@@ -11,11 +11,15 @@ import { TooltipProvider } from "../components/ui/tooltip"
 import { APP_NAME, SDK_CLIENT_APP } from "../../shared/branding"
 import { useChatSoundPreferencesStore } from "../stores/chatSoundPreferencesStore"
 import type { ChatSoundPreference } from "../stores/chatSoundPreferencesStore"
+import { getSetupStatus, useProviderAuthStore } from "../stores/providerAuthStore"
+import { SetupWizard } from "../components/auth/SetupWizard"
+import type { ProviderAuthSnapshot } from "../../shared/types"
 import { playChatNotificationSound, shouldPlayChatSound } from "../lib/chatSounds"
 import { getBrowserWindowTitle, getChatSoundBurstCount } from "./chatNotifications"
 import { KannaSidebar } from "./KannaSidebar"
 import { ChatPage } from "./ChatPage"
 import { LocalProjectsPage } from "./LocalProjectsPage"
+import { OpenRouterCallbackPage } from "./OpenRouterCallbackPage"
 import { SettingsPage } from "./SettingsPage"
 import { TerminalPage } from "./TerminalPage"
 import { useKannaState } from "./useKannaState"
@@ -202,9 +206,43 @@ function KannaLayout() {
   const navigate = useNavigate()
   const params = useParams()
   const state = useKannaState(params.chatId ?? null)
+
+  // Feed the provider-auth store for the app's lifetime: sign-in state powers
+  // the settings/new-chat auth cards, the harness picker's "Sign In" pills,
+  // and the blocked-switch dialog.
+  useEffect(() => {
+    useProviderAuthStore.getState().setSocket(state.socket)
+    const unsubscribe = state.socket.subscribe<ProviderAuthSnapshot>(
+      { type: "provider-auth" },
+      (snapshot) => useProviderAuthStore.getState().setSnapshot(snapshot),
+    )
+    return () => {
+      unsubscribe()
+      useProviderAuthStore.getState().setSocket(null)
+    }
+  }, [state.socket])
+
+  // Onboarding: once the auth probe resolves, auto-launch the setup wizard
+  // whenever setup is unfinished (something the flow covers isn't connected).
+  // Decided at most once per app load; "Set up later" and a completed run are
+  // both persisted and suppress future launches.
+  const authSnapshot = useProviderAuthStore((store) => store.snapshot)
+  const setupLaunchDecidedRef = useRef(false)
+  useEffect(() => {
+    if (setupLaunchDecidedRef.current) return
+    const status = getSetupStatus(authSnapshot)
+    if (!status.resolved) return
+    setupLaunchDecidedRef.current = true
+    const { setupCompleted, setupDismissed, openSetupWizard } = useProviderAuthStore.getState()
+    if (setupCompleted || setupDismissed) return
+    if (status.missingAny) {
+      openSetupWizard()
+    }
+  }, [authSnapshot])
+
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
-  const showMobileOpenButton = location.pathname === "/"
+  const showMobileOpenButton = location.pathname === "/" || location.pathname === "/terminal"
   const currentVersion = SDK_CLIENT_APP.split("/")[1] ?? "unknown"
   const previousSidebarDataRef = useRef<ReturnType<typeof useKannaState>["sidebarData"] | null>(null)
   const browserTitle = useMemo(() => getBrowserWindowTitle({
@@ -362,6 +400,7 @@ function KannaLayout() {
     <div className="flex h-[100dvh] min-h-[100dvh] overflow-hidden">
       {sidebarElement}
       <Outlet context={state} />
+      <SetupWizard />
       <CommandPalette state={state} />
       <StandaloneShareDialog
         open={Boolean(state.standaloneShareUrl)}
@@ -397,6 +436,8 @@ export function App() {
     <TooltipProvider>
       <AppDialogProvider>
         <Routes>
+          {/* Rendered outside the layout: opened as a bare OAuth popup. */}
+          <Route path="/oauth/openrouter/callback" element={<OpenRouterCallbackPage />} />
           <Route element={<KannaLayout />}>
             <Route path="/" element={<LocalProjectsPage />} />
             <Route path="/settings" element={<Navigate to="/settings/general" replace />} />

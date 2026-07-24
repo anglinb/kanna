@@ -2,6 +2,8 @@ import type {
   AppSettingsSnapshot,
   AppSettingsPatch,
   AgentProvider,
+  AuthServiceId,
+  ProviderAuthSnapshot,
   ChatAttachment,
   ChatDiffSnapshot,
   ChatHistoryPage,
@@ -50,6 +52,7 @@ export type SubscriptionTopic =
   | { type: "keybindings" }
   | { type: "app-settings" }
   | { type: "usage-limits" }
+  | { type: "provider-auth" }
   | { type: "chat"; chatId: string; recentLimit?: number }
   | { type: "project-git"; projectId: string }
   | { type: "terminal"; terminalId: string }
@@ -97,6 +100,17 @@ export type ClientCommand =
   | { type: "settings.writeAppSettingsPatch"; patch: AppSettingsPatch }
   | { type: "settings.readLlmProvider" }
   | { type: "usage.refresh"; force?: boolean }
+  | { type: "auth.refresh"; force?: boolean }
+  /** Install (or update to the latest version of) a service's CLI. */
+  | { type: "auth.install"; service: AuthServiceId }
+  | { type: "auth.login.start"; service: AuthServiceId }
+  /** claude only: the code the user pasted back from the OAuth page. */
+  | { type: "auth.login.submitCode"; service: AuthServiceId; code: string }
+  | { type: "auth.login.cancel"; service: AuthServiceId }
+  /** Ack result: `{ authUrl: string }` — open in a popup. */
+  | { type: "auth.openrouter.start"; callbackUrl: string }
+  /** Ack result: LlmProviderSnapshot with the exchanged key saved. */
+  | { type: "auth.openrouter.exchange"; code: string }
   | { type: "chat.listSkills"; provider: AgentProvider; chatId?: string; projectId?: string }
   | { type: "skills.search"; query: string; limit?: number }
   | { type: "skills.install"; source: string; skillId: string }
@@ -232,6 +246,7 @@ export type ServerSnapshot =
   | { type: "keybindings"; data: KeybindingsSnapshot }
   | { type: "app-settings"; data: AppSettingsSnapshot }
   | { type: "usage-limits"; data: UsageLimitsSnapshot }
+  | { type: "provider-auth"; data: ProviderAuthSnapshot }
   | { type: "llm-provider"; data: LlmProviderSnapshot }
   | { type: "chat"; data: ChatSnapshot | null }
   | { type: "project-git"; data: ChatDiffSnapshot | null }

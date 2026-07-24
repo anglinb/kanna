@@ -6,6 +6,7 @@ import {
   type AgentProvider,
   type LlmProviderKind,
 } from "../../../shared/types"
+import { AuthCard } from "../../components/auth/AuthCard"
 import { ChatPreferenceControls } from "../../components/chat-ui/ChatPreferenceControls"
 import { DefaultModelsDialog } from "../../components/DefaultModelsDialog"
 import { Button } from "../../components/ui/button"
@@ -21,6 +22,7 @@ import {
 } from "../../components/ui/select"
 import { cn } from "../../lib/utils"
 import { useChatPreferencesStore } from "../../stores/chatPreferencesStore"
+import { useProviderAuthStore } from "../../stores/providerAuthStore"
 import type { KannaState } from "../useKannaState"
 import { handleSettingsInputKeyDown, SettingsErrorBanner, SettingsRow } from "./shared"
 import { SETTINGS_ROWS } from "./registry"
@@ -36,6 +38,7 @@ export function ProvidersSection({
 }: {
   state: Pick<
     KannaState,
+    | "socket"
     | "availableProviders"
     | "llmProvider"
     | "handleReadLlmProvider"
@@ -51,6 +54,7 @@ export function ProvidersSection({
   const handleValidateLlmProvider = state.handleValidateLlmProvider
   const handleWriteAppSettings = state.handleWriteAppSettings
 
+  const providerAuthSnapshot = useProviderAuthStore((store) => store.snapshot)
   const defaultProvider = useChatPreferencesStore((store) => store.defaultProvider)
   const providerDefaults = useChatPreferencesStore((store) => store.providerDefaults)
   const setDefaultProvider = useChatPreferencesStore((store) => store.setDefaultProvider)
@@ -198,6 +202,17 @@ export function ProvidersSection({
   return (
     <>
       {providersError ? <SettingsErrorBanner message={providersError} /> : null}
+      <div className="space-y-3 pb-6">
+        {providerAuthSnapshot ? (
+          providerAuthSnapshot.services.map((service) => (
+            <AuthCard key={service.service} service={service} socket={state.socket} />
+          ))
+        ) : (
+          <div className="rounded-2xl border border-border bg-card/40 px-5 py-6 text-sm text-muted-foreground">
+            Checking provider sign-in status…
+          </div>
+        )}
+      </div>
       <div className="border-b border-border">
         <SettingsRow def={SETTINGS_ROWS.defaultProvider} bordered={false}>
           <Select

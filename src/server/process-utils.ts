@@ -41,6 +41,22 @@ export function hasCommand(command: string) {
   return result.status === 0
 }
 
+/**
+ * Resolve a command to an absolute path using a login shell, so binaries the
+ * server process's own PATH misses (npm globals, ~/.local/bin) are still
+ * found — the server may have been launched from launchd/systemd/cron.
+ */
+export function resolveCommandPath(command: string): string | null {
+  if (!/^[\w.-]+$/.test(command)) return null
+  const result = spawnSync("sh", ["-lc", `command -v -- ${command}`], {
+    stdio: ["ignore", "pipe", "ignore"],
+    encoding: "utf8",
+  })
+  if (result.status !== 0) return null
+  const resolved = result.stdout?.trim().split("\n").pop()?.trim() ?? ""
+  return resolved.startsWith("/") ? resolved : null
+}
+
 export function canOpenMacApp(appName: string) {
   const result = spawnSync("open", ["-Ra", appName], { stdio: "ignore" })
   return result.status === 0

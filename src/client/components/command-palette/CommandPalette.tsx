@@ -30,6 +30,7 @@ import {
   SquareMenu,
   SquarePen,
   SquareTerminal,
+  Terminal,
 } from "lucide-react"
 import type { ClaudeContextWindow, FsListResult, GitHubRecentReposResult } from "../../../shared/types"
 import { DEFAULT_NEW_PROJECTS_DIRECTORY } from "../../../shared/types"
@@ -90,7 +91,7 @@ import { useRepoMetadata } from "./useRepoMetadata"
 export const OPEN_COMMAND_PALETTE_EVENT = "kanna:open-command-palette"
 
 /** Palette sub-pages callers may deep-link to when opening the palette. */
-export type CommandPaletteTargetPage = "new-thread" | "project-chats" | "add-project"
+export type CommandPaletteTargetPage = "new-thread" | "project-chats" | "add-project" | "clone-github"
 
 /**
  * Opens the command palette from anywhere. Pass a target page to land directly
@@ -266,6 +267,10 @@ export function CommandPalette({ state }: { state: KannaState }) {
 
   const onChatPage = Boolean(state.activeChatId)
   const projectId = state.activeProjectId
+  // Reactive right-panel state for the active project so the palette's
+  // Show/Hide labels track the panel the way the navbar toggles do.
+  const rightPanel = useRightSidebarStore((store) =>
+    (projectId ? store.projects[projectId]?.rightPanel : undefined) ?? "hidden")
   const isMac = (state.localProjects?.machine.platform ?? "darwin") === "darwin"
   // The active chat's row plus the project group that owns it (for the
   // "Hide <project>" action, which needs the group key + title).
@@ -290,7 +295,13 @@ export function CommandPalette({ state }: { state: KannaState }) {
   const close = useCallback(() => setOpen(false), [])
 
   const openPalette = useCallback((initialPage?: PalettePage) => {
-    setPages(initialPage ? [{ page: initialPage }] : [])
+    // Deep-linking to the Clone page seeds Add Project underneath so
+    // Backspace/Escape walk back through the same stack as manual navigation.
+    setPages(
+      initialPage === "clone-github"
+        ? [{ page: "add-project" }, { page: "clone-github" }]
+        : initialPage ? [{ page: initialPage }] : []
+    )
     setQuery("")
     setSelectedValue("")
     setNowMs(Date.now())
@@ -518,6 +529,35 @@ export function CommandPalette({ state }: { state: KannaState }) {
       run: () => pushPage({ page: "add-project" }),
     })
 
+    // The three Add Project sub-actions are also directly searchable from the
+    // root (surfaced only while typing, so the empty root list stays curated)
+    // — no need to step through "Add Project…" to reach Clone / Create / Add
+    // Existing. Titles are spelled out ("… Project") for standalone clarity.
+    list.push({
+      id: "add-project-clone-github",
+      title: "Clone from GitHub…",
+      keywords: ["repo", "git", "clone", "checkout", "add project", "github"],
+      icon: <GitBranch className={ICON_CLASS} />,
+      searchOnly: true,
+      run: () => pushPage({ page: "clone-github" }),
+    })
+    list.push({
+      id: "add-project-create-new",
+      title: "Create New Project…",
+      keywords: ["blank", "empty", "init", "new project", "start", "add project"],
+      icon: <Plus className={ICON_CLASS} />,
+      searchOnly: true,
+      run: () => pushPage({ page: "create-new" }),
+    })
+    list.push({
+      id: "add-project-choose-existing",
+      title: "Add Existing Project…",
+      keywords: ["browse", "folder", "open", "filesystem", "directory", "path", "existing", "add project"],
+      icon: <Folder className={ICON_CLASS} />,
+      searchOnly: true,
+      run: () => pushPage({ page: "browse" }),
+    })
+
     list.push({
       id: "go-home",
       title: "All Projects",
@@ -558,15 +598,21 @@ export function CommandPalette({ state }: { state: KannaState }) {
     })
 
     if (onChatPage && projectId) {
+      const gitPanelVisible = rightPanel === "git"
+      const browserPanelVisible = rightPanel === "browser"
       list.push({
-        id: "git-changes",
-        title: "Open Git Changes",
-        keywords: ["diff", "commit", "stage", "source control"],
+        id: "git-panel",
+        title: gitPanelVisible ? "Hide Git Panel" : "Show Git Panel",
+        keywords: ["diff", "commit", "stage", "source control", "changes", "show", "hide"],
         icon: <GitBranch className={ICON_CLASS} />,
         shortcut: chatShortcuts("toggleRightSidebar"),
         run: () => {
           close()
-          openGitPanel("changes")
+          if (gitPanelVisible) {
+            useRightSidebarStore.getState().hidePanel(projectId)
+          } else {
+            openGitPanel("changes")
+          }
         },
       })
       list.push({
@@ -581,14 +627,15 @@ export function CommandPalette({ state }: { state: KannaState }) {
       })
       list.push({
         id: "browser-panel",
-        title: "Open Browser Panel",
-        keywords: ["preview", "localhost", "web"],
+        title: browserPanelVisible ? "Hide Browser Panel" : "Show Browser Panel",
+        keywords: ["preview", "localhost", "web", "show", "hide"],
         icon: <Globe className={ICON_CLASS} />,
         run: () => {
           close()
           const store = useRightSidebarStore.getState()
-          const currentPanel = store.projects[projectId]?.rightPanel ?? "hidden"
-          if (currentPanel !== "browser") {
+          if (browserPanelVisible) {
+            store.hidePanel(projectId)
+          } else {
             store.togglePanel(projectId, "browser")
           }
         },
@@ -597,7 +644,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
         id: "toggle-terminal",
         title: "Toggle Terminal",
         keywords: ["shell", "console", "embedded"],
-        icon: <SquareTerminal className={ICON_CLASS} />,
+        icon: <Terminal className={ICON_CLASS} />,
         shortcut: chatShortcuts("toggleEmbeddedTerminal"),
         run: () => {
           close()
@@ -885,6 +932,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
     openGitPanel,
     projectId,
     pushPage,
+    rightPanel,
     state.activeChatId,
     state.appSettings?.newSidebarEnabled,
     state.availableProviders,

@@ -104,6 +104,14 @@ async function wsUrlProvider(): Promise<string> {
   return sameOriginWsUrl()
 }
 
+/**
+ * A socket for pages that live outside KannaLayout (e.g. the OpenRouter OAuth
+ * callback popup) — same URL resolution as the main app socket.
+ */
+export function createStandaloneKannaSocket() {
+  return new KannaSocket(wsUrlProvider)
+}
+
 function useKannaSocket() {
   const socketRef = useRef<KannaSocket | null>(null)
   if (!socketRef.current) {

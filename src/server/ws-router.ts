@@ -20,6 +20,7 @@ import { readProjectQuickActions, writeProjectQuickActions } from "./project-qui
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
 import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
+import type { ProviderAuthManager } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
 import { deriveChatSnapshot, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
@@ -56,6 +57,19 @@ interface CreateWsRouterArgs {
   machineDisplayName: string
   updateManager: UpdateManager | null
   usageLimits?: Pick<UsageLimitsManager, "getSnapshot" | "refresh" | "onChange"> | null
+  providerAuth?: Pick<
+    ProviderAuthManager,
+    | "getSnapshot"
+    | "refresh"
+    | "probeService"
+    | "install"
+    | "startLogin"
+    | "submitLoginCode"
+    | "cancelLogin"
+    | "startOpenRouterAuth"
+    | "exchangeOpenRouterCode"
+    | "onChange"
+  > | null
 }
 
 interface SnapshotBroadcastFilter {
@@ -65,6 +79,7 @@ interface SnapshotBroadcastFilter {
   includeKeybindings?: boolean
   includeAppSettings?: boolean
   includeUsageLimits?: boolean
+  includeProviderAuth?: boolean
   chatIds?: Set<string>
   projectIds?: Set<string>
   terminalIds?: Set<string>
@@ -115,6 +130,7 @@ export function createWsRouter({
   machineDisplayName,
   updateManager,
   usageLimits,
+  providerAuth,
 }: CreateWsRouterArgs) {
   const sockets = new Set<ServerWebSocket<ClientState>>()
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
@@ -200,6 +216,9 @@ export function createWsRouter({
     }
     if (topic.type === "usage-limits") {
       return Boolean(filter.includeUsageLimits)
+    }
+    if (topic.type === "provider-auth") {
+      return Boolean(filter.includeProviderAuth)
     }
     if (topic.type === "chat") {
       return filter.chatIds?.has(topic.chatId) ?? false
@@ -315,6 +334,18 @@ export function createWsRouter({
         snapshot: {
           type: "usage-limits",
           data,
+        },
+      }
+    }
+
+    if (topic.type === "provider-auth") {
+      return {
+        v: PROTOCOL_VERSION,
+        type: "snapshot",
+        id,
+        snapshot: {
+          type: "provider-auth",
+          data: providerAuth?.getSnapshot() ?? { services: [] },
         },
       }
     }
@@ -630,6 +661,21 @@ export function createWsRouter({
     }
   }) ?? (() => {})
 
+  const disposeProviderAuthEvents = providerAuth?.onChange(() => {
+    for (const ws of sockets) {
+      const snapshotSignatures = ensureSnapshotSignatures(ws)
+      for (const [id, topic] of ws.data.subscriptions.entries()) {
+        if (topic.type !== "provider-auth") continue
+        const envelope = createEnvelope(id, topic)
+        if (envelope.type !== "snapshot") continue
+        const signature = JSON.stringify(envelope.snapshot)
+        if (snapshotSignatures.get(id) === signature) continue
+        snapshotSignatures.set(id, signature)
+        send(ws, envelope)
+      }
+    }
+  }) ?? (() => {})
+
   agent.setBackgroundErrorReporter?.(broadcastError)
 
   function resolveChatProject(chatId: string) {
@@ -767,6 +813,57 @@ export function createWsRouter({
           }
           return
         }
+        case "auth.refresh": {
+          if (providerAuth) {
+            await providerAuth.refresh({ force: command.force ?? false })
+            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: providerAuth.getSnapshot() })
+          } else {
+            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { services: [] } })
+          }
+          return
+        }
+        case "auth.install": {
+          if (!providerAuth) throw new Error("Provider auth unavailable.")
+          // Fire-and-forget: progress travels via provider-auth snapshots.
+          void providerAuth.install(command.service)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          return
+        }
+        case "auth.login.start": {
+          if (!providerAuth) throw new Error("Provider auth unavailable.")
+          providerAuth.startLogin(command.service)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          return
+        }
+        case "auth.login.submitCode": {
+          if (!providerAuth) throw new Error("Provider auth unavailable.")
+          providerAuth.submitLoginCode(command.service, command.code)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          return
+        }
+        case "auth.login.cancel": {
+          if (!providerAuth) throw new Error("Provider auth unavailable.")
+          providerAuth.cancelLogin(command.service)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          return
+        }
+        case "auth.openrouter.start": {
+          if (!providerAuth) throw new Error("Provider auth unavailable.")
+          const result = providerAuth.startOpenRouterAuth(command.callbackUrl)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "auth.openrouter.exchange": {
+          if (!providerAuth) throw new Error("Provider auth unavailable.")
+          const snapshot = await providerAuth.exchangeOpenRouterCode(command.code)
+          // The exchanged key is a full Model Registry write — refresh the pi
+          // model picker exactly like settings.writeLlmProvider does.
+          if (applyPiFaveModels(snapshot.faveModels)) {
+            void broadcastSnapshots()
+          }
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          return
+        }
         case "settings.writeAppSettings": {
           const previousAnalyticsEnabled = appSettings.getSnapshot().analyticsEnabled
           if (previousAnalyticsEnabled && !command.analyticsEnabled) {
@@ -809,6 +906,8 @@ export function createWsRouter({
           if (applyPiFaveModels(snapshot.faveModels)) {
             void broadcastSnapshots()
           }
+          // Manually entering/clearing an OpenRouter key changes the auth card.
+          void providerAuth?.probeService("openrouter").catch(() => undefined)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
@@ -1332,6 +1431,11 @@ export function createWsRouter({
         if (parsed.topic.type === "usage-limits" && usageLimits) {
           void usageLimits.refresh().catch(() => undefined)
         }
+        // Same shape for provider auth: cached state paints instantly, the
+        // TTL-respecting probe pushes fresh results to all subscribers.
+        if (parsed.topic.type === "provider-auth" && providerAuth) {
+          void providerAuth.refresh().catch(() => undefined)
+        }
         return
       }
 
@@ -1355,6 +1459,7 @@ export function createWsRouter({
       disposeAppSettingsEvents()
       disposeUpdateEvents()
       disposeUsageLimitsEvents()
+      disposeProviderAuthEvents()
     },
   }
 }

@@ -22,6 +22,8 @@ import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { applyPiFaveModels } from "./provider-catalog"
+import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
+import { fetchLatestPackageVersion } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
 import { TerminalManager } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
@@ -178,6 +180,22 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   agent.setClaudeRateLimitListener((info) => usageLimits.recordClaudeRateLimitPush(info))
   codexManager.setRateLimitsListener((snapshot) => usageLimits.recordCodexRateLimitPush(snapshot))
 
+  const providerAuth = new ProviderAuthManager({
+    ...createProcessAuthDeps(),
+    readLlmProvider: readLlmProviderSnapshot,
+    writeLlmProvider: writeLlmProviderSnapshot,
+    fetchLatestNpmVersion: fetchLatestPackageVersion,
+    trackEvent: analytics.track.bind(analytics),
+    onSignedIn: (service) => {
+      // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
+      // flip from auth → usage) and the live Cursor model catalog.
+      void usageLimits.refresh({ force: true }).catch(() => undefined)
+      if (service === "cursor") {
+        void agent.refreshCursorModelCatalog()
+      }
+    },
+  })
+
   router = createWsRouter({
     store,
     diffStore,
@@ -196,6 +214,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     getDiscoveredProjects: () => discoveredProjects,
     machineDisplayName,
     updateManager,
+    providerAuth,
   })
   // Overlay the account's live Cursor model list on the static catalog
   // (no-op when cursor-agent is missing or logged out); broadcasts on change.
@@ -459,6 +478,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       await agent.cancel(chatId)
     }
     router.dispose()
+    providerAuth.dispose()
     usageLimits.dispose()
     appSettings.dispose()
     keybindings.dispose()

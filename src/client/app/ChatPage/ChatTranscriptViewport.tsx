@@ -19,6 +19,7 @@ import {
 } from "../KannaTranscript"
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
+import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
   CHAT_NAVBAR_OFFSET_PX,
@@ -448,7 +449,10 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
                     : "pointer-events-none opacity-0",
                 )}
               >
-                <EmptyStateUsageCards socket={socket} activeChatId={activeChatId} />
+                <div className="w-full space-y-3">
+                  <EmptyStateAuthCards />
+                  <EmptyStateUsageCards socket={socket} activeChatId={activeChatId} />
+                </div>
               </div>
             ) : null}
             </div>

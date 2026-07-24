@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { LocalProjectSummary } from "../../shared/types"
-import { filterProjects, groupProjectsByRecency } from "./project-groups"
+import { filterProjects, groupByRecency, groupProjectsByRecency } from "./project-groups"
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const NOW_MS = Date.parse("2026-07-17T12:00:00.000Z")
@@ -62,6 +62,29 @@ describe("local project recency groups", () => {
     expect(groups[1]?.projects.map((entry) => entry.title)).toEqual([
       "alpha-quarter",
       "Zulu-quarter",
+    ])
+  })
+
+  test("generic grouping mirrors the project buckets for repo-shaped items", () => {
+    const repo = (name: string, ageInDays?: number) => ({
+      nameWithOwner: `acme/${name}`,
+      pushedAt: ageInDays === undefined ? null : new Date(NOW_MS - ageInDays * DAY_MS).toISOString(),
+    })
+
+    const groups = groupByRecency(
+      [repo("zulu", 1), repo("alpha", 5), repo("stale-z", 45), repo("stale-a", 60), repo("unknown")],
+      (item) => (item.pushedAt ? Date.parse(item.pushedAt) : undefined),
+      (a, b) => a.nameWithOwner.localeCompare(b.nameWithOwner, undefined, { sensitivity: "base" }),
+      NOW_MS
+    )
+
+    expect(groups.map((group) => [
+      group.title,
+      group.items.map((entry) => entry.nameWithOwner),
+    ])).toEqual([
+      ["Recent", ["acme/zulu", "acme/alpha"]],
+      ["Last 90 days", ["acme/stale-a", "acme/stale-z"]],
+      ["Older", ["acme/unknown"]],
     ])
   })
 })

@@ -1,4 +1,7 @@
 import { useOutletContext } from "react-router-dom"
+import { DEFAULT_NEW_PROJECTS_DIRECTORY } from "../../shared/types"
+import { SetupCard } from "../components/auth/SetupCard"
+import { GitHubReposSection } from "../components/GitHubReposSection"
 import { LocalDev } from "../components/LocalDev"
 import type { KannaState } from "./useKannaState"
 
@@ -14,6 +17,14 @@ export function LocalProjectsPage() {
         startingLocalPath={state.startingLocalPath}
         commandError={state.commandError}
         onOpenProject={state.handleOpenLocalProject}
+        providerCards={<SetupCard className="mb-8" />}
+        githubSection={
+          <GitHubReposSection
+            socket={state.socket}
+            newProjectsDirectory={state.appSettings?.newProjectsDirectory ?? DEFAULT_NEW_PROJECTS_DIRECTORY}
+            onCloneRepo={state.handleCreateProject}
+          />
+        }
       />
     </div>
   )

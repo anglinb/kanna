@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
-import { Flower, Folder, House, Loader2, PanelLeft, Search, X, Menu, Plus, Settings, SquarePen, SquareTerminal } from "lucide-react"
+import { Flower, Folder, House, Loader2, PanelLeft, Search, X, Menu, Plus, Settings, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
@@ -582,7 +582,7 @@ function KannaSidebarImpl({
         </div>
 
         {newSidebarEnabled ? (
-          <div className="flex flex-col gap-[1px] border-b border-border px-[7px] py-2">
+          <div className="px-[7px] py-2">
             <SegmentedControl
               value={sidebarView}
               onValueChange={changeSidebarView}
@@ -591,40 +591,9 @@ function KannaSidebarImpl({
                 { value: "projects", label: "Projects" },
               ]}
               size="sm"
-              className="grid w-full grid-cols-2 mb-2"
+              className="grid w-full grid-cols-2"
               optionClassName="w-full justify-center"
             />
-            <button
-              type="button"
-              onClick={() => openCommandPalette("new-thread")}
-              className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
-            >
-              <SquarePen className="h-4 w-4 shrink-0" />
-              <span>New Chat</span>
-            </button>
-            {devbox ? (
-              <button
-                type="button"
-                onClick={() => {
-                  navigate("/terminal")
-                  onClose()
-                }}
-                className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
-              >
-                <SquareTerminal className="h-4 w-4 shrink-0" />
-                <span>Terminal</span>
-              </button>
-            ) : null}
-            {currentProjectGroup ? (
-              <button
-                type="button"
-                onClick={() => openCommandPalette("project-chats")}
-                className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
-              >
-                <Folder className="h-4 w-4 shrink-0" />
-                <span className="min-w-0 truncate">{currentProjectGroup.title}</span>
-              </button>
-            ) : null}
           </div>
         ) : null}
 
@@ -637,6 +606,50 @@ function KannaSidebarImpl({
           }}
         >
           <div className="p-[7px]">
+            {newSidebarEnabled ? (
+              <div className="flex flex-col gap-[1px] pb-2">
+                <button
+                  type="button"
+                  onClick={() => openCommandPalette("new-thread")}
+                  className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                >
+                  <SquarePen className="h-4 w-4 shrink-0" />
+                  <span>New Chat</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCommandPalette("add-project")}
+                  className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                >
+                  <Plus className="h-4 w-4 shrink-0" />
+                  <span>Add Project</span>
+                </button>
+                {devbox ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate("/terminal")
+                      onClose()
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                  >
+                    <Terminal className="h-4 w-4 shrink-0" />
+                    <span>Terminal</span>
+                  </button>
+                ) : null}
+                {currentProjectGroup ? (
+                  <button
+                    type="button"
+                    onClick={() => openCommandPalette("project-chats")}
+                    className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                  >
+                    <Folder className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 truncate">{currentProjectGroup.title}</span>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
             {!hasVisibleChats && isConnecting ? (
               <div className="space-y-5 px-1 pt-3">
                 {[0, 1, 2].map((section) => (

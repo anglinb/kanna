@@ -30,6 +30,10 @@ interface LocalDevProps {
   startingLocalPath: string | null
   commandError: string | null
   onOpenProject: (localPath: string) => Promise<void>
+  /** Setup entry card (renders itself only when onboarding is unfinished). */
+  providerCards?: ReactNode
+  /** Recent GitHub repos section (renders itself only when `gh` is signed in). */
+  githubSection?: ReactNode
 }
 
 function CodeBlock({ children }: { children: string }) {
@@ -153,6 +157,8 @@ export function LocalDev({
   startingLocalPath,
   commandError,
   onOpenProject,
+  providerCards,
+  githubSection,
 }: LocalDevProps) {
   const projects = useMemo(() => snapshot?.projects ?? [], [snapshot?.projects])
   const [projectSearch, setProjectSearch] = useState("")
@@ -249,61 +255,59 @@ export function LocalDev({
           />
 
           <div className="w-full px-6 mb-10">
-            <div className="mb-8 flex items-center gap-2">
-              <Input
-                type="search"
-                aria-label="Search projects"
-                placeholder="Search projects..."
-                value={projectSearch}
-                onChange={(event) => setProjectSearch(event.target.value)}
-                className="min-w-0 flex-1"
-              />
-              <Button
-                variant="default"
-                size="sm"
-                className="rounded-lg"
-                onClick={() => openCommandPalette("add-project")}
-              >
-                <Plus className="size-3.5" data-icon="inline-start" />
-                Project
-              </Button>
-            </div>
+            {providerCards}
             {projects.length > 0 ? (
-              <div className="flex flex-col gap-8">
-                {projectGroups.length > 0 ? projectGroups.map((group) => (
-                  <section key={group.key} aria-labelledby={`project-group-${group.key}`}>
-                    <h3
-                      id={`project-group-${group.key}`}
-                      className="mb-3 text-[13px] font-medium uppercase tracking-wider text-muted-foreground"
-                    >
-                      {group.title}
-                    </h3>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-4 3xl:grid-cols-5">
-                      {group.projects.map((project) => (
-                        <ProjectCard
-                          key={project.localPath}
-                          localPath={project.localPath}
-                          loading={startingLocalPath === project.localPath}
-                          onClick={() => {
-                            void onOpenProject(project.localPath)
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                )) : (
-                  <InfoCard>
-                    <p className="text-sm text-muted-foreground">No projects match your search.</p>
-                  </InfoCard>
-                )}
-              </div>
-            ) : (
-              <InfoCard>
-                <p className="text-sm text-muted-foreground">
-                  No local projects discovered yet. Open one with Claude or Codex, or create a new project here.
-                </p>
-              </InfoCard>
-            )}
+              <>
+                <div className="mb-8 flex items-center gap-2">
+                  <Input
+                    type="search"
+                    aria-label="Search projects"
+                    placeholder="Search projects..."
+                    value={projectSearch}
+                    onChange={(event) => setProjectSearch(event.target.value)}
+                    className="min-w-0 flex-1"
+                  />
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => openCommandPalette("add-project")}
+                  >
+                    <Plus className="size-3.5" data-icon="inline-start" />
+                    Project
+                  </Button>
+                </div>
+                <div className="flex flex-col gap-8">
+                  {projectGroups.length > 0 ? projectGroups.map((group) => (
+                    <section key={group.key} aria-labelledby={`project-group-${group.key}`}>
+                      <h3
+                        id={`project-group-${group.key}`}
+                        className="mb-3 text-[13px] font-medium uppercase tracking-wider text-muted-foreground"
+                      >
+                        {group.title}
+                      </h3>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-4 3xl:grid-cols-5">
+                        {group.projects.map((project) => (
+                          <ProjectCard
+                            key={project.localPath}
+                            localPath={project.localPath}
+                            loading={startingLocalPath === project.localPath}
+                            onClick={() => {
+                              void onOpenProject(project.localPath)
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )) : (
+                    <InfoCard>
+                      <p className="text-sm text-muted-foreground">No projects match your search.</p>
+                    </InfoCard>
+                  )}
+                </div>
+              </>
+            ) : null}
+            {githubSection}
             {commandError ? (
               <div className="text-sm text-destructive border border-destructive/20 bg-destructive/5 rounded-xl px-4 py-3 mt-4">
                 {commandError}

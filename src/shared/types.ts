@@ -1017,6 +1017,83 @@ export interface UsageLimitsSnapshot {
   providers: ProviderUsageSnapshot[]
 }
 
+// ---------------------------------------------------------------------------
+// Provider auth: installed/version/signed-in state + headless login flows for
+// the coding-agent CLIs (claude, codex, cursor-agent), gh, and OpenRouter.
+// ---------------------------------------------------------------------------
+
+export type AuthServiceId = "claude" | "codex" | "cursor" | "gh" | "openrouter"
+
+export const AUTH_SERVICE_ORDER: AuthServiceId[] = ["claude", "codex", "cursor", "gh", "openrouter"]
+
+export const AUTH_SERVICE_LABELS: Record<AuthServiceId, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  cursor: "Cursor",
+  gh: "GitHub",
+  openrouter: "OpenRouter",
+}
+
+export type AuthServiceStatus =
+  // Not probed yet.
+  | "unknown"
+  | "not_installed"
+  | "signed_out"
+  | "signed_in"
+  // The probe itself failed (binary present but errored unexpectedly).
+  | "error"
+
+export type AuthLoginFlowState =
+  | { phase: "idle" }
+  | { phase: "starting" }
+  // codex / cursor / gh: user opens a link (and enters a code for codex/gh);
+  // the server polls until the provider reports approval.
+  | {
+      phase: "waiting_for_approval"
+      verificationUrl: string
+      userCode: string | null
+      startedAt: number
+      expiresAt: number | null
+    }
+  // claude: user opens a link, signs in, then pastes the resulting code back.
+  | { phase: "waiting_for_code_entry"; verificationUrl: string; startedAt: number }
+  // Approval/code received; finishing up (token exchange / re-probe).
+  | { phase: "finishing" }
+  | { phase: "error"; message: string; hint: string | null }
+
+export interface AuthServiceSnapshot {
+  service: AuthServiceId
+  label: string
+  /** openrouter is not a CLI — always true there. */
+  installed: boolean
+  version: string | null
+  latestVersion: string | null
+  updateAvailable: boolean
+  authStatus: AuthServiceStatus
+  /** Account identifier when cheap to read (gh login, cursor email, plan). */
+  account: string | null
+  /** Human-readable probe detail (e.g. why status is "error"). */
+  statusDetail: string | null
+  login: AuthLoginFlowState
+  installState: "idle" | "installing" | "error"
+  installError: string | null
+  checkedAt: number | null
+}
+
+export interface ProviderAuthSnapshot {
+  services: AuthServiceSnapshot[]
+}
+
+/**
+ * The auth service gating a harness, or null when the harness has no
+ * sign-in of its own (pi runs through the Model Registry, which may be any
+ * OpenAI-compatible endpoint — don't conflate it with the OpenRouter card).
+ */
+export function authServiceForProvider(provider: AgentProvider): AuthServiceId | null {
+  if (provider === "claude" || provider === "codex" || provider === "cursor") return provider
+  return null
+}
+
 /** A user-curated model shortcut shown in Pi's model picker. */
 export interface FaveModel {
   label: string

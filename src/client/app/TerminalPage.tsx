@@ -47,7 +47,7 @@ export function TerminalPage() {
   }
 
   return (
-    <div className="flex-1 flex min-h-0 min-w-0 flex-col">
+    <div className="flex-1 flex min-h-0 min-w-0 flex-col pt-14 md:pt-0">
       {layout && hasTerminals ? (
         <TerminalWorkspace
           projectId={HOME_TERMINAL_LAYOUT_KEY}

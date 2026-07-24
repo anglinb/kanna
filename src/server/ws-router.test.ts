@@ -2169,3 +2169,132 @@ describe("ws-router", () => {
     })
   })
 })
+
+describe("ws-router provider auth", () => {
+  const AUTH_SERVICES_SNAPSHOT = {
+    services: [
+      {
+        service: "gh" as const,
+        label: "GitHub",
+        installed: true,
+        version: "2.96.0",
+        latestVersion: null,
+        updateAvailable: false,
+        authStatus: "signed_out" as const,
+        account: null,
+        statusDetail: null,
+        login: { phase: "idle" as const },
+        installState: "idle" as const,
+        installError: null,
+        checkedAt: 1,
+      },
+    ],
+  }
+
+  function createFakeProviderAuth() {
+    const calls: string[] = []
+    let changeListener: (() => void) | null = null
+    const manager = {
+      getSnapshot: () => AUTH_SERVICES_SNAPSHOT,
+      refresh: async () => {
+        calls.push("refresh")
+      },
+      probeService: async (service: string) => {
+        calls.push(`probe:${service}`)
+      },
+      install: async (service: string) => {
+        calls.push(`install:${service}`)
+      },
+      startLogin: (service: string) => {
+        calls.push(`start:${service}`)
+      },
+      submitLoginCode: (service: string, code: string) => {
+        calls.push(`submit:${service}:${code}`)
+      },
+      cancelLogin: (service: string) => {
+        calls.push(`cancel:${service}`)
+      },
+      startOpenRouterAuth: (callbackUrl: string) => ({
+        authUrl: `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callbackUrl)}&code_challenge=x&code_challenge_method=S256`,
+      }),
+      exchangeOpenRouterCode: async (code: string) => {
+        calls.push(`exchange:${code}`)
+        return { ...DEFAULT_LLM_PROVIDER_SNAPSHOT, provider: "openrouter" as const, apiKey: "sk-or-key" }
+      },
+      onChange: (listener: () => void) => {
+        changeListener = listener
+        return () => {
+          changeListener = null
+        }
+      },
+    }
+    return { manager: manager as never, calls, fireChange: () => changeListener?.() }
+  }
+
+  test("subscribing pushes the snapshot and kicks a refresh; onChange fanout dedupes", async () => {
+    const fake = createFakeProviderAuth()
+    const router = createTestRouter({ providerAuth: fake.manager })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(
+      ws as never,
+      JSON.stringify({ v: 1, type: "subscribe", id: "sub-auth", topic: { type: "provider-auth" } })
+    )
+
+    expect(ws.sent).toEqual([
+      {
+        v: PROTOCOL_VERSION,
+        type: "snapshot",
+        id: "sub-auth",
+        snapshot: { type: "provider-auth", data: AUTH_SERVICES_SNAPSHOT },
+      },
+    ])
+    expect(fake.calls).toContain("refresh")
+
+    // Unchanged snapshot on change → deduped, nothing new sent.
+    fake.fireChange()
+    expect(ws.sent).toHaveLength(1)
+  })
+
+  test("auth commands route to the manager and ack", async () => {
+    const fake = createFakeProviderAuth()
+    const router = createTestRouter({ providerAuth: fake.manager })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    const send = (id: string, command: unknown) =>
+      router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "command", id, command }))
+
+    await send("c1", { type: "auth.login.start", service: "gh" })
+    await send("c2", { type: "auth.login.submitCode", service: "claude", code: "abc" })
+    await send("c3", { type: "auth.login.cancel", service: "gh" })
+    await send("c4", { type: "auth.install", service: "codex" })
+    await send("c5", { type: "auth.openrouter.start", callbackUrl: "http://localhost:3210/oauth/openrouter/callback" })
+    await send("c6", { type: "auth.openrouter.exchange", code: "code-1" })
+
+    expect(fake.calls).toEqual(
+      expect.arrayContaining(["start:gh", "submit:claude:abc", "cancel:gh", "install:codex", "exchange:code-1"])
+    )
+
+    const acks = ws.sent as Array<{ type: string; id: string; result?: unknown }>
+    expect(acks.every((message) => message.type === "ack")).toBe(true)
+    const startAck = acks.find((message) => message.id === "c5")
+    expect((startAck?.result as { authUrl: string }).authUrl).toContain("openrouter.ai/auth")
+    const exchangeAck = acks.find((message) => message.id === "c6")
+    expect((exchangeAck?.result as LlmProviderSnapshot).provider).toBe("openrouter")
+  })
+
+  test("auth.refresh acks the snapshot even without a manager", async () => {
+    const router = createTestRouter()
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+    await router.handleMessage(
+      ws as never,
+      JSON.stringify({ v: 1, type: "command", id: "r1", command: { type: "auth.refresh" } })
+    )
+    expect(ws.sent).toEqual([
+      { v: PROTOCOL_VERSION, type: "ack", id: "r1", result: { services: [] } },
+    ])
+  })
+})

@@ -19,3 +19,9 @@ export const OPEN_EXTERNAL_SELECT_STORAGE_KEY = "kanna:last-open-external"
 
 /** localStorage: active sidebar view ("recents" | "projects") when the recent-chats Labs mode is on. */
 export const SIDEBAR_VIEW_STORAGE_KEY = "kanna:sidebar-view"
+
+/** localStorage: the setup wizard was completed (finished the last step). */
+export const SETUP_WIZARD_COMPLETED_STORAGE_KEY = "kanna:setup-completed"
+
+/** localStorage: the setup wizard was dismissed ("Set up later") — suppresses auto-launch, not the Setup card. */
+export const SETUP_WIZARD_DISMISSED_STORAGE_KEY = "kanna:setup-dismissed"

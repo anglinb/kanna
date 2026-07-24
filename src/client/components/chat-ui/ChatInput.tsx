@@ -19,6 +19,8 @@ import { useChatInputStore } from "../../stores/chatInputStore"
 import { type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
 import { formatPathWithTilde } from "../../lib/pathUtils"
+import { useUnauthenticatedHarnesses } from "../../stores/providerAuthStore"
+import { SignInDialog } from "../auth/SignInDialog"
 import { ChatPreferenceControls } from "./ChatPreferenceControls"
 import { ContextWindowMeter } from "./ContextWindowMeter"
 import { AttachmentFileCard, AttachmentImageCard } from "../messages/AttachmentCard"
@@ -179,6 +181,17 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const { composerChatId, providerSwitchPending, selectedProvider } = composer
   const providerPrefs = composer.effectiveState
   const showPlanMode = composer.supportsPlanMode
+  // Switching to a harness that isn't signed in is blocked: the pick is
+  // stashed here, a sign-in dialog opens, and the switch applies
+  // automatically once the auth store reports the service signed in.
+  const unauthenticatedHarnesses = useUnauthenticatedHarnesses()
+  const [pendingSignInProvider, setPendingSignInProvider] = useState<AgentProvider | null>(null)
+  useEffect(() => {
+    if (!pendingSignInProvider) return
+    if (unauthenticatedHarnesses.has(pendingSignInProvider)) return
+    composer.selectProvider(pendingSignInProvider)
+    setPendingSignInProvider(null)
+  }, [pendingSignInProvider, unauthenticatedHarnesses, composer])
   const [value, setValue] = useState(() => (chatId ? getDraft(chatId) : ""))
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isStandalone = useIsStandalone()
@@ -909,6 +922,10 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
             model={providerPrefs.model}
             modelOptions={providerPrefs.modelOptions}
             onProviderChange={(provider) => {
+              if (provider !== selectedProvider && unauthenticatedHarnesses.has(provider)) {
+                setPendingSignInProvider(provider)
+                return
+              }
               composer.selectProvider(provider)
             }}
             onModelChange={(_, model) => {
@@ -951,6 +968,12 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       </div>
 
       <AttachmentPreviewModal attachment={selectedAttachment} onOpenChange={(open) => !open && setSelectedAttachmentId(null)} />
+      <SignInDialog
+        provider={pendingSignInProvider}
+        onOpenChange={(open) => {
+          if (!open) setPendingSignInProvider(null)
+        }}
+      />
     </div>
   )
 })
