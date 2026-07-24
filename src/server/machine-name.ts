@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { homedir, hostname } from "node:os"
+import path from "node:path"
 import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { getCloudFilePath } from "../shared/branding"
@@ -9,6 +10,24 @@ function runAndRead(command: string, args: string[]) {
   if (result.status !== 0) return null
   const value = result.stdout.trim()
   return value || null
+}
+
+export function getMachineNameOverridePath() {
+  return path.join(homedir(), ".kanna", "machine-name")
+}
+
+/**
+ * ~/.kanna/machine-name — explicit display-name override (first non-empty
+ * line). Written by environments whose hostname is meaningless, e.g. deploy
+ * previews name themselves after the ref they serve; users can set it too.
+ */
+export function readMachineNameOverride(overridePath = getMachineNameOverridePath()): string | null {
+  try {
+    const firstLine = readFileSync(overridePath, "utf8").split("\n")[0]?.trim() ?? ""
+    return firstLine ? firstLine.slice(0, 80) : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -29,7 +48,12 @@ export function readDevboxSubdomain(identityPath = getCloudFilePath(homedir())):
   }
 }
 
-export function getMachineDisplayName(identityPath?: string) {
+export function getMachineDisplayName(identityPath?: string, overridePath?: string) {
+  const override = readMachineNameOverride(overridePath)
+  if (override) {
+    return override
+  }
+
   const devboxSubdomain = readDevboxSubdomain(identityPath)
   if (devboxSubdomain) {
     return devboxSubdomain
