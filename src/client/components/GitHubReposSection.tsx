@@ -19,7 +19,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip"
  * the `gh` CLI is signed in. Mirrors the local-projects recency buckets,
  * filters by account (personal/org) via pills, and clones a repo into the
  * new-projects directory on click — the same flow as the palette's Clone
- * page. Renders nothing while loading or when GitHub isn't connected.
+ * page. Shows a shimmer while the list loads for a signed-in `gh`; renders
+ * nothing when GitHub isn't connected.
  */
 
 const ALL_ACCOUNTS = "all"
@@ -63,6 +64,35 @@ function AccountPill({
       {icon}
       {label}
     </button>
+  )
+}
+
+/** Pulsing placeholder mirroring the section layout while repos load. */
+function ReposShimmer() {
+  return (
+    <section aria-hidden className="mt-10">
+      <h2 className="mb-4 flex items-center gap-2.5 text-xl font-semibold text-foreground">
+        <GitHubIcon className="h-5 w-5 text-muted-foreground" />
+        GitHub
+      </h2>
+      <div className="animate-pulse">
+        <div className="mb-3 flex items-center">
+          <div className="ml-auto h-9 w-24 rounded-md bg-muted" />
+        </div>
+        <div className="mb-3 h-4 w-24 rounded bg-muted" />
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-4 3xl:grid-cols-5">
+          {[0, 1, 2, 3].map((card) => (
+            <div
+              key={card}
+              className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"
+            >
+              <div className="h-4 w-4 rounded-full bg-muted" />
+              <div className={cn("h-4 rounded bg-muted", card % 2 === 0 ? "w-32" : "w-40")} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -175,6 +205,13 @@ export function GitHubReposSection({
     [visibleRepos]
   )
 
+  // gh is signed in but the list hasn't arrived yet — hold the space with a
+  // shimmer instead of popping the section in later. Signed-out (or unknown)
+  // states keep rendering nothing.
+  if (result === null) {
+    return ghAuthStatus === "signed_in" ? <ReposShimmer /> : null
+  }
+
   if (repos.length === 0) return null
 
   const cloneDestination = (repo: GitHubRepoSummary) => {
@@ -238,11 +275,13 @@ export function GitHubReposSection({
         <Button
           variant="default"
           size="sm"
+          aria-label="Search GitHub repositories"
           className="ml-auto gap-2"
           onClick={() => openCommandPalette("clone-github")}
         >
           <Search className="size-3.5" data-icon="inline-start" />
-          Search
+          {/* Icon-only on mobile — the label costs too much pill-row width. */}
+          <span className="hidden sm:inline">Search</span>
         </Button>
       </div>
 
