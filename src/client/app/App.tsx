@@ -8,7 +8,7 @@ import { Button } from "../components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Input } from "../components/ui/input"
 import { TooltipProvider } from "../components/ui/tooltip"
-import { APP_NAME, SDK_CLIENT_APP } from "../../shared/branding"
+import { APP_NAME } from "../../shared/branding"
 import { useChatSoundPreferencesStore } from "../stores/chatSoundPreferencesStore"
 import type { ChatSoundPreference } from "../stores/chatSoundPreferencesStore"
 import { getSetupStatus, useProviderAuthStore } from "../stores/providerAuthStore"
@@ -24,7 +24,6 @@ import { SettingsPage } from "./SettingsPage"
 import { TerminalPage } from "./TerminalPage"
 import { useKannaState } from "./useKannaState"
 import type { AppSettingsSnapshot } from "../../shared/types"
-import { VERSION_SEEN_STORAGE_KEY } from "../lib/storageKeys"
 
 const AUTH_STATUS_RETRY_DELAY_MS = 500
 
@@ -189,10 +188,6 @@ function useAppAuthState() {
   }
 }
 
-export function shouldRedirectToChangelog(pathname: string, currentVersion: string, seenVersion: string | null) {
-  return pathname === "/" && Boolean(currentVersion) && seenVersion !== currentVersion
-}
-
 export function shouldPlayChatNotificationSound(
   appSettings: AppSettingsSnapshot | null,
   preference: ChatSoundPreference,
@@ -243,7 +238,6 @@ function KannaLayout() {
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
   const showMobileOpenButton = location.pathname === "/" || location.pathname === "/terminal"
-  const currentVersion = SDK_CLIENT_APP.split("/")[1] ?? "unknown"
   const previousSidebarDataRef = useRef<ReturnType<typeof useKannaState>["sidebarData"] | null>(null)
   const browserTitle = useMemo(() => getBrowserWindowTitle({
     appName: APP_NAME,
@@ -356,14 +350,6 @@ function KannaLayout() {
     state.sidebarReady,
     state.updateSnapshot,
   ])
-
-  useEffect(() => {
-    const seenVersion = window.localStorage.getItem(VERSION_SEEN_STORAGE_KEY)
-    const shouldRedirect = shouldRedirectToChangelog(location.pathname, currentVersion, seenVersion)
-    window.localStorage.setItem(VERSION_SEEN_STORAGE_KEY, currentVersion)
-    if (!shouldRedirect) return
-    navigate("/settings/changelog", { replace: true })
-  }, [currentVersion, location.pathname, navigate])
 
   useLayoutEffect(() => {
     document.title = browserTitle

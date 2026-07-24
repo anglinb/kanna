@@ -8,9 +8,6 @@ export const UI_UPDATE_RESTART_STORAGE_KEY = "kanna:ui-update-restart"
 /** sessionStorage: timestamp of the last server-initiated reload request we handled. */
 export const UI_UPDATE_RELOAD_REQUEST_STORAGE_KEY = "kanna:last-update-reload-request"
 
-/** localStorage: last app version the user has seen (release notes banner). */
-export const VERSION_SEEN_STORAGE_KEY = "kanna:last-seen-version"
-
 /** localStorage: persisted sidebar width in pixels. */
 export const SIDEBAR_WIDTH_STORAGE_KEY = "kanna:sidebar-width"
 
