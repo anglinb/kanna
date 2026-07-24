@@ -20,6 +20,7 @@ import { UsageLimitsManager } from "./usage-limits"
 import { DiffStore } from "./diff-store"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
+import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
@@ -192,6 +193,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       void usageLimits.refresh({ force: true }).catch(() => undefined)
       if (service === "cursor") {
         void agent.refreshCursorModelCatalog()
+      }
+      if (service === "gh") {
+        // Never let a cached "unauthenticated" repo list outlive the sign-in
+        // (clone palette / home repos section fetch through this cache).
+        clearGitHubRepoCache()
       }
     },
   })

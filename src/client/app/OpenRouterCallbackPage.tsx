@@ -13,14 +13,17 @@ type CallbackState =
   | { status: "error"; message: string }
 
 /**
- * OAuth PKCE callback target (usually opened as a popup). Exchanges the
- * one-time code through the server (which holds the verifier), then notifies
- * the opener via BroadcastChannel and closes itself.
+ * OAuth PKCE callback target, opened in a new tab. Exchanges the one-time code
+ * through the server (which holds the verifier); the original app tab flips to
+ * connected on its own via the provider-auth snapshot push (BroadcastChannel is
+ * a belt-and-suspenders nudge). New tabs self-close; the `self=1` fallback
+ * (browser blocked the new tab, so this IS the app tab) navigates back instead.
  */
 export function OpenRouterCallbackPage() {
   const [state, setState] = useState<CallbackState>({ status: "exchanging" })
   const navigate = useNavigate()
   const startedRef = useRef(false)
+  const isSelfFlow = new URLSearchParams(window.location.search).get("self") === "1"
 
   useEffect(() => {
     if (startedRef.current) return
@@ -43,7 +46,10 @@ export function OpenRouterCallbackPage() {
         } catch {
           // BroadcastChannel unavailable — the auth snapshot push covers it.
         }
-        if (window.opener) {
+        if (isSelfFlow) {
+          window.setTimeout(() => navigate("/settings/providers"), 700)
+        } else {
+          // Opened as its own tab — close it and return the user to the app.
           window.setTimeout(() => window.close(), 800)
         }
       })
@@ -56,6 +62,7 @@ export function OpenRouterCallbackPage() {
       .finally(() => {
         window.setTimeout(() => socket.dispose(), 1_000)
       })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
@@ -75,14 +82,16 @@ export function OpenRouterCallbackPage() {
               <Check className="h-4 w-4 text-emerald-500" />
               OpenRouter connected
             </div>
-            <p className="text-sm text-muted-foreground">
-              {window.opener ? "You can close this window." : "Your API key was saved."}
-            </p>
-            {!window.opener ? (
-              <Button variant="outline" size="sm" onClick={() => navigate("/settings/providers")}>
-                Back to Settings
-              </Button>
-            ) : null}
+            {isSelfFlow ? (
+              <>
+                <p className="text-sm text-muted-foreground">Your API key was saved.</p>
+                <Button variant="outline" size="sm" onClick={() => navigate("/settings/providers")}>
+                  Back to Kanna
+                </Button>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">You can close this tab.</p>
+            )}
           </>
         ) : (
           <>

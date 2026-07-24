@@ -22,16 +22,34 @@ function hostOf(url: string): string {
   }
 }
 
-/** Open the OpenRouter PKCE popup (falls back to same-tab when blocked). */
+/**
+ * Open the OpenRouter PKCE flow in a new tab. The tab is opened synchronously
+ * inside the click gesture (with a placeholder URL) and navigated once the
+ * server returns the auth URL — otherwise mobile Safari, seeing window.open
+ * run after an await, hijacks the current tab instead of opening a new one.
+ * Falls back to same-tab navigation only when the browser blocks the open.
+ */
 export async function startOpenRouterOauth(socket: KannaSocket) {
-  const callbackUrl = `${window.location.origin}/oauth/openrouter/callback`
-  const result = await socket.command<{ authUrl: string }>({
-    type: "auth.openrouter.start",
-    callbackUrl,
-  })
-  const popup = window.open(result.authUrl, "kanna-openrouter-auth", "popup,width=520,height=760")
-  if (!popup) {
-    window.location.assign(result.authUrl)
+  const newTab = window.open("about:blank", "_blank")
+  const origin = window.location.origin
+  // The `self=1` marker tells the callback page it's running in the current
+  // tab (blocked-open fallback) so it navigates back instead of self-closing.
+  const callbackUrl = newTab
+    ? `${origin}/oauth/openrouter/callback`
+    : `${origin}/oauth/openrouter/callback?self=1`
+  try {
+    const result = await socket.command<{ authUrl: string }>({
+      type: "auth.openrouter.start",
+      callbackUrl,
+    })
+    if (newTab && !newTab.closed) {
+      newTab.location.href = result.authUrl
+    } else {
+      window.location.assign(result.authUrl)
+    }
+  } catch (error) {
+    newTab?.close()
+    throw error
   }
 }
 

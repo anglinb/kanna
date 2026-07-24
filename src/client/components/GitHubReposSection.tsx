@@ -8,6 +8,7 @@ import { parseRepoRef, resolveCloneDestination } from "../lib/project-fs"
 import { formatPathWithTilde } from "../lib/pathUtils"
 import { groupByRecency } from "../lib/project-groups"
 import { cn } from "../lib/utils"
+import { useAuthService } from "../stores/providerAuthStore"
 import { openCommandPalette } from "./command-palette/CommandPalette"
 import { GitHubIcon } from "./provider-icons"
 import { Button } from "./ui/button"
@@ -133,6 +134,9 @@ export function GitHubReposSection({
   const [selectedAccount, setSelectedAccount] = useState<string>(ALL_ACCOUNTS)
   const [cloningRepo, setCloningRepo] = useState<string | null>(null)
   const [cloneError, setCloneError] = useState<string | null>(null)
+  // Refetch whenever GitHub auth flips (e.g. the setup wizard just signed
+  // `gh` in) so the section appears without a page reload.
+  const ghAuthStatus = useAuthService("gh")?.authStatus
 
   useEffect(() => {
     let cancelled = false
@@ -146,7 +150,7 @@ export function GitHubReposSection({
     return () => {
       cancelled = true
     }
-  }, [socket])
+  }, [socket, ghAuthStatus])
 
   const repos = result?.available ? result.repos : []
 

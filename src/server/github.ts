@@ -1,4 +1,5 @@
 import type { GitHubRecentReposResult, GitHubRepoSummary } from "../shared/types"
+import { resolveCommandPath } from "./process-utils"
 
 /**
  * Recent repositories for the signed-in `gh` user, across personal and all
@@ -19,7 +20,11 @@ interface GhRepoResponse {
 }
 
 async function runCommand(args: string[]) {
-  const process = Bun.spawn(args, {
+  // Resolve gh through a login shell so servers launched without the user's
+  // PATH (launchd/systemd) still find it — same treatment as provider-auth.
+  const [command, ...rest] = args
+  const argv = command === "gh" ? [resolveCommandPath("gh") ?? command, ...rest] : args
+  const process = Bun.spawn(argv, {
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -121,7 +126,11 @@ export async function listRecentGitHubRepos(
   }
 }
 
-/** Test hook: drop the module-level cache. */
+/**
+ * Drop the module-level cache — called when GitHub auth changes (e.g. the
+ * setup wizard just signed `gh` in) so a cached "unauthenticated" result
+ * doesn't outlive the sign-in. Also used by tests.
+ */
 export function clearGitHubRepoCache() {
   cache = null
 }
