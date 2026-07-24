@@ -1,8 +1,16 @@
 name: Publish to npm
 
+# Runs when a release is published by a user. Releases created with the
+# repo's GITHUB_TOKEN (the release.yml workflow) don't emit workflow-
+# triggering events, so release.yml chains into this via workflow_dispatch.
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.56.1)"
+        required: true
 
 jobs:
   publish:
@@ -10,8 +18,12 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
 
@@ -20,7 +32,7 @@ jobs:
       - name: Verify release tag matches package version
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          test "${{ github.event.release.tag_name }}" = "v${PACKAGE_VERSION}"
+          test "${RELEASE_TAG}" = "v${PACKAGE_VERSION}"
 
       - run: bun run build
 
@@ -29,7 +41,7 @@ jobs:
       - name: Upload export viewer release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/export-viewer-release-assets/* --clobber
+        run: gh release upload "${RELEASE_TAG}" dist/export-viewer-release-assets/* --clobber
 
       - uses: actions/setup-node@v4
         with:
