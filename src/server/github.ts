@@ -1,5 +1,6 @@
 import type { GitHubRecentReposResult, GitHubRepoSummary } from "../shared/types"
 import { resolveCommandPath } from "./process-utils"
+import { parseGhAccount } from "./provider-auth"
 
 /**
  * Recent repositories for the signed-in `gh` user, across personal and all
@@ -39,24 +40,63 @@ async function runCommand(args: string[]) {
 
 export type CommandRunner = typeof runCommand
 
-async function getActiveGhLogin(run: CommandRunner): Promise<string | null> {
+export interface GhAuthInfo {
+  ghInstalled: boolean
+  authenticated: boolean
+  activeAccountLogin: string | undefined
+}
+
+/**
+ * Auth state of the `gh` CLI — the single probe every gh consumer shares
+ * (repos section, publish modal, PR checks).
+ *
+ * Prefers `gh auth status --json hosts` for the structured active-account
+ * read, but that flag only exists in gh ≥ 2.81 (e.g. Ubuntu 24.04's apt
+ * build is 2.45 and exits 1 with "unknown flag" even when signed in). Any
+ * JSON-probe failure therefore falls back to the plain command, whose exit
+ * code has always been the authoritative signal, with the account parsed
+ * from its human output.
+ */
+export async function getGhAuthInfo(run: CommandRunner = runCommand): Promise<GhAuthInfo> {
   const versionResult = await run(["gh", "--version"])
-  if (versionResult.exitCode !== 0) return null
-
-  const authStatusResult = await run(["gh", "auth", "status", "--json", "hosts"])
-  if (authStatusResult.exitCode !== 0) return null
-
-  try {
-    const parsed = JSON.parse(authStatusResult.stdout) as {
-      hosts?: Record<string, Array<{ active?: boolean; login?: string; state?: string }>>
-    }
-    const accounts = parsed.hosts?.["github.com"] ?? []
-    const activeAccount = accounts.find((account) => account.active) ?? accounts[0]
-    if (activeAccount?.state !== "success") return null
-    return activeAccount.login ?? ""
-  } catch {
-    return null
+  if (versionResult.exitCode !== 0) {
+    return { ghInstalled: false, authenticated: false, activeAccountLogin: undefined }
   }
+
+  const jsonResult = await run(["gh", "auth", "status", "--json", "hosts"])
+  if (jsonResult.exitCode === 0) {
+    try {
+      const parsed = JSON.parse(jsonResult.stdout) as {
+        hosts?: Record<string, Array<{ active?: boolean; login?: string; state?: string }>>
+      }
+      const accounts = parsed.hosts?.["github.com"] ?? []
+      const activeAccount = accounts.find((account) => account.active) ?? accounts[0]
+      return {
+        ghInstalled: true,
+        authenticated: activeAccount?.state === "success",
+        activeAccountLogin: activeAccount?.login,
+      }
+    } catch {
+      // Unparseable JSON — fall through to the plain probe.
+    }
+  }
+
+  const plainResult = await run(["gh", "auth", "status"])
+  if (plainResult.exitCode !== 0) {
+    return { ghInstalled: true, authenticated: false, activeAccountLogin: undefined }
+  }
+  return {
+    ghInstalled: true,
+    authenticated: true,
+    activeAccountLogin:
+      parseGhAccount(`${plainResult.stdout}\n${plainResult.stderr}`) ?? undefined,
+  }
+}
+
+async function getActiveGhLogin(run: CommandRunner): Promise<string | null> {
+  const info = await getGhAuthInfo(run)
+  if (!info.ghInstalled || !info.authenticated) return null
+  return info.activeAccountLogin ?? ""
 }
 
 function toRepoSummary(repo: GhRepoResponse): GitHubRepoSummary | null {

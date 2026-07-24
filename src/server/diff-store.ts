@@ -26,6 +26,8 @@ import type {
   UpstreamStatus,
 } from "../shared/types"
 import { generateCommitMessageDetailed } from "./generate-commit-message"
+import { getGhAuthInfo } from "./github"
+import { resolveCommandPath } from "./process-utils"
 import { inferProjectFileContentType } from "./uploads"
 
 interface StoredChatDiffState extends BranchMetadata, UpstreamStatus {
@@ -140,7 +142,12 @@ async function runGit(args: string[], cwd: string, options?: { stdin?: string })
 }
 
 async function runCommand(args: string[]) {
-  const process = Bun.spawn(args, {
+  // Resolve gh through a login shell so servers launched without the user's
+  // PATH (launchd/systemd) still find it — same treatment as github.ts and
+  // provider-auth, so every gh consumer probes the same binary.
+  const [command, ...rest] = args
+  const argv = command === "gh" ? [resolveCommandPath("gh") ?? command, ...rest] : args
+  const process = Bun.spawn(argv, {
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -720,45 +727,6 @@ function sanitizeRepoName(name: string) {
     .replace(/[^a-z0-9.-]+/gu, "-")
     .replace(/-+/gu, "-")
     .replace(/^-|-$/gu, "")
-}
-
-async function getGhAuthInfo() {
-  const versionResult = await runCommand(["gh", "--version"])
-  if (versionResult.exitCode !== 0) {
-    return {
-      ghInstalled: false,
-      authenticated: false,
-      activeAccountLogin: undefined,
-    }
-  }
-
-  const authStatusResult = await runCommand(["gh", "auth", "status", "--json", "hosts"])
-  if (authStatusResult.exitCode !== 0) {
-    return {
-      ghInstalled: true,
-      authenticated: false,
-      activeAccountLogin: undefined,
-    }
-  }
-
-  try {
-    const parsed = JSON.parse(authStatusResult.stdout) as {
-      hosts?: Record<string, Array<{ active?: boolean; login?: string; state?: string }>>
-    }
-    const accounts = parsed.hosts?.["github.com"] ?? []
-    const activeAccount = accounts.find((account) => account.active) ?? accounts[0]
-    return {
-      ghInstalled: true,
-      authenticated: activeAccount?.state === "success",
-      activeAccountLogin: activeAccount?.login,
-    }
-  } catch {
-    return {
-      ghInstalled: true,
-      authenticated: false,
-      activeAccountLogin: undefined,
-    }
-  }
 }
 
 async function getGitHubOwners(): Promise<string[]> {

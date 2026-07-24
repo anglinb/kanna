@@ -498,7 +498,11 @@ export class ProviderAuthManager {
 
     try {
       const command = this.installCommand(service)
-      const result = await this.deps.exec(["sh", "-lc", command], { timeoutMs: 10 * 60_000 })
+      // Prefer bash: on Debian/Ubuntu `sh` is dash, which chokes on bash-isms
+      // in the user's profile files ("source: not found") and buries the real
+      // installer error in noise.
+      const shell = this.resolvePath("bash") ? "bash" : "sh"
+      const result = await this.deps.exec([shell, "-lc", command], { timeoutMs: 10 * 60_000 })
       if (result.code !== 0) {
         throw new Error(truncateOutput(result.stderr || result.stdout) || `Installer exited with code ${result.code}`)
       }
@@ -534,13 +538,21 @@ export class ProviderAuthManager {
       if (this.resolvePath("brew")) return "brew install gh || brew upgrade gh"
       throw new Error("Homebrew not found. Install it from brew.sh, or download the GitHub CLI from cli.github.com.")
     }
+    // Download to a file (not `curl | tar`): in a pipeline a mid-transfer
+    // curl failure just truncates tar's stdin — `set -e` never sees curl's
+    // exit code and the surfaced error is a baffling "gzip: unexpected end
+    // of file". Retries paper over transient CDN 5xx/timeouts.
     return [
       "set -e",
-      `ver=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep -o '"tag_name": *"v[^"]*"' | head -1 | grep -o 'v[0-9][0-9.]*')`,
+      `ver=$(curl -fsSL --retry 3 --retry-all-errors https://api.github.com/repos/cli/cli/releases/latest | grep -o '"tag_name": *"v[^"]*"' | head -1 | grep -o 'v[0-9][0-9.]*')`,
+      `test -n "$ver"`,
       `arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac`,
+      `tmp=$(mktemp -d)`,
+      `trap 'rm -rf "$tmp"' EXIT`,
+      `curl -fsSL --retry 3 --retry-all-errors -o "$tmp/gh.tar.gz" "https://github.com/cli/cli/releases/download/$ver/gh_$(echo $ver | tr -d v)_linux_$arch.tar.gz"`,
+      `tar -xzf "$tmp/gh.tar.gz" -C "$tmp"`,
       "mkdir -p \"$HOME/.local/bin\"",
-      `curl -fsSL "https://github.com/cli/cli/releases/download/$ver/gh_$(echo $ver | tr -d v)_linux_$arch.tar.gz" | tar -xz -C /tmp`,
-      `cp "/tmp/gh_$(echo $ver | tr -d v)_linux_$arch/bin/gh" "$HOME/.local/bin/gh"`,
+      `cp "$tmp/gh_$(echo $ver | tr -d v)_linux_$arch/bin/gh" "$HOME/.local/bin/gh"`,
     ].join("\n")
   }
 
