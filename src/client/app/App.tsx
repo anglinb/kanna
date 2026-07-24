@@ -11,7 +11,7 @@ import { TooltipProvider } from "../components/ui/tooltip"
 import { APP_NAME } from "../../shared/branding"
 import { useChatSoundPreferencesStore } from "../stores/chatSoundPreferencesStore"
 import type { ChatSoundPreference } from "../stores/chatSoundPreferencesStore"
-import { getSetupStatus, useProviderAuthStore } from "../stores/providerAuthStore"
+import { getSetupLaunchAction, useProviderAuthStore } from "../stores/providerAuthStore"
 import { SetupWizard } from "../components/auth/SetupWizard"
 import type { ProviderAuthSnapshot } from "../../shared/types"
 import { playChatNotificationSound, shouldPlayChatSound } from "../lib/chatSounds"
@@ -217,20 +217,21 @@ function KannaLayout() {
     }
   }, [state.socket])
 
-  // Onboarding: once the auth probe resolves, auto-launch the setup wizard
-  // whenever setup is unfinished (something the flow covers isn't connected).
-  // Decided at most once per app load; "Set up later" and a completed run are
-  // both persisted and suppress future launches.
+  // Onboarding auto-launch (see getSetupLaunchAction): a first-ever launch
+  // opens the wizard instantly — cards show live probe status inside — while
+  // later launches wait for the probe round and re-open only when something
+  // is still unconnected. Decided at most once per app load; "Set up later"
+  // and a completed run are both persisted and suppress future launches.
   const authSnapshot = useProviderAuthStore((store) => store.snapshot)
   const setupLaunchDecidedRef = useRef(false)
   useEffect(() => {
     if (setupLaunchDecidedRef.current) return
-    const status = getSetupStatus(authSnapshot)
-    if (!status.resolved) return
+    const { setupShown, setupCompleted, setupDismissed, openSetupWizard } =
+      useProviderAuthStore.getState()
+    const action = getSetupLaunchAction(authSnapshot, { setupShown, setupCompleted, setupDismissed })
+    if (action === "wait") return
     setupLaunchDecidedRef.current = true
-    const { setupCompleted, setupDismissed, openSetupWizard } = useProviderAuthStore.getState()
-    if (setupCompleted || setupDismissed) return
-    if (status.missingAny) {
+    if (action === "open") {
       openSetupWizard()
     }
   }, [authSnapshot])

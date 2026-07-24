@@ -11,6 +11,7 @@ import type { KannaSocket } from "../app/socket"
 import {
   SETUP_WIZARD_COMPLETED_STORAGE_KEY,
   SETUP_WIZARD_DISMISSED_STORAGE_KEY,
+  SETUP_WIZARD_SHOWN_STORAGE_KEY,
 } from "../lib/storageKeys"
 
 function readStorageFlag(key: string): boolean {
@@ -35,6 +36,8 @@ interface ProviderAuthStore {
   socket: KannaSocket | null
   /** Full-screen setup wizard visibility. */
   setupWizardOpen: boolean
+  /** The wizard has been shown at least once (persisted first-launch marker). */
+  setupShown: boolean
   /** The wizard's final step was completed (persisted). Hides the Setup cards. */
   setupCompleted: boolean
   /** "Set up later" was chosen (persisted). Suppresses auto-launch only. */
@@ -52,11 +55,15 @@ export const useProviderAuthStore = create<ProviderAuthStore>((set) => ({
   snapshot: null,
   socket: null,
   setupWizardOpen: false,
+  setupShown: readStorageFlag(SETUP_WIZARD_SHOWN_STORAGE_KEY),
   setupCompleted: readStorageFlag(SETUP_WIZARD_COMPLETED_STORAGE_KEY),
   setupDismissed: readStorageFlag(SETUP_WIZARD_DISMISSED_STORAGE_KEY),
   setSnapshot: (snapshot) => set({ snapshot }),
   setSocket: (socket) => set({ socket }),
-  openSetupWizard: () => set({ setupWizardOpen: true }),
+  openSetupWizard: () => {
+    writeStorageFlag(SETUP_WIZARD_SHOWN_STORAGE_KEY)
+    set({ setupWizardOpen: true, setupShown: true })
+  },
   dismissSetupWizard: () => {
     writeStorageFlag(SETUP_WIZARD_DISMISSED_STORAGE_KEY)
     set({ setupWizardOpen: false, setupDismissed: true })
@@ -131,6 +138,27 @@ export function getSetupStatus(snapshot: ProviderAuthSnapshot | null): SetupStat
     openRouterConnected,
     missingAny: !githubConnected || !anyAgentConnected || !openRouterConnected,
   }
+}
+
+/**
+ * Auto-launch decision for the setup wizard on app load.
+ *
+ * First-ever launch ("shown" never persisted) opens IMMEDIATELY — the cards
+ * inside render live "Checking…" states as the CLI probes resolve, so there
+ * is nothing to wait for; if everything turns out connected the user just
+ * sees checks and clicks through. Later launches wait for the probe round
+ * (avoids flashing the wizard at fully-set-up users) and re-open only while
+ * something the flow covers is still unconnected.
+ */
+export function getSetupLaunchAction(
+  snapshot: ProviderAuthSnapshot | null,
+  flags: { setupShown: boolean; setupCompleted: boolean; setupDismissed: boolean }
+): "open" | "wait" | "none" {
+  if (flags.setupCompleted || flags.setupDismissed) return "none"
+  if (!flags.setupShown) return "open"
+  const status = getSetupStatus(snapshot)
+  if (!status.resolved) return "wait"
+  return status.missingAny ? "open" : "none"
 }
 
 export function useSetupStatus(): SetupStatus {

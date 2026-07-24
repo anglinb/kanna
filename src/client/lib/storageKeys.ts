@@ -18,6 +18,9 @@ export const OPEN_EXTERNAL_SELECT_STORAGE_KEY = "kanna:last-open-external"
 export const SIDEBAR_VIEW_STORAGE_KEY = "kanna:sidebar-view"
 
 /** localStorage: the setup wizard was completed (finished the last step). */
+/** localStorage: the setup wizard has been shown at least once (first-launch marker). */
+export const SETUP_WIZARD_SHOWN_STORAGE_KEY = "kanna:setup-shown"
+
 export const SETUP_WIZARD_COMPLETED_STORAGE_KEY = "kanna:setup-completed"
 
 /** localStorage: the setup wizard was dismissed ("Set up later") — suppresses auto-launch, not the Setup card. */
