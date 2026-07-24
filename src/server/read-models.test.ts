@@ -27,6 +27,31 @@ describe("read models", () => {
     }
   })
 
+  test("hidden (dot-directory) discovered projects are filtered; saved ones are kept", () => {
+    const state = createEmptyState()
+    state.projectsById.set("project-1", {
+      id: "project-1",
+      localPath: "/home/user/.dotfiles",
+      title: "dotfiles",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    state.projectIdsByPath.set("/home/user/.dotfiles", "project-1")
+
+    const snapshot = deriveLocalProjectsSnapshot(state, [
+      { localPath: "/home/user/.claude/scratch", title: "scratch", modifiedAt: 2 },
+      { localPath: "/home/user/work/.hidden-repo", title: "hidden-repo", modifiedAt: 3 },
+      { localPath: "/home/user/work/visible", title: "visible", modifiedAt: 4 },
+    ], "Machine")
+
+    const paths = snapshot.projects.map((project) => project.localPath)
+    expect(paths).toContain("/home/user/work/visible")
+    // Saved projects are exempt — the user opted in explicitly.
+    expect(paths).toContain("/home/user/.dotfiles")
+    expect(paths).not.toContain("/home/user/.claude/scratch")
+    expect(paths).not.toContain("/home/user/work/.hidden-repo")
+  })
+
   test("include provider data in sidebar rows", () => {
     const state = createEmptyState()
     state.projectsById.set("project-1", {

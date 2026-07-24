@@ -165,6 +165,17 @@ export function deriveSidebarData(
   return { projectGroups }
 }
 
+/**
+ * Hidden projects: any dot-directory in the path (~/.claude/foo,
+ * ~/dotfiles/.config). Agent histories discover them, but they're noise on
+ * the home page — saved projects are exempt (the user opted in explicitly).
+ */
+export function hasHiddenPathSegment(localPath: string) {
+  return localPath
+    .split("/")
+    .some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..")
+}
+
 export function deriveLocalProjectsSnapshot(
   state: StoreState,
   discoveredProjects: Array<{ localPath: string; title: string; modifiedAt: number }>,
@@ -174,6 +185,7 @@ export function deriveLocalProjectsSnapshot(
 
   for (const project of discoveredProjects) {
     const normalizedPath = resolveLocalPath(project.localPath)
+    if (hasHiddenPathSegment(normalizedPath)) continue
     projects.set(normalizedPath, {
       localPath: normalizedPath,
       title: project.title,
