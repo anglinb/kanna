@@ -7,7 +7,6 @@ Bun server + React 19 client, talking over one WebSocket.
 
 - `bun run dev` — client (Vite) + server together
 - `bun test` — unit/integration suite (Bun test)
-- `bun run test:e2e` — build + Playwright smoke suite (boots the real server against a temp HOME)
 - `bun run check` — typecheck + both production builds
 - `bun run build` — client + export-viewer bundles
 
@@ -48,8 +47,8 @@ React client (src/client)
   and prefer targeted `broadcastFilteredSnapshots({...})` over full
   broadcasts (name exactly the topics the command can change).
 - Tests live next to their module (`foo.ts` / `foo.test.ts`) and run in Bun.
-  Playwright specs live in `e2e/*.e2e.ts` (the `.e2e.ts` suffix keeps
-  `bun test` from picking them up).
+  The `.e2e.ts` suffix keeps a file out of `bun test`'s default sweep (used
+  by the cloud wire e2e).
 - When tests need git, they create throwaway repos; in sandboxes set
   `GIT_CONFIG_GLOBAL` to a clean config so URL rewrites/identity don't leak in.
 

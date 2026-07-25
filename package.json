@@ -47,8 +47,7 @@
     "start": "bun run ./src/server/cli.ts",
     "test": "bun test",
     "test:cloud": "bun test ./src/server/cloud/wire.e2e.ts",
-    "prepublishOnly": "bun run build",
-    "test:e2e": "bun run build && playwright test"
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
@@ -70,7 +69,6 @@
     "@fontsource-variable/bricolage-grotesque": "^5.2.10",
     "@legendapp/list": "3.0.0-beta.44",
     "@pierre/diffs": "^1.1.12",
-    "@playwright/test": "^1.61.1",
     "@radix-ui/react-context-menu": "^2.2.16",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-popover": "^1.1.15",

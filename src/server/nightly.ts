@@ -5,6 +5,7 @@ import path from "node:path"
 import { LOG_PREFIX } from "../shared/branding"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import { hasCommand } from "./process-utils"
+import { CLI_CHILD_MODE, CLI_CHILD_MODE_ENV_VAR } from "./restart"
 
 // Nightly channel: build the repo's main branch from source and install it as
 // the global CLI, so clients can jump to unreleased changes without waiting
@@ -29,7 +30,7 @@ export interface NightlyBuildDeps {
   log?: (message: string) => void
   fetchImpl?: typeof fetch
   /** Command runner seam for tests; the default spawns with a hard timeout. */
-  runCommand?: (command: string, args: string[], cwd: string) => Promise<RunCommandResult>
+  runCommand?: (command: string, args: string[], cwd: string, env?: Record<string, string>) => Promise<RunCommandResult>
   /** Working directory override for tests (default ~/.kanna/nightly). */
   workDir?: string
 }
@@ -56,7 +57,7 @@ export async function fetchMainCommitSha(fetchImpl: typeof fetch = fetch): Promi
   return sha
 }
 
-function runCommandWithTimeout(command: string, args: string[], cwd: string): Promise<RunCommandResult> {
+function runCommandWithTimeout(command: string, args: string[], cwd: string, env?: Record<string, string>): Promise<RunCommandResult> {
   return new Promise((resolve) => {
     let output = ""
     let settled = false
@@ -67,7 +68,11 @@ function runCommandWithTimeout(command: string, args: string[], cwd: string): Pr
       resolve({ ok, output })
     }
 
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    })
     const timer = setTimeout(() => {
       output += `\n[timed out after ${STEP_TIMEOUT_MS / 60_000} minutes]`
       child.kill("SIGKILL")
@@ -166,7 +171,6 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
   const steps: Array<{ label: string; command: string; args: string[] }> = [
     { label: "install dependencies", command: "bun", args: ["install"] },
     { label: "build", command: "bun", args: ["run", "build"] },
-    { label: "install the build", command: "bun", args: ["install", "-g", "."] },
   ]
   for (const step of steps) {
     log(`${LOG_PREFIX} nightly: ${step.label}…`)
@@ -174,6 +178,24 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
     if (!result.ok) {
       return failure(`Nightly ${step.label} step failed.\n${outputTail(result.output)}`)
     }
+  }
+
+  // Startup probe BEFORE replacing the global install: `--version` in child
+  // mode loads the entire server module graph, so a main that can't even
+  // start never reaches users' PATH — the current install stays untouched.
+  log(`${LOG_PREFIX} nightly: verifying the build…`)
+  const probe = await runCommand("bun", ["bin/kanna", "--version"], srcDir, {
+    [CLI_CHILD_MODE_ENV_VAR]: CLI_CHILD_MODE,
+    KANNA_DISABLE_SELF_UPDATE: "1",
+  })
+  if (!probe.ok || !probe.output.includes(version)) {
+    return failure(`The nightly build failed its startup check, so it was not installed.\n${outputTail(probe.output)}`)
+  }
+
+  log(`${LOG_PREFIX} nightly: installing the build…`)
+  const install = await runCommand("bun", ["install", "-g", "."], srcDir)
+  if (!install.ok) {
+    return failure(`Nightly install step failed.\n${outputTail(install.output)}`)
   }
 
   log(`${LOG_PREFIX} nightly: installed ${version}`)

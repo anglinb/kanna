@@ -57,7 +57,7 @@ describe("installNightlyBuild", () => {
     const tarball = createSourceTarball(tempDir)
     const workDir = path.join(tempDir, "nightly")
 
-    const commands: Array<{ command: string; args: string[]; cwd: string }> = []
+    const commands: Array<{ command: string; args: string[]; cwd: string; env?: Record<string, string> }> = []
     const fetchImpl = (async (input: string | URL | Request) => {
       const url = String(input)
       if (url.includes("api.github.com")) return new Response(SHA)
@@ -71,12 +71,15 @@ describe("installNightlyBuild", () => {
     const result = await installNightlyBuild({
       workDir,
       fetchImpl,
-      runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
-        commands.push({ command, args, cwd })
+      runCommand: async (command, args, cwd, env): Promise<RunCommandResult> => {
+        commands.push({ command, args, cwd, env })
         if (command === "tar") {
           // Real extraction so the version-stamp step operates on real files.
           const extract = spawnSync(command, args, { cwd, stdio: "ignore" })
           return { ok: extract.status === 0, output: "" }
+        }
+        if (args.includes("--version")) {
+          return { ok: true, output: "0.56.7-nightly.0123456\n" }
         }
         return { ok: true, output: "" }
       },
@@ -93,10 +96,50 @@ describe("installNightlyBuild", () => {
       expect.stringContaining("tar -xzf"),
       "bun install",
       "bun run build",
+      "bun bin/kanna --version",
       "bun install -g .",
     ])
     // Build steps run inside the extracted source checkout.
     expect(commands.slice(1).every(({ cwd }) => cwd === path.join(workDir, "src"))).toBe(true)
+    // The startup probe runs the built CLI directly in child mode.
+    const probeEnv = commands.find(({ args }) => args.includes("--version"))?.env ?? {}
+    expect(Object.keys(probeEnv).length).toBeGreaterThan(0)
+    expect(probeEnv.KANNA_DISABLE_SELF_UPDATE).toBe("1")
+  })
+
+  test("a build that fails its startup check is never installed", async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "kanna-nightly-"))
+    const tarball = createSourceTarball(tempDir)
+    const workDir = path.join(tempDir, "nightly")
+
+    const commands: string[] = []
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes("api.github.com")) return new Response(SHA)
+      return new Response(new Uint8Array(tarball))
+    }) as unknown as typeof fetch
+
+    const result = await installNightlyBuild({
+      workDir,
+      fetchImpl,
+      runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
+        commands.push([command, ...args].join(" "))
+        if (command === "tar") {
+          const extract = spawnSync(command, args, { cwd, stdio: "ignore" })
+          return { ok: extract.status === 0, output: "" }
+        }
+        if (args.includes("--version")) {
+          return { ok: false, output: "SyntaxError: unexpected token" }
+        }
+        return { ok: true, output: "" }
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.userMessage).toContain("startup check")
+    expect(result.userMessage).toContain("SyntaxError")
+    // The global install was never touched.
+    expect(commands.some((command) => command.includes("install -g"))).toBe(false)
   })
 
   test("surfaces a failing build step with its output", async () => {
