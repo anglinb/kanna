@@ -184,6 +184,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Replace the sidebar with a tabbed Chats / Projects view — In Progress, Review, and Recents up top, full projects one tap away.",
     keywords: ["sidebar", "recents", "chats", "projects", "review", "in progress", "experimental"],
   },
+  nightlyBuilds: {
+    sectionId: "labs",
+    title: "Nightly builds",
+    description: "Run the newest changes from main — downloaded from GitHub and built from source on this machine.",
+    keywords: ["nightly", "main", "update", "channel", "stable", "prerelease", "build"],
+  },
 })
 
 export function listAllSettingsRowDefs(): SettingsRowDef[] {

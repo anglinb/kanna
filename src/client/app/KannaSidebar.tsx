@@ -470,17 +470,21 @@ function KannaSidebarImpl({
             >
               <X className="h-5 w-5" />
             </Button>
-            {!newSidebarEnabled ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="w-[42px] rounded-lg hover:!border-border/0 !border-0 -translate-x-[1px]"
-                onClick={() => window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT))}
-                title="Search"
-              >
-                <Search className="h-5 w-5" />
-              </Button>
-            ) : null}
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "w-[42px] rounded-lg hover:!border-border/0 !border-0 -translate-x-[1px]",
+                isSettingsActive ? "text-foreground" : "text-muted-foreground"
+              )}
+              onClick={() => {
+                navigate("/settings/general")
+                onClose()
+              }}
+              title="Settings"
+            >
+              <Settings className="h-5 w-5" />
+            </Button>
           </div>
           <div className="flex items-center justify-self-center gap-2 md:justify-self-auto">
             <button
@@ -496,6 +500,17 @@ function KannaSidebarImpl({
             <span className="font-logo text-base uppercase sm:text-md text-slate-600 dark:text-slate-100">{APP_NAME}</span>
           </div>
           <div className="flex items-center justify-self-end md:justify-self-auto">
+            {!newSidebarEnabled ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-10 rounded-lg hover:!border-border/0 md:hidden"
+                onClick={() => window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT))}
+                title="Search"
+              >
+                <Search className="h-5 w-5" />
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="icon"
@@ -726,7 +741,7 @@ function KannaSidebarImpl({
         </div>
 
           <MachineSwitcher />
-        <div className={cn("border-t border-border p-2", isStandalone && "pb-[55px]")}>
+        <div className={cn("hidden md:block border-t border-border p-2", isStandalone && "pb-[55px]")}>
           <button
             type="button"
             onClick={() => {
@@ -740,7 +755,7 @@ function KannaSidebarImpl({
                 : "border-border/0 hover:bg-muted hover:border-border active:bg-muted/80"
             )}
           >
-            <div className="flex items- justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Settings className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm">Settings</span>

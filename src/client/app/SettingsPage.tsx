@@ -300,7 +300,7 @@ export function SettingsPage() {
                 ) : selectedPage === "usage" ? (
                   <UsageSection state={state} />
                 ) : selectedPage === "labs" ? (
-                  <LabsSection state={state} />
+                  <LabsSection state={state} appVersion={appVersion} />
                 ) : (
                   <ChangelogSection
                     status={changelog.status}
@@ -314,12 +314,6 @@ export function SettingsPage() {
                     }}
                     onCheckForUpdates={() => {
                       void state.handleCheckForUpdates({ force: true })
-                    }}
-                    onInstallNightly={() => {
-                      void state.handleInstallNightly()
-                    }}
-                    onInstallStable={() => {
-                      void state.handleInstallStable()
                     }}
                   />
                 )}
