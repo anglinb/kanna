@@ -177,6 +177,8 @@ export interface KannaState {
   handleCreateProject: (project: ProjectRequest) => Promise<void>
   handleCheckForUpdates: (options?: { force?: boolean }) => Promise<void>
   handleInstallUpdate: () => Promise<void>
+  handleInstallNightly: () => Promise<void>
+  handleInstallStable: () => Promise<void>
   handleReadAppSettings: () => Promise<void>
   handleWriteAppSettings: (patch: AppSettingsPatch) => Promise<void>
   handleReadLlmProvider: () => Promise<void>
@@ -304,7 +306,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     })
   }, [socket])
 
-  const { updateSnapshot, handleCheckForUpdates, handleInstallUpdate } = useUpdateRestart({
+  const { updateSnapshot, handleCheckForUpdates, handleInstallUpdate, handleInstallNightly, handleInstallStable } = useUpdateRestart({
     socket,
     connectionStatus,
     dialog,
@@ -867,6 +869,8 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleCreateProject,
     handleCheckForUpdates,
     handleInstallUpdate,
+    handleInstallNightly,
+    handleInstallStable,
     handleReadAppSettings,
     handleWriteAppSettings,
     handleReadLlmProvider,

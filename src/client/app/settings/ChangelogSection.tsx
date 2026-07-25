@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react"
-import { DownloadCloud, Loader2 } from "lucide-react"
+import { DownloadCloud, Loader2, Moon } from "lucide-react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { UpdateSnapshot } from "../../../shared/types"
+import { isNightlyVersion, type UpdateSnapshot } from "../../../shared/types"
 import { markdownComponents } from "../../components/messages/shared"
 import { buttonVariants } from "../../components/ui/button"
 import { SettingsHeaderButton } from "../../components/ui/settings-header-button"
@@ -162,6 +162,8 @@ export function ChangelogSection({
   currentVersion,
   onInstallUpdate,
   onCheckForUpdates,
+  onInstallNightly,
+  onInstallStable,
 }: {
   status: ChangelogStatus
   releases: GithubRelease[]
@@ -171,6 +173,8 @@ export function ChangelogSection({
   currentVersion: string
   onInstallUpdate: () => void
   onCheckForUpdates: () => void
+  onInstallNightly: () => void
+  onInstallStable: () => void
 }) {
   const latestVersion = updateSnapshot?.latestVersion ?? releases[0]?.tag_name ?? "Unknown"
   const currentVersionLabel = updateSnapshot?.currentVersion ?? currentVersion
@@ -179,9 +183,45 @@ export function ChangelogSection({
   const canInstallUpdate = updateSnapshot?.updateAvailable === true
   const normalizedLatestVersion = latestVersion.replace(/^v/i, "")
   const normalizedCurrentVersion = currentVersionLabel.replace(/^v/i, "")
+  const onNightly = isNightlyVersion(currentVersionLabel)
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card/30 px-5 py-4">
+        <Moon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-foreground">
+            {onNightly ? `Nightly build ${currentVersionLabel}` : "Nightly builds"}
+          </div>
+          <div className="mt-0.5 text-sm text-muted-foreground">
+            {onNightly
+              ? "You're running a build of main. The next published release returns you to stable automatically."
+              : "Run the newest changes from main — downloaded from GitHub and built from source on this machine."}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {onNightly ? (
+            <SettingsHeaderButton
+              variant="outline"
+              onClick={onInstallStable}
+              disabled={isUpdating}
+            >
+              Back to stable
+            </SettingsHeaderButton>
+          ) : null}
+          <SettingsHeaderButton
+            variant="outline"
+            onClick={onInstallNightly}
+            disabled={isUpdating}
+          >
+            {isUpdating
+              ? "Updating…"
+              : onNightly
+                ? "Rebuild latest main"
+                : "Update to nightly"}
+          </SettingsHeaderButton>
+        </div>
+      </div>
       {status === "loading" || status === "idle" ? (
         <div className="flex min-h-[180px] items-center justify-center rounded-2xl border border-border bg-card/40 px-6 py-8 text-sm text-muted-foreground">
           <div className="flex items-center gap-3">

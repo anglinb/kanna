@@ -7,6 +7,7 @@ import {
   runCli,
 } from "./cli-runtime"
 import { CLI_STARTUP_UPDATE_RESTART_EXIT_CODE, CLI_UI_UPDATE_RESTART_EXIT_CODE } from "./restart"
+import { installNightlyBuild } from "./nightly"
 import { startKannaServer } from "./server"
 
 // Read version from package.json at the package root
@@ -33,6 +34,7 @@ const result = await runCli(argv, {
   },
   fetchLatestVersion: fetchLatestPackageVersion,
   installVersion: installPackageVersion,
+  installNightly: () => installNightlyBuild({ log: console.log }),
   openUrl,
   log: console.log,
   warn: console.warn,

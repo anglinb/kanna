@@ -789,6 +789,11 @@ export function resolveClaudeContextWindowMaxTokens(modelId: string, contextWind
   return resolveClaudeContextWindowTokens(resolveClaudeContextWindow(modelId, contextWindow))
 }
 
+/** Version strings stamped by nightly builds ("0.56.7-nightly.abc1234"). */
+export function isNightlyVersion(version: string): boolean {
+  return version.includes("-nightly.")
+}
+
 export type KannaStatus =
   | "idle"
   | "starting"

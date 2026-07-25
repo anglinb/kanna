@@ -93,6 +93,8 @@ export type ClientCommand =
   | { type: "project.writeQuickActions"; projectId: string; quickActions: ProjectQuickAction[] }
   | { type: "update.check"; force?: boolean }
   | { type: "update.install" }
+  | { type: "update.installNightly" }
+  | { type: "update.installStable" }
   | { type: "settings.readKeybindings" }
   | { type: "settings.writeKeybindings"; bindings: KeybindingsSnapshot["bindings"] }
   | { type: "settings.readAppSettings" }

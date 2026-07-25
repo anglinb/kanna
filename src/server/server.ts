@@ -29,6 +29,7 @@ import { getMachineDisplayName } from "./machine-name"
 import { TerminalManager } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
+import type { NightlyInstallResult } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { instanceFingerprint } from "./instance"
 import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileContentType, persistProjectUpload } from "./uploads"
@@ -107,6 +108,7 @@ export interface StartKannaServerOptions {
     version: string
     fetchLatestVersion: (packageName: string) => Promise<string>
     installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
+    installNightly?: () => Promise<NightlyInstallResult>
   }
 }
 
@@ -152,6 +154,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       currentVersion: options.update.version,
       fetchLatestVersion: options.update.fetchLatestVersion,
       installVersion: options.update.installVersion,
+      installNightly: options.update.installNightly,
       devMode: runtimeProfile === "dev",
       trackEvent: analytics.track.bind(analytics),
     })

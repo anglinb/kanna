@@ -5,6 +5,7 @@ import { APP_NAME, CLI_COMMAND, getDataDirDisplay, LOG_PREFIX, PACKAGE_NAME } fr
 import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
 import type { UpdateInstallErrorCode } from "../shared/types"
+import type { NightlyInstallResult } from "./nightly"
 import { PROD_SERVER_PORT } from "../shared/ports"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
@@ -36,6 +37,8 @@ export interface CliUpdateOptions {
   version: string
   fetchLatestVersion: (packageName: string) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
+  /** Build main from source and install it globally (see server/nightly.ts). */
+  installNightly?: () => Promise<NightlyInstallResult>
   argv: string[]
   command: string
 }
@@ -68,6 +71,7 @@ export interface CliRuntimeDeps {
   }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: AnalyticsReporter }>
   fetchLatestVersion: (packageName: string) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
+  installNightly?: () => Promise<NightlyInstallResult>
   openUrl: (url: string) => void
   log: (message: string) => void
   warn: (message: string) => void
@@ -417,6 +421,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
       version: deps.version,
       fetchLatestVersion: deps.fetchLatestVersion,
       installVersion: deps.installVersion,
+      installNightly: deps.installNightly,
       argv,
       command: CLI_COMMAND,
     },

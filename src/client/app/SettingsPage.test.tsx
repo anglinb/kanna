@@ -220,6 +220,8 @@ describe("ChangelogSection", () => {
         currentVersion="1.0.0"
         onInstallUpdate={() => {}}
         onCheckForUpdates={() => {}}
+        onInstallNightly={() => {}}
+        onInstallStable={() => {}}
       />
     )
 
@@ -248,6 +250,8 @@ describe("ChangelogSection", () => {
         currentVersion="1.0.0"
         onInstallUpdate={() => {}}
         onCheckForUpdates={() => {}}
+        onInstallNightly={() => {}}
+        onInstallStable={() => {}}
       />
     )
 
@@ -271,6 +275,8 @@ describe("ChangelogSection", () => {
         currentVersion="1.0.0"
         onInstallUpdate={() => {}}
         onCheckForUpdates={() => {}}
+        onInstallNightly={() => {}}
+        onInstallStable={() => {}}
       />
     )
 
@@ -292,6 +298,8 @@ describe("ChangelogSection", () => {
         currentVersion="1.0.0"
         onInstallUpdate={() => {}}
         onCheckForUpdates={() => {}}
+        onInstallNightly={() => {}}
+        onInstallStable={() => {}}
       />
     )
 

@@ -315,6 +315,12 @@ export function SettingsPage() {
                     onCheckForUpdates={() => {
                       void state.handleCheckForUpdates({ force: true })
                     }}
+                    onInstallNightly={() => {
+                      void state.handleInstallNightly()
+                    }}
+                    onInstallStable={() => {
+                      void state.handleInstallStable()
+                    }}
                   />
                 )}
               </div>

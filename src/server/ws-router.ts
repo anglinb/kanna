@@ -776,6 +776,22 @@ export function createWsRouter({
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
+        case "update.installNightly": {
+          if (!updateManager) {
+            throw new Error("Update manager unavailable.")
+          }
+          const result = await updateManager.installNightly()
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "update.installStable": {
+          if (!updateManager) {
+            throw new Error("Update manager unavailable.")
+          }
+          const result = await updateManager.installStable()
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
         case "update.install": {
           if (!updateManager) {
             throw new Error("Update manager unavailable.")

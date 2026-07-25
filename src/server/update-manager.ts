@@ -1,6 +1,7 @@
 import type { UpdateInstallResult, UpdateSnapshot } from "../shared/types"
 import { PACKAGE_NAME } from "../shared/branding"
 import { compareVersions, type UpdateInstallAttemptResult } from "./cli-runtime"
+import type { NightlyInstallResult } from "./nightly"
 
 const UPDATE_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -8,6 +9,8 @@ export interface UpdateManagerDeps {
   currentVersion: string
   fetchLatestVersion: (packageName: string) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
+  /** Build main from source and install it globally (see server/nightly.ts). */
+  installNightly?: () => Promise<NightlyInstallResult>
   devMode?: boolean
   trackEvent?: (eventName: string, properties?: Record<string, unknown>) => void
 }
@@ -133,6 +136,191 @@ export class UpdateManager {
         this.installPromise = null
       }
     }
+  }
+
+  /**
+   * Build main from GitHub and restart into it. Uses the same busy/restart
+   * plumbing as installUpdate; the stamped "-nightly.<sha>" version keeps the
+   * base version's ordering, so the next published release upgrades a nightly
+   * back to stable through the normal update path.
+   */
+  async installNightly(): Promise<UpdateInstallResult> {
+    if (this.deps.devMode) {
+      this.deps.trackEvent?.("update_nightly_installed", { nightly_version: `${this.snapshot.currentVersion}-dev` })
+      this.setSnapshot({
+        ...this.snapshot,
+        status: "restart_pending",
+        updateAvailable: false,
+        error: null,
+        reloadRequestedAt: Date.now(),
+      })
+      return { ok: true, action: "restart", errorCode: null, userTitle: null, userMessage: null }
+    }
+
+    if (this.snapshot.status === "updating" || this.snapshot.status === "restart_pending") {
+      return { ok: false, action: "restart", errorCode: null, userTitle: null, userMessage: null }
+    }
+    if (this.installPromise) {
+      return this.installPromise
+    }
+
+    const installPromise = this.runNightlyInstall()
+    this.installPromise = installPromise
+    try {
+      return await installPromise
+    } finally {
+      if (this.installPromise === installPromise) {
+        this.installPromise = null
+      }
+    }
+  }
+
+  /**
+   * Reinstall the latest published release even when the version number
+   * matches the running one — the way back from a nightly build without
+   * waiting for the next release.
+   */
+  async installStable(): Promise<UpdateInstallResult> {
+    if (this.deps.devMode) {
+      this.setSnapshot({
+        ...this.snapshot,
+        status: "restart_pending",
+        updateAvailable: false,
+        error: null,
+        reloadRequestedAt: Date.now(),
+      })
+      return { ok: true, action: "restart", errorCode: null, userTitle: null, userMessage: null }
+    }
+
+    if (this.snapshot.status === "updating" || this.snapshot.status === "restart_pending") {
+      return { ok: false, action: "restart", errorCode: null, userTitle: null, userMessage: null }
+    }
+    if (this.installPromise) {
+      return this.installPromise
+    }
+
+    const installPromise = this.runStableReinstall()
+    this.installPromise = installPromise
+    try {
+      return await installPromise
+    } finally {
+      if (this.installPromise === installPromise) {
+        this.installPromise = null
+      }
+    }
+  }
+
+  private async runNightlyInstall(): Promise<UpdateInstallResult> {
+    if (!this.deps.installNightly) {
+      return {
+        ok: false,
+        action: "restart",
+        errorCode: "install_failed",
+        userTitle: "Nightly update unavailable",
+        userMessage: "This build cannot install nightly versions.",
+      }
+    }
+
+    this.setSnapshot({
+      ...this.snapshot,
+      status: "updating",
+      error: null,
+      reloadRequestedAt: null,
+    })
+
+    const installed = await this.deps.installNightly()
+    if (!installed.ok) {
+      this.setSnapshot({
+        ...this.snapshot,
+        status: "error",
+        error: installed.userMessage ?? "Unable to build the nightly version.",
+        reloadRequestedAt: null,
+      })
+      this.deps.trackEvent?.("update_nightly_failed", {})
+      return {
+        ok: false,
+        action: "restart",
+        errorCode: installed.errorCode,
+        userTitle: installed.userTitle,
+        userMessage: installed.userMessage,
+      }
+    }
+
+    this.setSnapshot({
+      ...this.snapshot,
+      currentVersion: installed.version ?? this.snapshot.currentVersion,
+      status: "restart_pending",
+      updateAvailable: false,
+      error: null,
+      reloadRequestedAt: Date.now(),
+    })
+    this.deps.trackEvent?.("update_nightly_installed", {
+      nightly_version: installed.version,
+    })
+    return { ok: true, action: "restart", errorCode: null, userTitle: null, userMessage: null }
+  }
+
+  private async runStableReinstall(): Promise<UpdateInstallResult> {
+    this.setSnapshot({
+      ...this.snapshot,
+      status: "updating",
+      error: null,
+      reloadRequestedAt: null,
+    })
+
+    let latestVersion: string
+    try {
+      latestVersion = await this.deps.fetchLatestVersion(PACKAGE_NAME)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.setSnapshot({
+        ...this.snapshot,
+        status: "error",
+        error: `Could not look up the latest release: ${message}`,
+        reloadRequestedAt: null,
+      })
+      return {
+        ok: false,
+        action: "restart",
+        errorCode: "install_failed",
+        userTitle: "Update failed",
+        userMessage: "Kanna could not look up the latest published release.",
+      }
+    }
+
+    const installed = this.deps.installVersion(PACKAGE_NAME, latestVersion)
+    if (!installed.ok) {
+      this.setSnapshot({
+        ...this.snapshot,
+        status: "error",
+        error: installed.userMessage ?? "Unable to install the latest version.",
+        reloadRequestedAt: null,
+      })
+      this.deps.trackEvent?.("update_failed", {
+        latest_version: latestVersion,
+      })
+      return {
+        ok: false,
+        action: "restart",
+        errorCode: installed.errorCode,
+        userTitle: installed.userTitle,
+        userMessage: installed.userMessage,
+      }
+    }
+
+    this.setSnapshot({
+      ...this.snapshot,
+      currentVersion: latestVersion,
+      latestVersion,
+      status: "restart_pending",
+      updateAvailable: false,
+      error: null,
+      reloadRequestedAt: Date.now(),
+    })
+    this.deps.trackEvent?.("update_stable_reinstalled", {
+      latest_version: latestVersion,
+    })
+    return { ok: true, action: "restart", errorCode: null, userTitle: null, userMessage: null }
   }
 
   private async runCheck() {
