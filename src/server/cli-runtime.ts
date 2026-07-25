@@ -5,7 +5,7 @@ import { APP_NAME, CLI_COMMAND, getDataDirDisplay, LOG_PREFIX, PACKAGE_NAME } fr
 import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
 import type { UpdateInstallErrorCode } from "../shared/types"
-import type { NightlyInstallResult } from "./nightly"
+import { repairBunGlobalManifest, type NightlyInstallResult } from "./nightly"
 import { PROD_SERVER_PORT } from "../shared/ports"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
@@ -553,6 +553,11 @@ export function installPackageVersion(packageName: string, version: string) {
       userMessage: "Kanna could not find Bun to install the update.",
     } satisfies UpdateInstallAttemptResult
   }
+
+  // A corrupt global manifest (see repairBunGlobalManifest) makes every
+  // global install fail with a DependencyLoop error — heal it first so
+  // machines that hit 0.57.0's nightly bug can still auto-update.
+  repairBunGlobalManifest()
 
   const result = spawnSync("bun", ["install", "-g", `${packageName}@${version}`], {
     stdio: ["ignore", "pipe", "pipe"],

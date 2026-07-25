@@ -33,6 +33,8 @@ export interface NightlyBuildDeps {
   runCommand?: (command: string, args: string[], cwd: string, env?: Record<string, string>) => Promise<RunCommandResult>
   /** Working directory override for tests (default ~/.kanna/nightly). */
   workDir?: string
+  /** Bun global dir override for tests (default $BUN_INSTALL or ~/.bun). */
+  bunGlobalDir?: string
 }
 
 /** Version string stamped onto nightly builds: "<base>-nightly.<short-sha>". */
@@ -106,6 +108,44 @@ function outputTail(output: string): string {
   return trimmed.length > OUTPUT_TAIL_CHARS ? `…${trimmed.slice(-OUTPUT_TAIL_CHARS)}` : trimmed
 }
 
+function bunGlobalDir(): string {
+  return process.env.BUN_INSTALL || path.join(homedir(), ".bun")
+}
+
+/**
+ * Strip corrupt entries from Bun's global package manifest. Kanna 0.57.0's
+ * nightly install ran `bun install -g .`, which Bun mis-parses: it installs
+ * nothing but records a junk dependency (key "" or "@", value "." / "@.").
+ * While one is present, Bun refuses EVERY further global install with a
+ * DependencyLoop error — including the stable auto-update — so both the
+ * nightly and stable installers repair the manifest first.
+ * Returns true when the manifest was repaired.
+ */
+export function repairBunGlobalManifest(globalDir = bunGlobalDir()): boolean {
+  const manifestPath = path.join(globalDir, "install", "global", "package.json")
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { dependencies?: Record<string, unknown> }
+    const dependencies = manifest.dependencies
+    if (!dependencies) return false
+    let repaired = false
+    for (const [name, value] of Object.entries(dependencies)) {
+      const junkName = name === "" || name === "@"
+      const junkValue = typeof value === "string" && /^(?:@|file:)?\.$/.test(value)
+      if (junkName || junkValue) {
+        delete dependencies[name]
+        repaired = true
+      }
+    }
+    if (repaired) {
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n")
+    }
+    return repaired
+  } catch {
+    // Missing or unreadable manifest — nothing to repair.
+    return false
+  }
+}
+
 /**
  * Download main from GitHub, build it from source, and install it as the
  * global CLI. The build's version is stamped "<base>-nightly.<short-sha>" so
@@ -159,9 +199,11 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
   // Stamp the build's identity before installing so the running version and
   // the global package both carry the commit.
   let version: string
+  let packageName: string
   try {
     const packageJsonPath = path.join(srcDir, "package.json")
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: string }
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { name?: string; version?: string }
+    packageName = packageJson.name ?? "kanna-code"
     version = nightlyVersion(packageJson.version ?? "0.0.0", sha)
     writeFileSync(packageJsonPath, JSON.stringify({ ...packageJson, version }, null, 2) + "\n")
   } catch (error) {
@@ -192,10 +234,39 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
     return failure(`The nightly build failed its startup check, so it was not installed.\n${outputTail(probe.output)}`)
   }
 
+  // Install via a packed tarball with an absolute path — `bun install -g .`
+  // mis-parses the bare dot (installs nothing, corrupts the global manifest).
+  if (repairBunGlobalManifest(deps.bunGlobalDir)) {
+    log(`${LOG_PREFIX} nightly: repaired a corrupt bun global manifest`)
+  }
   log(`${LOG_PREFIX} nightly: installing the build…`)
-  const install = await runCommand("bun", ["install", "-g", "."], srcDir)
+  const pack = await runCommand("bun", ["pm", "pack"], srcDir)
+  if (!pack.ok) {
+    return failure(`Nightly pack step failed.\n${outputTail(pack.output)}`)
+  }
+  const packedTarball = path.join(srcDir, `${packageName}-${version}.tgz`)
+  if (!existsSync(packedTarball)) {
+    return failure(`Nightly pack step did not produce ${path.basename(packedTarball)}.\n${outputTail(pack.output)}`)
+  }
+  const install = await runCommand("bun", ["install", "-g", packedTarball], srcDir)
   if (!install.ok) {
     return failure(`Nightly install step failed.\n${outputTail(install.output)}`)
+  }
+
+  // `bun install -g` can exit 0 without replacing the package (that's how
+  // 0.57.0's dot-path install silently no-opped) — trust only the installed
+  // manifest reporting the stamped version.
+  try {
+    const installedManifestPath = path.join(
+      deps.bunGlobalDir ?? bunGlobalDir(),
+      "install", "global", "node_modules", packageName, "package.json"
+    )
+    const installedVersion = (JSON.parse(readFileSync(installedManifestPath, "utf8")) as { version?: string }).version
+    if (installedVersion !== version) {
+      return failure(`The install finished but the global package still reports ${installedVersion ?? "no version"} instead of ${version}.`)
+    }
+  } catch (error) {
+    return failure(`Could not verify the installed build: ${error instanceof Error ? error.message : String(error)}`)
   }
 
   log(`${LOG_PREFIX} nightly: installed ${version}`)

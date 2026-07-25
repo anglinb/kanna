@@ -7,6 +7,7 @@ import {
   fetchMainCommitSha,
   installNightlyBuild,
   nightlyVersion,
+  repairBunGlobalManifest,
   type RunCommandResult,
 } from "./nightly"
 
@@ -51,6 +52,35 @@ describe("fetchMainCommitSha", () => {
   })
 })
 
+describe("repairBunGlobalManifest", () => {
+  test("strips the corrupt entries `bun install -g .` wrote, keeping real dependencies", () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "kanna-bun-global-"))
+    const manifestDir = path.join(tempDir, "install", "global")
+    mkdirSync(manifestDir, { recursive: true })
+    const manifestPath = path.join(manifestDir, "package.json")
+    writeFileSync(manifestPath, JSON.stringify({
+      dependencies: {
+        "kanna-code": "^0.57.0",
+        "@": "@.",
+        "": ".",
+        "some-tool": "file:.",
+      },
+    }))
+
+    expect(repairBunGlobalManifest(tempDir)).toBe(true)
+    const repaired = JSON.parse(readFileSync(manifestPath, "utf8")) as { dependencies: Record<string, string> }
+    expect(repaired.dependencies).toEqual({ "kanna-code": "^0.57.0" })
+
+    // Idempotent: a clean manifest reports nothing to repair.
+    expect(repairBunGlobalManifest(tempDir)).toBe(false)
+  })
+
+  test("is a no-op when the manifest is missing", () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "kanna-bun-global-"))
+    expect(repairBunGlobalManifest(tempDir)).toBe(false)
+  })
+})
+
 describe("installNightlyBuild", () => {
   test("downloads main, stamps the version, and runs the build/install steps", async () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "kanna-nightly-"))
@@ -68,8 +98,14 @@ describe("installNightlyBuild", () => {
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
 
+    const srcDir = path.join(workDir, "src")
+    const stampedVersion = "0.56.7-nightly.0123456"
+    const expectedTgz = path.join(srcDir, `kanna-code-${stampedVersion}.tgz`)
+    const bunGlobalDir = path.join(tempDir, "bun-global")
+
     const result = await installNightlyBuild({
       workDir,
+      bunGlobalDir,
       fetchImpl,
       runCommand: async (command, args, cwd, env): Promise<RunCommandResult> => {
         commands.push({ command, args, cwd, env })
@@ -79,32 +115,87 @@ describe("installNightlyBuild", () => {
           return { ok: extract.status === 0, output: "" }
         }
         if (args.includes("--version")) {
-          return { ok: true, output: "0.56.7-nightly.0123456\n" }
+          return { ok: true, output: `${stampedVersion}\n` }
+        }
+        if (args[0] === "pm" && args[1] === "pack") {
+          writeFileSync(expectedTgz, "tarball")
+          return { ok: true, output: "" }
+        }
+        if (args[0] === "install" && args[1] === "-g") {
+          // Simulate the global install landing the stamped version.
+          const installedDir = path.join(bunGlobalDir, "install", "global", "node_modules", "kanna-code")
+          mkdirSync(installedDir, { recursive: true })
+          writeFileSync(path.join(installedDir, "package.json"), JSON.stringify({ name: "kanna-code", version: stampedVersion }))
+          return { ok: true, output: "" }
         }
         return { ok: true, output: "" }
       },
     })
 
     expect(result.ok).toBe(true)
-    expect(result.version).toBe("0.56.7-nightly.0123456")
+    expect(result.version).toBe(stampedVersion)
 
     // The extracted checkout carries the stamped version bun install -g picks up.
-    const stamped = JSON.parse(readFileSync(path.join(workDir, "src", "package.json"), "utf8")) as { version: string }
-    expect(stamped.version).toBe("0.56.7-nightly.0123456")
+    const stamped = JSON.parse(readFileSync(path.join(srcDir, "package.json"), "utf8")) as { version: string }
+    expect(stamped.version).toBe(stampedVersion)
 
     expect(commands.map(({ command, args }) => [command, ...args].join(" "))).toEqual([
       expect.stringContaining("tar -xzf"),
       "bun install",
       "bun run build",
       "bun bin/kanna --version",
-      "bun install -g .",
+      "bun pm pack",
+      // Absolute tarball path — never "." (bun mis-parses it; see repairBunGlobalManifest).
+      `bun install -g ${expectedTgz}`,
     ])
     // Build steps run inside the extracted source checkout.
-    expect(commands.slice(1).every(({ cwd }) => cwd === path.join(workDir, "src"))).toBe(true)
+    expect(commands.slice(1).every(({ cwd }) => cwd === srcDir)).toBe(true)
     // The startup probe runs the built CLI directly in child mode.
     const probeEnv = commands.find(({ args }) => args.includes("--version"))?.env ?? {}
     expect(Object.keys(probeEnv).length).toBeGreaterThan(0)
     expect(probeEnv.KANNA_DISABLE_SELF_UPDATE).toBe("1")
+  })
+
+  test("an install that does not land the stamped version fails instead of reporting success", async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "kanna-nightly-"))
+    const tarball = createSourceTarball(tempDir)
+    const workDir = path.join(tempDir, "nightly")
+    const srcDir = path.join(workDir, "src")
+    const bunGlobalDir = path.join(tempDir, "bun-global")
+    // The global manifest still carries the OLD version after the install —
+    // the silent no-op that shipped in 0.57.0's `bun install -g .`.
+    const installedDir = path.join(bunGlobalDir, "install", "global", "node_modules", "kanna-code")
+    mkdirSync(installedDir, { recursive: true })
+    writeFileSync(path.join(installedDir, "package.json"), JSON.stringify({ name: "kanna-code", version: "0.57.0" }))
+
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes("api.github.com")) return new Response(SHA)
+      return new Response(new Uint8Array(tarball))
+    }) as unknown as typeof fetch
+
+    const result = await installNightlyBuild({
+      workDir,
+      bunGlobalDir,
+      fetchImpl,
+      runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
+        if (command === "tar") {
+          const extract = spawnSync(command, args, { cwd, stdio: "ignore" })
+          return { ok: extract.status === 0, output: "" }
+        }
+        if (args.includes("--version")) {
+          return { ok: true, output: "0.56.7-nightly.0123456\n" }
+        }
+        if (args[0] === "pm" && args[1] === "pack") {
+          writeFileSync(path.join(srcDir, "kanna-code-0.56.7-nightly.0123456.tgz"), "tarball")
+          return { ok: true, output: "" }
+        }
+        return { ok: true, output: "" }
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.userMessage).toContain("still reports 0.57.0")
   })
 
   test("a build that fails its startup check is never installed", async () => {
