@@ -407,6 +407,12 @@ export class ProviderAuthManager {
       if (parsed) {
         authStatus = parsed.loggedIn ? "signed_in" : "signed_out"
         account = parsed.account
+      } else if (result.code !== 0 && isUnknownCliSyntax(`${result.stderr}\n${result.stdout}`)) {
+        // The CLI predates `auth status --json` (e.g. v1.0.x rejects the
+        // flag): its auth state is unreadable, so say it's outdated instead
+        // of echoing the raw CLI error — the card offers Update.
+        authStatus = "error"
+        statusDetail = `Claude Code ${version ?? "(unknown version)"} is too old for Kanna — update it to continue.`
       } else {
         authStatus = result.code === 0 ? "signed_out" : "error"
         statusDetail = result.code === 0 ? null : truncateOutput(result.stderr || result.stdout)
@@ -826,10 +832,16 @@ export class ProviderAuthManager {
       await this.finishLogin(flow)
       return
     }
+    // A config parse failure means Codex can't run at all — device-auth
+    // settings are not the problem, the named config.toml line is.
+    const transcriptText = stripAnsi(flow.transcript)
+    const configLoadFailed = /(?:error loading|failed to load) configuration/i.test(transcriptText)
     this.failFlow(
       flow,
-      `Codex sign-in failed: ${truncateOutput(stripAnsi(flow.transcript)) || `exit code ${exitCode}`}`,
-      CODEX_DEVICE_AUTH_HINT
+      `Codex sign-in failed: ${truncateOutput(transcriptText) || `exit code ${exitCode}`}`,
+      configLoadFailed
+        ? "Codex could not read ~/.codex/config.toml — fix or remove the line it names (or update Codex), then try again."
+        : CODEX_DEVICE_AUTH_HINT
     )
   }
 
@@ -990,6 +1002,11 @@ export class ProviderAuthManager {
 function truncateOutput(output: string, max = 400): string {
   const cleaned = output.trim().replace(/\s+/g, " ")
   return cleaned.length > max ? `…${cleaned.slice(-max)}` : cleaned
+}
+
+/** CLI rejected the invocation's syntax — it predates a flag/subcommand we rely on. */
+function isUnknownCliSyntax(output: string): boolean {
+  return /unknown (?:option|command|argument)|unexpected argument|unrecognized/i.test(output)
 }
 
 function shellQuote(value: string): string {

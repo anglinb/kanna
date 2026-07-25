@@ -315,6 +315,29 @@ describe("ProviderAuthManager probing", () => {
     expect(byService.get("openrouter")).toMatchObject({ authStatus: "signed_in" })
   })
 
+  test("an old Claude CLI that rejects `auth status --json` reads as outdated, not a raw error", async () => {
+    // Claude Code v1.0.x predates the JSON auth status; it exits non-zero
+    // with "error: unknown option '--json'".
+    const harness = createHarness({
+      exec: (argv) => {
+        const joined = argv.join(" ")
+        if (argv[0].includes("claude") && joined.endsWith("--version")) {
+          return { code: 0, stdout: "1.0.77 (Claude Code)", stderr: "" }
+        }
+        if (argv[0].includes("claude") && joined.includes("auth status --json")) {
+          return { code: 1, stdout: "", stderr: "error: unknown option '--json'" }
+        }
+        return signedOutExec(argv)
+      },
+    })
+    await harness.manager.refresh({ force: true })
+    const claude = harness.manager.getSnapshot().services.find((s) => s.service === "claude")!
+    expect(claude.authStatus).toBe("error")
+    expect(claude.statusDetail).toContain("too old")
+    expect(claude.statusDetail).toContain("1.0.77")
+    expect(claude.statusDetail).not.toContain("unknown option")
+  })
+
   test("non-forced refresh is TTL-coalesced", async () => {
     const harness = createHarness({ exec: signedOutExec })
     await harness.manager.refresh()
@@ -496,6 +519,21 @@ describe("codex device login flow", () => {
     const login = harness.manager.getSnapshot().services.find((s) => s.service === "codex")!.login
     expect(login.phase).toBe("error")
     expect(login.phase === "error" ? login.hint : null).toContain("ChatGPT security settings")
+  })
+
+  test("a config-load failure points at config.toml instead of device-auth settings", async () => {
+    const child = new FakeChild()
+    const harness = createHarness({ exec: signedOutExec, spawnStreaming: () => child })
+    await harness.manager.refresh({ force: true })
+    harness.manager.startLogin("codex")
+    child.emit("Error loading configuration: /Users/friend/.codex/config.toml:4:16: unknown variant `priority`, expected `fast` or `flex`\n")
+    child.exit(1)
+    await tick(20)
+    const login = harness.manager.getSnapshot().services.find((s) => s.service === "codex")!.login
+    expect(login.phase).toBe("error")
+    const hint = login.phase === "error" ? login.hint : null
+    expect(hint).toContain("config.toml")
+    expect(hint).not.toContain("ChatGPT security settings")
   })
 })
 

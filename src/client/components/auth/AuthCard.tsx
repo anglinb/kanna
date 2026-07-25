@@ -278,6 +278,10 @@ export function AuthCard({
         <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
       </span>
     )
+  } else if (service.authStatus === "error" && service.installed) {
+    // A probe error usually means the CLI is too old or broken — offer the
+    // installer as the escape hatch instead of dead-ending on the message.
+    action = <ActionButton onClick={install}>Update</ActionButton>
   } else if (service.authStatus === "unknown") {
     action = <span className="shrink-0 text-xs text-muted-foreground">Checking…</span>
   }
