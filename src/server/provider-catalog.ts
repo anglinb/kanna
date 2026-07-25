@@ -15,6 +15,7 @@ import {
   DEFAULT_CLAUDE_MODEL_OPTIONS,
   DEFAULT_CURSOR_MODEL_OPTIONS,
   PROVIDERS,
+  deriveModelLabel,
   withPiFaveModels,
   normalizeClaudeContextWindow,
   normalizeClaudeFastMode,
@@ -59,14 +60,21 @@ function sanitizeSdkDisplayName(displayName: string): string {
 
 function sdkModelMatchScore(model: ClaudeSdkModelInfo, option: ProviderModelOption) {
   const modelValue = model.value.toLowerCase()
-  if (modelValue === option.id.toLowerCase()) return 3
-  if (option.aliases?.some((alias) => alias.toLowerCase() === modelValue)) return 2
+  if (modelValue === option.id.toLowerCase()) return 5
+  if (option.aliases?.some((alias) => alias.toLowerCase() === modelValue)) return 4
   // Family fallback covers rows keyed by a version-pinned id ("claude-opus-4-8")
-  // or an indirect alias ("default" resolving to a sonnet release) matching the
-  // alias-keyed catalog entry ("opus"/"sonnet").
+  // matching the alias-keyed catalog entry ("opus").
   const optionKeys = [option.id, ...(option.aliases ?? [])].map(modelIdFamily)
-  const rowFamilies = [model.value, ...(model.resolvedModel ? [model.resolvedModel] : [])].map(modelIdFamily)
-  return rowFamilies.some((family) => optionKeys.includes(family)) ? 1 : 0
+  if (optionKeys.includes(modelIdFamily(model.value))) return 3
+  // Indirect rows ("default" resolving to an opus release) tie to the option
+  // only through resolvedModel; they rank below any row named after the family.
+  if (model.resolvedModel && optionKeys.includes(modelIdFamily(model.resolvedModel))) return 1
+  return 0
+}
+
+/** Rows matched only through resolvedModel — the row's own value ("default") names a role, not a model. */
+function isIndirectSdkMatch(model: ClaudeSdkModelInfo, option: ProviderModelOption) {
+  return sdkModelMatchScore(model, option) === 1
 }
 
 function findSdkModelForOption(models: readonly ClaudeSdkModelInfo[], option: ProviderModelOption) {
@@ -90,9 +98,16 @@ export function applyClaudeSdkModels(models: readonly ClaudeSdkModelInfo[]) {
   const nextModels = claudeProvider.models.map((option) => {
     const sdkModel = findSdkModelForOption(models, option)
     if (!sdkModel) return option
+    // An indirect row's display name ("Default (recommended)") labels the
+    // row's role, not the model — derive the label from the wire id it
+    // resolves to instead. Capability flags still describe the resolved
+    // model, so they apply either way.
+    const label = isIndirectSdkMatch(sdkModel, option)
+      ? deriveModelLabel(sdkModel.resolvedModel ?? sdkModel.value)
+      : (sdkModel.displayName ? sanitizeSdkDisplayName(sdkModel.displayName) : "")
     return {
       ...option,
-      label: (sdkModel.displayName ? sanitizeSdkDisplayName(sdkModel.displayName) : "") || option.label,
+      label: label || option.label,
       supportsEffort: sdkModel.supportsEffort ?? option.supportsEffort,
       supportsFastMode: sdkModel.supportsFastMode ?? option.supportsFastMode,
     }

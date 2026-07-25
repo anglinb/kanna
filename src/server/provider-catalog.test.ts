@@ -250,13 +250,27 @@ describe("provider catalog normalization", () => {
       { value: "claude-fable-5[1m]", displayName: "Fable from SDK", supportsEffort: true },
       // Alias-keyed row (the SDK's own list is alias-first): exact id match.
       { value: "opus", resolvedModel: "claude-opus-4-8", displayName: "Opus from SDK", supportsEffort: true },
-      // resolvedModel carries the family when the row value alone doesn't.
-      { value: "default", resolvedModel: "claude-sonnet-5", displayName: "Sonnet from SDK", supportsEffort: true },
+      // An indirect row matches through resolvedModel, but its display name
+      // labels the row's role, not the model — the label derives from the
+      // resolved wire id instead.
+      { value: "default", resolvedModel: "claude-sonnet-5", displayName: "Default (recommended)", supportsEffort: true },
     ])).toBe(true)
 
     const claude = SERVER_PROVIDERS.find((provider) => provider.id === "claude")
     expect(claude?.models.find((model) => model.id === "fable")?.label).toBe("Fable from SDK")
     expect(claude?.models.find((model) => model.id === "opus")?.label).toBe("Opus from SDK")
-    expect(claude?.models.find((model) => model.id === "sonnet")?.label).toBe("Sonnet from SDK")
+    expect(claude?.models.find((model) => model.id === "sonnet")?.label).toBe("Sonnet 5")
+  })
+
+  test("a family-named SDK row beats an indirect default row for the same option", () => {
+    // The CLI lists "default" first; a later row actually named after the
+    // family must still win the match.
+    expect(applyClaudeSdkModels([
+      { value: "default", resolvedModel: "claude-opus-4-8", displayName: "Default (recommended)" },
+      { value: "opus", resolvedModel: "claude-opus-4-8", displayName: "Opus 4.8" },
+    ])).toBe(true)
+
+    const claude = SERVER_PROVIDERS.find((provider) => provider.id === "claude")
+    expect(claude?.models.find((model) => model.id === "opus")?.label).toBe("Opus 4.8")
   })
 })
