@@ -332,10 +332,13 @@ describe("ProviderAuthManager probing", () => {
     })
     await harness.manager.refresh({ force: true })
     const claude = harness.manager.getSnapshot().services.find((s) => s.service === "claude")!
-    expect(claude.authStatus).toBe("error")
+    expect(claude.authStatus).toBe("outdated")
     expect(claude.statusDetail).toContain("too old")
     expect(claude.statusDetail).toContain("1.0.77")
     expect(claude.statusDetail).not.toContain("unknown option")
+
+    // Updating is the only way forward — login refuses until then.
+    expect(() => harness.manager.startLogin("claude")).toThrow("too old")
   })
 
   test("non-forced refresh is TTL-coalesced", async () => {

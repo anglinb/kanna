@@ -409,9 +409,9 @@ export class ProviderAuthManager {
         account = parsed.account
       } else if (result.code !== 0 && isUnknownCliSyntax(`${result.stderr}\n${result.stdout}`)) {
         // The CLI predates `auth status --json` (e.g. v1.0.x rejects the
-        // flag): its auth state is unreadable, so say it's outdated instead
-        // of echoing the raw CLI error — the card offers Update.
-        authStatus = "error"
+        // flag): its auth state is unreadable, so mark it outdated instead
+        // of echoing the raw CLI error — the card requires an update.
+        authStatus = "outdated"
         statusDetail = `Claude Code ${version ?? "(unknown version)"} is too old for Kanna — update it to continue.`
       } else {
         authStatus = result.code === 0 ? "signed_out" : "error"
@@ -423,6 +423,9 @@ export class ProviderAuthManager {
         authStatus = "signed_in"
         const match = /logged in (?:using|with|as)\s+(.+)/i.exec(stripAnsi(`${result.stdout}\n${result.stderr}`))
         account = match?.[1]?.trim() ?? null
+      } else if (isUnknownCliSyntax(`${result.stderr}\n${result.stdout}`)) {
+        authStatus = "outdated"
+        statusDetail = `Codex ${version ?? "(unknown version)"} is too old for Kanna — update it to continue.`
       } else {
         authStatus = "signed_out"
       }
@@ -586,6 +589,9 @@ export class ProviderAuthManager {
     const current = this.services.get(service)!
     if (!current.installed || current.authStatus === "not_installed") {
       throw new Error(`${current.label} is not installed.`)
+    }
+    if (current.authStatus === "outdated") {
+      throw new Error(`${current.label} is too old for Kanna — update it first.`)
     }
 
     const flow: LoginFlowRuntime = {

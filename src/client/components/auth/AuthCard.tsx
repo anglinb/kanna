@@ -278,6 +278,14 @@ export function AuthCard({
         <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
       </span>
     )
+  } else if (service.authStatus === "outdated") {
+    // The installed CLI can't run the commands Kanna drives — updating is
+    // the only way forward, so it's the card's sole action (no Log In).
+    action = (
+      <ActionButton onClick={install}>
+        {service.latestVersion ? `Update to ${displayVersion(service.latestVersion)}` : "Update"}
+      </ActionButton>
+    )
   } else if (service.authStatus === "error" && service.installed) {
     // A probe error usually means the CLI is too old or broken — offer the
     // installer as the escape hatch instead of dead-ending on the message.
@@ -301,7 +309,7 @@ export function AuthCard({
       {service.installState === "error" && service.installError ? (
         <div className="mt-2 text-xs text-destructive">{service.installError}</div>
       ) : null}
-      {service.authStatus === "error" && service.statusDetail ? (
+      {(service.authStatus === "error" || service.authStatus === "outdated") && service.statusDetail ? (
         <div className="mt-2 text-xs text-muted-foreground">{service.statusDetail}</div>
       ) : null}
       <LoginFlowPanel service={service} socket={socket} />

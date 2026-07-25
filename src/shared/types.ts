@@ -1072,6 +1072,9 @@ export type AuthServiceStatus =
   | "not_installed"
   | "signed_out"
   | "signed_in"
+  // Installed, but too old for the commands Kanna drives (e.g. a Claude Code
+  // that predates `auth status --json`). Updating is the only way forward.
+  | "outdated"
   // The probe itself failed (binary present but errored unexpectedly).
   | "error"
 
