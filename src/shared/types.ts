@@ -474,9 +474,15 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
   {
     id: "claude",
     label: "Claude Code",
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: "sonnet",
     defaultEffort: "high",
     supportsPlanMode: true,
+    // Claude ids are family aliases ("opus"), never version-pinned ids
+    // ("claude-opus-4-8"): the harness resolves each alias to its latest
+    // release, so new model versions apply without a Kanna update. Labels and
+    // capability flags are refreshed at runtime from the SDK's supportedModels
+    // (applyClaudeSdkModels); persisted version-pinned ids from older Kanna
+    // versions fold into their family alias in normalizeProviderModelId.
     models: [
       {
         id: "fable",
@@ -487,29 +493,25 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
         contextWindowTokens: 1_000_000,
       },
       {
-        id: "claude-opus-4-8",
-        label: deriveModelLabel("claude-opus-4-8"),
+        id: "opus",
+        label: deriveModelLabel("opus"),
         supportsEffort: true,
-        aliases: ["opus"],
         contextWindowOptions: [...CLAUDE_CONTEXT_WINDOW_OPTIONS],
         supportsMaxReasoningEffort: true,
-        // Fast mode is available on Opus 4.6/4.7/4.8 — Opus is the only
-        // catalog model in that family. The SDK confirms this at runtime via
-        // supportedModels() (see applyClaudeSdkModels).
+        // Fast mode is available on the Opus family. The SDK confirms this at
+        // runtime via supportedModels() (see applyClaudeSdkModels).
         supportsFastMode: true,
       },
       {
-        id: "claude-sonnet-4-6",
-        label: deriveModelLabel("claude-sonnet-4-6"),
+        id: "sonnet",
+        label: deriveModelLabel("sonnet"),
         supportsEffort: true,
-        aliases: ["sonnet"],
         contextWindowOptions: [...CLAUDE_CONTEXT_WINDOW_OPTIONS],
       },
       {
-        id: "claude-haiku-4-5-20251001",
-        label: deriveModelLabel("claude-haiku-4-5-20251001"),
+        id: "haiku",
+        label: deriveModelLabel("haiku"),
         supportsEffort: true,
-        aliases: ["haiku"],
       },
     ],
     efforts: [...CLAUDE_REASONING_OPTIONS],
@@ -626,6 +628,17 @@ function getProviderModelMatch(provider: AgentProvider, modelId?: string): Provi
   )
 }
 
+/**
+ * The family word of a Claude-style model id: "claude-opus-4-8[1m]" → "opus",
+ * "sonnet" → "sonnet". Used to fold version-pinned ids into the alias-keyed
+ * catalog (migration of persisted ids) and to match SDK model rows to catalog
+ * entries (server provider-catalog).
+ */
+export function modelIdFamily(modelId: string): string {
+  const match = modelId.match(/^(?:claude-)?([a-z]+)(?:[-[]|$)/i)
+  return match?.[1]?.toLowerCase() ?? modelId.toLowerCase()
+}
+
 export function normalizeProviderModelId(
   provider: AgentProvider,
   modelId?: string,
@@ -637,12 +650,19 @@ export function normalizeProviderModelId(
   if (provider === "cursor") {
     return normalizeCursorModelId(modelId, fallbackModelId ?? getProviderCatalog(provider).defaultModel)
   }
-  return getProviderModelMatch(provider, modelId)?.id
-    ?? fallbackModelId
-    ?? getProviderCatalog(provider).defaultModel
+  const match = getProviderModelMatch(provider, modelId)
+  if (match) return match.id
+  // Claude catalog ids are family aliases; persisted version-pinned ids from
+  // older Kanna versions ("claude-opus-4-8", "claude-haiku-4-5-20251001")
+  // migrate here by folding into their family's alias entry.
+  if (provider === "claude" && modelId) {
+    const familyMatch = getProviderModelMatch(provider, modelIdFamily(modelId))
+    if (familyMatch) return familyMatch.id
+  }
+  return fallbackModelId ?? getProviderCatalog(provider).defaultModel
 }
 
-export function normalizeClaudeModelId(modelId?: string, fallbackModelId = "claude-opus-4-8"): string {
+export function normalizeClaudeModelId(modelId?: string, fallbackModelId = "opus"): string {
   return normalizeProviderModelId("claude", modelId, fallbackModelId)
 }
 

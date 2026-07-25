@@ -842,7 +842,7 @@ export class AgentCoordinator {
       probe = await this.startClaudeSessionFn({
         localPath: homedir(),
         // Model choice is irrelevant for the usage read; use the catalog default.
-        model: "claude-sonnet-4-6",
+        model: "sonnet",
         planMode: false,
         sessionToken: null,
         forkSession: false,

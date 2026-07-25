@@ -66,7 +66,7 @@ describe("ChatPreferenceControls", () => {
       <ChatPreferenceControls
         availableProviders={PROVIDERS}
         selectedProvider="claude"
-        model="claude-opus-4-8"
+        model="opus"
         modelOptions={{ reasoningEffort: "max", contextWindow: "1m" }}
         onProviderChange={() => {}}
         onModelChange={() => {}}

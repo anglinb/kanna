@@ -98,7 +98,8 @@ export async function runClaudeStructured(args: Omit<StructuredQuickResponseArgs
     prompt: args.prompt,
     options: {
       cwd: args.cwd,
-      model: "claude-haiku-4-5-20251001",
+      // Family alias — the harness resolves it to the latest haiku release.
+      model: "haiku",
       tools: [],
       systemPrompt: "",
       effort: "low",

@@ -25,7 +25,8 @@ describe("migrateChatPreferencesState", () => {
     })
 
     expect(migrated.providerDefaults.claude).toEqual({
-      model: "claude-opus-4-8",
+      // The version-pinned id folds into the alias while keeping max effort.
+      model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: false,
     })
@@ -58,7 +59,7 @@ describe("migrateChatPreferencesState", () => {
       defaultProvider: "last_used",
       providerDefaults: {
         claude: {
-          model: "claude-opus-4-8",
+          model: "opus",
           modelOptions: { reasoningEffort: "low", contextWindow: "1m", fastMode: false },
           planMode: true,
         },
@@ -81,7 +82,7 @@ describe("migrateChatPreferencesState", () => {
       chatStates: {},
       legacyComposerState: {
         provider: "claude",
-        model: "claude-sonnet-4-6",
+        model: "sonnet",
         modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
         planMode: false,
       },
@@ -114,7 +115,7 @@ describe("migrateChatPreferencesState", () => {
     expect(migrated.providerDefaults.claude.modelOptions).toEqual({ reasoningEffort: "low", contextWindow: "1m", fastMode: false })
     expect(migrated.chatStates.chatA).toEqual({
       provider: "claude",
-      model: "claude-haiku-4-5-20251001",
+      model: "haiku",
       modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
       planMode: false,
     })
@@ -278,7 +279,7 @@ describe("chat preference store", () => {
 
     store.setComposerState("chat-a", {
       provider: "claude",
-      model: "claude-sonnet-4-6",
+      model: "sonnet",
       modelOptions: { reasoningEffort: "low", contextWindow: "1m", fastMode: false },
       planMode: false,
     })
@@ -292,7 +293,7 @@ describe("chat preference store", () => {
 
     expect(store.getComposerState("chat-a")).toEqual({
       provider: "claude",
-      model: "claude-sonnet-4-6",
+      model: "sonnet",
       modelOptions: { reasoningEffort: "low", contextWindow: "1m", fastMode: false },
       planMode: true,
     })
@@ -309,7 +310,7 @@ describe("chat preference store", () => {
 
     store.setComposerState("chat-a", {
       provider: "claude",
-      model: "claude-opus-4-8",
+      model: "opus",
       modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
       planMode: false,
     })
@@ -319,7 +320,7 @@ describe("chat preference store", () => {
     // at usage time, and switching back to Opus resumes the 1m preference.
     expect(store.getComposerState("chat-a")).toEqual({
       provider: "claude",
-      model: "claude-haiku-4-5-20251001",
+      model: "haiku",
       modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
       planMode: false,
     })
@@ -407,7 +408,7 @@ describe("chat preference store", () => {
       providerDefaults: {
         ...INITIAL_STATE.providerDefaults,
         claude: {
-          model: "claude-opus-4-8",
+          model: "opus",
           modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
           planMode: true,
         },
@@ -419,7 +420,7 @@ describe("chat preference store", () => {
 
     expect(useChatPreferencesStore.getState().getComposerState("chat-a")).toEqual({
       provider: "claude",
-      model: "claude-opus-4-8",
+      model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: true,
     })
@@ -432,7 +433,7 @@ describe("chat preference store", () => {
     store.syncProviderDefaults("last_used", {
       ...INITIAL_STATE.providerDefaults,
       claude: {
-        model: "claude-opus-4-8",
+        model: "opus",
         modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
         planMode: true,
       },
@@ -440,7 +441,7 @@ describe("chat preference store", () => {
 
     expect(useChatPreferencesStore.getState().getComposerState(NEW_CHAT_COMPOSER_ID)).toEqual({
       provider: "claude",
-      model: "claude-opus-4-8",
+      model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: true,
     })
@@ -453,7 +454,7 @@ describe("chat preference store", () => {
     store.syncProviderDefaults("last_used", {
       ...INITIAL_STATE.providerDefaults,
       claude: {
-        model: "claude-opus-4-8",
+        model: "opus",
         modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
         planMode: true,
       },
@@ -461,7 +462,7 @@ describe("chat preference store", () => {
 
     expect(useChatPreferencesStore.getState().getComposerState("chat-a")).toEqual({
       provider: "claude",
-      model: "claude-opus-4-8",
+      model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: true,
     })
@@ -479,7 +480,7 @@ describe("chat preference store", () => {
     store.syncProviderDefaults("last_used", {
       ...INITIAL_STATE.providerDefaults,
       claude: {
-        model: "claude-opus-4-8",
+        model: "opus",
         modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
         planMode: true,
       },

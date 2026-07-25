@@ -24,11 +24,14 @@ import {
   isClaudeReasoningEffort,
   isCodexReasoningEffort,
   isPiReasoningEffort,
+  modelIdFamily,
   supportsProviderFastMode,
 } from "../shared/types"
 
 export interface ClaudeSdkModelInfo {
   value: string
+  /** Canonical wire id the row's value resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
+  resolvedModel?: string
   displayName?: string
   description?: string
   supportsEffort?: boolean
@@ -54,17 +57,16 @@ function sanitizeSdkDisplayName(displayName: string): string {
   return displayName.replace(/\s*\([^)]*context[^)]*\)\s*$/i, "").trim()
 }
 
-function modelFamily(value: string) {
-  const match = value.match(/^(?:claude-)?([a-z]+)(?:-|$)/i)
-  return match?.[1]?.toLowerCase() ?? value.toLowerCase()
-}
-
 function sdkModelMatchScore(model: ClaudeSdkModelInfo, option: ProviderModelOption) {
   const modelValue = model.value.toLowerCase()
   if (modelValue === option.id.toLowerCase()) return 3
   if (option.aliases?.some((alias) => alias.toLowerCase() === modelValue)) return 2
-  const optionKeys = [option.id, ...(option.aliases ?? [])].map(modelFamily)
-  return optionKeys.includes(modelFamily(model.value)) ? 1 : 0
+  // Family fallback covers rows keyed by a version-pinned id ("claude-opus-4-8")
+  // or an indirect alias ("default" resolving to a sonnet release) matching the
+  // alias-keyed catalog entry ("opus"/"sonnet").
+  const optionKeys = [option.id, ...(option.aliases ?? [])].map(modelIdFamily)
+  const rowFamilies = [model.value, ...(model.resolvedModel ? [model.resolvedModel] : [])].map(modelIdFamily)
+  return rowFamilies.some((family) => optionKeys.includes(family)) ? 1 : 0
 }
 
 function findSdkModelForOption(models: readonly ClaudeSdkModelInfo[], option: ProviderModelOption) {
