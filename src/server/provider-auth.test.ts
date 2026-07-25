@@ -663,15 +663,15 @@ describe("openrouter oauth", () => {
 // ---------------------------------------------------------------------------
 
 describe("install", () => {
-  test("installs claude via npm and re-probes", async () => {
+  test("installs claude via the native installer and re-probes", async () => {
     let installed = false
     const harness = createHarness({
       paths: { claude: null },
       exec: (argv) => {
         const joined = argv.join(" ")
-        if (argv[0] === "sh" && joined.includes("npm install -g @anthropic-ai/claude-code")) {
+        if (argv[0] === "sh" && joined.includes("curl -fsSL https://claude.ai/install.sh | bash")) {
           installed = true
-          return { code: 0, stdout: "added 3 packages", stderr: "" }
+          return { code: 0, stdout: "installed", stderr: "" }
         }
         return signedOutExec(argv)
       },
@@ -689,6 +689,53 @@ describe("install", () => {
     expect(claude.installState).toBe("idle")
     expect(claude.installed).toBe(true)
     expect(claude.authStatus).toBe("signed_out")
+  })
+
+  test("updates an existing claude via self-update with a native-installer fallback", async () => {
+    let command = ""
+    const harness = createHarness({
+      exec: (argv) => {
+        if (argv[0] === "sh") {
+          command = argv[2] ?? ""
+          return { code: 0, stdout: "updated", stderr: "" }
+        }
+        return signedOutExec(argv)
+      },
+    })
+    await harness.manager.refresh({ force: true })
+    await harness.manager.install("claude")
+    // Self-update first (native installs handle themselves), then the
+    // installer as fallback — npm-managed installs on root-owned prefixes
+    // fail the first leg and migrate to ~/.local/bin via the second.
+    expect(command).toBe("'/usr/local/bin/claude' update || (curl -fsSL https://claude.ai/install.sh | bash)")
+  })
+
+  test("installs codex via npm and re-probes", async () => {
+    let installed = false
+    const harness = createHarness({
+      paths: { codex: null },
+      exec: (argv) => {
+        const joined = argv.join(" ")
+        if (argv[0] === "sh" && joined.includes("npm install -g @openai/codex")) {
+          installed = true
+          return { code: 0, stdout: "added 3 packages", stderr: "" }
+        }
+        return signedOutExec(argv)
+      },
+    })
+    await harness.manager.refresh({ force: true })
+    expect(harness.manager.getSnapshot().services.find((s) => s.service === "codex")!.authStatus).toBe("not_installed")
+
+    harness.setPath("codex", null) // still missing until installer runs
+    const installPromise = harness.manager.install("codex")
+    harness.setPath("codex", "/usr/local/bin/codex")
+    await installPromise
+
+    expect(installed).toBe(true)
+    const codex = harness.manager.getSnapshot().services.find((s) => s.service === "codex")!
+    expect(codex.installState).toBe("idle")
+    expect(codex.installed).toBe(true)
+    expect(codex.authStatus).toBe("signed_out")
   })
 
   test("install failure surfaces the error output", async () => {

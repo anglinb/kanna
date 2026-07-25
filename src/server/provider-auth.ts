@@ -522,8 +522,19 @@ export class ProviderAuthManager {
 
   private installCommand(service: Exclude<AuthServiceId, "openrouter">): string {
     const platform = this.deps.platform ?? process.platform
-    if (service === "claude" || service === "codex") {
-      const pkg = NPM_PACKAGES[service]!
+    if (service === "claude") {
+      // Native-first: the official installer is per-user (~/.local/bin),
+      // needs no root, and self-updates — `npm install -g` fails wherever the
+      // global prefix is root-owned (e.g. cloud dev-boxes). For existing
+      // installs try the binary's own self-update, falling back to the
+      // native installer (which also migrates npm-managed installs).
+      const existing = this.resolvePath(CLI_BINARIES.claude)
+      const nativeInstall = "curl -fsSL https://claude.ai/install.sh | bash"
+      if (existing) return `${shellQuote(existing)} update || (${nativeInstall})`
+      return nativeInstall
+    }
+    if (service === "codex") {
+      const pkg = NPM_PACKAGES.codex!
       if (this.resolvePath("npm")) return `npm install -g ${pkg}`
       if (this.resolvePath("bun")) return `bun add -g ${pkg}`
       throw new Error("Neither npm nor bun is available to install the package.")
