@@ -92,28 +92,34 @@ function ChatRowImpl({
           chat.status !== 'idle' || activeChatId === normalizedChatId || chat.unread ? <span className="">{chat.title}</span> : <span className="text-slate-500 dark:text-slate-400">{chat.title}</span>
         }
       </span>
-      <div className={cn("relative h-7 mr-[2px] shrink-0", chat.canFork ? "w-12" : "w-6")}>
+      {/* Mobile has no real hover — a tap leaves the row stuck in :hover — so
+          below `md` the fork/archive icons are dropped entirely and the age
+          label stays put. Desktop keeps the swap on row hover. */}
+      <div
+        className={cn(
+          "relative h-7 mr-[2px] shrink-0",
+          chat.canFork ? "w-12" : "w-6",
+          // Mobile only holds the label, so widen it for the age / drop the
+          // slot entirely when there's nothing to put in it.
+          trailingLabel ? "max-md:w-12" : "max-md:hidden"
+        )}
+      >
         {trailingLabel ? (
           showShortcutKeycap ? (
-            <span className="hidden md:flex absolute inset-0 items-center justify-end pr-0.5 text-[11px] text-foreground transition-opacity group-hover:opacity-0">
+            // Keycaps only appear while a modifier is held — a physical-keyboard
+            // affordance, so it stays desktop-only.
+            <span className="hidden md:flex absolute inset-0 items-center justify-end pr-0.5 text-[11px] text-foreground transition-opacity md:group-hover:opacity-0">
               <Kbd className="h-4 min-w-4 rounded-sm border-border/50 bg-transparent px-1 text-[10px]">
                 {shortcutHint}
               </Kbd>
             </span>
           ) : (
-            <span className="hidden md:flex absolute inset-0 items-center justify-end pr-2 text-[11px] text-muted-foreground opacity-60 transition-opacity group-hover:opacity-0">
+            <span className="flex absolute inset-0 items-center justify-end pr-2 text-[11px] text-muted-foreground opacity-60 transition-opacity md:group-hover:opacity-0">
               {trailingLabel}
             </span>
           )
         ) : null}
-        <div
-          className={cn(
-            "absolute inset-0 flex items-center justify-end gap-0 opacity-100 mr-[3px]",
-            trailingLabel
-              ? "md:opacity-0 md:group-hover:opacity-100"
-              : "opacity-100 md:opacity-0 md:group-hover:opacity-100"
-          )}
-        >
+        <div className="absolute inset-0 hidden md:flex items-center justify-end gap-0 mr-[3px] md:opacity-0 md:group-hover:opacity-100">
           {chat.canFork ? (
             <Button
               variant="ghost"
