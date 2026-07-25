@@ -39,9 +39,12 @@ describe("shared model normalization", () => {
     expect(normalizeClaudeModelId("claude-sonnet-4-6")).toBe("sonnet")
     expect(normalizeClaudeModelId("claude-haiku-4-5-20251001")).toBe("haiku")
     expect(normalizeClaudeModelId("claude-fable-5")).toBe("fable")
-    // Unknown families clamp to the fallback rather than passing through.
-    expect(normalizeClaudeModelId("claude-mystery-9")).toBe("opus")
-    expect(normalizeClaudeModelId("not-a-model")).toBe("opus")
+    // The static catalog is only a cold-start picker (the real list is
+    // runtime-discovered), so unknown ids pass through for the harness to
+    // validate; only empty input falls back.
+    expect(normalizeClaudeModelId("claude-mystery-9")).toBe("claude-mystery-9")
+    expect(normalizeClaudeModelId("")).toBe("opus")
+    expect(normalizeClaudeModelId(undefined)).toBe("opus")
   })
 
   test("passes Cursor model ids through and folds -fast back into the base id", () => {

@@ -479,10 +479,12 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
     supportsPlanMode: true,
     // Claude ids are family aliases ("opus"), never version-pinned ids
     // ("claude-opus-4-8"): the harness resolves each alias to its latest
-    // release, so new model versions apply without a Kanna update. Labels and
-    // capability flags are refreshed at runtime from the SDK's supportedModels
-    // (applyClaudeSdkModels); persisted version-pinned ids from older Kanna
-    // versions fold into their family alias in normalizeProviderModelId.
+    // release, so new model versions apply without a Kanna update. This static
+    // list is only a cold-start fallback — the real picker is rebuilt at
+    // runtime from the SDK's supportedModels (applyClaudeSdkModels), labeled
+    // from each row's resolved wire id. Persisted version-pinned ids from
+    // older Kanna versions fold into their family alias in
+    // normalizeProviderModelId.
     models: [
       {
         id: "fable",
@@ -652,12 +654,17 @@ export function normalizeProviderModelId(
   }
   const match = getProviderModelMatch(provider, modelId)
   if (match) return match.id
-  // Claude catalog ids are family aliases; persisted version-pinned ids from
-  // older Kanna versions ("claude-opus-4-8", "claude-haiku-4-5-20251001")
-  // migrate here by folding into their family's alias entry.
   if (provider === "claude" && modelId) {
+    // Claude catalog ids are family aliases; persisted version-pinned ids from
+    // older Kanna versions ("claude-opus-4-8", "claude-haiku-4-5-20251001")
+    // migrate here by folding into their family's alias entry.
     const familyMatch = getProviderModelMatch(provider, modelIdFamily(modelId))
     if (familyMatch) return familyMatch.id
+    // The static catalog is only a cold-start picker — the real list comes
+    // from the harness at runtime (supportedModels → applyClaudeSdkModels),
+    // so like cursor/pi, unknown ids pass through for it to validate.
+    const trimmed = modelId.trim()
+    if (trimmed) return trimmed
   }
   return fallbackModelId ?? getProviderCatalog(provider).defaultModel
 }
