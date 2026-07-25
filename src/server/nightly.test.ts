@@ -145,6 +145,9 @@ describe("installNightlyBuild", () => {
       "bun run build",
       "bun bin/kanna --version",
       "bun pm pack",
+      // The existing registry entry must go first — bun can't switch an
+      // installed package to a tarball spec in place (DependencyLoop).
+      "bun remove -g kanna-code",
       // Absolute tarball path — never "." (bun mis-parses it; see repairBunGlobalManifest).
       `bun install -g ${expectedTgz}`,
     ])
@@ -196,6 +199,51 @@ describe("installNightlyBuild", () => {
 
     expect(result.ok).toBe(false)
     expect(result.userMessage).toContain("still reports 0.57.0")
+    // A failure after the global entry was removed reinstalls the release.
+    expect(result.userMessage).toContain("release was reinstalled")
+  })
+
+  test("a failed tarball install rolls back to the latest release", async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "kanna-nightly-"))
+    const tarball = createSourceTarball(tempDir)
+    const workDir = path.join(tempDir, "nightly")
+    const srcDir = path.join(workDir, "src")
+
+    const commands: string[] = []
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes("api.github.com")) return new Response(SHA)
+      return new Response(new Uint8Array(tarball))
+    }) as unknown as typeof fetch
+
+    const result = await installNightlyBuild({
+      workDir,
+      bunGlobalDir: path.join(tempDir, "bun-global"),
+      fetchImpl,
+      runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
+        commands.push([command, ...args].join(" "))
+        if (command === "tar") {
+          const extract = spawnSync(command, args, { cwd, stdio: "ignore" })
+          return { ok: extract.status === 0, output: "" }
+        }
+        if (args.includes("--version")) {
+          return { ok: true, output: "0.56.7-nightly.0123456\n" }
+        }
+        if (args[0] === "pm" && args[1] === "pack") {
+          writeFileSync(path.join(srcDir, "kanna-code-0.56.7-nightly.0123456.tgz"), "tarball")
+          return { ok: true, output: "" }
+        }
+        if (args[0] === "install" && args[1] === "-g" && args[2]?.endsWith(".tgz")) {
+          return { ok: false, output: "registry is down" }
+        }
+        return { ok: true, output: "" }
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.userMessage).toContain("registry is down")
+    expect(result.userMessage).toContain("release was reinstalled")
+    expect(commands.at(-1)).toBe("bun install -g kanna-code@latest")
   })
 
   test("a build that fails its startup check is never installed", async () => {

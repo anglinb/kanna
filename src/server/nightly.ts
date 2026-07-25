@@ -248,9 +248,21 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
   if (!existsSync(packedTarball)) {
     return failure(`Nightly pack step did not produce ${path.basename(packedTarball)}.\n${outputTail(pack.output)}`)
   }
+  // Bun refuses to switch an installed registry package to a tarball spec in
+  // place (DependencyLoop), so drop the existing global entry first — the
+  // package may not be installed globally, so a remove failure is fine. Any
+  // failure past this point rolls back to the latest release so the machine
+  // is never left without a global install. (The reverse direction — a
+  // registry install over a tarball entry — works in place, so the stable
+  // updater needs no such dance.)
+  await runCommand("bun", ["remove", "-g", packageName], srcDir)
+  const rollbackFailure = async (message: string) => {
+    const rollback = await runCommand("bun", ["install", "-g", `${packageName}@latest`], srcDir)
+    return failure(`${message}${rollback.ok ? `\nThe latest ${packageName} release was reinstalled.` : `\nRestoring the release also failed — run \`bun install -g ${packageName}@latest\` to recover.`}`)
+  }
   const install = await runCommand("bun", ["install", "-g", packedTarball], srcDir)
   if (!install.ok) {
-    return failure(`Nightly install step failed.\n${outputTail(install.output)}`)
+    return rollbackFailure(`Nightly install step failed.\n${outputTail(install.output)}`)
   }
 
   // `bun install -g` can exit 0 without replacing the package (that's how
@@ -263,10 +275,10 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
     )
     const installedVersion = (JSON.parse(readFileSync(installedManifestPath, "utf8")) as { version?: string }).version
     if (installedVersion !== version) {
-      return failure(`The install finished but the global package still reports ${installedVersion ?? "no version"} instead of ${version}.`)
+      return await rollbackFailure(`The install finished but the global package still reports ${installedVersion ?? "no version"} instead of ${version}.`)
     }
   } catch (error) {
-    return failure(`Could not verify the installed build: ${error instanceof Error ? error.message : String(error)}`)
+    return await rollbackFailure(`Could not verify the installed build: ${error instanceof Error ? error.message : String(error)}`)
   }
 
   log(`${LOG_PREFIX} nightly: installed ${version}`)
