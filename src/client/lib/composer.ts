@@ -1,4 +1,5 @@
 import {
+  chatModeFromFlags,
   CLAUDE_CONTEXT_WINDOW_OPTIONS,
   CLAUDE_REASONING_OPTIONS,
   getCodexReasoningOptions,
@@ -9,6 +10,7 @@ import {
   PI_REASONING_OPTIONS,
   supportsClaudeMaxReasoningEffort,
   type AgentProvider,
+  type ChatMode,
   type ChatProviderPreferences,
   type ClaudeContextWindow,
   type ProviderCatalogEntry,
@@ -82,6 +84,7 @@ export function getEffectiveComposerState(
         model: providerDefaults.claude.model,
         modelOptions: { ...providerDefaults.claude.modelOptions },
         planMode: composerState.planMode,
+        autoPlan: composerState.autoPlan,
       }
     case "codex":
       return {
@@ -89,6 +92,7 @@ export function getEffectiveComposerState(
         model: providerDefaults.codex.model,
         modelOptions: { ...providerDefaults.codex.modelOptions },
         planMode: composerState.planMode,
+        autoPlan: composerState.autoPlan,
       }
     case "cursor":
       return {
@@ -96,6 +100,7 @@ export function getEffectiveComposerState(
         model: providerDefaults.cursor.model,
         modelOptions: { ...providerDefaults.cursor.modelOptions },
         planMode: composerState.planMode,
+        autoPlan: composerState.autoPlan,
       }
     case "pi":
       return {
@@ -103,6 +108,7 @@ export function getEffectiveComposerState(
         model: providerDefaults.pi.model,
         modelOptions: { ...providerDefaults.pi.modelOptions },
         planMode: composerState.planMode,
+        autoPlan: composerState.autoPlan,
       }
     default:
       return assertNever(activeProvider)
@@ -129,6 +135,8 @@ export interface ComposerView {
   /** The only models that may be selected for this chat. */
   models: ProviderModelOption[]
   supportsPlanMode: boolean
+  /** Whether the provider offers the third "Auto Plan" mode (Claude only). */
+  supportsAutoPlanMode: boolean
 }
 
 export function deriveComposerView(args: {
@@ -164,6 +172,7 @@ export function deriveComposerView(args: {
     providerConfig,
     models: providerConfig?.models ?? [],
     supportsPlanMode: providerConfig?.supportsPlanMode ?? false,
+    supportsAutoPlanMode: providerConfig?.supportsAutoPlanMode ?? false,
   }
 }
 
@@ -186,8 +195,19 @@ export interface ComposerOptionControls {
   contextWindow: { options: ComposerOptionChoice[]; selectedId: ClaudeContextWindow } | null
   /** Fast-mode toggle, or null when the selected model doesn't support it. */
   fastMode: { enabled: boolean } | null
-  /** Plan-mode toggle, or null when the provider doesn't support plan mode. */
-  planMode: { enabled: boolean } | null
+  /**
+   * Mode selector, or null when the provider has no modes (cursor, pi).
+   * `options` is in display order — it is also the Shift+Tab cycle order, so
+   * codex cycles between two entries and claude between three.
+   */
+  mode: { selected: ChatMode; options: ChatMode[] } | null
+}
+
+/** Labels/descriptions for each mode, shared by the picker and command palette. */
+export const CHAT_MODE_LABELS: Record<ChatMode, { label: string; description: string }> = {
+  "full-access": { label: "Full Access", description: "Execution without approval" },
+  "plan": { label: "Plan Mode", description: "Review a plan before execution" },
+  "auto-plan": { label: "Auto Plan", description: "The agent decides when to plan first" },
 }
 
 /**
@@ -237,9 +257,19 @@ export function deriveComposerOptionControls(
     ? { enabled: Boolean(modelOptions.fastMode) }
     : null
 
-  const planMode = providerConfig?.supportsPlanMode
-    ? { enabled: state.planMode }
+  const modeOptions: ChatMode[] = providerConfig?.supportsAutoPlanMode
+    ? ["full-access", "plan", "auto-plan"]
+    : ["full-access", "plan"]
+  // A composer state seeded from another harness can carry autoPlan into a
+  // provider that has no Auto Plan (see getEffectiveComposerState), so clamp
+  // the selection to what this provider actually offers.
+  const selectedMode = chatModeFromFlags(state.planMode, state.autoPlan)
+  const mode = providerConfig?.supportsPlanMode
+    ? {
+      selected: modeOptions.includes(selectedMode) ? selectedMode : "full-access" as ChatMode,
+      options: modeOptions,
+    }
     : null
 
-  return { reasoning, contextWindow, fastMode, planMode }
+  return { reasoning, contextWindow, fastMode, mode }
 }

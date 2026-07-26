@@ -54,6 +54,7 @@ function createState(localPath: string, options?: { lastTurnEndedAt?: number }):
     unread: false,
     provider: "claude",
     planMode: false,
+    autoPlan: false,
     sessionToken: null,
     lastTurnOutcome: null,
     ...(options?.lastTurnEndedAt === undefined ? {} : { lastTurnEndedAt: options.lastTurnEndedAt }),

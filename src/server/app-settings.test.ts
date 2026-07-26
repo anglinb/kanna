@@ -45,6 +45,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
           fastMode: false,
         },
         planMode: false,
+        autoPlan: false,
       },
       codex: {
         model: "gpt-5.6-sol",
@@ -53,6 +54,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
           fastMode: false,
         },
         planMode: false,
+        autoPlan: false,
       },
       cursor: {
         model: "composer-2.5",
@@ -60,6 +62,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
           fastMode: false,
         },
         planMode: false,
+        autoPlan: false,
       },
       pi: {
         model: "~anthropic/claude-fable-latest",
@@ -67,6 +70,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
           reasoningEffort: "medium",
         },
         planMode: false,
+        autoPlan: false,
       },
     },
     newSidebarEnabled: true,

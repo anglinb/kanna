@@ -98,6 +98,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
         fastMode: false,
       },
       planMode: false,
+      autoPlan: false,
     },
     codex: {
       model: "gpt-5.5",
@@ -106,6 +107,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
         fastMode: false,
       },
       planMode: false,
+      autoPlan: false,
     },
     cursor: {
       model: "composer-2.5",
@@ -113,6 +115,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
         fastMode: false,
       },
       planMode: false,
+      autoPlan: false,
     },
     pi: {
       model: "~anthropic/claude-fable-latest",
@@ -120,6 +123,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
         reasoningEffort: "medium",
       },
       planMode: false,
+      autoPlan: false,
     },
   },
   newSidebarEnabled: false,
@@ -1191,6 +1195,7 @@ describe("ws-router", () => {
       unread: false,
       provider: null,
       planMode: false,
+      autoPlan: false,
       sessionToken: null,
       lastTurnOutcome: null,
     })
@@ -1283,6 +1288,7 @@ describe("ws-router", () => {
       unread: false,
       provider: null,
       planMode: false,
+      autoPlan: false,
       sessionToken: null,
       lastTurnOutcome: null,
     })
@@ -1434,6 +1440,7 @@ describe("ws-router", () => {
       unread: true,
       provider: null,
       planMode: false,
+      autoPlan: false,
       sessionToken: null,
       lastTurnOutcome: null,
     })
@@ -1648,6 +1655,7 @@ describe("ws-router", () => {
       unread: false,
       provider: "claude",
       planMode: false,
+      autoPlan: false,
       sessionToken: "session-1",
       pendingForkSessionToken: null,
       lastTurnOutcome: null,
@@ -1670,6 +1678,7 @@ describe("ws-router", () => {
             unread: false,
             provider: "claude",
             planMode: false,
+            autoPlan: false,
             sessionToken: null,
             pendingForkSessionToken: "session-1",
             lastTurnOutcome: null,
@@ -1767,6 +1776,7 @@ describe("ws-router", () => {
       unread: false,
       provider: null,
       planMode: false,
+      autoPlan: false,
       sessionToken: null,
       lastTurnOutcome: null,
     })
@@ -1835,6 +1845,7 @@ describe("ws-router", () => {
       unread: false,
       provider: null,
       planMode: false,
+      autoPlan: false,
       sessionToken: null,
       lastTurnOutcome: null,
     })
@@ -2122,6 +2133,7 @@ describe("ws-router", () => {
       unread: false,
       provider: null,
       planMode: false,
+      autoPlan: false,
       sessionToken: null,
       lastTurnOutcome: null,
     })
@@ -2201,6 +2213,7 @@ describe("ws-router", () => {
       unread: false,
       provider: null,
       planMode: false,
+      autoPlan: false,
       sessionToken: null,
       lastTurnOutcome: null,
     })

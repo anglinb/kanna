@@ -50,6 +50,7 @@ export type ProviderPreferenceInput = {
   effort?: unknown
   modelOptions?: ProviderModelOptionsInput
   planMode?: unknown
+  autoPlan?: unknown
 }
 
 function modelIdFromInput(value?: ProviderPreferenceInput): string | undefined {
@@ -73,6 +74,10 @@ export function normalizeClaudePreference(value?: ProviderPreferenceInput): Prov
       fastMode: normalizeClaudeFastMode(model, value?.modelOptions?.fastMode),
     },
     planMode: value?.planMode === true,
+    // Absent (older settings files / persisted composer state) means Full
+    // Access, which is the intended default — nobody is silently left in the
+    // legacy Auto Plan behaviour.
+    autoPlan: value?.autoPlan === true,
   }
 }
 
@@ -91,6 +96,7 @@ export function normalizeCodexPreference(value?: ProviderPreferenceInput): Provi
         : DEFAULT_CODEX_MODEL_OPTIONS.fastMode,
     },
     planMode: value?.planMode === true,
+    autoPlan: false,
   }
 }
 
@@ -103,6 +109,7 @@ export function normalizeCursorPreference(value?: ProviderPreferenceInput): Prov
         : DEFAULT_CURSOR_MODEL_OPTIONS.fastMode,
     },
     planMode: false,
+    autoPlan: false,
   }
 }
 
@@ -116,6 +123,7 @@ export function normalizePiPreference(value?: ProviderPreferenceInput): Provider
       ),
     },
     planMode: false,
+    autoPlan: false,
   }
 }
 

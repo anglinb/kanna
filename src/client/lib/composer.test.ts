@@ -17,6 +17,7 @@ function claudeState(overrides: Partial<Extract<ComposerState, { provider: "clau
     model: providerDefaults.claude.model,
     modelOptions: { ...providerDefaults.claude.modelOptions },
     planMode: false,
+    autoPlan: false,
     ...overrides,
   } as ComposerState
 }
@@ -164,7 +165,7 @@ describe("deriveComposerOptionControls", () => {
     )
 
     expect(controls.reasoning).not.toBeNull()
-    expect(controls.planMode).not.toBeNull()
+    expect(controls.mode).not.toBeNull()
     expect(controls.contextWindow?.options.map((option) => option.id)).toEqual(["1m", "200k"])
     expect(controls.fastMode !== null).toBe(Boolean(modelWithWindow.supportsFastMode))
     // "Max" reasoning is disabled unless the model supports it.
@@ -180,6 +181,7 @@ describe("deriveComposerOptionControls", () => {
         model: cursorModel?.id ?? "auto",
         modelOptions: {},
         planMode: false,
+        autoPlan: false,
       } as ComposerState,
       cursorConfig
     )
@@ -194,11 +196,56 @@ describe("deriveComposerOptionControls", () => {
         model: providerDefaults.codex.model,
         modelOptions: { ...providerDefaults.codex.modelOptions },
         planMode: false,
+        autoPlan: false,
       } as ComposerState,
       codexConfig
     )
     expect(controls.reasoning?.options.length).toBeGreaterThan(0)
     expect(controls.contextWindow).toBeNull()
+  })
+
+  test("only claude offers the third Auto Plan mode", () => {
+    expect(deriveComposerOptionControls(claudeState(), claudeConfig).mode).toEqual({
+      selected: "full-access",
+      options: ["full-access", "plan", "auto-plan"],
+    })
+    expect(deriveComposerOptionControls(
+      {
+        provider: "codex",
+        model: providerDefaults.codex.model,
+        modelOptions: { ...providerDefaults.codex.modelOptions },
+        planMode: false,
+        autoPlan: false,
+      } as ComposerState,
+      codexConfig
+    ).mode).toEqual({ selected: "full-access", options: ["full-access", "plan"] })
+    // Providers without modes get no selector at all.
+    expect(deriveComposerOptionControls(
+      { provider: "cursor", model: "composer-2.5", modelOptions: {}, planMode: false, autoPlan: false } as ComposerState,
+      cursorConfig
+    ).mode).toBeNull()
+  })
+
+  test("codex clamps an autoPlan flag carried over from a claude composer state", () => {
+    const controls = deriveComposerOptionControls(
+      {
+        provider: "codex",
+        model: providerDefaults.codex.model,
+        modelOptions: { ...providerDefaults.codex.modelOptions },
+        planMode: false,
+        autoPlan: true,
+      } as ComposerState,
+      codexConfig
+    )
+    expect(controls.mode?.selected).toBe("full-access")
+  })
+
+  test("the selected mode is derived from the planMode/autoPlan pair", () => {
+    expect(deriveComposerOptionControls(claudeState({ autoPlan: true }), claudeConfig).mode?.selected)
+      .toBe("auto-plan")
+    // planMode wins so an Auto Plan chat parked in plan mode still reads "Plan Mode".
+    expect(deriveComposerOptionControls(claudeState({ planMode: true, autoPlan: true }), claudeConfig).mode?.selected)
+      .toBe("plan")
   })
 
   test("fast mode only offered when the selected model supports it", () => {

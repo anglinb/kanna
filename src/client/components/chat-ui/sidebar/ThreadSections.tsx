@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react"
-import { Archive, ChevronRight, MoreHorizontal, RotateCcw, Split } from "lucide-react"
+import { Archive, ChevronRight, MoreHorizontal } from "lucide-react"
 import type { SidebarChatRow, SidebarData } from "../../../../shared/types"
 import {
   computeSidebarThreadSections,
@@ -15,8 +15,7 @@ import {
   ContextMenuTrigger,
 } from "../../ui/context-menu"
 import { openContextMenuFromButton } from "../../open-external-menu"
-import { ThreadRowContent } from "../ThreadRowContent"
-import { ChatRowMenu } from "./Menus"
+import { ThreadRow } from "./ThreadRow"
 
 /**
  * Section header matching the Projects tab's collapsible project headers
@@ -161,70 +160,24 @@ function ThreadSectionsImpl({
   if (pinnedGroups.length === 0 && sections.buckets.length === 0 && sections.archived.length === 0) return null
 
   const renderRow = (thread: SidebarThread) => (
-    <ChatRowMenu
+    <ThreadRow
       key={thread.chatId}
-      canFork={thread.row.canFork}
+      thread={thread}
+      isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
       editorLabel={editorLabel}
-      onNewChat={() => onCreateChat(thread.projectId)}
-      onRename={() => onRenameChat(thread.row)}
-      onShare={() => onShareChat(thread.row.chatId)}
-      onCopyPath={() => onCopyPath(thread.row.localPath)}
-      onOpenInFinder={() => onOpenExternalPath("open_finder", thread.row.localPath)}
-      onOpenInEditor={() => onOpenExternalPath("open_editor", thread.row.localPath)}
-      onFork={() => onForkChat(thread.row)}
-      onArchive={() => onArchiveChat(thread.row)}
-      onDelete={() => onDeleteChat(thread.row)}
-    >
-      <div
-        // Same marker ChatRow uses. Because this section renders above the
-        // project groups, the sidebar's scroll-to-active querySelector finds
-        // this top copy first and scrolls up to it. A div (not a button) so
-        // the hover action Buttons can nest inside.
-        data-chat-id={normalizeChatId(thread.chatId)}
-        className={cn(
-          "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
-          normalizeChatId(thread.chatId) === normalizedActiveChatId
-            ? "bg-muted hover:bg-muted border-border"
-            : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
-        )}
-        onClick={() => onSelectChat(thread.chatId)}
-      >
-        <ThreadRowContent
-          thread={thread}
-          showStatus
-          hoverActions={(
-            <>
-              {thread.row.canFork ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onForkChat(thread.row)
-                  }}
-                  title="Fork chat"
-                >
-                  <Split className="size-3.5" />
-                </Button>
-              ) : null}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onArchiveChat(thread.row)
-                }}
-                title="Archive chat"
-              >
-                <Archive className="size-3.5" />
-              </Button>
-            </>
-          )}
-        />
-      </div>
-    </ChatRowMenu>
+      // No trailingLabel: this tab spans projects, so the project title is the
+      // useful thing to show there.
+      onSelect={onSelectChat}
+      onCreateChat={onCreateChat}
+      onRenameChat={onRenameChat}
+      onShareChat={onShareChat}
+      onCopyPath={onCopyPath}
+      onOpenExternalPath={onOpenExternalPath}
+      onForkChat={onForkChat}
+      onArchiveChat={onArchiveChat}
+      onRestoreChat={onRestoreChat}
+      onDeleteChat={onDeleteChat}
+    />
   )
 
   return (
@@ -269,52 +222,23 @@ function ThreadSectionsImpl({
             {isExpanded ? (
               <div className="space-y-[2px] mb-3">
                 {sections.archived.map((thread) => (
-                  <ChatRowMenu
+                  <ThreadRow
                     key={thread.chatId}
+                    thread={thread}
                     archived
-                    canFork={thread.row.canFork}
+                    isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
                     editorLabel={editorLabel}
-                    onNewChat={() => onCreateChat(thread.projectId)}
-                    onRestore={() => onRestoreChat(thread.row.chatId)}
-                    onRename={() => onRenameChat(thread.row)}
-                    onShare={() => onShareChat(thread.row.chatId)}
-                    onCopyPath={() => onCopyPath(thread.row.localPath)}
-                    onOpenInFinder={() => onOpenExternalPath("open_finder", thread.row.localPath)}
-                    onOpenInEditor={() => onOpenExternalPath("open_editor", thread.row.localPath)}
-                    onFork={() => onForkChat(thread.row)}
-                    onArchive={() => {}}
-                    onDelete={() => onDeleteChat(thread.row)}
-                  >
-                    <div
-                      data-chat-id={normalizeChatId(thread.chatId)}
-                      className={cn(
-                        "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
-                        normalizeChatId(thread.chatId) === normalizedActiveChatId
-                          ? "bg-muted hover:bg-muted border-border"
-                          : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
-                      )}
-                      onClick={() => onOpenArchivedChat(thread.chatId)}
-                    >
-                      <ThreadRowContent
-                        thread={thread}
-                        showStatus
-                        hoverActions={(
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              onRestoreChat(thread.row.chatId)
-                            }}
-                            title="Restore chat"
-                          >
-                            <RotateCcw className="size-3.5" />
-                          </Button>
-                        )}
-                      />
-                    </div>
-                  </ChatRowMenu>
+                    onSelect={onOpenArchivedChat}
+                    onCreateChat={onCreateChat}
+                    onRenameChat={onRenameChat}
+                    onShareChat={onShareChat}
+                    onCopyPath={onCopyPath}
+                    onOpenExternalPath={onOpenExternalPath}
+                    onForkChat={onForkChat}
+                    onArchiveChat={onArchiveChat}
+                    onRestoreChat={onRestoreChat}
+                    onDeleteChat={onDeleteChat}
+                  />
                 ))}
               </div>
             ) : null}

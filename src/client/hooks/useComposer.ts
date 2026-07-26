@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react"
-import type { AgentProvider, ClaudeContextWindow, ProviderCatalogEntry } from "../../shared/types"
+import type { AgentProvider, ChatMode, ClaudeContextWindow, ProviderCatalogEntry } from "../../shared/types"
 import {
   applyModelToComposerState,
   deriveComposerOptionControls,
@@ -25,8 +25,10 @@ export interface ComposerController extends ComposerView {
   selectProvider: (provider: AgentProvider) => boolean
   /** Selects a model from the provider catalog, normalizing dependent options. Returns false when unavailable. */
   selectModel: (modelId: string) => boolean
-  /** Sets plan mode. Returns false when the provider doesn't support it. */
-  setPlanMode: (planMode: boolean) => boolean
+  /** Sets the chat mode. Returns false when the provider doesn't offer it. */
+  setMode: (mode: ChatMode) => boolean
+  /** Advances to the next mode in the provider's cycle (Shift+Tab). */
+  cycleMode: () => boolean
   /** Sets reasoning effort. Returns false when the option isn't offered for this provider/model. */
   setReasoningEffort: (effortId: string) => boolean
   /** Sets the Claude context window. Returns false when the model has no selector. */
@@ -110,16 +112,28 @@ export function useComposer(args: {
     return true
   }, [view])
 
-  const setPlanMode = useCallback((planMode: boolean) => {
-    if (!view.supportsPlanMode) return false
-    useChatPreferencesStore.getState().setChatComposerPlanMode(view.composerChatId, planMode)
-    return true
-  }, [view.composerChatId, view.supportsPlanMode])
-
   const optionControls = useMemo(
     () => deriveComposerOptionControls(view.effectiveState, view.providerConfig),
     [view.effectiveState, view.providerConfig]
   )
+
+  const setMode = useCallback((mode: ChatMode) => {
+    // The availability registry is the gate: codex never offers "auto-plan",
+    // cursor/pi offer nothing at all.
+    if (!optionControls.mode?.options.includes(mode)) return false
+    useChatPreferencesStore.getState().setChatComposerMode(view.composerChatId, mode)
+    return true
+  }, [optionControls.mode, view.composerChatId])
+
+  const cycleMode = useCallback(() => {
+    const modeControl = optionControls.mode
+    if (!modeControl) return false
+    const index = modeControl.options.indexOf(modeControl.selected)
+    const next = modeControl.options[(index + 1) % modeControl.options.length]
+    if (!next) return false
+    useChatPreferencesStore.getState().setChatComposerMode(view.composerChatId, next)
+    return true
+  }, [optionControls.mode, view.composerChatId])
 
   const setReasoningEffort = useCallback((effortId: string) => {
     const option = optionControls.reasoning?.options.find((candidate) => candidate.id === effortId)
@@ -159,18 +173,20 @@ export function useComposer(args: {
     optionControls,
     selectProvider,
     selectModel,
-    setPlanMode,
+    setMode,
+    cycleMode,
     setReasoningEffort,
     setContextWindow,
     setFastMode,
     updateEffectiveState,
   }), [
+    cycleMode,
     optionControls,
     selectModel,
     selectProvider,
     setContextWindow,
     setFastMode,
-    setPlanMode,
+    setMode,
     setReasoningEffort,
     updateEffectiveState,
     view,

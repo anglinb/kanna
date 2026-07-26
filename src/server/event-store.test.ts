@@ -68,6 +68,7 @@ describe("EventStore", () => {
         unread: false,
         provider: null,
         planMode: false,
+        autoPlan: false,
         sessionToken: null,
         lastTurnOutcome: null,
       }],
@@ -189,6 +190,7 @@ describe("EventStore", () => {
       provider: "codex",
       model: "gpt-5.4",
       planMode: false,
+      autoPlan: false,
     })
     const second = await store.enqueueMessage(chat.id, {
       content: "second queued",
@@ -196,6 +198,7 @@ describe("EventStore", () => {
       provider: "claude",
       model: "claude-sonnet-4-6",
       planMode: true,
+      autoPlan: false,
     })
 
     expect(store.getQueuedMessages(chat.id).map((message) => message.content)).toEqual([
@@ -445,6 +448,7 @@ describe("EventStore", () => {
         updatedAt: 5,
         provider: null,
         planMode: false,
+        autoPlan: false,
         sessionToken: null,
         lastTurnOutcome: null,
       }],
@@ -822,6 +826,25 @@ describe("EventStore", () => {
     expect(store.getChat(protectedChat.id)?.id).toBe(protectedChat.id)
   })
 
+  test("auto plan defaults to false and survives a replay", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    // A chat that never saw a chat_auto_plan_set event — i.e. every chat in a
+    // log written before Auto Plan existed — reads as Full Access.
+    expect(store.requireChat(chat.id).autoPlan).toBe(false)
+
+    await store.setAutoPlan(chat.id, true)
+    expect(store.requireChat(chat.id).autoPlan).toBe(true)
+
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.requireChat(chat.id).autoPlan).toBe(true)
+  })
+
   test("forks a chat with copied transcript and pending fork session token", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)
@@ -831,6 +854,7 @@ describe("EventStore", () => {
     const source = await store.createChat(project.id)
     await store.setChatProvider(source.id, "claude")
     await store.setPlanMode(source.id, true)
+    await store.setAutoPlan(source.id, true)
     await store.setSessionToken(source.id, "session-1")
     await store.appendMessage(source.id, entry("user_prompt", source.createdAt + 1, { content: "analyze this" }))
     await store.appendMessage(source.id, entry("assistant_text", source.createdAt + 2, { text: "done" }))
@@ -841,6 +865,7 @@ describe("EventStore", () => {
     expect(forked.title).toBe("Fork: New Chat")
     expect(forked.provider).toBe("claude")
     expect(forked.planMode).toBe(true)
+    expect(forked.autoPlan).toBe(true)
     expect(forked.sessionToken).toBeNull()
     expect(forked.pendingForkSessionToken).toBe("session-1")
     expect(forked.lastTurnOutcome).toBeNull()

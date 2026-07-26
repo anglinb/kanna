@@ -27,16 +27,18 @@ import {
   Plus,
   Settings2,
   Share2,
+  Sparkles,
   SquareMenu,
   SquarePen,
   SquareTerminal,
   Terminal,
 } from "lucide-react"
-import type { ClaudeContextWindow, FsListResult, GitHubRecentReposResult } from "../../../shared/types"
+import type { ChatMode, ClaudeContextWindow, FsListResult, GitHubRecentReposResult } from "../../../shared/types"
 import { DEFAULT_NEW_PROJECTS_DIRECTORY } from "../../../shared/types"
 import { REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
 import type { KannaState } from "../../app/useKannaState"
 import { useComposer } from "../../hooks/useComposer"
+import { CHAT_MODE_LABELS } from "../../lib/composer"
 import type { ProjectRequest } from "../../app/kannaStateHelpers"
 import { actionMatchesEvent, getBindingsForAction } from "../../lib/keybindings"
 import { formatSidebarAgeLabel, getPathBasename } from "../../lib/formatters"
@@ -198,6 +200,18 @@ function ThreadItem({
 }
 
 const ICON_CLASS = "h-4 w-4 text-muted-foreground"
+
+const MODE_COMMAND_ICONS: Record<ChatMode, typeof LockOpen> = {
+  "full-access": LockOpen,
+  "plan": ListTodo,
+  "auto-plan": Sparkles,
+}
+
+const MODE_COMMAND_KEYWORDS: Record<ChatMode, string[]> = {
+  "full-access": ["execute", "yolo", "no approval"],
+  "plan": ["review", "safe", "approve"],
+  "auto-plan": ["automatic", "decide", "enter plan mode"],
+}
 
 /** The Add Project page's static rows (each pushes its own sub-page). */
 const ADD_PROJECT_STATIC_ACTIONS = [
@@ -784,29 +798,22 @@ export function CommandPalette({ state }: { state: KannaState }) {
       // Option controls come from the same central availability registry
       // (lib/composer.ts deriveComposerOptionControls) that drives the chat
       // input's ChatPreferenceControls — nothing unavailable is ever offered.
-      const { planMode, fastMode, reasoning, contextWindow } = composer.optionControls
-      if (planMode) {
-        list.push(planMode.enabled
-          ? {
-            id: "full-access",
-            title: "Switch to Full Access",
-            keywords: ["plan mode", "permission", "execute", "yolo"],
-            icon: <LockOpen className={ICON_CLASS} />,
+      const { mode, fastMode, reasoning, contextWindow } = composer.optionControls
+      if (mode) {
+        for (const option of mode.options) {
+          if (option === mode.selected) continue
+          const Icon = MODE_COMMAND_ICONS[option]
+          list.push({
+            id: `mode-${option}`,
+            title: `Switch to ${CHAT_MODE_LABELS[option].label}`,
+            keywords: ["mode", "permission", ...MODE_COMMAND_KEYWORDS[option]],
+            icon: <Icon className={ICON_CLASS} />,
             run: () => {
               close()
-              composer.setPlanMode(false)
-            },
-          }
-          : {
-            id: "plan-mode",
-            title: "Switch to Plan Mode",
-            keywords: ["full access", "permission", "review", "safe"],
-            icon: <ListTodo className={ICON_CLASS} />,
-            run: () => {
-              close()
-              composer.setPlanMode(true)
+              composer.setMode(option)
             },
           })
+        }
       }
       if (fastMode) {
         list.push(fastMode.enabled

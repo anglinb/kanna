@@ -14,7 +14,7 @@ describe("ChatPreferenceControls", () => {
         onProviderChange={() => {}}
         onModelChange={() => {}}
         onModelOptionChange={() => {}}
-        includePlanMode={false}
+        includeMode={false}
       />
     )
 
@@ -35,7 +35,7 @@ describe("ChatPreferenceControls", () => {
         onProviderChange={() => {}}
         onModelChange={() => {}}
         onModelOptionChange={() => {}}
-        includePlanMode={false}
+        includeMode={false}
       />
     )
 
@@ -53,7 +53,7 @@ describe("ChatPreferenceControls", () => {
         onProviderChange={() => {}}
         onModelChange={() => {}}
         onModelOptionChange={() => {}}
-        includePlanMode={false}
+        includeMode={false}
       />
     )
 
@@ -71,9 +71,9 @@ describe("ChatPreferenceControls", () => {
         onProviderChange={() => {}}
         onModelChange={() => {}}
         onModelOptionChange={() => {}}
-        planMode
-        onPlanModeChange={() => {}}
-        includePlanMode
+        mode="plan"
+        onModeChange={() => {}}
+        includeMode
       />
     )
 
@@ -95,7 +95,7 @@ describe("ChatPreferenceControls", () => {
         onProviderChange={() => {}}
         onModelChange={() => {}}
         onModelOptionChange={() => {}}
-        includePlanMode={false}
+        includeMode={false}
       />
     )
 

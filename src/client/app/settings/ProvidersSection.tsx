@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react"
 import {
+  chatModeFromFlags,
+  chatModeToFlags,
   DEFAULT_OPENAI_SDK_MODEL,
   DEFAULT_OPENROUTER_SDK_MODEL,
   PROVIDERS,
   type AgentProvider,
+  type ChatMode,
   type LlmProviderKind,
 } from "../../../shared/types"
 import { AuthCard } from "../../components/auth/AuthCard"
@@ -60,7 +63,7 @@ export function ProvidersSection({
   const setDefaultProvider = useChatPreferencesStore((store) => store.setDefaultProvider)
   const setProviderDefaultModel = useChatPreferencesStore((store) => store.setProviderDefaultModel)
   const setProviderDefaultModelOptions = useChatPreferencesStore((store) => store.setProviderDefaultModelOptions)
-  const setProviderDefaultPlanMode = useChatPreferencesStore((store) => store.setProviderDefaultPlanMode)
+  const setProviderDefaultMode = useChatPreferencesStore((store) => store.setProviderDefaultMode)
 
   const [providersError, setProvidersError] = useState<string | null>(null)
   const [llmProviderDraft, setLlmProviderDraft] = useState({
@@ -120,9 +123,10 @@ export function ProvidersSection({
     })
   }
 
-  function handleProviderDefaultPlanModeChange(provider: AgentProvider, planMode: boolean) {
-    setProviderDefaultPlanMode(provider, planMode)
-    void handleWriteAppSettings({ providerDefaults: { [provider]: { planMode } } }).catch((error) => {
+  function handleProviderDefaultModeChange(provider: AgentProvider, mode: ChatMode) {
+    setProviderDefaultMode(provider, mode)
+    const flags = chatModeToFlags(mode, providerDefaults[provider].autoPlan)
+    void handleWriteAppSettings({ providerDefaults: { [provider]: flags } }).catch((error) => {
       setProvidersError(error instanceof Error ? error.message : "Unable to save provider settings.")
     })
   }
@@ -258,9 +262,9 @@ export function ProvidersSection({
                   handleProviderDefaultModelOptionsChange("claude", { fastMode: change.fastMode })
                 }
               }}
-              planMode={providerDefaults.claude.planMode}
-              onPlanModeChange={(planMode) => handleProviderDefaultPlanModeChange("claude", planMode)}
-              includePlanMode
+              mode={chatModeFromFlags(providerDefaults.claude.planMode, providerDefaults.claude.autoPlan)}
+              onModeChange={(mode) => handleProviderDefaultModeChange("claude", mode)}
+              includeMode
               className="justify-start flex-wrap"
             />
           </div>
@@ -285,9 +289,9 @@ export function ProvidersSection({
                   handleProviderDefaultModelOptionsChange("codex", { fastMode: change.fastMode })
                 }
               }}
-              planMode={providerDefaults.codex.planMode}
-              onPlanModeChange={(planMode) => handleProviderDefaultPlanModeChange("codex", planMode)}
-              includePlanMode
+              mode={chatModeFromFlags(providerDefaults.codex.planMode, providerDefaults.codex.autoPlan)}
+              onModeChange={(mode) => handleProviderDefaultModeChange("codex", mode)}
+              includeMode
               className="justify-start flex-wrap"
             />
           </div>
@@ -310,7 +314,7 @@ export function ProvidersSection({
                   handleProviderDefaultModelOptionsChange("cursor", { fastMode: change.fastMode })
                 }
               }}
-              planMode={providerDefaults.cursor.planMode}
+              mode={chatModeFromFlags(providerDefaults.cursor.planMode, providerDefaults.cursor.autoPlan)}
               className="justify-start flex-wrap"
             />
           </div>
@@ -334,7 +338,7 @@ export function ProvidersSection({
                 }
               }}
               onEditModels={() => setDefaultModelsDialogOpen(true)}
-              planMode={providerDefaults.pi.planMode}
+              mode={chatModeFromFlags(providerDefaults.pi.planMode, providerDefaults.pi.autoPlan)}
               className="justify-start flex-wrap"
             />
           </div>

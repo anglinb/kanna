@@ -1,8 +1,10 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ArrowUp, Paperclip } from "lucide-react"
 import {
+  chatModeFromFlags,
   type AgentProvider,
   type ChatAttachment,
+  type ChatMode,
   type ChatSkillsSnapshot,
   type HarnessSkill,
   type ModelOptions,
@@ -121,7 +123,7 @@ interface ComposerAttachment extends ChatAttachment {
 interface Props {
   onSubmit: (
     value: string,
-    options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; attachments?: ChatAttachment[] }
+    options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; autoPlan?: boolean; attachments?: ChatAttachment[] }
   ) => Promise<void>
   onLayoutChange?: () => void
   onCancel?: () => void
@@ -180,7 +182,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   })
   const { composerChatId, providerSwitchPending, selectedProvider } = composer
   const providerPrefs = composer.effectiveState
-  const showPlanMode = composer.supportsPlanMode
+  const showModePicker = composer.supportsPlanMode
   // Switching to a harness that isn't signed in is blocked: the pick is
   // stashed here, a sign-in dialog opens, and the switch applies
   // automatically once the auth store reports the service signed in.
@@ -443,12 +445,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     attachmentsRef.current.forEach(cleanupAttachmentPreview)
   }, [cleanupAttachmentPreview])
 
-  function setEffectivePlanMode(planMode: boolean) {
-    composer.setPlanMode(planMode)
-  }
-
-  function toggleEffectivePlanMode() {
-    setEffectivePlanMode(!providerPrefs.planMode)
+  function setEffectiveMode(mode: ChatMode) {
+    composer.setMode(mode)
   }
 
   const processUploadQueue = useCallback(() => {
@@ -594,7 +592,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       provider: selectedProvider,
       model: providerPrefs.model,
       modelOptions,
-      planMode: showPlanMode ? providerPrefs.planMode : false,
+      planMode: showModePicker ? providerPrefs.planMode : false,
+      autoPlan: showModePicker ? providerPrefs.autoPlan : false,
       attachments: attachmentsForSubmit,
     }
     setValue("")
@@ -653,9 +652,11 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       return
     }
 
-    if (event.key === "Tab" && event.shiftKey && showPlanMode) {
+    // Cycles the provider's modes in picker order: two for codex
+    // (Full Access → Plan Mode), three for claude (… → Auto Plan).
+    if (event.key === "Tab" && event.shiftKey && showModePicker) {
       event.preventDefault()
-      toggleEffectivePlanMode()
+      composer.cycleMode()
       return
     }
 
@@ -947,9 +948,9 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               }
             }}
             onEditModels={onEditModels}
-            planMode={providerPrefs.planMode}
-            onPlanModeChange={setEffectivePlanMode}
-            includePlanMode={showPlanMode}
+            mode={chatModeFromFlags(providerPrefs.planMode, providerPrefs.autoPlan)}
+            onModeChange={setEffectiveMode}
+            includeMode={showModePicker}
             className="max-w-[840px] mx-auto"
           />
           {activeContextWindow ? (

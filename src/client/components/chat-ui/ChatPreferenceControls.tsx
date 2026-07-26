@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react"
-import { Box, Brain, Gauge, ListTodo, LockOpen, Plus, Search, SquareMenu, SquareMinus } from "lucide-react"
+import { Box, Brain, Gauge, ListTodo, LockOpen, Plus, Search, Sparkles, SquareMenu, SquareMinus } from "lucide-react"
 import {
   resolveModelLabel,
   type AgentProvider,
+  type ChatMode,
   type ClaudeContextWindow,
   type ClaudeModelOptions,
   type ClaudeReasoningEffort,
@@ -14,7 +15,7 @@ import {
   type ProviderCatalogEntry,
   type ProviderModelOption,
 } from "../../../shared/types"
-import { deriveComposerOptionControls } from "../../lib/composer"
+import { CHAT_MODE_LABELS, deriveComposerOptionControls } from "../../lib/composer"
 import { cn } from "../../lib/utils"
 import type { ComposerState } from "../../stores/chatPreferencesStore"
 import { useUnauthenticatedHarnesses } from "../../stores/providerAuthStore"
@@ -200,10 +201,16 @@ interface ChatPreferenceControlsProps {
   onModelOptionChange: (change: ModelOptionChange) => void
   /** Opens the Default Models dialog from the pi model picker's "Add models…" row. */
   onEditModels?: () => void
-  planMode?: boolean
-  onPlanModeChange?: (planMode: boolean) => void
-  includePlanMode?: boolean
+  mode?: ChatMode
+  onModeChange?: (mode: ChatMode) => void
+  includeMode?: boolean
   className?: string
+}
+
+const MODE_ICONS: Record<ChatMode, typeof LockOpen> = {
+  "full-access": LockOpen,
+  "plan": ListTodo,
+  "auto-plan": Sparkles,
 }
 
 export function ChatPreferenceControls({
@@ -218,9 +225,9 @@ export function ChatPreferenceControls({
   onModelChange,
   onModelOptionChange,
   onEditModels,
-  planMode = false,
-  onPlanModeChange,
-  includePlanMode = true,
+  mode = "full-access",
+  onModeChange,
+  includeMode = true,
   className,
 }: ChatPreferenceControlsProps) {
   const providerConfig = availableProviders.find((provider) => provider.id === selectedProvider) ?? availableProviders[0]
@@ -242,11 +249,19 @@ export function ChatPreferenceControls({
   const codexModelOptions = selectedProvider === "codex" ? modelOptions as CodexModelOptions : null
   // Central availability registry (shared with the command palette): which
   // option controls exist for this provider/model and their current values.
+  // Only `provider` and `model`/`modelOptions` feed the non-mode controls; the
+  // mode itself is passed in, so the plan/autoPlan pair is reconstructed from it.
   const controls = deriveComposerOptionControls(
-    { provider: selectedProvider, model, modelOptions, planMode } as ComposerState,
+    {
+      provider: selectedProvider,
+      model,
+      modelOptions,
+      planMode: mode === "plan",
+      autoPlan: mode === "auto-plan",
+    } as ComposerState,
     providerConfig
   )
-  const showPlanMode = includePlanMode && controls.planMode && onPlanModeChange
+  const modeControl = includeMode && onModeChange ? controls.mode : null
   const ContextWindowIcon = controls.contextWindow?.selectedId === "1m" ? SquareMenu : SquareMinus
 
   const reasoningChangeFor = (effortId: string): ModelOptionChange =>
@@ -434,42 +449,37 @@ export function ChatPreferenceControls({
         )
       })() : null}
 
-      {showPlanMode ? (
-        <InputPopover
-          trigger={(
-            <>
-              {planMode ? <ListTodo className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}
-              <span>{planMode ? "Plan Mode" : "Full Access"}</span>
-            </>
-          )}
-          triggerClassName={planMode ? "text-blue-400 dark:text-blue-300" : undefined}
-        >
-          {(close) => (
-            <>
-              <PopoverMenuItem
-                onClick={() => {
-                  onPlanModeChange(false)
-                  close()
-                }}
-                selected={!planMode}
-                icon={<LockOpen className="h-4 w-4 text-muted-foreground" />}
-                label="Full Access"
-                description="Execution without approval"
-              />
-              <PopoverMenuItem
-                onClick={() => {
-                  onPlanModeChange(true)
-                  close()
-                }}
-                selected={planMode}
-                icon={<ListTodo className="h-4 w-4 text-muted-foreground" />}
-                label="Plan Mode"
-                description="Review a plan before execution"
-              />
-            </>
-          )}
-        </InputPopover>
-      ) : null}
+      {modeControl ? (() => {
+        const TriggerIcon = MODE_ICONS[modeControl.selected]
+        return (
+          <InputPopover
+            trigger={(
+              <>
+                <TriggerIcon className="h-3.5 w-3.5" />
+                <span>{CHAT_MODE_LABELS[modeControl.selected].label}</span>
+              </>
+            )}
+            triggerClassName={modeControl.selected === "plan" ? "text-blue-400 dark:text-blue-300" : undefined}
+          >
+            {(close) => modeControl.options.map((option) => {
+              const Icon = MODE_ICONS[option]
+              return (
+                <PopoverMenuItem
+                  key={option}
+                  onClick={() => {
+                    onModeChange?.(option)
+                    close()
+                  }}
+                  selected={modeControl.selected === option}
+                  icon={<Icon className="h-4 w-4 text-muted-foreground" />}
+                  label={CHAT_MODE_LABELS[option].label}
+                  description={CHAT_MODE_LABELS[option].description}
+                />
+              )
+            })}
+          </InputPopover>
+        )
+      })() : null}
     </div>
   )
 }

@@ -59,7 +59,7 @@ export function useSendMessage(params: {
 
   const handleSend = useCallback(async (
     content: string,
-    options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; attachments?: ChatAttachment[] }
+    options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; autoPlan?: boolean; attachments?: ChatAttachment[] }
   ) => {
     const { isProcessing, optimisticUserPrompts, serverTranscriptEntries, sidebarProjectGroups, selectedProjectId, fallbackLocalProjectPath } = sendContextRef.current
     const attachments = options?.attachments ?? []
@@ -74,6 +74,7 @@ export function useSendMessage(params: {
           model: options?.model,
           modelOptions: options?.modelOptions,
           planMode: options?.planMode,
+          autoPlan: options?.autoPlan,
         })
         setCommandError(null)
         return
@@ -133,6 +134,7 @@ export function useSendMessage(params: {
         model: options?.model,
         modelOptions: options?.modelOptions,
         planMode: options?.planMode,
+        autoPlan: options?.autoPlan,
       })
       setOptimisticProcessing((current) => {
         if (!current) return current

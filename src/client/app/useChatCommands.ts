@@ -100,7 +100,8 @@ export function useChatCommands(params: {
   const handleExitPlanMode = useCallback(async (toolUseId: string, confirmed: boolean, clearContext?: boolean, message?: string) => {
     if (!activeChatId) return
     if (confirmed) {
-      useChatPreferencesStore.getState().setChatComposerPlanMode(activeChatId, false)
+      // Clears plan mode only — an Auto Plan chat stays in Auto Plan.
+      useChatPreferencesStore.getState().clearChatComposerPlanMode(activeChatId)
     }
     await wrapCommand({
       type: "chat.respondTool",

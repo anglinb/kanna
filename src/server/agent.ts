@@ -55,7 +55,16 @@ import { buildHandoffContext, buildHandoffMessageContent, type HandoffContext } 
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
 
-const CLAUDE_TOOLSET = [
+/**
+ * Tools every Claude session gets. `EnterPlanMode` is deliberately absent — it
+ * is added only in "Auto Plan" (see {@link claudeToolset}); without it Claude
+ * cannot put itself into plan mode unprompted.
+ *
+ * `ExitPlanMode` stays in the base set even in Full Access: the user can flip a
+ * live session into plan mode via `setPermissionMode` without a restart, and
+ * without the exit tool they would be stranded there.
+ */
+const CLAUDE_BASE_TOOLSET = [
   "Skill",
   "WebFetch",
   "WebSearch",
@@ -78,9 +87,17 @@ const CLAUDE_TOOLSET = [
   "Monitor",
   "PushNotification",
   "AskUserQuestion",
-  "EnterPlanMode",
   "ExitPlanMode",
 ] as const
+
+/**
+ * The SDK's `tools` allowlist is fixed at `query()` time (there is no runtime
+ * tool-swap), so a change to `autoPlan` forces a session restart — see the
+ * restart condition in {@link AgentCoordinator.startClaudeTurn}.
+ */
+export function claudeToolset(autoPlan: boolean): string[] {
+  return autoPlan ? [...CLAUDE_BASE_TOOLSET, "EnterPlanMode"] : [...CLAUDE_BASE_TOOLSET]
+}
 
 interface PendingToolRequest {
   toolUseId: string
@@ -97,6 +114,7 @@ interface ActiveTurn {
   effort?: string
   serviceTier?: "fast"
   planMode: boolean
+  autoPlan: boolean
   status: KannaStatus
   pendingTool: PendingToolRequest | null
   postToolFollowUp: { content: string; planMode: boolean } | null
@@ -129,6 +147,7 @@ interface ClaudeSessionState {
   effort?: string
   serviceTier?: "fast"
   planMode: boolean
+  autoPlan: boolean
   sessionToken: string | null
   accountInfoLoaded: boolean
   nextPromptSeq: number
@@ -166,6 +185,7 @@ interface AgentCoordinatorArgs {
     effort?: string
     serviceTier?: "fast"
     planMode: boolean
+    autoPlan: boolean
     sessionToken: string | null
     forkSession: boolean
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
@@ -205,6 +225,7 @@ interface SendMessageOptions {
   modelOptions?: ModelOptions
   effort?: string
   planMode?: boolean
+  autoPlan?: boolean
 }
 
 function stringFromUnknown(value: unknown) {
@@ -629,6 +650,7 @@ async function startClaudeSession(args: {
   effort?: string
   serviceTier?: "fast"
   planMode: boolean
+  autoPlan: boolean
   sessionToken: string | null
   forkSession: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
@@ -702,7 +724,7 @@ async function startClaudeSession(args: {
       forkSession: args.forkSession,
       permissionMode: args.planMode ? "plan" : "acceptEdits",
       canUseTool,
-      tools: [...CLAUDE_TOOLSET],
+      tools: claudeToolset(args.autoPlan),
       settingSources: ["user", "project", "local"],
       // fastMode must go through the flag-settings layer: the CLI only allows
       // fast mode in Agent SDK sessions when flagSettings.fastMode is true,
@@ -844,6 +866,7 @@ export class AgentCoordinator {
         // Model choice is irrelevant for the usage read; use the catalog default.
         model: "sonnet",
         planMode: false,
+        autoPlan: false,
         sessionToken: null,
         forkSession: false,
         onToolRequest: async () => ({}),
@@ -961,6 +984,7 @@ export class AgentCoordinator {
         effort: modelOptions.reasoningEffort,
         serviceTier: serviceTierFromModelOptions(modelOptions),
         planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
+        autoPlan: catalog.supportsAutoPlanMode ? Boolean(options.autoPlan) : false,
       }
     }
 
@@ -971,6 +995,7 @@ export class AgentCoordinator {
         effort: undefined,
         serviceTier: undefined,
         planMode: false,
+        autoPlan: false,
       }
     }
 
@@ -981,6 +1006,7 @@ export class AgentCoordinator {
         effort: modelOptions.reasoningEffort,
         serviceTier: undefined,
         planMode: false,
+        autoPlan: false,
       }
     }
 
@@ -991,6 +1017,7 @@ export class AgentCoordinator {
       effort: modelOptions.reasoningEffort,
       serviceTier: serviceTierFromModelOptions(modelOptions),
       planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
+      autoPlan: catalog.supportsAutoPlanMode ? Boolean(options.autoPlan) : false,
     }
   }
 
@@ -1002,6 +1029,7 @@ export class AgentCoordinator {
       model: options?.model,
       modelOptions: options?.modelOptions,
       planMode: options?.planMode,
+      autoPlan: options?.autoPlan,
     })
     this.emitStateChange(chatId)
     return queued
@@ -1021,6 +1049,7 @@ export class AgentCoordinator {
       effort: settings.effort,
       serviceTier: settings.serviceTier,
       planMode: settings.planMode,
+      autoPlan: settings.autoPlan,
       appendUserPrompt: true,
       steered: options?.steered,
     })
@@ -1191,6 +1220,7 @@ export class AgentCoordinator {
     effort?: string
     serviceTier?: "fast"
     planMode: boolean
+    autoPlan: boolean
     appendUserPrompt: boolean
     steered?: boolean
   }) {
@@ -1212,6 +1242,7 @@ export class AgentCoordinator {
       await this.store.setChatProvider(args.chatId, args.provider)
     }
     await this.store.setPlanMode(args.chatId, args.planMode)
+    await this.store.setAutoPlan(args.chatId, args.autoPlan)
 
     const existingMessages = this.store.getMessages(args.chatId)
     const shouldGenerateTitle = args.appendUserPrompt && chat.title === "New Chat" && existingMessages.length === 0
@@ -1333,6 +1364,7 @@ export class AgentCoordinator {
         effort: args.effort,
         serviceTier: args.serviceTier,
         planMode: args.planMode,
+        autoPlan: args.autoPlan,
         sessionToken: chat.pendingForkSessionToken ?? chat.sessionToken,
         forkSession: Boolean(chat.pendingForkSessionToken),
         onToolRequest,
@@ -1403,6 +1435,7 @@ export class AgentCoordinator {
       effort: args.effort,
       serviceTier: args.serviceTier,
       planMode: args.planMode,
+      autoPlan: args.autoPlan,
       status: args.provider === "claude" ? "running" : "starting",
       pendingTool: null,
       postToolFollowUp: null,
@@ -1464,13 +1497,24 @@ export class AgentCoordinator {
     effort?: string
     serviceTier?: "fast"
     planMode: boolean
+    autoPlan: boolean
     sessionToken: string | null
     forkSession: boolean
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   }): Promise<HarnessTurn> {
     let session = this.claudeSessions.get(args.chatId)
 
-    if (!session || session.localPath !== args.localPath || session.effort !== args.effort || args.forkSession) {
+    // autoPlan changes the SDK's `tools` allowlist, which is fixed at query()
+    // time — unlike planMode (setPermissionMode) it can only be applied by
+    // restarting the session. The restart resumes by sessionToken, so the
+    // conversation carries over.
+    if (
+      !session
+      || session.localPath !== args.localPath
+      || session.effort !== args.effort
+      || session.autoPlan !== args.autoPlan
+      || args.forkSession
+    ) {
       if (session) {
         session.session.close()
         this.claudeSessions.delete(args.chatId)
@@ -1482,6 +1526,7 @@ export class AgentCoordinator {
         effort: args.effort,
         serviceTier: args.serviceTier,
         planMode: args.planMode,
+        autoPlan: args.autoPlan,
         sessionToken: args.sessionToken,
         forkSession: args.forkSession,
         onToolRequest: args.onToolRequest,
@@ -1498,6 +1543,7 @@ export class AgentCoordinator {
         effort: args.effort,
         serviceTier: args.serviceTier,
         planMode: args.planMode,
+        autoPlan: args.autoPlan,
         sessionToken: args.sessionToken,
         accountInfoLoaded: false,
         nextPromptSeq: 0,
@@ -1560,6 +1606,7 @@ export class AgentCoordinator {
         modelOptions: command.modelOptions,
         effort: command.effort,
         planMode: command.planMode,
+        autoPlan: command.autoPlan,
       })
       return { chatId, queuedMessageId: queuedMessage.id, queued: true as const }
     }
@@ -1576,6 +1623,7 @@ export class AgentCoordinator {
       effort: settings.effort,
       serviceTier: settings.serviceTier,
       planMode: settings.planMode,
+      autoPlan: settings.autoPlan,
       appendUserPrompt: true,
     })
 
@@ -1590,6 +1638,7 @@ export class AgentCoordinator {
       model: command.model,
       modelOptions: command.modelOptions,
       planMode: command.planMode,
+      autoPlan: command.autoPlan,
     })
     return { queuedMessageId: queuedMessage.id }
   }
@@ -1770,6 +1819,7 @@ export class AgentCoordinator {
       model: session.model,
       effort: session.effort,
       planMode: session.planMode,
+      autoPlan: session.autoPlan,
       status: "running",
       pendingTool: null,
       postToolFollowUp: null,
@@ -1901,7 +1951,13 @@ export class AgentCoordinator {
         await this.store.recordTurnFailed(session.chatId, message)
       }
     } finally {
-      this.claudeSessions.delete(session.chatId)
+      // Only evict if this session is still the chat's current one — a restart
+      // (localPath/effort/autoPlan change, or a fork) closes the old session
+      // and immediately registers a replacement, and the old stream's cleanup
+      // lands afterwards. Deleting by chatId alone would drop the new session.
+      if (this.claudeSessions.get(session.chatId) === session) {
+        this.claudeSessions.delete(session.chatId)
+      }
       const active = this.activeTurns.get(session.chatId)
       if (active?.provider === "claude") {
         if (active.cancelRequested && !active.cancelRecorded) {
@@ -2024,6 +2080,8 @@ export class AgentCoordinator {
             effort: active.effort,
             serviceTier: active.serviceTier,
             planMode: active.postToolFollowUp.planMode,
+            // Codex-only path; carry the turn's mode through unchanged.
+            autoPlan: active.autoPlan,
             appendUserPrompt: false,
           })
         } catch (error) {

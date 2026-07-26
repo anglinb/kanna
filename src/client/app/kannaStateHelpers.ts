@@ -128,6 +128,7 @@ export function composerStateFromSendOptions(options?: {
   model?: string
   modelOptions?: ModelOptions
   planMode?: boolean
+  autoPlan?: boolean
 }): ComposerState | null {
   if (options?.provider === "claude" && options.model && options.modelOptions?.claude) {
     return {
@@ -139,6 +140,7 @@ export function composerStateFromSendOptions(options?: {
         fastMode: options.modelOptions.claude.fastMode ?? false,
       },
       planMode: Boolean(options.planMode),
+      autoPlan: Boolean(options.autoPlan),
     }
   }
 
@@ -151,6 +153,7 @@ export function composerStateFromSendOptions(options?: {
         fastMode: options.modelOptions.codex.fastMode ?? false,
       },
       planMode: Boolean(options.planMode),
+      autoPlan: Boolean(options.autoPlan),
     }
   }
 

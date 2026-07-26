@@ -12,6 +12,26 @@ afterEach(() => {
 })
 
 describe("migrateChatPreferencesState", () => {
+  test("state persisted before Auto Plan existed migrates to Full Access", () => {
+    const migrated = migrateChatPreferencesState({
+      defaultProvider: "last_used",
+      providerDefaults: {
+        // No autoPlan key at all — exactly what an older Kanna wrote.
+        claude: {
+          model: "opus",
+          modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
+          planMode: false,
+        },
+      },
+    } as never)
+
+    expect(migrated.providerDefaults.claude.autoPlan).toBe(false)
+    // Auto Plan is Claude-only; the other harnesses are pinned to false.
+    expect(migrated.providerDefaults.codex.autoPlan).toBe(false)
+    expect(migrated.providerDefaults.cursor.autoPlan).toBe(false)
+    expect(migrated.providerDefaults.pi.autoPlan).toBe(false)
+  })
+
   test("preserves max effort for versioned Opus Claude models", () => {
     const migrated = migrateChatPreferencesState({
       defaultProvider: "last_used",
@@ -20,6 +40,7 @@ describe("migrateChatPreferencesState", () => {
           model: "claude-opus-4-8",
           modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
           planMode: false,
+          autoPlan: false,
         },
       },
     })
@@ -29,6 +50,7 @@ describe("migrateChatPreferencesState", () => {
       model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
   })
 
@@ -40,11 +62,13 @@ describe("migrateChatPreferencesState", () => {
           model: "opus",
           modelOptions: { reasoningEffort: "low", contextWindow: "1m", fastMode: false },
           planMode: true,
+          autoPlan: false,
         },
         codex: {
           model: "gpt-5.3-codex",
           modelOptions: { reasoningEffort: "minimal", fastMode: true },
           planMode: false,
+          autoPlan: false,
         },
       },
       composerState: {
@@ -52,6 +76,7 @@ describe("migrateChatPreferencesState", () => {
         model: "sonnet",
         modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
         planMode: false,
+        autoPlan: false,
       },
     })
 
@@ -62,21 +87,25 @@ describe("migrateChatPreferencesState", () => {
           model: "opus",
           modelOptions: { reasoningEffort: "low", contextWindow: "1m", fastMode: false },
           planMode: true,
+          autoPlan: false,
         },
         codex: {
           model: "gpt-5.3-codex",
           modelOptions: { reasoningEffort: "minimal", fastMode: true },
           planMode: false,
+          autoPlan: false,
         },
         cursor: {
           model: "composer-2.5",
           modelOptions: { fastMode: false },
           planMode: false,
+          autoPlan: false,
         },
         pi: {
           model: "~anthropic/claude-fable-latest",
           modelOptions: { reasoningEffort: "medium" },
           planMode: false,
+          autoPlan: false,
         },
       },
       chatStates: {},
@@ -85,6 +114,7 @@ describe("migrateChatPreferencesState", () => {
         model: "sonnet",
         modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
         planMode: false,
+        autoPlan: false,
       },
     })
   })
@@ -100,6 +130,7 @@ describe("migrateChatPreferencesState", () => {
           model: "haiku",
           modelOptions: { reasoningEffort: "low", contextWindow: "1m" as never, fastMode: false },
           planMode: false,
+          autoPlan: false,
         },
       },
       chatStates: {
@@ -108,6 +139,7 @@ describe("migrateChatPreferencesState", () => {
           model: "haiku",
           modelOptions: { reasoningEffort: "high", contextWindow: "1m" as never, fastMode: false },
           planMode: false,
+          autoPlan: false,
         },
       },
     })
@@ -118,6 +150,7 @@ describe("migrateChatPreferencesState", () => {
       model: "haiku",
       modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
   })
 
@@ -129,6 +162,7 @@ describe("migrateChatPreferencesState", () => {
           model: "gpt-5-codex",
           modelOptions: { reasoningEffort: "low", fastMode: true },
           planMode: false,
+          autoPlan: false,
         },
       },
     })
@@ -137,6 +171,7 @@ describe("migrateChatPreferencesState", () => {
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "low", fastMode: true },
       planMode: false,
+      autoPlan: false,
     })
   })
 
@@ -148,6 +183,7 @@ describe("migrateChatPreferencesState", () => {
           model: "gpt-5.3-codex-spark",
           modelOptions: { reasoningEffort: "low", fastMode: true },
           planMode: true,
+          autoPlan: false,
         },
       },
       chatStates: {
@@ -156,6 +192,7 @@ describe("migrateChatPreferencesState", () => {
           model: "gpt-5.4",
           modelOptions: { reasoningEffort: "medium", fastMode: false },
           planMode: false,
+          autoPlan: false,
         },
       },
       legacyComposerState: {
@@ -163,6 +200,7 @@ describe("migrateChatPreferencesState", () => {
         model: "gpt-5.3-codex",
         modelOptions: { reasoningEffort: "xhigh", fastMode: true },
         planMode: true,
+        autoPlan: false,
       },
     })
 
@@ -170,18 +208,21 @@ describe("migrateChatPreferencesState", () => {
       model: "gpt-5.3-codex-spark",
       modelOptions: { reasoningEffort: "low", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
     expect(migrated.chatStates.chatA).toEqual({
       provider: "codex",
       model: "gpt-5.4",
       modelOptions: { reasoningEffort: "medium", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
     expect(migrated.legacyComposerState).toEqual({
       provider: "codex",
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "xhigh", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
   })
 
@@ -193,6 +234,7 @@ describe("migrateChatPreferencesState", () => {
           model: "gpt-5.6-terra",
           modelOptions: { reasoningEffort: "ultra", fastMode: true },
           planMode: true,
+          autoPlan: false,
         },
       },
     })
@@ -201,6 +243,7 @@ describe("migrateChatPreferencesState", () => {
       model: "gpt-5.6-terra",
       modelOptions: { reasoningEffort: "ultra", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
   })
 })
@@ -211,6 +254,7 @@ describe("chat preference store", () => {
       model: "gpt-5.6-sol",
       modelOptions: { reasoningEffort: "medium", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
   })
 
@@ -222,12 +266,14 @@ describe("chat preference store", () => {
       model: "gpt-5.6-sol",
       modelOptions: { reasoningEffort: "minimal", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
     store.setComposerState("luna", {
       provider: "codex",
       model: "gpt-5.6-luna",
       modelOptions: { reasoningEffort: "ultra", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
 
     expect(useChatPreferencesStore.getState().getComposerState("sol").modelOptions.reasoningEffort).toBe("low")
@@ -241,6 +287,7 @@ describe("chat preference store", () => {
       model: "gpt-5.6-sol",
       modelOptions: { reasoningEffort: "ultra", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
 
     store.setChatComposerModel("chat-a", "gpt-5.6-luna")
@@ -257,6 +304,7 @@ describe("chat preference store", () => {
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "minimal", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
 
     useChatPreferencesStore.getState().setProviderDefaultModel("codex", "gpt-5.3-codex-spark")
@@ -264,14 +312,39 @@ describe("chat preference store", () => {
       reasoningEffort: "low",
       fastMode: false,
     })
-    useChatPreferencesStore.getState().setProviderDefaultPlanMode("codex", false)
+    useChatPreferencesStore.getState().setProviderDefaultMode("codex", "full-access")
 
     expect(useChatPreferencesStore.getState().getComposerState("chat-a")).toEqual({
       provider: "codex",
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "minimal", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
+  })
+
+  test("approving a plan returns an Auto Plan chat to Auto Plan, not Full Access", () => {
+    const store = useChatPreferencesStore.getState()
+    const modeOf = (chatId: string) => {
+      const state = store.getComposerState(chatId)
+      return { planMode: state.planMode, autoPlan: state.autoPlan }
+    }
+
+    store.setChatComposerMode("chat-a", "auto-plan")
+    expect(modeOf("chat-a")).toEqual({ planMode: false, autoPlan: true })
+
+    // Manually flipping to Plan Mode holds autoPlan underneath…
+    store.setChatComposerMode("chat-a", "plan")
+    expect(modeOf("chat-a")).toEqual({ planMode: true, autoPlan: true })
+
+    // …so clearing plan mode on approval lands back in Auto Plan.
+    store.clearChatComposerPlanMode("chat-a")
+    expect(modeOf("chat-a")).toEqual({ planMode: false, autoPlan: true })
+
+    // A chat that was never in Auto Plan lands in Full Access instead.
+    store.setChatComposerMode("chat-b", "plan")
+    store.clearChatComposerPlanMode("chat-b")
+    expect(modeOf("chat-b")).toEqual({ planMode: false, autoPlan: false })
   })
 
   test("restores isolated composer state by chat id", () => {
@@ -282,26 +355,30 @@ describe("chat preference store", () => {
       model: "sonnet",
       modelOptions: { reasoningEffort: "low", contextWindow: "1m", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
     store.setComposerState("chat-b", {
       provider: "codex",
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "minimal", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
-    store.setChatComposerPlanMode("chat-a", true)
+    store.setChatComposerMode("chat-a", "plan")
 
     expect(store.getComposerState("chat-a")).toEqual({
       provider: "claude",
       model: "sonnet",
       modelOptions: { reasoningEffort: "low", contextWindow: "1m", fastMode: false },
       planMode: true,
+      autoPlan: false,
     })
     expect(store.getComposerState("chat-b")).toEqual({
       provider: "codex",
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "minimal", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
   })
 
@@ -313,6 +390,7 @@ describe("chat preference store", () => {
       model: "opus",
       modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
     store.setChatComposerModel("chat-a", "haiku")
 
@@ -323,6 +401,7 @@ describe("chat preference store", () => {
       model: "haiku",
       modelOptions: { reasoningEffort: "high", contextWindow: "1m", fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
   })
 
@@ -334,6 +413,7 @@ describe("chat preference store", () => {
       model: "composer-2.5",
       modelOptions: { fastMode: true },
       planMode: false,
+      autoPlan: false,
     })
 
     // Selecting the model must not silently convert the composer to Codex.
@@ -343,6 +423,7 @@ describe("chat preference store", () => {
       model: "composer-2.5",
       modelOptions: { fastMode: true },
       planMode: false,
+      autoPlan: false,
     })
 
     store.setChatComposerModelOptions("chat-a", { fastMode: false })
@@ -351,6 +432,7 @@ describe("chat preference store", () => {
       model: "composer-2.5",
       modelOptions: { fastMode: false },
       planMode: false,
+      autoPlan: false,
     })
   })
 
@@ -363,6 +445,7 @@ describe("chat preference store", () => {
           model: "gpt-5.3-codex",
           modelOptions: { reasoningEffort: "minimal", fastMode: true },
           planMode: true,
+          autoPlan: false,
         },
       },
     })
@@ -374,6 +457,7 @@ describe("chat preference store", () => {
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "minimal", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
   })
 
@@ -387,6 +471,7 @@ describe("chat preference store", () => {
           model: "gpt-5.3-codex-spark",
           modelOptions: { reasoningEffort: "minimal", fastMode: true },
           planMode: true,
+          autoPlan: false,
         },
       },
     })
@@ -398,6 +483,7 @@ describe("chat preference store", () => {
       model: "gpt-5.3-codex-spark",
       modelOptions: { reasoningEffort: "minimal", fastMode: true },
       planMode: true,
+      autoPlan: false,
     })
   })
 
@@ -411,6 +497,7 @@ describe("chat preference store", () => {
           model: "opus",
           modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
           planMode: true,
+          autoPlan: false,
         },
       },
       legacyComposerState: null,
@@ -423,6 +510,7 @@ describe("chat preference store", () => {
       model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: true,
+      autoPlan: false,
     })
   })
 
@@ -436,6 +524,7 @@ describe("chat preference store", () => {
         model: "opus",
         modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
         planMode: true,
+        autoPlan: false,
       },
     })
 
@@ -444,6 +533,7 @@ describe("chat preference store", () => {
       model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: true,
+      autoPlan: false,
     })
   })
 
@@ -457,6 +547,7 @@ describe("chat preference store", () => {
         model: "opus",
         modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
         planMode: true,
+        autoPlan: false,
       },
     })
 
@@ -465,6 +556,7 @@ describe("chat preference store", () => {
       model: "opus",
       modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
       planMode: true,
+      autoPlan: false,
     })
   })
 
@@ -476,6 +568,7 @@ describe("chat preference store", () => {
       model: "gpt-5.5",
       modelOptions: { reasoningEffort: "low", fastMode: true },
       planMode: false,
+      autoPlan: false,
     })
     store.syncProviderDefaults("last_used", {
       ...INITIAL_STATE.providerDefaults,
@@ -483,6 +576,7 @@ describe("chat preference store", () => {
         model: "opus",
         modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
         planMode: true,
+        autoPlan: false,
       },
     })
 
@@ -491,6 +585,7 @@ describe("chat preference store", () => {
       model: "gpt-5.5",
       modelOptions: { reasoningEffort: "low", fastMode: true },
       planMode: false,
+      autoPlan: false,
     })
   })
 
@@ -504,6 +599,7 @@ describe("chat preference store", () => {
           model: "gpt-5.3-codex",
           modelOptions: { reasoningEffort: "low", fastMode: false },
           planMode: true,
+          autoPlan: false,
         },
       },
     })
@@ -516,6 +612,7 @@ describe("chat preference store", () => {
       model: "gpt-5.3-codex",
       modelOptions: { reasoningEffort: "low", fastMode: false },
       planMode: true,
+      autoPlan: false,
     })
   })
 })

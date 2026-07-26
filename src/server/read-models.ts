@@ -277,6 +277,7 @@ export function deriveChatSnapshot(
     isDraining: drainingChatIds.has(chat.id),
     provider: chat.provider,
     planMode: chat.planMode,
+    autoPlan: chat.autoPlan,
     sessionToken: chat.sessionToken,
   }
 

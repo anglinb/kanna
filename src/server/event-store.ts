@@ -88,6 +88,7 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_renamed":
     case "chat_provider_set":
     case "chat_plan_mode_set":
+    case "chat_auto_plan_set":
       return 2
     case "message_appended":
       return 3
@@ -523,6 +524,7 @@ export class EventStore {
           unread: false,
           provider: null,
           planMode: false,
+          autoPlan: false,
           sessionToken: null,
           pendingForkSessionToken: null,
           hasMessages: false,
@@ -571,6 +573,13 @@ export class EventStore {
         const chat = this.state.chatsById.get(event.chatId)
         if (!chat) break
         chat.planMode = event.planMode
+        chat.updatedAt = event.timestamp
+        break
+      }
+      case "chat_auto_plan_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        chat.autoPlan = event.autoPlan
         chat.updatedAt = event.timestamp
         break
       }
@@ -887,6 +896,7 @@ export class EventStore {
     await this.append(this.chatsLogPath, createEvent)
     await this.setChatProvider(chatId, sourceChat.provider)
     await this.setPlanMode(chatId, sourceChat.planMode)
+    await this.setAutoPlan(chatId, sourceChat.autoPlan)
     await this.setPendingForkSessionToken(chatId, sourceSessionToken)
 
     const sourceEntries = this.getMessages(sourceChatId)
@@ -1144,6 +1154,19 @@ export class EventStore {
     await this.append(this.chatsLogPath, event)
   }
 
+  async setAutoPlan(chatId: string, autoPlan: boolean) {
+    const chat = this.requireChat(chatId)
+    if (chat.autoPlan === autoPlan) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_auto_plan_set",
+      timestamp: Date.now(),
+      chatId,
+      autoPlan,
+    }
+    await this.append(this.chatsLogPath, event)
+  }
+
   async setChatReadState(chatId: string, unread: boolean) {
     const chat = this.requireChat(chatId)
     if (chat.unread === unread) return
@@ -1240,6 +1263,7 @@ export class EventStore {
       model: message.model,
       modelOptions: message.modelOptions,
       planMode: message.planMode,
+      autoPlan: message.autoPlan,
     }
     const event: QueuedMessageEvent = {
       v: STORE_VERSION,

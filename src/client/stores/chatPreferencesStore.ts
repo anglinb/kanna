@@ -1,6 +1,8 @@
 import { create } from "zustand"
 import {
+  chatModeToFlags,
   type AgentProvider,
+  type ChatMode,
   type ChatProviderPreferences,
   type ClaudeModelOptions,
   type CodexModelOptions,
@@ -42,6 +44,7 @@ export type ComposerState = {
     model: string
     modelOptions: ProviderModelOptionsByProvider[TProvider]
     planMode: boolean
+    autoPlan: boolean
   }
 }[AgentProvider]
 
@@ -96,6 +99,7 @@ function cloneComposerState(state: ComposerState): ComposerState {
 function sameComposerState(left: ComposerState | undefined, right: ComposerState): boolean {
   if (!left || left.provider !== right.provider) return false
   if (left.model !== right.model || left.planMode !== right.planMode) return false
+  if (left.autoPlan !== right.autoPlan) return false
 
   const leftOptions: Record<string, unknown> = { ...left.modelOptions }
   const rightOptions: Record<string, unknown> = { ...right.modelOptions }
@@ -214,7 +218,7 @@ interface ChatPreferencesState {
     provider: TProvider,
     modelOptions: Partial<ProviderModelOptionsByProvider[TProvider]>
   ) => void
-  setProviderDefaultPlanMode: (provider: AgentProvider, planMode: boolean) => void
+  setProviderDefaultMode: (provider: AgentProvider, mode: ChatMode) => void
   getComposerState: (chatId: string) => ComposerState
   initializeComposerForChat: (chatId: string, options?: { sourceState?: ComposerState | null }) => void
   setComposerState: (chatId: string, composerState: ComposerState) => void
@@ -224,7 +228,13 @@ interface ChatPreferencesState {
     chatId: string,
     modelOptions: Partial<ClaudeModelOptions> | Partial<CodexModelOptions> | Partial<CursorModelOptions> | Partial<PiModelOptions>
   ) => void
-  setChatComposerPlanMode: (chatId: string, planMode: boolean) => void
+  setChatComposerMode: (chatId: string, mode: ChatMode) => void
+  /**
+   * Clears plan mode while leaving `autoPlan` untouched — used when a plan is
+   * approved, so an Auto Plan user returns to Auto Plan rather than dropping
+   * to Full Access.
+   */
+  clearChatComposerPlanMode: (chatId: string) => void
   resetChatComposerFromProvider: (chatId: string, provider: AgentProvider) => void
   markPendingProviderSwitch: (chatId: string) => void
   clearPendingProviderSwitch: (chatId: string) => void
@@ -308,13 +318,13 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
             }),
           },
         })),
-      setProviderDefaultPlanMode: (provider, planMode) =>
+      setProviderDefaultMode: (provider, mode) =>
         set((state) => ({
           providerDefaults: {
             ...state.providerDefaults,
             [provider]: {
               ...state.providerDefaults[provider],
-              planMode,
+              ...chatModeToFlags(mode, state.providerDefaults[provider].autoPlan),
             },
           },
         })),
@@ -365,10 +375,15 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
             modelOptions: { ...composerState.modelOptions, ...modelOptions } as ProviderModelOptionsInput,
           })
         )),
-      setChatComposerPlanMode: (chatId, planMode) =>
+      setChatComposerMode: (chatId, mode) =>
         set((state) => withChatComposerState(state, chatId, (composerState) => ({
           ...composerState,
-          planMode,
+          ...chatModeToFlags(mode, composerState.autoPlan),
+        }))),
+      clearChatComposerPlanMode: (chatId) =>
+        set((state) => withChatComposerState(state, chatId, (composerState) => ({
+          ...composerState,
+          planMode: false,
         }))),
       resetChatComposerFromProvider: (chatId, provider) =>
         set((state) => ({

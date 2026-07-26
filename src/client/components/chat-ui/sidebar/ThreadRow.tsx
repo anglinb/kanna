@@ -1,0 +1,136 @@
+import type { ReactNode } from "react"
+import { Archive, RotateCcw, Split } from "lucide-react"
+import type { SidebarThread } from "../../../lib/thread-sections"
+import { cn, normalizeChatId } from "../../../lib/utils"
+import { Button } from "../../ui/button"
+import { ThreadRowContent } from "../ThreadRowContent"
+import { ChatRowMenu } from "./Menus"
+
+/**
+ * The canonical sidebar chat row: right-click menu, click target, status glyph /
+ * harness icon, title, and hover-revealed Fork/Archive. Used by both sidebar
+ * tabs — the cross-project Chats tab leaves `trailingLabel` unset so rows show
+ * their project, while the Projects tab passes a relative age (the project would
+ * be redundant inside a project group).
+ *
+ * A div rather than a button so the hover-action Buttons can nest inside it.
+ */
+export function ThreadRow({
+  thread,
+  isActive,
+  archived = false,
+  editorLabel,
+  trailingLabel,
+  onSelect,
+  onCreateChat,
+  onRenameChat,
+  onShareChat,
+  onCopyPath,
+  onOpenExternalPath,
+  onForkChat,
+  onArchiveChat,
+  onRestoreChat,
+  onDeleteChat,
+}: {
+  thread: SidebarThread
+  isActive: boolean
+  /** Archived rows swap Fork/Archive for Restore and get the archived menu. */
+  archived?: boolean
+  editorLabel: string
+  /** `undefined` keeps the project title; a node replaces it; `null` hides it. */
+  trailingLabel?: ReactNode
+  onSelect: (chatId: string) => void
+  onCreateChat: (projectId: string) => void
+  onRenameChat: (chat: SidebarThread["row"]) => void
+  onShareChat: (chatId: string) => void
+  onCopyPath: (localPath: string) => void
+  onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
+  onForkChat: (chat: SidebarThread["row"]) => void
+  onArchiveChat: (chat: SidebarThread["row"]) => void
+  onRestoreChat: (chatId: string) => void
+  onDeleteChat: (chat: SidebarThread["row"]) => void
+}) {
+  const hoverActions = archived ? (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
+      onClick={(event) => {
+        event.stopPropagation()
+        onRestoreChat(thread.row.chatId)
+      }}
+      title="Restore chat"
+    >
+      <RotateCcw className="size-3.5" />
+    </Button>
+  ) : (
+    <>
+      {thread.row.canFork ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
+          onClick={(event) => {
+            event.stopPropagation()
+            onForkChat(thread.row)
+          }}
+          title="Fork chat"
+        >
+          <Split className="size-3.5" />
+        </Button>
+      ) : null}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
+        onClick={(event) => {
+          event.stopPropagation()
+          onArchiveChat(thread.row)
+        }}
+        title="Archive chat"
+      >
+        <Archive className="size-3.5" />
+      </Button>
+    </>
+  )
+
+  return (
+    <ChatRowMenu
+      canFork={thread.row.canFork}
+      archived={archived}
+      editorLabel={editorLabel}
+      onNewChat={() => onCreateChat(thread.projectId)}
+      onRestore={archived ? () => onRestoreChat(thread.row.chatId) : undefined}
+      onRename={() => onRenameChat(thread.row)}
+      onShare={() => onShareChat(thread.row.chatId)}
+      onCopyPath={() => onCopyPath(thread.row.localPath)}
+      onOpenInFinder={() => onOpenExternalPath("open_finder", thread.row.localPath)}
+      onOpenInEditor={() => onOpenExternalPath("open_editor", thread.row.localPath)}
+      onFork={() => onForkChat(thread.row)}
+      onArchive={archived ? () => {} : () => onArchiveChat(thread.row)}
+      onDelete={() => onDeleteChat(thread.row)}
+    >
+      <div
+        // The marker the sidebar's scroll-to-active querySelector looks for.
+        // When the Chats tab renders above the project groups, its copy is found
+        // first and the sidebar scrolls up to it.
+        data-chat-id={normalizeChatId(thread.chatId)}
+        className={cn(
+          "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
+          isActive
+            ? "bg-muted hover:bg-muted border-border"
+            : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
+        )}
+        onClick={() => onSelect(thread.chatId)}
+      >
+        <ThreadRowContent
+          thread={thread}
+          showStatus
+          isActive={isActive}
+          trailingLabel={trailingLabel}
+          hoverActions={hoverActions}
+        />
+      </div>
+    </ChatRowMenu>
+  )
+}

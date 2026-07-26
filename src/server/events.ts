@@ -31,6 +31,8 @@ export interface ChatRecord {
   readAnchor?: ChatReadAnchor | null
   provider: AgentProvider | null
   planMode: boolean
+  /** "Auto Plan": the harness keeps its EnterPlanMode tool. Claude only. */
+  autoPlan: boolean
   sessionToken: string | null
   pendingForkSessionToken?: string | null
   hasMessages?: boolean
@@ -126,6 +128,13 @@ export type ChatEvent =
       timestamp: number
       chatId: string
       planMode: boolean
+    }
+  | {
+      v: 2
+      type: "chat_auto_plan_set"
+      timestamp: number
+      chatId: string
+      autoPlan: boolean
     }
   | {
       v: 2

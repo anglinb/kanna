@@ -170,6 +170,7 @@ export type ClientCommand =
       modelOptions?: ModelOptions
       effort?: string
       planMode?: boolean
+      autoPlan?: boolean
     }
   | { type: "chat.refreshDiffs"; chatId: string }
   | { type: "chat.initGit"; chatId: string }
@@ -225,6 +226,7 @@ export type ClientCommand =
       model?: string
       modelOptions?: ModelOptions
       planMode?: boolean
+      autoPlan?: boolean
     }
   | {
       type: "message.steer"

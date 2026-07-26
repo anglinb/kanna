@@ -22,6 +22,7 @@ function sameRuntime(left: ChatSnapshot["runtime"] | null | undefined, right: Ch
     && left.isDraining === right.isDraining
     && left.provider === right.provider
     && left.planMode === right.planMode
+    && left.autoPlan === right.autoPlan
     && left.sessionToken === right.sessionToken
 }
 
@@ -68,6 +69,7 @@ function sameQueuedMessage(left: QueuedChatMessage, right: QueuedChatMessage) {
     && left.provider === right.provider
     && left.model === right.model
     && left.planMode === right.planMode
+    && left.autoPlan === right.autoPlan
     && JSON.stringify(left.modelOptions) === JSON.stringify(right.modelOptions)
     && sameAttachmentArray(left.attachments, right.attachments)
 }

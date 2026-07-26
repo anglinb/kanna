@@ -1,15 +1,17 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
-import { Flower, Folder, House, Loader2, PanelLeft, Search, X, Menu, Plus, Settings, SquarePen, Terminal } from "lucide-react"
+import { Flower, House, Loader2, PanelLeft, Search, X, Menu, Plus, Settings, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog"
 import { formatSidebarAgeLabel } from "../lib/formatters"
 import { getSidebarChatTimestamp } from "../lib/sidebarChats"
-import { cn } from "../lib/utils"
-import { ChatRow } from "../components/chat-ui/sidebar/ChatRow"
+import { flattenSidebarThreads } from "../lib/thread-sections"
+import { cn, normalizeChatId } from "../lib/utils"
 import { LocalProjectsSection, projectActivity } from "../components/chat-ui/sidebar/LocalProjectsSection"
+import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
+import { Kbd } from "../components/ui/kbd"
 import { SegmentedControl } from "../components/ui/segmented-control"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
@@ -128,14 +130,6 @@ function KannaSidebarImpl({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [nowMs, setNowMs] = useState(() => Date.now())
 
-  // The selected chat's project group, when it has chats to browse — gates the
-  // "Chats in <project>" shortcut (mirrors the palette's own action gating).
-  const currentProjectGroup = useMemo(() => {
-    if (!currentProjectId) return null
-    const group = data.projectGroups.find((candidate) => candidate.groupKey === currentProjectId)
-    if (!group) return null
-    return group.chats.length > 0 || (group.archivedChats?.length ?? 0) > 0 ? group : null
-  }, [currentProjectId, data.projectGroups])
   const [showNumberJumpHints, setShowNumberJumpHints] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth)
   const [isResizingSidebar, setIsResizingSidebar] = useState(false)
@@ -160,6 +154,14 @@ function KannaSidebarImpl({
   const projectIdByPath = useMemo(
     () => new Map(data.projectGroups.map((group) => [group.localPath, group.groupKey])),
     [data.projectGroups]
+  )
+
+  // The Projects tab renders the same `ThreadRow` as the Chats tab, which wants
+  // a SidebarThread. Reuse the flattener rather than synthesising one per row so
+  // projectId/projectTitle/archived stay correct in one place.
+  const threadByChatId = useMemo(
+    () => new Map(flattenSidebarThreads(data).map((thread) => [thread.chatId, thread])),
+    [data]
   )
 
   const activeVisibleCount = visibleChats.length
@@ -231,33 +233,41 @@ function KannaSidebarImpl({
   }, [navigate, onClose])
 
   const renderChatRow = useCallback((chat: SidebarChatRow) => {
+    const thread = threadByChatId.get(chat.chatId)
+    if (!thread) return null
     const visibleIndex = visibleIndexByChatId.get(chat.chatId)
+    const shortcutHint = visibleIndex ? getSidebarNumberJumpHint(resolvedKeybindings, visibleIndex) : null
 
     return (
-      <ChatRow
+      <ThreadRow
         key={chat._id}
-        chat={chat}
-        activeChatId={activeChatId}
-        nowMs={nowMs}
-        shortcutHint={visibleIndex ? getSidebarNumberJumpHint(resolvedKeybindings, visibleIndex) : null}
-        showShortcutHint={showNumberJumpHints}
+        thread={thread}
+        isActive={activeChatId === normalizeChatId(chat.chatId)}
         editorLabel={editorLabel}
-        onSelectChat={selectChat}
-        onNewChatInProject={(localPath) => {
-          const projectId = projectIdByPath.get(localPath)
-          if (projectId) onCreateChat(projectId)
-        }}
-        onRenameChat={() => onRenameChat(chat)}
-        onShareChat={() => onShareChat(chat.chatId)}
-        onCopyPath={() => onCopyPath(chat.localPath)}
-        onOpenInFinder={() => onOpenExternalPath("open_finder", chat.localPath)}
-        onOpenInEditor={() => onOpenExternalPath("open_editor", chat.localPath)}
-        onForkChat={() => onForkChat(chat)}
-        onArchiveChat={() => onArchiveChat(chat)}
-        onDeleteChat={() => onDeleteChat(chat)}
+        // Rows are already grouped under their project here, so the trailing
+        // slot shows the chat's age instead — swapped for a keycap while the
+        // number-jump modifier is held. Deliberately
+        // `getSidebarChatTimestamp` and not `thread.lastActivityAt`: the latter
+        // folds in turn-end, which would read "now" for a chat that just
+        // finished where this has always read its last message's age.
+        trailingLabel={showNumberJumpHints && shortcutHint ? (
+          <Kbd className="h-4 min-w-4 rounded-sm border-border/50 bg-transparent px-1 text-[10px]">
+            {shortcutHint}
+          </Kbd>
+        ) : formatSidebarAgeLabel(getSidebarChatTimestamp(chat), nowMs)}
+        onSelect={selectChat}
+        onCreateChat={onCreateChat}
+        onRenameChat={onRenameChat}
+        onShareChat={onShareChat}
+        onCopyPath={onCopyPath}
+        onOpenExternalPath={onOpenExternalPath}
+        onForkChat={onForkChat}
+        onArchiveChat={onArchiveChat}
+        onRestoreChat={onRestoreChat}
+        onDeleteChat={onDeleteChat}
       />
     )
-  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onShareChat, projectIdByPath, resolvedKeybindings, selectChat, showNumberJumpHints, visibleIndexByChatId])
+  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onRestoreChat, onShareChat, resolvedKeybindings, selectChat, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -650,16 +660,6 @@ function KannaSidebarImpl({
                   >
                     <Terminal className="h-4 w-4 shrink-0" />
                     <span>Terminal</span>
-                  </button>
-                ) : null}
-                {currentProjectGroup ? (
-                  <button
-                    type="button"
-                    onClick={() => openCommandPalette("project-chats")}
-                    className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
-                  >
-                    <Folder className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 truncate">{currentProjectGroup.title}</span>
                   </button>
                 ) : null}
               </div>

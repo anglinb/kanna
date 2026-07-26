@@ -149,17 +149,22 @@ function EmptyProjectChatButton({
       type="button"
       disabled={disabled}
       title={!isConnected ? `Start ${APP_NAME} to connect` : "New Chat"}
+      // Geometry tracks ThreadRow's (gap-2.5 px-2 py-1.5) so this sits flush
+      // with the chat rows above it. The leading spacer stands in for their
+      // status glyph / harness icon, the trailing one for their min-w-12
+      // label slot; without both, the title lands out of alignment.
       className={cn(
-        "group flex w-full items-center gap-2 pl-2.5 pr-0.5 py-0.5 max-md:py-1.5 rounded-lg text-left cursor-pointer border-border/0 hover:border-border hover:bg-muted/20 active:scale-[0.985] border transition-all",
+        "group flex w-full items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base cursor-pointer hover:border-border hover:bg-muted/20 active:scale-[0.985] transition-all",
         "border-border/0 dark:hover:border-slate-400/10",
         disabled && "cursor-not-allowed opacity-50 active:scale-100"
       )}
       onClick={() => onNewLocalChat(localPath)}
     >
-      <span className="text-sm max-md:text-base truncate flex-1 translate-y-[-0.5px] text-slate-500 dark:text-slate-400">
+      <div className="h-4 w-4 shrink-0" aria-hidden />
+      <span className="min-w-0 shrink truncate text-slate-500 dark:text-slate-400">
         New Chat
       </span>
-      <div className="h-7 w-6 mr-[2px] shrink-0" aria-hidden />
+      <div className="ml-auto h-6 min-w-12 shrink-0 pl-3" aria-hidden />
     </button>
   )
 }

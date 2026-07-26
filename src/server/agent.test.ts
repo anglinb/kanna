@@ -5,6 +5,7 @@ import {
   buildConcurrentAgentsNotice,
   buildPromptText,
   buildSteeredMessageContent,
+  claudeToolset,
   maxClaudeContextWindowFromModelUsage,
   normalizeClaudeContextUsage,
   normalizeClaudeStreamMessage,
@@ -1507,6 +1508,87 @@ describe("AgentCoordinator claude integration", () => {
     events.close()
   })
 
+  test("auto plan controls the EnterPlanMode tool and restarts the session when it changes", async () => {
+    const queues: AsyncEventQueue<any>[] = []
+    const startSessionCalls: Array<{ planMode: boolean; autoPlan: boolean }> = []
+    const permissionModeCalls: boolean[] = []
+
+    const store = createFakeStore()
+    const coordinator = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      startClaudeSession: async (args) => {
+        startSessionCalls.push({ planMode: args.planMode, autoPlan: args.autoPlan })
+        // Each session gets its own stream so the restarted session doesn't
+        // compete with the closed one for events.
+        const events = new AsyncEventQueue<any>()
+        queues.push(events)
+        return {
+          provider: "claude",
+          stream: events,
+          getAccountInfo: async () => null,
+          interrupt: async () => {},
+          close: () => events.close(),
+          setModel: async () => {},
+          setPermissionMode: async (planMode: boolean) => {
+            permissionModeCalls.push(planMode)
+          },
+          sendPrompt: async () => {
+            events.push({
+              type: "transcript" as const,
+              entry: timestamped({
+                kind: "result",
+                subtype: "success",
+                isError: false,
+                durationMs: 0,
+                result: "done",
+              }),
+            })
+          },
+        }
+      },
+    })
+
+    const send = async (options: { planMode?: boolean; autoPlan?: boolean }) => {
+      await coordinator.send({
+        type: "chat.send",
+        chatId: "chat-1",
+        provider: "claude",
+        content: "go",
+        model: "claude-opus-4-1",
+        ...options,
+      })
+    }
+
+    await send({})
+    await waitFor(() => store.turnFinishedCount === 1)
+
+    // Plan mode is applied to the live session — no restart.
+    await send({ planMode: true })
+    await waitFor(() => store.turnFinishedCount === 2)
+
+    // Auto plan changes the tool allowlist, which forces a fresh session.
+    await send({ autoPlan: true })
+    await waitFor(() => store.turnFinishedCount === 3)
+
+    expect(startSessionCalls).toEqual([
+      { planMode: false, autoPlan: false },
+      { planMode: false, autoPlan: true },
+    ])
+    expect(permissionModeCalls).toEqual([true])
+    expect(store.chat.autoPlan).toBe(true)
+
+    queues.forEach((queue) => queue.close())
+  })
+
+  test("claudeToolset only offers EnterPlanMode in auto plan", () => {
+    expect(claudeToolset(false)).not.toContain("EnterPlanMode")
+    // ExitPlanMode stays available so a mid-session switch into plan mode
+    // isn't a one-way door.
+    expect(claudeToolset(false)).toContain("ExitPlanMode")
+    expect(claudeToolset(true)).toContain("EnterPlanMode")
+  })
+
   test("passes Claude fast mode as a service tier and toggles it mid-session", async () => {
     const events = new AsyncEventQueue<any>()
     const startSessionCalls: Array<{ serviceTier?: string }> = []
@@ -2295,6 +2377,7 @@ function createFakeChat(id: string, projectId: string, title = "New Chat") {
     title,
     provider: null as "claude" | "codex" | null,
     planMode: false,
+    autoPlan: false,
     sessionToken: null as string | null,
     pendingForkSessionToken: null as string | null,
   }
@@ -2337,6 +2420,9 @@ function createFakeStore(options?: {
     },
     async setPlanMode(chatId: string, planMode: boolean) {
       requireChat(chatId).planMode = planMode
+    },
+    async setAutoPlan(chatId: string, autoPlan: boolean) {
+      requireChat(chatId).autoPlan = autoPlan
     },
     async renameChat(chatId: string, title: string) {
       requireChat(chatId).title = title

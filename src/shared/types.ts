@@ -175,6 +175,7 @@ export interface QueuedChatMessage {
   model?: string
   modelOptions?: ModelOptions
   planMode?: boolean
+  autoPlan?: boolean
 }
 
 export interface ProviderModelOption {
@@ -280,6 +281,44 @@ export interface ProviderPreference<TModelOptions> {
   model: string
   modelOptions: TModelOptions
   planMode: boolean
+  /**
+   * "Auto Plan": leave the EnterPlanMode tool in the harness's toolset so the
+   * agent may decide on its own to plan first. Orthogonal to {@link planMode},
+   * which forces the session to *start* in plan mode. Claude-only — every
+   * other provider normalizes this to false (see provider-preferences.ts).
+   */
+  autoPlan: boolean
+}
+
+/**
+ * The user-facing three-way mode, derived from the (planMode, autoPlan) pair.
+ * Kept as a derived value rather than a stored field so the two server-side
+ * concerns stay independent: planMode maps to the SDK's permissionMode (
+ * swappable at runtime), autoPlan maps to the session's tool allowlist (fixed
+ * at session creation).
+ */
+export type ChatMode = "full-access" | "plan" | "auto-plan"
+
+export function chatModeFromFlags(planMode: boolean, autoPlan: boolean): ChatMode {
+  // planMode wins: a user who explicitly asked to start in plan mode sees
+  // "Plan Mode" even while autoPlan is held underneath.
+  return planMode ? "plan" : autoPlan ? "auto-plan" : "full-access"
+}
+
+export function chatModeToFlags(
+  mode: ChatMode,
+  currentAutoPlan: boolean
+): { planMode: boolean; autoPlan: boolean } {
+  switch (mode) {
+    case "plan":
+      // Preserve autoPlan so approving a plan (which clears planMode) returns
+      // an Auto Plan user to Auto Plan rather than dropping them to Full Access.
+      return { planMode: true, autoPlan: currentAutoPlan }
+    case "auto-plan":
+      return { planMode: false, autoPlan: true }
+    case "full-access":
+      return { planMode: false, autoPlan: false }
+  }
 }
 
 export type ChatProviderPreferences = {
@@ -419,6 +458,8 @@ export interface ProviderCatalogEntry {
   defaultModel: string
   defaultEffort?: string
   supportsPlanMode: boolean
+  /** Whether the provider offers the third "Auto Plan" mode. Claude only. */
+  supportsAutoPlanMode: boolean
   models: ProviderModelOption[]
   efforts: ProviderEffortOption[]
 }
@@ -477,6 +518,7 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
     defaultModel: "sonnet",
     defaultEffort: "high",
     supportsPlanMode: true,
+    supportsAutoPlanMode: true,
     // Claude ids are family aliases ("opus"), never version-pinned ids
     // ("claude-opus-4-8"): the harness resolves each alias to its latest
     // release, so new model versions apply without a Kanna update. This static
@@ -524,6 +566,7 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
     defaultModel: "gpt-5.6-sol",
     defaultEffort: "medium",
     supportsPlanMode: true,
+    supportsAutoPlanMode: false,
     models: [
       {
         id: "gpt-5.6-sol",
@@ -592,6 +635,7 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
     label: "Cursor",
     defaultModel: "composer-2.5",
     supportsPlanMode: false,
+    supportsAutoPlanMode: false,
     // Static fallback only — the real list is discovered at runtime via
     // `cursor-agent --list-models` (see applyCursorModels in provider-catalog).
     models: [
@@ -609,6 +653,7 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
     defaultModel: DEFAULT_PI_MODEL,
     defaultEffort: "medium",
     supportsPlanMode: false,
+    supportsAutoPlanMode: false,
     models: piModelOptionsFromFaves(DEFAULT_PI_FAVE_MODELS),
     efforts: [...PI_REASONING_OPTIONS],
   },
@@ -1765,6 +1810,7 @@ export interface ChatRuntime {
   isDraining: boolean
   provider: AgentProvider | null
   planMode: boolean
+  autoPlan: boolean
   sessionToken: string | null
 }
 

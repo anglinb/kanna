@@ -20,27 +20,17 @@ function statusDotClass(archived: boolean) {
 
 /**
  * Status glyph mirroring the sidebar chat rows: spinner while running, a blue
- * ping when waiting on the user, a green ping when unread, and a still muted
- * dot when the chat is merely relevant to the project's uncommitted work.
- * Returns null for idle chats so callers can fall back to a default icon.
+ * ping when waiting on the user, a green ping when unread. Returns null for
+ * idle chats so callers can fall back to a default icon — for those,
+ * `uncommittedWork` is carried by tinting that icon rather than by a dot,
+ * so this slot only ever holds things that want your attention.
  */
 export function renderChatStatusDot(chat: SidebarChatRow): ReactNode | null {
   if (chat.status === "starting" || chat.status === "running") {
     return <Loader2 className="size-3.5 shrink-0 animate-spin text-logo" />
   }
   const color = chat.status === "waiting_for_user" ? "blue" : chat.unread ? "emerald" : null
-  if (!color) {
-    // Lowest precedence: an ambient "there's uncommitted work from this chat"
-    // hint, so it never pulses and never outranks something needing attention.
-    if (chat.uncommittedWork) {
-      return (
-        <div className="relative flex size-4 shrink-0 items-center justify-center">
-          <div className="size-2.5 rounded-full bg-muted-foreground/40 ring-2 ring-muted/20 dark:ring-muted/50" />
-        </div>
-      )
-    }
-    return null
-  }
+  if (!color) return null
   return (
     <div className="relative flex size-4 shrink-0 items-center justify-center">
       <div
@@ -63,6 +53,7 @@ export function ThreadRowContent({
   thread,
   showStatus = false,
   showPreview = false,
+  isActive = false,
   trailingLabel,
   hoverActions,
 }: {
@@ -71,12 +62,15 @@ export function ThreadRowContent({
   showStatus?: boolean
   /** Fill the middle with a faint preview of the latest user prompt. */
   showPreview?: boolean
+  /** The chat currently open. Exempts the row from title dimming. */
+  isActive?: boolean
   /**
    * Replaces the trailing project label — e.g. a relative age ("4h") in
    * project-scoped lists where the project would be redundant. `null` hides
-   * the trailing label entirely; `undefined` keeps the project title.
+   * the trailing label entirely; `undefined` keeps the project title. Accepts a
+   * node so callers can render chrome there (the sidebar's number-jump keycap).
    */
-  trailingLabel?: string | null
+  trailingLabel?: ReactNode
   /**
    * Hover actions swapped in place of the trailing label on desktop: the label
    * fades out while the icons are hovered. Desktop only — mobile has no real
@@ -100,11 +94,21 @@ export function ThreadRowContent({
   // when the provider is unknown). Archived chats keep their harness icon,
   // dimmed — the Archived section/subtitle carries the archived signal.
   const HarnessIcon = thread.row.provider ? PROVIDER_ICONS[thread.row.provider] : null
+  // One relevance signal, two expressions: the chat has work sitting in its
+  // project's dirty tree, so tint its harness icon with the brand colour and
+  // keep the title at full contrast. Archived rows never qualify.
+  const relevant = !thread.archived && Boolean(thread.row.uncommittedWork)
+  const iconClass = cn("h-4 w-4", relevant ? "text-logo" : statusDotClass(thread.archived))
+  // Anything with a status dot or a shimmer is already asking for attention and
+  // must never dim; so must the chat you're looking at. What's left — idle,
+  // read, and not part of the current diff — recedes.
+  const needsAttention = thread.row.status !== "idle" || thread.row.unread
+  const dimTitle = !isActive && !relevant && !needsAttention
   return (
     <>
       {statusDot ?? (HarnessIcon
-        ? <HarnessIcon className={`h-4 w-4 ${statusDotClass(thread.archived)}`} />
-        : <MessageCircle className={`h-4 w-4 ${statusDotClass(thread.archived)}`} />)}
+        ? <HarnessIcon className={iconClass} />
+        : <MessageCircle className={iconClass} />)}
       {thread.row.status === "running" || thread.row.status === "starting" ? (
         <AnimatedShinyText
           className="!mx-0 min-w-0 shrink truncate"
@@ -114,7 +118,9 @@ export function ThreadRowContent({
           {thread.title}
         </AnimatedShinyText>
       ) : (
-        <span className="min-w-0 shrink truncate">{thread.title}</span>
+        <span className={cn("min-w-0 shrink truncate", dimTitle && "text-slate-500 dark:text-slate-400")}>
+          {thread.title}
+        </span>
       )}
       {previewText ? (
         // Grows to fill the middle and truncates its tail; -ml-1 offsets part
