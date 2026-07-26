@@ -1,4 +1,5 @@
 import type { SidebarChatRow, SidebarData } from "../../shared/types"
+import { formatProjectSidebarLabel } from "./project-label"
 
 /**
  * Canonical thread-section logic shared by the command palette (empty-query
@@ -10,6 +11,12 @@ export interface SidebarThread {
   title: string
   projectId: string
   projectTitle: string
+  /**
+   * The New Sidebar's project name — a rename, else `repo/branch`, else the
+   * folder. Separate from `projectTitle` because the command palette still
+   * wants the plain project name; only the sidebar shows the branch.
+   */
+  projectLabel: string
   archived: boolean
   lastActivityAt: number
   row: SidebarChatRow
@@ -30,6 +37,7 @@ function activityAt(row: SidebarChatRow): number {
 export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
   const threads: SidebarThread[] = []
   for (const group of data.projectGroups) {
+    const projectLabel = formatProjectSidebarLabel(group)
     const pushRows = (rows: SidebarChatRow[], archived: boolean) => {
       for (const row of rows) {
         threads.push({
@@ -37,6 +45,7 @@ export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
           title: row.title,
           projectId: group.groupKey,
           projectTitle: group.title,
+          projectLabel,
           archived,
           lastActivityAt: activityAt(row),
           row,

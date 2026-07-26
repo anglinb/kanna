@@ -170,8 +170,9 @@ function ThreadSectionsImpl({
       thread={thread}
       isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
       editorLabel={editorLabel}
-      // No trailingLabel: this tab spans projects, so the project title is the
-      // useful thing to show there.
+      // This tab spans projects, so the project is the useful thing to show —
+      // as `repo/branch` where we know it (see `formatProjectSidebarLabel`).
+      trailingLabel={thread.projectLabel}
       onSelect={onSelectChat}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}

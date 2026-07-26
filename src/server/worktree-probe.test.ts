@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { EventStore } from "./event-store"
@@ -264,5 +264,113 @@ describe("WorktreeProbe integration", () => {
 
     const sidebar = deriveSidebarData(store.state, new Map(), { workingTrees: probe.getStates() })
     expect(sidebar.projectGroups[0]?.chats[0]?.uncommittedWork).toBeUndefined()
+  })
+
+  test("labels a project with its repo name and branch", async () => {
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await probe.refreshForChat("chat-1")
+
+    expect(probe.getRepoLabels().get("project-1")).toEqual({
+      repoName: path.basename(repoRoot),
+      branchName: "main",
+    })
+  })
+
+  test("the tick labels projects with no finished turn, without running git status", async () => {
+    const repoRoot = await createRepo()
+    // No lastTurnEndedAt: this project can never show the dot, but its label is
+    // still on screen, so the label must not depend on being a dot candidate.
+    const state = createState(repoRoot)
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
+    await tick(probe)
+
+    expect(probe.getRepoLabels().get("project-1")?.branchName).toBe("main")
+    expect(probe.getStates().get("project-1")).toBeUndefined()
+  })
+
+  test("the tick picks up a branch switch made outside Kanna", async () => {
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await tick(probe)
+    expect(probe.getRepoLabels().get("project-1")?.branchName).toBe("main")
+
+    await run(["git", "checkout", "-b", "feature/side-quest"], repoRoot)
+    await tick(probe)
+
+    expect(probe.getRepoLabels().get("project-1")?.branchName).toBe("feature/side-quest")
+  })
+
+  test("a detached HEAD keeps the repo name and drops the branch", async () => {
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await run(["git", "checkout", "--detach", "HEAD"], repoRoot)
+    await probe.refreshForChat("chat-1")
+
+    const label = probe.getRepoLabels().get("project-1")
+    expect(label?.repoName).toBe(path.basename(repoRoot))
+    expect(label?.branchName).toBeUndefined()
+  })
+
+  test("a project inside a repo is labelled with the repo root, not its own folder", async () => {
+    const repoRoot = await createRepo()
+    const nested = path.join(repoRoot, "packages", "ui")
+    await mkdir(nested, { recursive: true })
+    const state = createState(nested, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await probe.refreshForChat("chat-1")
+
+    expect(probe.getRepoLabels().get("project-1")?.repoName).toBe(path.basename(repoRoot))
+  })
+
+  test("a project that is not in a repo gets no label", async () => {
+    const plainDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-plain-"))
+    tempDirs.push(plainDir)
+    const state = createState(plainDir, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await probe.refreshForChat("chat-1")
+
+    expect(probe.getRepoLabels().get("project-1")).toBeUndefined()
+  })
+
+  test("one refresh is one broadcast even when label and dirty state both change", async () => {
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    let changes = 0
+    const probe = new WorktreeProbe(() => state, () => {
+      changes += 1
+    })
+
+    // First pass sets both the label and the probe — one broadcast, not two.
+    await probe.refreshForChat("chat-1")
+    expect(changes).toBe(1)
+
+    // A checkout that also dirties the tree still coalesces.
+    await run(["git", "checkout", "-b", "next"], repoRoot)
+    await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
+    await probe.refreshForChat("chat-1")
+    expect(changes).toBe(2)
+  })
+
+  test("the sidebar snapshot carries the repo label", async () => {
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+    await probe.refreshForChat("chat-1")
+
+    const sidebar = deriveSidebarData(state, new Map(), { repoLabels: probe.getRepoLabels() })
+
+    expect(sidebar.projectGroups[0]?.repoName).toBe(path.basename(repoRoot))
+    expect(sidebar.projectGroups[0]?.branchName).toBe("main")
   })
 })

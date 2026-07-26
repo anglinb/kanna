@@ -10,6 +10,7 @@ import type {
   SidebarProjectGroup,
 } from "../shared/types"
 import type { WorkingTreeProbe } from "./diff-store"
+import type { ProjectRepoLabel } from "./worktree-probe"
 import type { ChatRecord, StoreState } from "./events"
 import { resolveLocalPath } from "./paths"
 import { SERVER_PROVIDERS } from "./provider-catalog"
@@ -85,6 +86,8 @@ export function deriveSidebarData(
     pendingToolKinds?: Map<string, string>
     /** Per-project working-tree state, from `WorktreeProbe.getStates()`. */
     workingTrees?: ReadonlyMap<string, WorkingTreeProbe>
+    /** Per-project repo/branch identity, from `WorktreeProbe.getRepoLabels()`. */
+    repoLabels?: ReadonlyMap<string, ProjectRepoLabel>
   }
 ): SidebarData {
   const nowMs = options?.nowMs ?? Date.now()
@@ -155,6 +158,7 @@ export function deriveSidebarData(
   }
 
   const projectGroups: SidebarProjectGroup[] = projects.map((project) => {
+    const repoLabel = options?.repoLabels?.get(project.id)
     const chats = toSidebarChatRows(project, chatsByProjectId.get(project.id) ?? [])
     const archivedChats = toSidebarChatRows(project, archivedChatsByProjectId.get(project.id) ?? [])
     const { previewChats, olderChats } = getSidebarChatBuckets(chats, nowMs)
@@ -164,6 +168,8 @@ export function deriveSidebarData(
       title: project.sidebarTitle ?? project.title,
       realTitle: project.title,
       ...(project.sidebarTitle ? { sidebarTitle: project.sidebarTitle } : {}),
+      ...(repoLabel ? { repoName: repoLabel.repoName } : {}),
+      ...(repoLabel?.branchName ? { branchName: repoLabel.branchName } : {}),
       localPath: project.localPath,
       chats,
       previewChats,

@@ -128,7 +128,11 @@ export function ThreadRowContent({
         <span className="-ml-1 min-w-0 flex-1 truncate text-xs text-muted-foreground">{previewText}</span>
       ) : null}
       {hoverActions ? (
-        <span className="ml-auto relative flex h-6 min-w-12 shrink-0 items-center justify-end pl-3 text-xs">
+        // The label keeps its natural width and the title takes what's left —
+        // but never less than half, because a `repo/branch` label is far longer
+        // than the bare folder name this used to show. Proportional rather than
+        // a fixed px cap: the sidebar is resizable.
+        <span className="ml-auto relative flex h-6 min-w-12 max-w-[50%] shrink-0 items-center justify-end pl-3 text-xs">
           {/* z-10 + pointer-events-none on the label: while the label's opacity
               transition runs, opacity<1 creates a stacking context that would
               otherwise lift the later-DOM label above the icons and steal the
@@ -136,18 +140,24 @@ export function ThreadRowContent({
           <span className="peer/actions absolute inset-y-0 right-0 z-10 hidden md:flex items-center justify-end gap-0 md:opacity-0 md:hover:opacity-100">
             {hoverActions}
           </span>
-          <span className="pointer-events-none flex max-w-[140px] items-center truncate text-muted-foreground transition-opacity md:peer-hover/actions:opacity-0">
-            {trailingLabel !== undefined ? trailingLabel ?? "" : thread.projectTitle}
+          <span className="pointer-events-none flex min-w-0 items-center text-muted-foreground transition-opacity md:peer-hover/actions:opacity-0">
+            {/* `truncate` has to sit on a block, not on the flex parent —
+                text-overflow doesn't apply to a flex container, so putting it
+                up there clips a long `repo/branch` with no ellipsis. */}
+            <span className="min-w-0 truncate">
+              {trailingLabel !== undefined ? trailingLabel ?? "" : thread.projectTitle}
+            </span>
           </span>
         </span>
       ) : (
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-3 text-xs">
+        // See above: natural width, capped at half the row.
+        <span className="ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 pl-3 text-xs">
           {trailingLabel !== undefined ? (
             trailingLabel !== null ? (
-              <span className="max-w-[140px] truncate text-muted-foreground">{trailingLabel}</span>
+              <span className="min-w-0 truncate text-muted-foreground">{trailingLabel}</span>
             ) : null
           ) : (
-            <span className="max-w-[140px] truncate text-muted-foreground">{thread.projectTitle}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{thread.projectTitle}</span>
           )}
         </span>
       )}

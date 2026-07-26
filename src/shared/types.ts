@@ -892,6 +892,15 @@ export interface SidebarProjectGroup {
   title: string
   realTitle: string
   sidebarTitle?: string
+  /**
+   * Basename of the git repo root, absent when the project isn't in a repo.
+   * Not always the project's folder name — a project can be a subdirectory of
+   * its repo. Together with `branchName` this is the New Sidebar's `repo/branch`
+   * label; best-effort, so treat "absent" as "not known yet", not "not a repo".
+   */
+  repoName?: string
+  /** Current branch of `repoName`'s repo; absent on a detached HEAD. */
+  branchName?: string
   localPath: string
   chats: SidebarChatRow[]
   previewChats: SidebarChatRow[]

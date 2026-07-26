@@ -362,7 +362,7 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
   return createWsRouter({
     store: createFakeStore(),
     diffStore: createFakeDiffStore(),
-    worktreeProbe: { getStates: () => new Map() },
+    worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map() },
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
     terminals: {
       getSnapshot: () => null,

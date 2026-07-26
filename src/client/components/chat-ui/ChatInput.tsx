@@ -197,6 +197,10 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [value, setValue] = useState(() => (chatId ? getDraft(chatId) : ""))
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isStandalone = useIsStandalone()
+  // Leading/trailing gutter *inside* the controls scroller, standing in for the
+  // horizontal padding its wrapper can't have. Standalone keeps the same 32px
+  // net inset the old wrapper produced (20px padding + 12px spacer).
+  const controlsScrollSpacer = cn("min-w-3", isStandalone && "min-w-8")
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => hydrateComposerAttachments(chatId ? getAttachmentDrafts(chatId) : []))
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -888,9 +892,16 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }}
       />
 
-      <div className={cn("relative py-3 max-w-[840px] mx-auto", isStandalone && "p-5 pt-3")}>
+      {/*
+        Vertical padding only: horizontal padding here would clip the scroller
+        and stop the controls row from bleeding to the screen edge. The inset is
+        applied as leading/trailing spacers *inside* the scroller instead (see
+        controlsScrollSpacer), so the net gutter is unchanged but content can
+        scroll under the edge.
+      */}
+      <div className={cn("relative py-3 max-w-[840px] mx-auto", isStandalone && "pt-3 pb-5")}>
         <div className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex flex-row">
-          <div className="min-w-3" />
+          <div className={controlsScrollSpacer} />
           <label
             aria-label="Add attachment"
             className={cn(
@@ -958,7 +969,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               <ContextWindowMeter usage={activeContextWindow} />
             </div>
           ) : null}
-          <div className="min-w-3" />
+          <div className={controlsScrollSpacer} />
         </div>
 
         {activeContextWindow ? (

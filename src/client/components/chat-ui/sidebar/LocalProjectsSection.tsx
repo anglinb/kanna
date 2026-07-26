@@ -24,6 +24,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip"
 import type { SidebarChatRow, SidebarProjectGroup } from "../../../../shared/types"
 import { APP_NAME } from "../../../../shared/branding"
 import { getPathBasename } from "../../../lib/formatters"
+import { formatProjectSidebarLabel } from "../../../lib/project-label"
 import { cn } from "../../../lib/utils"
 import { ProjectSectionMenu } from "./Menus"
 
@@ -235,6 +236,9 @@ const SortableProjectGroup = memo(function SortableProjectGroup({
   newSidebar = false,
 }: SortableProjectGroupProps) {
   const { groupKey, localPath, title } = group
+  // The New Sidebar names a project by its repo and branch; the old sidebar
+  // keeps the plain project title.
+  const headerTitle = newSidebar ? formatProjectSidebarLabel(group) : title
   const isExpanded = newSidebar || expandedGroups.has(groupKey)
   const isEmptyProject = group.chats.length === 0
   const hasMore = group.olderChats.length > 0
@@ -266,12 +270,14 @@ const SortableProjectGroup = memo(function SortableProjectGroup({
       onClick={() => onToggleSection(groupKey)}
       {...(isReorderEnabled ? listeners : undefined)}
     >
-      {/* Chevron trails the label, matching the Chats tab's section headers. */}
-      <div className="flex items-center gap-1.5">
+      {/* Chevron trails the label, matching the Chats tab's section headers.
+          min-w-0 + the right padding let a long `repo/branch` truncate at the
+          hover actions instead of running under them. */}
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 pr-14">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="truncate max-w-[150px] whitespace-nowrap text-sm max-md:text-base">
-              {title || getPathBasename(localPath)}
+            <span className="min-w-0 truncate whitespace-nowrap text-sm max-md:text-base">
+              {headerTitle || getPathBasename(localPath)}
             </span>
           </TooltipTrigger>
           <TooltipContent side="right" sideOffset={4}>
