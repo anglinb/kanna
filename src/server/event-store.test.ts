@@ -243,6 +243,106 @@ describe("EventStore", () => {
     expect(reloaded.getChat(chat.id)?.unread).toBe(true)
   })
 
+  test("stores and resolves a read anchor across restart", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+
+    expect(store.getChatReadAnchor(chat.id)).toBeNull()
+
+    await store.appendMessage(chat.id, entry("user_prompt", 200, { content: "hello" }))
+    await store.appendMessage(chat.id, entry("assistant_text", 201, { content: "world" }))
+    await store.appendMessage(chat.id, entry("assistant_text", 202, { content: "again" }))
+
+    await store.setChatReadAnchor(chat.id, "user_prompt-200", false)
+
+    // 3 entries total, anchor at index 0 -> 3 entries at or after it.
+    expect(store.getChatReadAnchor(chat.id)).toEqual({
+      messageId: "user_prompt-200",
+      atEnd: false,
+      distanceFromEnd: 3,
+    })
+
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
+      messageId: "user_prompt-200",
+      atEnd: false,
+      distanceFromEnd: 3,
+    })
+  })
+
+  test("survives compaction and tracks distance as the transcript grows", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+
+    await store.appendMessage(chat.id, entry("user_prompt", 200, { content: "hello" }))
+    await store.setChatReadAnchor(chat.id, "user_prompt-200", true)
+    expect(store.getChatReadAnchor(chat.id)?.distanceFromEnd).toBe(1)
+
+    await store.appendMessage(chat.id, entry("assistant_text", 201, { content: "world" }))
+    expect(store.getChatReadAnchor(chat.id)?.distanceFromEnd).toBe(2)
+
+    await store.compact()
+
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
+      messageId: "user_prompt-200",
+      atEnd: true,
+      distanceFromEnd: 2,
+    })
+  })
+
+  test("resolves a read anchor to null when the anchored message is gone", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+
+    await store.appendMessage(chat.id, entry("user_prompt", 200, { content: "hello" }))
+    await store.setChatReadAnchor(chat.id, "missing-entry", false)
+
+    expect(store.getChat(chat.id)?.readAnchor?.messageId).toBe("missing-entry")
+    expect(store.getChatReadAnchor(chat.id)).toBeNull()
+  })
+
+  test("skips redundant read anchor writes", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 200, { content: "hello" }))
+
+    const chatsLogPath = join(dataDir, "chats.jsonl")
+    const countAnchorEvents = async () => {
+      const contents = await readFile(chatsLogPath, "utf8")
+      return contents.split("\n").filter((line) => line.includes("chat_read_anchor_set")).length
+    }
+
+    await store.setChatReadAnchor(chat.id, "user_prompt-200", false)
+    expect(await countAnchorEvents()).toBe(1)
+
+    // Same anchor + same atEnd -> no second event.
+    await store.setChatReadAnchor(chat.id, "user_prompt-200", false)
+    expect(await countAnchorEvents()).toBe(1)
+
+    // Flipping atEnd alone is still a real change.
+    await store.setChatReadAnchor(chat.id, "user_prompt-200", true)
+    expect(await countAnchorEvents()).toBe(2)
+  })
+
   test("preserves read state after a finished turn across restart", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)
@@ -665,8 +765,13 @@ describe("EventStore", () => {
     const archivedChat = await store.createChat(project.id)
     await store.appendMessage(archivedChat.id, entry("user_prompt", archivedChat.createdAt + 1, { content: "b" }))
     await store.archiveChat(archivedChat.id)
-    // Fresh chat anchors the reference past the window.
-    const stalePoint = store.getChat(plain.id)!.lastMessageAt! + NINETY_DAYS_MS
+    // Fresh chat anchors the reference past the window. Measure from whichever
+    // of the two is newer: they are created back-to-back off the real clock, so
+    // anchoring to `plain` alone leaves `archivedChat` one millisecond short of
+    // the window whenever the clock ticks between the two createChat calls.
+    const stalePoint =
+      Math.max(store.getChat(plain.id)!.lastMessageAt!, store.getChat(archivedChat.id)!.lastMessageAt!) +
+      NINETY_DAYS_MS
     const fresh = await store.createChat(project.id)
     await store.appendMessage(fresh.id, entry("user_prompt", stalePoint, { content: "c" }))
 

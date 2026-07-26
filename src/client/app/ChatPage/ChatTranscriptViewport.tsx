@@ -19,6 +19,17 @@ import {
 } from "../KannaTranscript"
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
+import type { ChatReadAnchorState } from "../useChatReadAnchor"
+import {
+  buildRowIndexByMessageId,
+  getLatestUserPrompt,
+  getRowAnchorMessageId,
+  isOptimisticMessageId,
+  resolveRestoreTarget,
+  shouldPinForNewPrompt,
+  type LatestUserPrompt,
+  type TranscriptScrollTarget,
+} from "./transcriptScrollAnchors"
 import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
@@ -29,6 +40,16 @@ import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../..
 
 /** Max auto-fetched history pages per chat when the list is too short to scroll. */
 const MAX_HISTORY_AUTO_FILL_PAGES = 4
+
+/**
+ * Blank space held below the transcript while a turn is streaming, so a freshly
+ * sent prompt (which is the last row, with nothing beneath it) has something to
+ * scroll against and can rise toward the top of the viewport.
+ */
+const STREAMING_TAIL_SPACER_CLASS = "h-[25vh]"
+
+/** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
+const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
 
 interface ChatTranscriptViewportProps {
   activeChatId: string | null
@@ -66,6 +87,10 @@ interface ChatTranscriptViewportProps {
   editorCommandTemplate?: string
   platform?: NodeJS.Platform
   headerOffsetPx?: number
+  /** Server-stored read position; restore waits for this to resolve. */
+  readAnchorState?: ChatReadAnchorState
+  /** Reports the message at the top of the viewport as the user scrolls. */
+  onReportReadAnchor?: (messageId: string, atEnd: boolean) => void
 }
 
 export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
@@ -103,8 +128,9 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   editorCommandTemplate,
   platform = "darwin",
   headerOffsetPx = CHAT_NAVBAR_OFFSET_PX,
+  readAnchorState = DEFAULT_READ_ANCHOR_STATE,
+  onReportReadAnchor,
 }: ChatTranscriptViewportProps) {
-  const previousRowCountRef = useRef(0)
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
   const [localLinkMenuTarget, setLocalLinkMenuTarget] = useState<OpenLocalLinkTarget | null>(null)
@@ -122,20 +148,98 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     setToolGroupExpanded({})
   }, [activeChatId])
 
-  useEffect(() => {
-    const previousRowCount = previousRowCountRef.current
-    previousRowCountRef.current = resolvedRows.length
+  const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
 
-    if (previousRowCount > 0 || resolvedRows.length === 0) {
+  // Kept in a ref so the native scroll handler can read the current rows
+  // without being re-created (and re-attached) on every transcript change.
+  const resolvedRowsRef = useRef(resolvedRows)
+  resolvedRowsRef.current = resolvedRows
+
+  /** Chat we have already positioned, so restore runs exactly once per open. */
+  const restoredChatIdRef = useRef<string | null>(null)
+  /** Latest user prompt as of the last observation, for the pin-on-send rule. */
+  const latestPromptRef = useRef<LatestUserPrompt | null>(null)
+  /**
+   * Whether the user has actually scrolled this chat themselves.
+   *
+   * Only their own scrolling may move the stored read position. Restores,
+   * pins and auto-follow all scroll programmatically and settle over several
+   * frames as rows measure — sampling during that drifts the anchor by a row
+   * on every open. Real input events are the one signal those can't fake.
+   */
+  const hasUserScrolledRef = useRef(false)
+  const scrollFramesRef = useRef<number[]>([])
+
+  const cancelPendingScrollFrames = useCallback(() => {
+    for (const frameId of scrollFramesRef.current) {
+      window.cancelAnimationFrame(frameId)
+    }
+    scrollFramesRef.current = []
+  }, [])
+
+  const applyScrollTarget = useCallback((target: TranscriptScrollTarget) => {
+    cancelPendingScrollFrames()
+
+    if (target.kind === "end") {
+      onIsAtEndChange(true)
+      scrollFramesRef.current.push(window.requestAnimationFrame(() => {
+        void listRef.current?.scrollToEnd?.({ animated: false })
+      }))
       return
     }
 
-    onIsAtEndChange(true)
-    const frameId = window.requestAnimationFrame(() => {
-      void listRef.current?.scrollToEnd?.({ animated: false })
-    })
-    return () => window.cancelAnimationFrame(frameId)
-  }, [listRef, onIsAtEndChange, resolvedRows.length])
+    // Written synchronously (it sets a ref in ChatPage) so the parent's
+    // auto-follow effect bails on this same commit instead of yanking us to
+    // the bottom — child effects flush before parent effects.
+    onIsAtEndChange(false)
+
+    const scrollToTarget = () => {
+      void listRef.current?.scrollToIndex?.({
+        index: target.index,
+        viewPosition: 0,
+        viewOffset: headerOffsetPx,
+        animated: false,
+      })
+    }
+
+    scrollFramesRef.current.push(window.requestAnimationFrame(() => {
+      scrollToTarget()
+      // Rows are virtualized against an estimated height, so the first pass
+      // lands approximately; re-issue once real measurements have landed.
+      scrollFramesRef.current.push(window.requestAnimationFrame(() => {
+        scrollToTarget()
+      }))
+    }))
+  }, [cancelPendingScrollFrames, headerOffsetPx, listRef, onIsAtEndChange])
+
+  useEffect(() => cancelPendingScrollFrames, [cancelPendingScrollFrames])
+
+  // Restore once per chat open: wait until rows exist *and* the stored anchor
+  // has resolved, otherwise we'd land on the fallback and visibly jump when the
+  // anchor arrives a moment later.
+  useEffect(() => {
+    if (!activeChatId) return
+    if (restoredChatIdRef.current === activeChatId) return
+    if (resolvedRows.length === 0 || !readAnchorState.resolved) return
+
+    restoredChatIdRef.current = activeChatId
+    hasUserScrolledRef.current = false
+    latestPromptRef.current = getLatestUserPrompt(resolvedRows)
+    applyScrollTarget(resolveRestoreTarget(resolvedRows, readAnchorState.anchor, rowIndexByMessageId))
+  }, [activeChatId, applyScrollTarget, readAnchorState, resolvedRows, rowIndexByMessageId])
+
+  // Pin a newly sent prompt to the top. Streaming output never trips this
+  // because it leaves the latest prompt untouched.
+  useEffect(() => {
+    if (!activeChatId || restoredChatIdRef.current !== activeChatId) return
+
+    const nextPrompt = getLatestUserPrompt(resolvedRows)
+    const previousPrompt = latestPromptRef.current
+    latestPromptRef.current = nextPrompt
+
+    if (!shouldPinForNewPrompt(previousPrompt, nextPrompt) || nextPrompt === null) return
+    applyScrollTarget({ kind: "pin", index: nextPrompt.rowIndex })
+  }, [activeChatId, applyScrollTarget, resolvedRows])
 
   const handleToolGroupExpandedChange = useCallback((groupId: string, next: boolean) => {
     setToolGroupExpanded((current) => (
@@ -147,6 +251,29 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
           }
     ))
   }, [])
+
+  /**
+   * Remember which message the user is looking at. `getState().start` is by
+   * construction the first row whose bottom edge is below the viewport top, in
+   * a coordinate space that already accounts for the sticky header — so it is
+   * exactly "the message at the top of the screen".
+   */
+  const reportTopVisibleMessage = useCallback((isAtEnd: boolean) => {
+    if (!onReportReadAnchor) return
+    // Never let a programmatic scroll move the stored position.
+    if (!hasUserScrolledRef.current) return
+
+    const start = listRef.current?.getState?.()?.start
+    if (typeof start !== "number") return
+    const row = resolvedRowsRef.current[start]
+    if (!row) return
+
+    const messageId = getRowAnchorMessageId(row)
+    // Optimistic ids are client-local and will not resolve on another device.
+    if (!messageId || isOptimisticMessageId(messageId)) return
+
+    onReportReadAnchor(messageId, isAtEnd)
+  }, [listRef, onReportReadAnchor])
 
   const handleScroll = useCallback((event?: unknown) => {
     const currentTarget = (
@@ -160,15 +287,18 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
 
     if (currentTarget instanceof HTMLElement) {
       const distanceFromEnd = currentTarget.scrollHeight - currentTarget.clientHeight - currentTarget.scrollTop
-      onIsAtEndChange(distanceFromEnd <= 4)
+      const isAtEnd = distanceFromEnd <= 4
+      onIsAtEndChange(isAtEnd)
+      reportTopVisibleMessage(isAtEnd)
       return
     }
 
     const state = listRef.current?.getState?.()
     if (state) {
       onIsAtEndChange(state.isAtEnd)
+      reportTopVisibleMessage(state.isAtEnd)
     }
-  }, [listRef, onIsAtEndChange])
+  }, [listRef, onIsAtEndChange, reportTopVisibleMessage])
 
   useEffect(() => {
     let cleanup: (() => void) | undefined
@@ -182,10 +312,24 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
         handleScroll({ currentTarget: scrollNode })
       }
 
+      // Input events are the only reliable way to tell the user's own
+      // scrolling apart from a restore/pin/auto-follow, which also emit
+      // `scroll` and keep settling for several frames as rows measure.
+      const markUserScrolled = () => {
+        hasUserScrolledRef.current = true
+      }
+      const userIntentEvents = ["wheel", "touchmove", "pointerdown", "keydown"] as const
+
       scrollNode.addEventListener("scroll", handleNativeScroll, { passive: true })
+      for (const eventName of userIntentEvents) {
+        scrollNode.addEventListener(eventName, markUserScrolled, { passive: true })
+      }
       handleNativeScroll()
       cleanup = () => {
         scrollNode.removeEventListener("scroll", handleNativeScroll)
+        for (const eventName of userIntentEvents) {
+          scrollNode.removeEventListener(eventName, markUserScrolled)
+        }
       }
     })
 
@@ -194,6 +338,13 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
       cleanup?.()
     }
   }, [activeChatId, handleScroll, listRef, resolvedRows.length])
+
+  // The button lives outside the scroll node, so it never trips the input
+  // listeners — but jumping to the bottom is an explicit read-position choice.
+  const handleScrollToBottomClick = useCallback(() => {
+    hasUserScrolledRef.current = true
+    scrollToBottom()
+  }, [scrollToBottom])
 
   const handleStartReached = useCallback(() => {
     if (isHistoryLoading || !hasOlderHistory) {
@@ -315,6 +466,9 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
           {commandError}
         </div>
       ) : null}
+      {isProcessing || isDraining ? (
+        <div className={STREAMING_TAIL_SPACER_CLASS} aria-hidden="true" />
+      ) : null}
     </div>
   )
 
@@ -328,7 +482,9 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           estimatedItemSize={96}
-          initialScrollAtEnd
+          // No initialScrollAtEnd: the prop is captured at mount, and opening a
+          // chat now restores to a stored anchor rather than the bottom. The
+          // restore effect above drives the initial position instead.
           maintainScrollAtEnd
           maintainScrollAtEndThreshold={0.1}
           maintainVisibleContentPosition
@@ -484,7 +640,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
         )}
       >
         <button
-          onClick={scrollToBottom}
+          onClick={handleScrollToBottomClick}
           className="flex aspect-square cursor-pointer items-center gap-1.5 rounded-full border border-border bg-white px-2 text-sm text-primary transition-colors hover:bg-muted hover:text-foreground dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600"
         >
           <ArrowDown className="h-5 w-5" />

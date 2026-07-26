@@ -25,7 +25,10 @@ async function run(command: string[], cwd: string) {
 
 async function createRepo() {
   const root = await mkdtemp(path.join(tmpdir(), "kanna-diff-store-"))
-  await run(["git", "init"], root)
+  // -b main pins the initial branch: git only defaults to "main" when the host
+  // sets init.defaultBranch, so on a stock config (git's built-in default is
+  // still "master") every assertion below that names "main" would fail.
+  await run(["git", "init", "-b", "main"], root)
   await run(["git", "config", "user.email", "kanna@example.com"], root)
   await run(["git", "config", "user.name", "Kanna"], root)
   return root

@@ -927,6 +927,8 @@ export interface AppSettingsSnapshot {
   terminal: {
     scrollbackLines: number
     minColumnWidth: number
+    /** Labs: render the embedded terminal with xterm's WebGL renderer instead of the DOM one. */
+    webglRenderer: boolean
   }
   editor: {
     preset: EditorPreset
@@ -1777,6 +1779,21 @@ export interface ChatHistoryPage {
   messages: TranscriptEntry[]
   hasOlder: boolean
   olderCursor: string | null
+}
+
+/**
+ * A chat's stored read position, resolved against the current transcript.
+ *
+ * `messageId` is a `TranscriptEntry._id`. `atEnd` means the user was parked at
+ * the bottom following the stream, so restoring should keep following rather
+ * than pin to that message. `distanceFromEnd` is how many entries sit at or
+ * after the anchor, letting the client widen its subscription window in one
+ * round trip when the anchor predates the default recent page.
+ */
+export interface ResolvedChatReadAnchor {
+  messageId: string
+  atEnd: boolean
+  distanceFromEnd: number
 }
 
 export interface PendingToolSnapshot {

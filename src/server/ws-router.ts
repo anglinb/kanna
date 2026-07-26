@@ -1131,6 +1131,19 @@ export function createWsRouter({
           await broadcastChatAndSidebar(command.chatId)
           return
         }
+        case "chat.setReadAnchor": {
+          // No broadcast on purpose. The anchor is not part of any snapshot,
+          // so scrolling stays free of fan-out, and a device sitting on an
+          // open chat never gets its viewport yanked by another device.
+          await store.setChatReadAnchor(command.chatId, command.messageId, command.atEnd)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          return
+        }
+        case "chat.getReadAnchor": {
+          const result = store.getChatReadAnchor(command.chatId)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
         case "chat.setDraftProtection": {
           // Only adjusts this socket's prune protection — no snapshot changes.
           ws.data.protectedDraftChatIds = new Set(command.chatIds)

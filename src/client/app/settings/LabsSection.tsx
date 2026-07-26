@@ -32,7 +32,17 @@ export function LabsSection({
     }
   }
 
+  async function handleWebglRendererChange(nextValue: "enabled" | "disabled") {
+    try {
+      setError(null)
+      await handleWriteAppSettings({ terminal: { webglRenderer: nextValue === "enabled" } })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to save Labs settings.")
+    }
+  }
+
   const recentChatsValue = appSettings?.newSidebarEnabled === false ? "disabled" : "enabled"
+  const webglRendererValue = appSettings?.terminal.webglRenderer === true ? "enabled" : "disabled"
 
   const currentVersionLabel = updateSnapshot?.currentVersion ?? appVersion
   const isUpdating = updateSnapshot?.status === "updating" || updateSnapshot?.status === "restart_pending"
@@ -47,6 +57,16 @@ export function LabsSection({
             value={recentChatsValue}
             onValueChange={(value) => {
               void handleRecentChatsChange(value)
+            }}
+            options={ENABLED_DISABLED_OPTIONS}
+            size="sm"
+          />
+        </SettingsRow>
+        <SettingsRow def={SETTINGS_ROWS.terminalWebglRenderer}>
+          <SegmentedControl
+            value={webglRendererValue}
+            onValueChange={(value) => {
+              void handleWebglRendererChange(value)
             }}
             options={ENABLED_DISABLED_OPTIONS}
             size="sm"

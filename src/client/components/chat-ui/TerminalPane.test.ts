@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { getMacOptionInputSequence, getTerminalOptions } from "./TerminalPane"
+import { getMacOptionInputSequence, getTerminalOptions, TERMINAL_THEMES } from "./TerminalPane"
 
 describe("getTerminalOptions", () => {
   test("treats Option as Meta on macOS", () => {
@@ -15,6 +15,24 @@ describe("getTerminalOptions", () => {
 
     expect(options.macOptionIsMeta).toBe(false)
     expect(options.scrollback).toBe(500)
+  })
+
+  // Reading `terminal.unicode` throws from xterm's _checkProposedApi() without
+  // this, which crashes the whole pane at construction.
+  test("opts into proposed API so the Unicode version can be set", () => {
+    expect(getTerminalOptions(1_000, { foreground: "#fff" }, "Linux x86_64").allowProposedApi).toBe(true)
+  })
+})
+
+describe("terminal themes", () => {
+  // xterm's css.toColor() cannot parse the CSS keyword "transparent"; it throws
+  // and the theme silently falls back to opaque black. The DOM renderer masks
+  // that, the WebGL renderer paints it into the canvas.
+  test("use a parseable zero-alpha background rather than the transparent keyword", () => {
+    for (const theme of TERMINAL_THEMES) {
+      expect(theme.background).not.toBe("transparent")
+      expect(theme.background).toMatch(/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(\.0+)?\s*\)$/)
+    }
   })
 })
 

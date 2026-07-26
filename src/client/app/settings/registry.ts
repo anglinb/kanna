@@ -184,6 +184,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Replace the sidebar with a tabbed Chats / Projects view — In Progress, Review, and Recents up top, full projects one tap away.",
     keywords: ["sidebar", "recents", "chats", "projects", "review", "in progress", "experimental"],
   },
+  terminalWebglRenderer: {
+    sectionId: "labs",
+    title: "Terminal GPU rendering",
+    description: "Draw the embedded terminal with xterm's WebGL renderer instead of the DOM one. Faster with heavy output; falls back to the DOM renderer if the GPU context is unavailable or lost. Reopens open terminals.",
+    keywords: ["terminal", "webgl", "gpu", "renderer", "performance", "acceleration", "experimental"],
+  },
   nightlyBuilds: {
     sectionId: "labs",
     title: "Nightly builds",

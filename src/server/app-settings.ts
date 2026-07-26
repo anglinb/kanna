@@ -31,6 +31,7 @@ interface AppSettingsFile {
   terminal?: {
     scrollbackLines?: unknown
     minColumnWidth?: unknown
+    webglRenderer?: unknown
   }
   editor?: {
     preset?: unknown
@@ -225,6 +226,7 @@ function normalizeAppSettings(
     terminal: {
       scrollbackLines: clampNumber(source?.terminal?.scrollbackLines, DEFAULT_TERMINAL_SCROLLBACK, MIN_TERMINAL_SCROLLBACK, MAX_TERMINAL_SCROLLBACK),
       minColumnWidth: clampNumber(source?.terminal?.minColumnWidth, DEFAULT_TERMINAL_MIN_COLUMN_WIDTH, MIN_TERMINAL_MIN_COLUMN_WIDTH, MAX_TERMINAL_MIN_COLUMN_WIDTH),
+      webglRenderer: source?.terminal?.webglRenderer === true,
     },
     editor: {
       preset: editorPreset,

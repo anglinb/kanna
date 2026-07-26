@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react"
 import { SerializeAddon } from "@xterm/addon-serialize"
+import { Unicode11Addon } from "@xterm/addon-unicode11"
+import { WebglAddon } from "@xterm/addon-webgl"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { Terminal, type ITheme, type ITerminalOptions } from "@xterm/xterm"
 import type { TerminalSnapshot } from "../../../shared/protocol"
 import type { KannaSocket, SocketStatus } from "../../app/socket"
 import { useTheme } from "../../hooks/useTheme"
+import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 
 interface Props {
   /** null → a home-directory terminal (dev-box full-screen Terminal page). */
@@ -23,7 +26,11 @@ interface Props {
 
 const TERMINAL_THEME_LIGHT: ITheme = {
   foreground: "#0f172a",
-  background: "transparent",
+  // Not the CSS keyword: xterm's css.toColor() cannot parse "transparent" and
+  // silently falls back to opaque black. The DOM renderer hides that (index.css
+  // forces the element backgrounds clear) but the WebGL renderer paints the
+  // theme colour into its canvas. A zero-alpha rgba parses and stays see-through.
+  background: "rgba(0, 0, 0, 0)",
   cursor: "#000000",
   cursorAccent: "#ffffff",
   selectionBackground: "rgba(221,228,236,0.55)",
@@ -48,7 +55,11 @@ const TERMINAL_THEME_LIGHT: ITheme = {
 
 const TERMINAL_THEME_DARK: ITheme = {
   foreground: "#f8fafc",
-  background: "transparent",
+  // Not the CSS keyword: xterm's css.toColor() cannot parse "transparent" and
+  // silently falls back to opaque black. The DOM renderer hides that (index.css
+  // forces the element backgrounds clear) but the WebGL renderer paints the
+  // theme colour into its canvas. A zero-alpha rgba parses and stays see-through.
+  background: "rgba(0, 0, 0, 0)",
   cursor: "#ffffff",
   cursorAccent: "#000000",
   selectionBackground: "rgba(248,250,252,0.28)",
@@ -70,6 +81,9 @@ const TERMINAL_THEME_DARK: ITheme = {
   brightCyan: "#67e8f9",
   brightWhite: "#f8fafc",
 }
+
+/** Exported so tests can assert both themes stay xterm-parseable. */
+export const TERMINAL_THEMES: ITheme[] = [TERMINAL_THEME_LIGHT, TERMINAL_THEME_DARK]
 
 function getTerminalSize(terminal: Terminal) {
   return {
@@ -150,6 +164,10 @@ interface MacOptionKeyEvent {
 export function getTerminalOptions(scrollback: number, theme: ITheme, platform = globalThis.navigator?.platform ?? ""): ITerminalOptions {
   return {
     scrollback,
+    // Required before touching `terminal.unicode` — xterm throws from
+    // _checkProposedApi() otherwise. The server's shadow terminal already
+    // sets it.
+    allowProposedApi: true,
     cursorBlink: true,
     cursorStyle: "bar",
     cursorWidth: 1,
@@ -160,6 +178,9 @@ export function getTerminalOptions(scrollback: number, theme: ITheme, platform =
     fontSize: 13,
     theme,
     macOptionIsMeta: isMacPlatform(platform),
+    // Shrink glyphs that a fallback font draws wider than their cell instead of
+    // letting them bleed over the next column. xterm defaults this off.
+    rescaleOverlappingGlyphs: true,
   }
 }
 
@@ -244,6 +265,9 @@ export function TerminalPane({
   onInitialCommandSent,
 }: Props) {
   const { resolvedTheme } = useTheme()
+  // Labs opt-in. Read from the store rather than drilled through the workspace
+  // so toggling it only re-mounts the panes.
+  const webglRenderer = useTerminalPreferencesStore((store) => store.webglRenderer)
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const replayStateRef = useRef<string | null>(null)
@@ -303,6 +327,11 @@ export function TerminalPane({
     const serializeAddon = new SerializeAddon()
     terminal.loadAddon(serializeAddon)
     terminal.loadAddon(new WebLinksAddon())
+    // Must match the shadow terminal on the server: xterm defaults to Unicode 6
+    // width tables, which measure astral emoji as one cell instead of two. If
+    // the two ends disagree, replayed snapshots land in the wrong columns.
+    terminal.loadAddon(new Unicode11Addon())
+    terminal.unicode.activeVersion = "11"
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true
 
@@ -317,9 +346,28 @@ export function TerminalPane({
     terminalRef.current = terminal
 
     const element = containerRef.current
+    let webglAddon: WebglAddon | null = null
 
     if (element) {
       terminal.open(element)
+      // The WebGL renderer needs a live render service, so it can only be
+      // attached after open(). Any failure (no GPU, blocklisted driver, lost
+      // context) falls back to xterm's built-in DOM renderer rather than
+      // leaving the pane blank.
+      if (webglRenderer) {
+        try {
+          const addon = new WebglAddon()
+          addon.onContextLoss(() => {
+            addon.dispose()
+            if (webglAddon === addon) webglAddon = null
+          })
+          terminal.loadAddon(addon)
+          webglAddon = addon
+        } catch (webglError) {
+          console.warn("Terminal: WebGL renderer unavailable, using the DOM renderer.", webglError)
+          webglAddon = null
+        }
+      }
       if (replayStateRef.current) {
         terminal.write(replayStateRef.current)
       }
@@ -365,10 +413,14 @@ export function TerminalPane({
       resizeDisposable.dispose()
       dataDisposable.dispose()
       replayStateRef.current = serializeAddon.serialize()
+      // Release the GL context before the terminal goes away; browsers cap the
+      // number of live contexts and won't reclaim it on their own.
+      webglAddon?.dispose()
+      webglAddon = null
       terminal.dispose()
       terminalRef.current = null
     }
-  }, [scrollback, socket, terminalId, terminalTheme])
+  }, [scrollback, socket, terminalId, terminalTheme, webglRenderer])
 
   useEffect(() => {
     const terminal = terminalRef.current

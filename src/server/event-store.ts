@@ -3,7 +3,7 @@ import { existsSync, readFileSync as readFileSyncImmediate } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
-import type { AgentProvider, ChatHistoryPage, ChatHistorySnapshot, QueuedChatMessage, TranscriptEntry } from "../shared/types"
+import type { AgentProvider, ChatHistoryPage, ChatHistorySnapshot, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
   type ChatEvent,
@@ -107,6 +107,7 @@ function getReplayEventPriority(event: StoreEvent) {
       return 8
     case "chat_read_state_set":
     case "chat_done_state_set":
+    case "chat_read_anchor_set":
       return 9
     case "chat_deleted":
     case "chat_archived":
@@ -281,6 +282,7 @@ export class EventStore {
         this.state.chatsById.set(chat.id, {
           ...chat,
           unread: chat.unread ?? false,
+          readAnchor: chat.readAnchor ?? null,
           pendingForkSessionToken: chat.pendingForkSessionToken ?? null,
         })
       }
@@ -571,6 +573,18 @@ export class EventStore {
         if (!chat) break
         chat.unread = event.unread
         chat.updatedAt = event.timestamp
+        break
+      }
+      case "chat_read_anchor_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        chat.readAnchor = {
+          messageId: event.messageId,
+          atEnd: event.atEnd,
+          updatedAt: event.timestamp,
+        }
+        // Intentionally does not bump `updatedAt` — a scroll is not a chat
+        // mutation, and bumping it would churn sidebar ordering/signatures.
         break
       }
       case "chat_done_state_set": {
@@ -1148,6 +1162,49 @@ export class EventStore {
       done,
     }
     await this.append(this.chatsLogPath, event)
+  }
+
+  /**
+   * Persist where the user left off reading. Called on a throttle from the
+   * client as it scrolls, so the no-op guard below matters — it is the only
+   * write rate-limit in the store.
+   */
+  async setChatReadAnchor(chatId: string, messageId: string, atEnd: boolean) {
+    const chat = this.requireChat(chatId)
+    if (chat.readAnchor?.messageId === messageId && chat.readAnchor.atEnd === atEnd) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_read_anchor_set",
+      timestamp: Date.now(),
+      chatId,
+      messageId,
+      atEnd,
+    }
+    await this.append(this.chatsLogPath, event)
+  }
+
+  /**
+   * Resolve a chat's stored read anchor against the current transcript.
+   * Returns null when nothing is stored or the anchored message no longer
+   * exists (deleted, or compacted away), so the client can fall back.
+   *
+   * `distanceFromEnd` lets the client widen its subscription window in one
+   * round trip when the anchor sits outside the default recent page.
+   */
+  getChatReadAnchor(chatId: string): ResolvedChatReadAnchor | null {
+    const chat = this.requireChat(chatId)
+    const anchor = chat.readAnchor
+    if (!anchor) return null
+
+    const entries = this.getTranscriptEntries(chatId)
+    const index = entries.findIndex((entry) => entry._id === anchor.messageId)
+    if (index === -1) return null
+
+    return {
+      messageId: anchor.messageId,
+      atEnd: anchor.atEnd,
+      distanceFromEnd: entries.length - index,
+    }
   }
 
   async appendMessage(chatId: string, entry: TranscriptEntry) {

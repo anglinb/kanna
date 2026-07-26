@@ -151,6 +151,14 @@ export type ClientCommand =
   | { type: "chat.setDraftProtection"; chatIds: string[] }
   | { type: "chat.markRead"; chatId: string }
   | { type: "chat.setDone"; chatId: string; done: boolean }
+  /**
+   * Persist where the user left off reading. Sent on a throttle while
+   * scrolling. Deliberately ack-only: the anchor is not part of any snapshot,
+   * so a scroll never triggers a sidebar or chat re-push to other sockets.
+   */
+  | { type: "chat.setReadAnchor"; chatId: string; messageId: string; atEnd: boolean }
+  /** Read back the stored anchor when opening a chat. Result: ResolvedChatReadAnchor | null. */
+  | { type: "chat.getReadAnchor"; chatId: string }
   | {
       type: "chat.send"
       chatId?: string

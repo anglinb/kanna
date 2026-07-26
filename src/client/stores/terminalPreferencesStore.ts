@@ -4,6 +4,7 @@ import type { EditorPreset } from "../../shared/protocol"
 export const DEFAULT_TERMINAL_SCROLLBACK = 1_000
 export const MIN_TERMINAL_SCROLLBACK = 500
 export const MAX_TERMINAL_SCROLLBACK = 5_000
+export const DEFAULT_TERMINAL_WEBGL_RENDERER = false
 export const DEFAULT_TERMINAL_MIN_COLUMN_WIDTH = 450
 export const MIN_TERMINAL_MIN_COLUMN_WIDTH = 250
 export const MAX_TERMINAL_MIN_COLUMN_WIDTH = 900
@@ -72,10 +73,12 @@ function normalizeEditorCommandTemplate(value: string | undefined, preset: Edito
 interface TerminalPreferencesState {
   scrollbackLines: number
   minColumnWidth: number
+  webglRenderer: boolean
   editorPreset: EditorPreset
   editorCommandTemplate: string
   setScrollbackLines: (scrollbackLines: number) => void
   setMinColumnWidth: (minColumnWidth: number) => void
+  setWebglRenderer: (webglRenderer: boolean) => void
   setEditorPreset: (editorPreset: EditorPreset) => void
   setEditorCommandTemplate: (editorCommandTemplate: string) => void
 }
@@ -84,10 +87,12 @@ export const useTerminalPreferencesStore = create<TerminalPreferencesState>()(
   (set) => ({
     scrollbackLines: DEFAULT_TERMINAL_SCROLLBACK,
     minColumnWidth: DEFAULT_TERMINAL_MIN_COLUMN_WIDTH,
+    webglRenderer: DEFAULT_TERMINAL_WEBGL_RENDERER,
     editorPreset: DEFAULT_EDITOR_PRESET,
     editorCommandTemplate: getDefaultEditorCommandTemplate(DEFAULT_EDITOR_PRESET),
     setScrollbackLines: (scrollbackLines) => set({ scrollbackLines: clampScrollback(scrollbackLines) }),
     setMinColumnWidth: (minColumnWidth) => set({ minColumnWidth: clampMinColumnWidth(minColumnWidth) }),
+    setWebglRenderer: (webglRenderer) => set({ webglRenderer: webglRenderer === true }),
     setEditorPreset: (editorPreset) =>
       set((state) => {
         const normalizedPreset = normalizeEditorPreset(editorPreset)

@@ -52,6 +52,42 @@ describe("read models", () => {
     expect(paths).not.toContain("/home/user/work/.hidden-repo")
   })
 
+  test("Codex scratch workspaces are filtered; saved ones and real projects are kept", () => {
+    const state = createEmptyState()
+    state.projectsById.set("project-1", {
+      id: "project-1",
+      localPath: "/home/user/Documents/Codex/2026-07-11/kept-because-saved",
+      title: "kept-because-saved",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    state.projectIdsByPath.set("/home/user/Documents/Codex/2026-07-11/kept-because-saved", "project-1")
+
+    const snapshot = deriveLocalProjectsSnapshot(state, [
+      { localPath: "/home/user/Documents/Codex/2026-07-11/what", title: "what", modifiedAt: 2 },
+      { localPath: "/home/user/Documents/Codex/2026-07-11", title: "2026-07-11", modifiedAt: 3 },
+      { localPath: "/home/user/Documents/Codex/2026-06-18/can/nested", title: "nested", modifiedAt: 4 },
+      // Non-default root: the app offers no setting for it, so match structurally.
+      { localPath: "/Volumes/work/Codex/2026-07-12/scratch", title: "scratch", modifiedAt: 5 },
+      // The workspace root itself may be the user's own folder — keep it.
+      { localPath: "/home/user/Documents/Codex", title: "Codex", modifiedAt: 6 },
+      // A real project that merely lives near/under a Codex-ish name.
+      { localPath: "/home/user/code/codex-clone", title: "codex-clone", modifiedAt: 7 },
+      { localPath: "/home/user/code/Codex/packages/core", title: "core", modifiedAt: 8 },
+    ], "Machine")
+
+    const paths = snapshot.projects.map((project) => project.localPath)
+    expect(paths).not.toContain("/home/user/Documents/Codex/2026-07-11/what")
+    expect(paths).not.toContain("/home/user/Documents/Codex/2026-07-11")
+    expect(paths).not.toContain("/home/user/Documents/Codex/2026-06-18/can/nested")
+    expect(paths).not.toContain("/Volumes/work/Codex/2026-07-12/scratch")
+    expect(paths).toContain("/home/user/Documents/Codex")
+    expect(paths).toContain("/home/user/code/codex-clone")
+    expect(paths).toContain("/home/user/code/Codex/packages/core")
+    // Saved projects are exempt — the user opted in explicitly.
+    expect(paths).toContain("/home/user/Documents/Codex/2026-07-11/kept-because-saved")
+  })
+
   test("include provider data in sidebar rows", () => {
     const state = createEmptyState()
     state.projectsById.set("project-1", {

@@ -114,6 +114,7 @@ function syncRuntimeStoresFromAppSettings(snapshot: AppSettingsSnapshot) {
   const terminalPreferences = useTerminalPreferencesStore.getState()
   terminalPreferences.setScrollbackLines(snapshot.terminal.scrollbackLines)
   terminalPreferences.setMinColumnWidth(snapshot.terminal.minColumnWidth)
+  terminalPreferences.setWebglRenderer(snapshot.terminal.webglRenderer)
   terminalPreferences.setEditorPreset(snapshot.editor.preset)
   terminalPreferences.setEditorCommandTemplate(snapshot.editor.commandTemplate)
 

@@ -29,6 +29,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
     terminal: {
       scrollbackLines: 1_000,
       minColumnWidth: 450,
+      webglRenderer: false,
     },
     editor: {
       preset: "cursor",

@@ -176,6 +176,27 @@ export function hasHiddenPathSegment(localPath: string) {
     .some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..")
 }
 
+const DATE_FOLDER_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Codex scratch workspaces: the Codex desktop app puts every projectless
+ * ("start from scratch") thread in `<Documents>/Codex/<YYYY-MM-DD>/<slug>`, so
+ * a week of throwaway chats buries the real projects on the home page.
+ *
+ * Matched structurally (a `Codex` segment followed by a date segment) rather
+ * than against a fixed `~/Documents/Codex`: the root moves with the platform
+ * and with a relocated/localized Documents folder, and the app exposes no
+ * setting for it — see openai/codex#19913, #22875, #24734. The root itself is
+ * left alone; only its dated children are Codex's, and a plain folder named
+ * `Codex` may well be the user's own.
+ */
+export function isCodexScratchWorkspacePath(localPath: string) {
+  const segments = localPath.split("/")
+  return segments.some(
+    (segment, index) => segment.toLowerCase() === "codex" && DATE_FOLDER_PATTERN.test(segments[index + 1] ?? "")
+  )
+}
+
 export function deriveLocalProjectsSnapshot(
   state: StoreState,
   discoveredProjects: Array<{ localPath: string; title: string; modifiedAt: number }>,
@@ -186,6 +207,7 @@ export function deriveLocalProjectsSnapshot(
   for (const project of discoveredProjects) {
     const normalizedPath = resolveLocalPath(project.localPath)
     if (hasHiddenPathSegment(normalizedPath)) continue
+    if (isCodexScratchWorkspacePath(normalizedPath)) continue
     projects.set(normalizedPath, {
       localPath: normalizedPath,
       title: project.title,

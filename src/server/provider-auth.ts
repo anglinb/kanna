@@ -71,6 +71,33 @@ export function parseClaudeVersion(output: string): string | null {
   return /(\d+\.\d+\.\d+)/.exec(output)?.[1] ?? null
 }
 
+/**
+ * Derive a git commit identity from a `gh api user` payload.
+ *
+ * The email is GitHub's privacy-preserving `<id>+<login>@users.noreply.github.com`
+ * form — the same address the web UI commits under. We prefer it over the
+ * account's profile email because that field is null for anyone who hasn't made
+ * their address public, and because repos with email-privacy enforcement reject
+ * pushes carrying a real address. Accounts predating numeric ids fall back to
+ * the legacy `<login>@users.noreply.github.com`.
+ */
+export function parseGhUserIdentity(output: string): { name: string; email: string } | null {
+  let parsed: { login?: unknown; name?: unknown; id?: unknown }
+  try {
+    parsed = JSON.parse(output) as typeof parsed
+  } catch {
+    return null
+  }
+  const login = typeof parsed.login === "string" ? parsed.login.trim() : ""
+  if (!login) return null
+  const id = typeof parsed.id === "number" && Number.isInteger(parsed.id) && parsed.id > 0 ? parsed.id : null
+  const displayName = typeof parsed.name === "string" ? parsed.name.trim() : ""
+  return {
+    name: displayName || login,
+    email: `${id === null ? "" : `${id}+`}${login}@users.noreply.github.com`,
+  }
+}
+
 export function parseCodexVersion(output: string): string | null {
   return /codex-cli\s+(\S+)/i.exec(output)?.[1] ?? /(\d+\.\d+\.\d+)/.exec(output)?.[1] ?? null
 }
@@ -790,6 +817,7 @@ export class ProviderAuthManager {
           return
         }
         await this.deps.exec([ghPath, "auth", "setup-git"], { timeoutMs: 30_000 }).catch(() => undefined)
+        await this.ensureGitIdentity().catch(() => undefined)
         await this.finishLogin(flow)
         return
       }
@@ -804,6 +832,55 @@ export class ProviderAuthManager {
         null
       )
       return
+    }
+  }
+
+  /**
+   * Give git a global commit identity when the machine has none.
+   *
+   * `gh auth setup-git` (run just above) installs the credential helper, which
+   * is enough to *push* but not to *commit*: with no `user.name`/`user.email`,
+   * git refuses with "Author identity unknown" after guessing a bogus
+   * `user@host.(none)` address. Fresh boxes, devboxes and containers routinely
+   * ship without a `~/.gitconfig` identity, so onboarding would complete and
+   * then the first commit, merge or rebase Kanna attempts would fail.
+   *
+   * Only missing values are filled in — an identity the user already set is
+   * never overwritten — and every failure is swallowed, because sign-in itself
+   * has already succeeded and must not be reported as broken.
+   */
+  private async ensureGitIdentity() {
+    const gitPath = this.resolvePath("git")
+    const ghPath = this.resolvePath(CLI_BINARIES.gh)
+    if (!gitPath || !ghPath) return
+
+    const readConfig = async (key: string): Promise<string> => {
+      // `--get` exits 1 when the key is unset, which is the signal we want.
+      const result = await this.deps.exec([gitPath, "config", "--global", "--get", key], {
+        timeoutMs: 10_000,
+      })
+      return result.code === 0 ? result.stdout.trim() : ""
+    }
+    const [existingName, existingEmail] = await Promise.all([
+      readConfig("user.name"),
+      readConfig("user.email"),
+    ])
+    if (existingName && existingEmail) return
+
+    const userResult = await this.deps.exec([ghPath, "api", "user"], { timeoutMs: 20_000 })
+    if (userResult.code !== 0) return
+    const identity = parseGhUserIdentity(userResult.stdout)
+    if (!identity) return
+
+    if (!existingName) {
+      await this.deps.exec([gitPath, "config", "--global", "user.name", identity.name], {
+        timeoutMs: 10_000,
+      })
+    }
+    if (!existingEmail) {
+      await this.deps.exec([gitPath, "config", "--global", "user.email", identity.email], {
+        timeoutMs: 10_000,
+      })
     }
   }
 

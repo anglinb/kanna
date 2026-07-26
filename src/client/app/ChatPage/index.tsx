@@ -759,9 +759,10 @@ export function ChatPage() {
     content: string,
     options?: Parameters<typeof state.handleSend>[1],
   ) => {
-    await scrollToTranscriptEnd(false)
+    // No scroll here: the transcript pins the new prompt to the top of the
+    // viewport once it renders (see ChatTranscriptViewport's pin effect).
     await state.handleSend(content, options)
-  }, [scrollToTranscriptEnd, state.handleSend])
+  }, [state.handleSend])
 
   const handleListSkills = useCallback(
     (provider: AgentProvider) =>
@@ -983,6 +984,8 @@ export function ChatPage() {
           onExitPlanModeConfirm={state.handleExitPlanMode}
           showScrollButton={showScrollToBottom && state.messages.length > 0}
           onIsAtEndChange={onIsAtEndChange}
+          readAnchorState={state.readAnchorState}
+          onReportReadAnchor={state.reportReadAnchor}
           scrollToBottom={() => scrollToTranscriptEnd(true)}
           typedEmptyStateText={typedEmptyStateText}
           isEmptyStateTypingComplete={isEmptyStateTypingComplete}

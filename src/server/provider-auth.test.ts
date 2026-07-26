@@ -11,6 +11,7 @@ import {
   parseCursorStatus,
   parseCursorVersion,
   parseGhAccount,
+  parseGhUserIdentity,
   parseGhVersion,
   pkceChallengeS256,
   stripAnsi,
@@ -105,6 +106,32 @@ describe("parsers", () => {
       .toEqual({ loggedIn: true, account: "jake@example.com" })
   })
 
+  test("parseGhUserIdentity builds the noreply commit address", () => {
+    expect(
+      parseGhUserIdentity(JSON.stringify({ login: "jakemor", name: "Jake Mor", id: 5595046 }))
+    ).toEqual({ name: "Jake Mor", email: "5595046+jakemor@users.noreply.github.com" })
+  })
+
+  test("parseGhUserIdentity falls back to the login when the profile name is blank", () => {
+    expect(parseGhUserIdentity(JSON.stringify({ login: "jakemor", name: "  ", id: 42 }))).toEqual({
+      name: "jakemor",
+      email: "42+jakemor@users.noreply.github.com",
+    })
+    expect(parseGhUserIdentity(JSON.stringify({ login: "jakemor", id: 42 }))?.name).toBe("jakemor")
+  })
+
+  test("parseGhUserIdentity uses the legacy address when there is no usable id", () => {
+    expect(parseGhUserIdentity(JSON.stringify({ login: "jakemor", name: "Jake" }))?.email).toBe(
+      "jakemor@users.noreply.github.com"
+    )
+  })
+
+  test("parseGhUserIdentity rejects unusable payloads", () => {
+    expect(parseGhUserIdentity("not json")).toBeNull()
+    expect(parseGhUserIdentity(JSON.stringify({ name: "Jake", id: 1 }))).toBeNull()
+    expect(parseGhUserIdentity(JSON.stringify({ login: "   ", id: 1 }))).toBeNull()
+  })
+
   test("parseGhAccount", () => {
     expect(parseGhAccount("github.com\n  ✓ Logged in to github.com account jakemny (keyring)")).toBe("jakemny")
   })
@@ -187,6 +214,7 @@ function createHarness(options: HarnessOptions = {}) {
     codex: "/usr/local/bin/codex",
     "cursor-agent": "/home/user/.local/bin/cursor-agent",
     gh: "/usr/local/bin/gh",
+    git: "/usr/bin/git",
     npm: "/usr/local/bin/npm",
     brew: null,
     bun: "/usr/local/bin/bun",
@@ -468,6 +496,139 @@ describe("gh device login flow", () => {
     const login = harness.manager.getSnapshot().services.find((s) => s.service === "gh")!.login
     expect(login.phase).toBe("error")
     expect(login.phase === "error" ? login.message : "").toContain("denied")
+  })
+})
+
+describe("git identity seeding after gh sign-in", () => {
+  const GH_USER_JSON = JSON.stringify({ login: "jakemor", name: "Jake Mor", id: 5595046 })
+
+  /** Drives the gh device flow to completion with a caller-supplied exec tail. */
+  function ghHarness(options: {
+    tail?: (argv: string[]) => ExecResult | undefined
+    paths?: Record<string, string | null>
+  }) {
+    let tokenAccepted = false
+    return createHarness({
+      paths: options.paths,
+      exec: (argv) => {
+        const joined = argv.join(" ")
+        if (joined.includes("auth login --with-token")) {
+          tokenAccepted = true
+          return { code: 0, stdout: "", stderr: "" }
+        }
+        if (joined.includes("auth status") && tokenAccepted) {
+          return { code: 0, stdout: "Logged in to github.com account jakemor (keyring)", stderr: "" }
+        }
+        const tailed = options.tail?.(argv)
+        return tailed ?? signedOutExec(argv)
+      },
+      fetchFn: (async (url: string | URL | Request) => {
+        const href = String(url)
+        if (href.includes("/login/device/code")) {
+          return Response.json({
+            device_code: "devcode",
+            user_code: "D6A5-E931",
+            verification_uri: "https://github.com/login/device",
+            interval: 5,
+            expires_in: 900,
+          })
+        }
+        if (href.includes("/login/oauth/access_token")) {
+          return Response.json({ access_token: "gho_secret_token" })
+        }
+        return new Response("{}", { status: 200 })
+      }) as typeof fetch,
+    })
+  }
+
+  /** `git config --global --get <key>` exits 1 when the key is unset. */
+  function unsetIdentityTail(argv: string[]): ExecResult | undefined {
+    const joined = argv.join(" ")
+    if (joined.includes("config --global --get")) return { code: 1, stdout: "", stderr: "" }
+    if (joined.includes("api user")) return { code: 0, stdout: GH_USER_JSON, stderr: "" }
+    return undefined
+  }
+
+  const writes = (harness: ReturnType<typeof createHarness>) =>
+    harness.execCalls
+      .map((call) => call.argv)
+      .filter((argv) => argv[0].includes("git") && !argv.includes("--get"))
+      .map((argv) => argv.slice(1).join(" "))
+
+  async function runLogin(harness: ReturnType<typeof createHarness>) {
+    await harness.manager.refresh({ force: true })
+    harness.manager.startLogin("gh")
+    await tick(20)
+  }
+
+  test("seeds a global name and noreply email when git has no identity", async () => {
+    const harness = ghHarness({ tail: unsetIdentityTail })
+    await runLogin(harness)
+
+    expect(harness.manager.getSnapshot().services.find((s) => s.service === "gh")!.authStatus).toBe(
+      "signed_in"
+    )
+    expect(writes(harness)).toEqual([
+      "config --global user.name Jake Mor",
+      "config --global user.email 5595046+jakemor@users.noreply.github.com",
+    ])
+  })
+
+  test("never overwrites an identity the user already configured", async () => {
+    const harness = ghHarness({
+      tail: (argv) => {
+        const joined = argv.join(" ")
+        if (joined.includes("--get user.name")) return { code: 0, stdout: "Existing Name\n", stderr: "" }
+        if (joined.includes("--get user.email")) return { code: 0, stdout: "me@example.com\n", stderr: "" }
+        if (joined.includes("api user")) return { code: 0, stdout: GH_USER_JSON, stderr: "" }
+        return undefined
+      },
+    })
+    await runLogin(harness)
+
+    expect(writes(harness)).toEqual([])
+    // Fully configured means we never even ask GitHub who the user is.
+    expect(harness.execCalls.some((call) => call.argv.join(" ").includes("api user"))).toBe(false)
+  })
+
+  test("fills only the missing half of a partial identity", async () => {
+    const harness = ghHarness({
+      tail: (argv) => {
+        const joined = argv.join(" ")
+        if (joined.includes("--get user.name")) return { code: 0, stdout: "Existing Name\n", stderr: "" }
+        if (joined.includes("--get user.email")) return { code: 1, stdout: "", stderr: "" }
+        if (joined.includes("api user")) return { code: 0, stdout: GH_USER_JSON, stderr: "" }
+        return undefined
+      },
+    })
+    await runLogin(harness)
+
+    expect(writes(harness)).toEqual([
+      "config --global user.email 5595046+jakemor@users.noreply.github.com",
+    ])
+  })
+
+  test("sign-in still succeeds when git is missing or the identity probe fails", async () => {
+    const noGit = ghHarness({ tail: unsetIdentityTail, paths: { git: null } })
+    await runLogin(noGit)
+    expect(noGit.manager.getSnapshot().services.find((s) => s.service === "gh")!.authStatus).toBe(
+      "signed_in"
+    )
+    expect(writes(noGit)).toEqual([])
+
+    const apiDown = ghHarness({
+      tail: (argv) => {
+        const joined = argv.join(" ")
+        if (joined.includes("config --global --get")) return { code: 1, stdout: "", stderr: "" }
+        if (joined.includes("api user")) return { code: 1, stdout: "", stderr: "gh: offline" }
+        return undefined
+      },
+    })
+    await runLogin(apiDown)
+    expect(apiDown.manager.getSnapshot().services.find((s) => s.service === "gh")!.authStatus).toBe(
+      "signed_in"
+    )
+    expect(writes(apiDown)).toEqual([])
   })
 })
 

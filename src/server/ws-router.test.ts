@@ -82,6 +82,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
   terminal: {
     scrollbackLines: 1_000,
     minColumnWidth: 450,
+    webglRenderer: false,
   },
   editor: {
     preset: "cursor",
@@ -1332,6 +1333,84 @@ describe("ws-router", () => {
         hasOlder: false,
         olderCursor: null,
       },
+    })
+  })
+
+  test("persists a read anchor without broadcasting any snapshot", async () => {
+    const writes: Array<{ chatId: string; messageId: string; atEnd: boolean }> = []
+    const router = createTestRouter({
+      store: createFakeStore({
+        async setChatReadAnchor(chatId: string, messageId: string, atEnd: boolean) {
+          writes.push({ chatId, messageId, atEnd })
+        },
+      }),
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    // Subscribed to the sidebar so a stray broadcast would be visible below.
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1,
+      type: "subscribe",
+      id: "sidebar-1",
+      topic: { type: "sidebar" },
+    }))
+    const sentBefore = ws.sent.length
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1,
+      type: "command",
+      id: "set-anchor-1",
+      command: { type: "chat.setReadAnchor", chatId: "chat-1", messageId: "entry-7", atEnd: false },
+    }))
+
+    expect(writes).toEqual([{ chatId: "chat-1", messageId: "entry-7", atEnd: false }])
+    // Exactly one new frame: the ack. Scrolling must never cause fan-out.
+    expect(ws.sent.length).toBe(sentBefore + 1)
+    expect(ws.sent.at(-1)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "ack",
+      id: "set-anchor-1",
+    })
+  })
+
+  test("returns the stored read anchor", async () => {
+    const router = createTestRouter({
+      store: createFakeStore({
+        getChatReadAnchor: (chatId: string) => (
+          chatId === "chat-1" ? { messageId: "entry-7", atEnd: false, distanceFromEnd: 420 } : null
+        ),
+      }),
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1,
+      type: "command",
+      id: "get-anchor-1",
+      command: { type: "chat.getReadAnchor", chatId: "chat-1" },
+    }))
+
+    expect(ws.sent.at(-1)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "ack",
+      id: "get-anchor-1",
+      result: { messageId: "entry-7", atEnd: false, distanceFromEnd: 420 },
+    })
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1,
+      type: "command",
+      id: "get-anchor-2",
+      command: { type: "chat.getReadAnchor", chatId: "chat-2" },
+    }))
+
+    expect(ws.sent.at(-1)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "ack",
+      id: "get-anchor-2",
+      result: null,
     })
   })
 

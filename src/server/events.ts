@@ -5,6 +5,12 @@ export interface ProjectRecord extends ProjectSummary {
   deletedAt?: number
 }
 
+export interface ChatReadAnchor {
+  messageId: string
+  atEnd: boolean
+  updatedAt: number
+}
+
 export interface ChatRecord {
   id: string
   projectId: string
@@ -16,6 +22,13 @@ export interface ChatRecord {
   /** Set when the user marks the chat done (e.g. drags it to the board's Done column). Cleared when a new turn starts. */
   doneAt?: number
   unread: boolean
+  /**
+   * Where the user last left off reading, anchored to a transcript entry `_id`
+   * so it survives history paging and re-renders. `atEnd` means they were
+   * parked at the bottom following the stream — restore should keep following
+   * rather than pin to a message.
+   */
+  readAnchor?: ChatReadAnchor | null
   provider: AgentProvider | null
   planMode: boolean
   sessionToken: string | null
@@ -127,6 +140,14 @@ export type ChatEvent =
       timestamp: number
       chatId: string
       done: boolean
+    }
+  | {
+      v: 2
+      type: "chat_read_anchor_set"
+      timestamp: number
+      chatId: string
+      messageId: string
+      atEnd: boolean
     }
 
 export type MessageEvent = {

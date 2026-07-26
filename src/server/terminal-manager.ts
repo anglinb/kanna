@@ -1,8 +1,10 @@
 import path from "node:path"
 import process from "node:process"
+import { StringDecoder } from "node:string_decoder"
 import defaultShell, { detectDefaultShell } from "default-shell"
 import { Terminal } from "@xterm/headless"
 import { SerializeAddon } from "@xterm/addon-serialize"
+import { Unicode11Addon } from "@xterm/addon-unicode11"
 import type { TerminalEvent, TerminalSnapshot } from "../shared/protocol"
 
 const DEFAULT_COLS = 80
@@ -36,6 +38,13 @@ interface TerminalSession {
   terminal: Bun.Terminal
   headless: Terminal
   serializeAddon: SerializeAddon
+  /**
+   * Stateful UTF-8 decoder for PTY output. PTY reads split at arbitrary byte
+   * offsets, so a decoder that carries incomplete trailing sequences across
+   * chunks is required — a per-chunk `Buffer.toString("utf8")` turns every
+   * multi-byte character straddling a read boundary into U+FFFD.
+   */
+  decoder: StringDecoder
   focusReportingEnabled: boolean
   modeSequenceTail: string
 }
@@ -75,12 +84,40 @@ function resolveShellArgs(shellPath: string) {
   return []
 }
 
+// Matches the locale suffixes that imply a multi-byte-capable charmap. Same
+// test VS Code uses for `terminal.integrated.detectLocale`.
+const UTF8_LOCALE_PATTERN = /(\.utf-?8|\.euc.+)$/i
+
+/**
+ * The embedded terminal only transports UTF-8, but a shell launched under a
+ * `C`/`POSIX` locale makes programs transliterate non-ASCII to literal `?`
+ * before the bytes ever reach us. Guarantee a UTF-8 locale when the inherited
+ * environment doesn't already specify one.
+ *
+ * POSIX precedence is LC_ALL > LC_CTYPE > LANG, so setting LANG alone (what
+ * VS Code does) is not enough — an inherited `LC_ALL=C` would still win.
+ */
+export function applyUtf8Locale(env: Record<string, string | undefined>) {
+  const effective = env.LC_ALL || env.LC_CTYPE || env.LANG
+  if (effective && UTF8_LOCALE_PATTERN.test(effective)) return env
+
+  // C.UTF-8 always exists on glibc/musl without locale generation; macOS ships
+  // en_US.UTF-8 but has no C.UTF-8.
+  const fallback = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8"
+  // Replace only the variables actually forcing ASCII, so a user's deliberate
+  // regional choice (`LANG=de_DE.UTF-8` under an inherited `LC_ALL=C`) survives.
+  if (!env.LANG || !UTF8_LOCALE_PATTERN.test(env.LANG)) env.LANG = fallback
+  if (env.LC_ALL && !UTF8_LOCALE_PATTERN.test(env.LC_ALL)) env.LC_ALL = fallback
+  if (env.LC_CTYPE && !UTF8_LOCALE_PATTERN.test(env.LC_CTYPE)) env.LC_CTYPE = fallback
+  return env
+}
+
 function createTerminalEnv() {
-  return {
+  return applyUtf8Locale({
     ...process.env,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
-  }
+  })
 }
 
 function updateFocusReportingState(session: Pick<TerminalSession, "focusReportingEnabled" | "modeSequenceTail">, chunk: string) {
@@ -158,6 +195,27 @@ export class TerminalManager {
     }
   }
 
+  /**
+   * Single entry point for PTY bytes. Kept as a method (rather than inlined in
+   * the `Bun.Terminal` config) so tests can drive it with deliberately split
+   * chunks — the real PTY gives no control over where reads land.
+   *
+   * The decode is stateful: bytes of a partially received character are held
+   * back and prepended to the next chunk. Both consumers below take that same
+   * string, so xterm only ever sees one decoder's output.
+   */
+  private handlePtyOutput(session: TerminalSession, data: Uint8Array) {
+    const chunk = session.decoder.write(Buffer.from(data))
+    if (!chunk) return
+    updateFocusReportingState(session, chunk)
+    session.headless.write(chunk)
+    this.emit({
+      type: "terminal.output",
+      terminalId: session.terminalId,
+      data: chunk,
+    })
+  }
+
   createTerminal(args: CreateTerminalArgs) {
     if (process.platform === "win32") {
       throw new Error("Embedded terminal is currently supported on macOS/Linux only.")
@@ -186,6 +244,13 @@ export class TerminalManager {
     const headless = new Terminal({ cols, rows, scrollback, allowProposedApi: true })
     const serializeAddon = new SerializeAddon()
     headless.loadAddon(serializeAddon)
+    // Without this xterm runs Unicode 6 width tables, where every astral emoji
+    // measures 1 cell instead of 2. Programs size their output with a modern
+    // wcwidth, so the mismatch shifts everything after a wide character.
+    // Must stay in step with the client terminal or snapshot replay desyncs.
+    headless.loadAddon(new Unicode11Addon())
+    headless.unicode.activeVersion = "11"
+    const decoder = new StringDecoder("utf8")
 
     const session: TerminalSession = {
       terminalId: args.terminalId,
@@ -203,18 +268,12 @@ export class TerminalManager {
         rows,
         name: "xterm-256color",
         data: (_terminal, data) => {
-          const chunk = Buffer.from(data).toString("utf8")
-          updateFocusReportingState(session, chunk)
-          headless.write(chunk)
-          this.emit({
-            type: "terminal.output",
-            terminalId: args.terminalId,
-            data: chunk,
-          })
+          this.handlePtyOutput(session, data)
         },
       }),
       headless,
       serializeAddon,
+      decoder,
       focusReportingEnabled: false,
       modeSequenceTail: "",
     }

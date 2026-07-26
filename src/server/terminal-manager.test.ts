@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { TerminalManager } from "./terminal-manager"
+import { applyUtf8Locale, TerminalManager } from "./terminal-manager"
 
 const SHELL_START_TIMEOUT_MS = 5_000
 const COMMAND_TIMEOUT_MS = 5_000
@@ -306,5 +306,108 @@ describeIfSupported("TerminalManager", () => {
       manager.close(firstTerminalId)
       manager.close(secondTerminalId)
     }
+  })
+
+  // PTY reads split at arbitrary byte offsets. Decoding each chunk in
+  // isolation turns any character straddling a boundary into U+FFFD. A real
+  // PTY gives no control over where reads land, so drive the output handler
+  // directly and split at every byte position of a multi-byte sequence.
+  test("does not corrupt multi-byte characters split across PTY read boundaries", async () => {
+    const terminalId = "terminal-utf8-boundaries"
+    const { manager, getOutput } = await createSession(terminalId)
+
+    try {
+      const internals = manager as unknown as {
+        sessions: Map<string, object>
+        handlePtyOutput: (session: object, data: Uint8Array) => void
+      }
+      const session = internals.sessions.get(terminalId)
+      expect(session).toBeDefined()
+
+      // 2-, 3- and 4-byte sequences: accented Latin, box drawing, CJK, emoji.
+      const payload = "é─日🎉"
+      const bytes = Buffer.from(payload, "utf8")
+
+      for (let cut = 1; cut < bytes.length; cut++) {
+        const before = getOutput().length
+        internals.handlePtyOutput(session!, bytes.subarray(0, cut))
+        internals.handlePtyOutput(session!, bytes.subarray(cut))
+        expect(getOutput().slice(before)).toBe(payload)
+      }
+    } finally {
+      manager.close(terminalId)
+    }
+  })
+
+  test("round-trips a large UTF-8 stream through a real PTY", async () => {
+    const terminalId = "terminal-utf8-stream"
+    const { manager, getOutput } = await createSession(terminalId)
+
+    try {
+      const line = "🎉👻🐣─│┌┐└┘áéíóú日本語"
+      const repeats = 4_000
+      const fixturePath = path.join(tempProjectPath, "utf8-fixture.txt")
+      await Bun.write(fixturePath, `${`${line}\n`.repeat(repeats)}__KANNA_UTF8_DONE__\n`)
+
+      const before = getOutput().length
+      manager.write(terminalId, `cat ${fixturePath}\r`)
+      await waitForOutputToContain(getOutput, "__KANNA_UTF8_DONE__", 20_000)
+
+      const streamed = getOutput().slice(before)
+      expect(Buffer.byteLength(streamed, "utf8")).toBeGreaterThan(200_000)
+      expect(streamed).not.toInclude("�")
+      expect(streamed.split("🎉").length - 1).toBe(repeats)
+      expect(streamed.split("日本語").length - 1).toBe(repeats)
+    } finally {
+      manager.close(terminalId)
+    }
+  }, 30_000)
+
+  test("runs the shadow terminal on Unicode 11 width tables", async () => {
+    const terminalId = "terminal-unicode-version"
+    const { manager } = await createSession(terminalId)
+
+    try {
+      const sessions = (manager as unknown as {
+        sessions: Map<string, { headless: { unicode: { activeVersion: string } } }>
+      }).sessions
+      expect(sessions.get(terminalId)?.headless.unicode.activeVersion).toBe("11")
+    } finally {
+      manager.close(terminalId)
+    }
+  })
+})
+
+describe("applyUtf8Locale", () => {
+  test("sets a UTF-8 LANG when the environment specifies none", () => {
+    const env = applyUtf8Locale({ PATH: "/usr/bin" })
+    expect(env.LANG).toMatch(/\.UTF-8$/i)
+  })
+
+  test("leaves an existing UTF-8 locale untouched", () => {
+    const env = applyUtf8Locale({ LANG: "en_GB.UTF-8" })
+    expect(env.LANG).toBe("en_GB.UTF-8")
+    expect(env.LC_ALL).toBeUndefined()
+  })
+
+  test("overrides LC_ALL and LC_CTYPE when they force ASCII", () => {
+    // Both outrank LANG in POSIX precedence, so setting LANG alone would not
+    // actually give the shell a UTF-8 locale.
+    const env = applyUtf8Locale({ LC_ALL: "C", LC_CTYPE: "POSIX", LANG: "en_US.UTF-8" })
+    expect(env.LC_ALL).toMatch(/\.UTF-8$/i)
+    expect(env.LC_CTYPE).toMatch(/\.UTF-8$/i)
+  })
+
+  test("treats a non-UTF-8 LC_CTYPE as authoritative over a UTF-8 LANG", () => {
+    const env = applyUtf8Locale({ LC_CTYPE: "POSIX", LANG: "en_US.UTF-8" })
+    expect(env.LC_CTYPE).toMatch(/\.UTF-8$/i)
+    // The already-valid LANG is a deliberate regional choice — keep it.
+    expect(env.LANG).toBe("en_US.UTF-8")
+  })
+
+  test("keeps a deliberate UTF-8 LC_ALL", () => {
+    const env = applyUtf8Locale({ LC_ALL: "ja_JP.UTF-8", LANG: "C" })
+    expect(env.LC_ALL).toBe("ja_JP.UTF-8")
+    expect(env.LANG).toBe("C")
   })
 })

@@ -21,7 +21,6 @@ import {
   getNewestRemainingChatId,
   getPreviousPrompt,
   getProjectIdForChat,
-  INITIAL_CHAT_RECENT_LIMIT,
   NEW_CHAT_OPTIMISTIC_SCOPE,
   reconcileOptimisticUserPrompts,
   resolveComposeIntent,
@@ -40,6 +39,7 @@ import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shar
 import { KannaSocket, type SocketStatus } from "./socket"
 import { useAppSettingsSync } from "./useAppSettingsSync"
 import { useChatCommands } from "./useChatCommands"
+import { useChatReadAnchor, type ChatReadAnchorState } from "./useChatReadAnchor"
 import { useSendMessage } from "./useSendMessage"
 import { useShareExport } from "./useShareExport"
 import { useUpdateRestart } from "./useUpdateRestart"
@@ -137,6 +137,10 @@ export interface KannaState {
   localProjects: LocalProjectsSnapshot | null
   updateSnapshot: UpdateSnapshot | null
   chatSnapshot: ChatSnapshot | null
+  /** Server-stored read position for the active chat; drives restore on open. */
+  readAnchorState: ChatReadAnchorState
+  /** Report the message at the top of the viewport (throttled write). */
+  reportReadAnchor: (messageId: string, atEnd: boolean) => void
   chatDiffSnapshot: ChatDiffSnapshot | null
   keybindings: KeybindingsSnapshot | null
   appSettings: AppSettingsSnapshot | null
@@ -325,6 +329,14 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleValidateLlmProvider,
   } = useAppSettingsSync({ socket, connectionStatus, setCommandError })
 
+  // Declared before the chat subscription so a widened window (an anchor that
+  // predates the default recent page) is available when the subscription runs.
+  const {
+    anchorState: readAnchorState,
+    recentLimit: chatRecentLimit,
+    reportReadAnchor,
+  } = useChatReadAnchor(socket, activeChatId)
+
   useEffect(() => {
     if (!activeChatId) {
       setChatSnapshot(null)
@@ -334,7 +346,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
     setChatSnapshot(null)
     setChatReady(false)
-    const unsubscribe = socket.subscribe<ChatSnapshot | null>({ type: "chat", chatId: activeChatId, recentLimit: INITIAL_CHAT_RECENT_LIMIT }, (snapshot) => {
+    const unsubscribe = socket.subscribe<ChatSnapshot | null>({ type: "chat", chatId: activeChatId, recentLimit: chatRecentLimit }, (snapshot) => {
       setChatSnapshot((current) => (sameChatSnapshotCore(current, snapshot) ? current : snapshot))
       setHistoryCursor(snapshot?.history.olderCursor ?? null)
       setHasOlderHistory(snapshot?.history.hasOlder ?? false)
@@ -342,7 +354,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
       setCommandError(null)
     })
     return unsubscribe
-  }, [activeChatId, socket])
+  }, [activeChatId, chatRecentLimit, socket])
 
   useEffect(() => {
     if (selectedProjectId) return
@@ -829,6 +841,8 @@ export function useKannaState(activeChatId: string | null): KannaState {
     localProjects,
     updateSnapshot,
     chatSnapshot,
+    readAnchorState,
+    reportReadAnchor,
     chatDiffSnapshot,
     keybindings,
     appSettings,
