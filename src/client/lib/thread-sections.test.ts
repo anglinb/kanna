@@ -257,7 +257,7 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "older", title: "o", lastMessageAt: at(2026, 6, 20) }),
     ])
     expect(buckets.map((bucket) => [bucket.label, bucket.defaultExpanded])).toEqual([
-      ["Earlier Today", true],
+      ["Today", true],
       ["Yesterday", true],
       ["Last Monday", true],
       ["Last Week", false],
@@ -275,7 +275,7 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "monday", title: "m", lastMessageAt: at(2026, 7, 13) }),
       makeChatRow({ chatId: "sunday", title: "s", lastMessageAt: at(2026, 7, 12) }),
     ])
-    expect(buckets.map((bucket) => bucket.label)).toEqual(["Earlier Today", "Yesterday", "Last Monday", "Last Week"])
+    expect(buckets.map((bucket) => bucket.label)).toEqual(["Today", "Yesterday", "Last Monday", "Last Week"])
     expect(buckets[3].threads.map((thread) => thread.chatId)).toEqual(["sunday"])
   })
 
@@ -284,7 +284,7 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "today", title: "t", lastMessageAt: at(2026, 7, 15) }),
       makeChatRow({ chatId: "friday", title: "f", lastMessageAt: at(2026, 7, 10) }), // Fri, 5 days back
     ])
-    expect(buckets.map((bucket) => bucket.label)).toEqual(["Earlier Today", "Last Friday"])
+    expect(buckets.map((bucket) => bucket.label)).toEqual(["Today", "Last Friday"])
   })
 
   test("after idle weeks the day sections carry full dates, with the rest in Last 30 Days", () => {
@@ -307,7 +307,7 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "recent", title: "a", lastMessageAt: at(2026, 7, 15) }),
       makeChatRow({ chatId: "ancient", title: "b", lastMessageAt: at(2026, 5, 1) }),
     ])
-    expect(buckets.map((bucket) => bucket.label)).toEqual(["Earlier Today", "Friday May 1st"])
+    expect(buckets.map((bucket) => bucket.label)).toEqual(["Today", "Friday May 1st"])
   })
 
   test("empty buckets are never emitted and threads sort newest-first within a bucket", () => {
@@ -316,7 +316,7 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "early", title: "b", lastMessageAt: at(2026, 7, 15, 9) }),
     ])
     expect(buckets).toHaveLength(1)
-    expect(buckets[0].label).toBe("Earlier Today")
+    expect(buckets[0].label).toBe("Today")
     expect(buckets[0].threads.map((thread) => thread.chatId)).toEqual(["late", "early"])
   })
 })
