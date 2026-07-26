@@ -76,11 +76,13 @@ describe("renderChatStatusDot", () => {
 })
 
 describe("ThreadRowContent relevance treatment", () => {
-  test("tints the harness icon and keeps the title bright for uncommitted work", () => {
+  test("keeps the title bright for uncommitted work, without tinting the harness icon", () => {
+    // The harness icon says which agent ran the chat — it is never recoloured
+    // by git state (a brand-red icon read as an error badge).
     const html = renderRow({ thread: thread({ uncommittedWork: true }), showStatus: true, detailLabel: null })
 
-    expect(html).toContain("text-logo")
     expect(html).not.toContain(DIM_CLASS)
+    expect(html).not.toContain("text-logo")
   })
 
   test("dims an idle chat with nothing to say", () => {
@@ -106,7 +108,7 @@ describe("ThreadRowContent relevance treatment", () => {
     }
   })
 
-  test("archived chats are never tinted, however dirty the tree", () => {
+  test("archived chats keep the extra-dimmed icon, however dirty the tree", () => {
     const html = renderRow({ thread: thread({ uncommittedWork: true }, true), showStatus: true, detailLabel: null })
 
     expect(html).not.toContain("text-logo")
@@ -121,23 +123,20 @@ describe("ThreadRowContent relevance treatment", () => {
     expect(html).not.toContain(DIM_CLASS)
   })
 
-  test("dimIdleTitles=false still tints the icon for uncommitted work", () => {
-    // Opting out of dimming is about attention weighting, not about hiding
-    // which chats have work sitting in a dirty tree.
-    const html = renderRow({
-      thread: thread({ uncommittedWork: true }),
-      showStatus: true,
-      detailLabel: null,
-      dimIdleTitles: false,
-    })
+  test("the harness icon stays muted whatever the git state", () => {
+    for (const overrides of [{ uncommittedWork: true }, { uncommittedWork: false }, {}]) {
+      const html = renderRow({ thread: thread(overrides), showStatus: true, detailLabel: null })
 
-    expect(html).toContain("text-logo")
+      expect(html).not.toContain("text-logo")
+      expect(html).toContain("text-muted-foreground")
+    }
   })
 
-  test("falls back to a tinted chat bubble when the provider is unknown", () => {
+  test("falls back to a muted chat bubble when the provider is unknown", () => {
     const html = renderRow({ thread: thread({ provider: null, uncommittedWork: true }), showStatus: true, detailLabel: null })
 
-    expect(html).toContain("text-logo")
+    expect(html).toContain("text-muted-foreground")
+    expect(html).not.toContain("text-logo")
   })
 })
 

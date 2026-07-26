@@ -21,9 +21,9 @@ function statusDotClass(archived: boolean) {
 /**
  * Status glyph mirroring the sidebar chat rows: spinner while running, a blue
  * ping when waiting on the user, a green ping when unread. Returns null for
- * idle chats so callers can fall back to a default icon — for those,
- * `uncommittedWork` is carried by tinting that icon rather than by a dot,
- * so this slot only ever holds things that want your attention.
+ * idle chats so callers can fall back to a default icon — `uncommittedWork` is
+ * carried by title contrast, not by this slot, so it only ever holds things
+ * that want your attention.
  */
 export function renderChatStatusDot(chat: SidebarChatRow): ReactNode | null {
   if (chat.status === "starting" || chat.status === "running") {
@@ -71,9 +71,7 @@ export function ThreadRowContent({
    * list sits there all day and read rows should recede.
    *
    * The command palette turns it off: you opened it to pick something, so every
-   * row is a live candidate and none of them should read as background. Note
-   * the harness-icon tint for uncommitted work stays either way — that's a
-   * signal about the chat, not about how much attention the row is worth.
+   * row is a live candidate and none of them should read as background.
    */
   dimIdleTitles?: boolean
   /**
@@ -111,13 +109,14 @@ export function ThreadRowContent({
   // when the provider is unknown). Archived chats keep their harness icon,
   // dimmed — the Archived section/subtitle carries the archived signal.
   const HarnessIcon = thread.row.provider ? PROVIDER_ICONS[thread.row.provider] : null
-  // One signal, two expressions: the chat has work sitting in its project's
-  // dirty tree, so tint its harness icon with the brand colour and keep the
-  // title at full contrast. Archived rows never qualify. Named for the wire
-  // field it reads (`SidebarChatRow.uncommittedWork`) so the concept has one
-  // word from git probe to pixel.
+  // The chat has work sitting in its project's dirty tree, so keep its title at
+  // full contrast. Deliberately *not* a colour treatment on the harness icon —
+  // that icon says which agent ran the chat, and tinting it (brand red) read as
+  // an error state. Archived rows never qualify. Named for the wire field it
+  // reads (`SidebarChatRow.uncommittedWork`) so the concept has one word from
+  // git probe to pixel.
   const hasUncommittedWork = !thread.archived && Boolean(thread.row.uncommittedWork)
-  const iconClass = cn("h-4 w-4", hasUncommittedWork ? "text-logo" : statusDotClass(thread.archived))
+  const iconClass = cn("h-4 w-4", statusDotClass(thread.archived))
   // Anything with a status dot or a shimmer is already asking for attention and
   // must never dim; so must the chat you're looking at. What's left — idle,
   // read, and not part of the current diff — recedes, unless the surface has

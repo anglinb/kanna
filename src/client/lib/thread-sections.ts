@@ -99,7 +99,7 @@ export function getInProgressThreads(
 
 /**
  * Chats whose work is sitting in their project's dirty tree — the same
- * `uncommittedWork` flag that tints the row's harness icon. Pulled out of the
+ * `uncommittedWork` flag that keeps the row's title at full contrast. Pulled out of the
  * date buckets so everything bearing on the current diff sits together instead
  * of scattered across Today / This Week / Last 30 Days.
  *
@@ -168,12 +168,12 @@ export function computeThreadSections(threads: SidebarThread[]): ThreadSections 
 // ---------------------------------------------------------------------------
 
 /** How many of the most recent distinct activity days get their own section. */
-export const RECENT_ACTIVITY_DAY_BUCKETS = 2
+export const RECENT_ACTIVITY_DAY_BUCKETS = 3
 
 export interface ThreadDateBucket {
   /** Stable key: "day-2026-7-15" | "this-week" | "last-week" | "last-30-days". */
   key: string
-  /** "Today" | "Yesterday" | "Last Friday" | "Monday Jun 7th" | "This Week" | "Last Week" | "Last 30 Days". */
+  /** "Earlier Today" | "Yesterday" | "Last Friday" | "Monday Jun 7th" | "This Week" | "Last Week" | "Last 30 Days". */
   label: string
   threads: SidebarThread[]
   /** Only the recent-activity day buckets start expanded. */
@@ -216,12 +216,12 @@ function ordinal(day: number): string {
 }
 
 /**
- * Label for a recent-activity day: "Today" / "Yesterday", "Last <weekday>"
+ * Label for a recent-activity day: "Earlier Today" / "Yesterday", "Last <weekday>"
  * within the past week, then "Monday Jun 7th" (with the year appended when it
  * isn't the current one).
  */
 function dayBucketLabel(dayStart: number, todayStart: number): string {
-  if (dayStart === todayStart) return "Today"
+  if (dayStart === todayStart) return "Earlier Today"
   if (dayStart === addDays(todayStart, -1)) return "Yesterday"
   const date = new Date(dayStart)
   const weekday = date.toLocaleDateString(undefined, { weekday: "long" })
@@ -233,9 +233,10 @@ function dayBucketLabel(dayStart: number, todayStart: number): string {
 /**
  * Buckets threads (already filtered) by walking the timestamps: the
  * RECENT_ACTIVITY_DAY_BUCKETS most recent distinct days of activity each get
- * their own expanded section, labeled by what the day actually is — "Today"
- * and "Yesterday" when activity is fresh, "Today" and "Last Friday" after a
- * long weekend, "Monday Jun 7th" and "Friday Jun 4th" after two idle weeks.
+ * their own expanded section, labeled by what the day actually is — "Earlier
+ * Today", "Yesterday" and "Last Monday" when activity is fresh, "Earlier
+ * Today" and "Last Friday" after a long weekend, "Monday Jun 7th" and "Friday
+ * Jun 4th" after two idle weeks.
  * Everything older falls through to This Week (Monday–now), Last Week (the
  * prior Mon–Sun), and Last 30 Days. No client-side age cutoff — server
  * garbage collection (auto-archive 30 days behind the latest activity,
