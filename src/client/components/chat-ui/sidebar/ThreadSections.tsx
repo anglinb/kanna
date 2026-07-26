@@ -49,7 +49,7 @@ function SectionHeader({
       {/* Chevron trails the label rather than leading it, so every title starts
           at the same left edge — including the non-collapsible In Progress /
           Review headers, which have no chevron to occupy a leading slot. */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1">
         {/* Faint by design: in this tab the chat rows carry full contrast, so
             the section labels stay quiet chrome you scan past. (The Projects
             tab is the other way round — full-contrast project headers over
