@@ -20,6 +20,7 @@ import { readProjectQuickActions, writeProjectQuickActions } from "./project-qui
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
 import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
+import type { WorktreeProbe } from "./worktree-probe"
 import type { ProviderAuthManager } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
@@ -42,6 +43,7 @@ export interface ClientState {
 interface CreateWsRouterArgs {
   store: EventStore
   diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch">
+  worktreeProbe: Pick<WorktreeProbe, "getStates">
   agent: AgentCoordinator
   terminals: TerminalManager
   keybindings: KeybindingsManager
@@ -119,6 +121,7 @@ function ensureSnapshotSignatures(ws: ServerWebSocket<ClientState>) {
 export function createWsRouter({
   store,
   diffStore,
+  worktreeProbe,
   agent,
   terminals,
   keybindings,
@@ -249,6 +252,7 @@ export function createWsRouter({
       sidebarProjectOrder: store.getSidebarProjectOrder(),
       drainingChatIds: agent.getDrainingChatIds(),
       pendingToolKinds,
+      workingTrees: worktreeProbe.getStates(),
     })
 
     const sidebar = {
@@ -1423,6 +1427,7 @@ export function createWsRouter({
     },
     broadcastSnapshots,
     broadcastChatStateImmediately,
+    broadcastSidebar: () => broadcastFilteredSnapshots({ includeSidebar: true }),
     scheduleBroadcast,
     scheduleChatStateBroadcast,
     pruneStaleEmptyChats: () => maybePruneStaleEmptyChats(),

@@ -19,16 +19,28 @@ function statusDotClass(archived: boolean) {
 }
 
 /**
- * Status glyph mirroring the sidebar chat rows: spinner while running, a
- * blue ping when waiting on the user, a green ping when unread. Returns null
- * for idle chats so callers can fall back to a default icon.
+ * Status glyph mirroring the sidebar chat rows: spinner while running, a blue
+ * ping when waiting on the user, a green ping when unread, and a still muted
+ * dot when the chat is merely relevant to the project's uncommitted work.
+ * Returns null for idle chats so callers can fall back to a default icon.
  */
 export function renderChatStatusDot(chat: SidebarChatRow): ReactNode | null {
   if (chat.status === "starting" || chat.status === "running") {
     return <Loader2 className="size-3.5 shrink-0 animate-spin text-logo" />
   }
   const color = chat.status === "waiting_for_user" ? "blue" : chat.unread ? "emerald" : null
-  if (!color) return null
+  if (!color) {
+    // Lowest precedence: an ambient "there's uncommitted work from this chat"
+    // hint, so it never pulses and never outranks something needing attention.
+    if (chat.uncommittedWork) {
+      return (
+        <div className="relative flex size-4 shrink-0 items-center justify-center">
+          <div className="size-2.5 rounded-full bg-muted-foreground/40 ring-2 ring-muted/20 dark:ring-muted/50" />
+        </div>
+      )
+    }
+    return null
+  }
   return (
     <div className="relative flex size-4 shrink-0 items-center justify-center">
       <div

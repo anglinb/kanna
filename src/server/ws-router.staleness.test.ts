@@ -338,6 +338,7 @@ function createWorld(options?: { projectPath?: string }) {
   const router = createWsRouter({
     store: store as never,
     diffStore: diffStore as never,
+    worktreeProbe: { getStates: () => new Map() },
     agent: agent as never,
     terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
     keybindings: keybindings as never,

@@ -571,4 +571,124 @@ describe("read models", () => {
     // Cursor has no fork primitive, so forking is disabled even with a live session.
     expect(sidebar.projectGroups[0]?.chats.find((chat) => chat.chatId === "chat-cursor")?.canFork).toBeUndefined()
   })
+
+  describe("uncommittedWork", () => {
+    const DIRTY_SINCE_MS = 10_000
+
+    function stateWithChats(chats: Array<{ id: string; lastTurnEndedAt?: number }>) {
+      const state = createEmptyState()
+      state.projectsById.set("project-1", {
+        id: "project-1",
+        localPath: "/tmp/project",
+        title: "Project",
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      state.projectIdsByPath.set("/tmp/project", "project-1")
+      for (const chat of chats) {
+        state.chatsById.set(chat.id, {
+          id: chat.id,
+          projectId: "project-1",
+          title: chat.id,
+          createdAt: 1,
+          updatedAt: 1,
+          unread: false,
+          provider: "claude",
+          planMode: false,
+          sessionToken: null,
+          lastTurnOutcome: null,
+          ...(chat.lastTurnEndedAt == null ? {} : { lastTurnEndedAt: chat.lastTurnEndedAt }),
+        })
+      }
+      return state
+    }
+
+    function rowsFor(
+      chats: Array<{ id: string; lastTurnEndedAt?: number }>,
+      workingTrees?: Map<string, { dirty: boolean; dirtySinceMs?: number }>
+    ) {
+      const sidebar = deriveSidebarData(stateWithChats(chats), new Map(), {
+        nowMs: 1_000_000,
+        ...(workingTrees ? { workingTrees } : {}),
+      })
+      return sidebar.projectGroups[0]?.chats ?? []
+    }
+
+    test("flags a chat whose last turn ended after the tree became dirty", () => {
+      const rows = rowsFor(
+        [{ id: "chat-after", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }],
+        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
+      )
+
+      expect(rows[0]?.uncommittedWork).toBe(true)
+    })
+
+    test("leaves a chat whose last turn predates the dirt unflagged", () => {
+      const rows = rowsFor(
+        [{ id: "chat-before", lastTurnEndedAt: DIRTY_SINCE_MS - 1 }],
+        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
+      )
+
+      expect(rows[0]?.uncommittedWork).toBeUndefined()
+    })
+
+    test("flags nothing when the tree is clean", () => {
+      const rows = rowsFor(
+        [{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }],
+        new Map([["project-1", { dirty: false }]])
+      )
+
+      expect(rows[0]?.uncommittedWork).toBeUndefined()
+    })
+
+    test("flags nothing when the tree is dirty but unanchored", () => {
+      // Deletion-only trees have nothing to stat, so there is no anchor to
+      // compare against and we must not guess.
+      const rows = rowsFor(
+        [{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }],
+        new Map([["project-1", { dirty: true }]])
+      )
+
+      expect(rows[0]?.uncommittedWork).toBeUndefined()
+    })
+
+    test("leaves a chat that never finished a turn unflagged", () => {
+      const rows = rowsFor(
+        [{ id: "chat-no-turn" }],
+        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
+      )
+
+      expect(rows[0]?.uncommittedWork).toBeUndefined()
+    })
+
+    test("flags nothing when the project has no probe entry yet", () => {
+      const rows = rowsFor([{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }], new Map())
+
+      expect(rows[0]?.uncommittedWork).toBeUndefined()
+    })
+
+    test("omits the field entirely rather than emitting false", () => {
+      const rows = rowsFor([{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS - 1 }], new Map([
+        ["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }],
+      ]))
+
+      // The sidebar dedupe signature is a JSON.stringify of the whole snapshot,
+      // so an always-present `false` would be pure wire noise.
+      expect("uncommittedWork" in (rows[0] ?? {})).toBe(false)
+    })
+
+    test("flags every qualifying chat in the project, not just one", () => {
+      const rows = rowsFor(
+        [
+          { id: "chat-a", lastTurnEndedAt: DIRTY_SINCE_MS + 1 },
+          { id: "chat-b", lastTurnEndedAt: DIRTY_SINCE_MS + 2 },
+          { id: "chat-c", lastTurnEndedAt: DIRTY_SINCE_MS - 1 },
+        ],
+        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
+      )
+
+      const flagged = rows.filter((row) => row.uncommittedWork).map((row) => row.chatId).sort()
+      expect(flagged).toEqual(["chat-a", "chat-b"])
+    })
+  })
 })

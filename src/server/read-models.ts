@@ -9,6 +9,7 @@ import type {
   SidebarData,
   SidebarProjectGroup,
 } from "../shared/types"
+import type { WorkingTreeProbe } from "./diff-store"
 import type { ChatRecord, StoreState } from "./events"
 import { resolveLocalPath } from "./paths"
 import { SERVER_PROVIDERS } from "./provider-catalog"
@@ -82,6 +83,8 @@ export function deriveSidebarData(
     sidebarProjectOrder?: string[]
     drainingChatIds?: Set<string>
     pendingToolKinds?: Map<string, string>
+    /** Per-project working-tree state, from `WorktreeProbe.getStates()`. */
+    workingTrees?: ReadonlyMap<string, WorkingTreeProbe>
   }
 ): SidebarData {
   const nowMs = options?.nowMs ?? Date.now()
@@ -118,10 +121,17 @@ export function deriveSidebarData(
   ]
 
   function toSidebarChatRows(project: NonNullable<typeof projects[number]>, projectChats: ChatRecord[]) {
+    const workingTree = options?.workingTrees?.get(project.id)
+    // Project-scoped by nature: every chat that finished a turn after the tree
+    // got dirty is flagged, not just whichever one caused the dirt.
+    const dirtySinceMs = workingTree?.dirty ? workingTree.dirtySinceMs : undefined
     return projectChats
       .sort((a, b) => getSidebarChatSortTimestamp(b) - getSidebarChatSortTimestamp(a))
       .map((chat) => {
         const pendingToolKind = options?.pendingToolKinds?.get(chat.id)
+        const uncommittedWork = dirtySinceMs != null
+          && chat.lastTurnEndedAt != null
+          && chat.lastTurnEndedAt > dirtySinceMs
         return {
           _id: chat.id,
           _creationTime: chat.createdAt,
@@ -137,6 +147,7 @@ export function deriveSidebarData(
           ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
           ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
           ...(pendingToolKind ? { pendingToolKind } : {}),
+          ...(uncommittedWork ? { uncommittedWork: true } : {}),
           hasAutomation: false,
           canFork: canForkChat(chat, activeStatuses, drainingChatIds) || undefined,
         }

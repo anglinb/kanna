@@ -18,6 +18,7 @@ import { KannaAnalyticsReporter } from "./analytics"
 import { AppSettingsManager } from "./app-settings"
 import { UsageLimitsManager } from "./usage-limits"
 import { DiffStore } from "./diff-store"
+import { WorktreeProbe } from "./worktree-probe"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { clearGitHubRepoCache } from "./github"
@@ -135,6 +136,25 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
 
   let server: ReturnType<typeof Bun.serve<ClientState>>
   let router: ReturnType<typeof createWsRouter>
+  // Feeds the sidebar's muted "relevant to uncommitted work" dot. Derived and
+  // in-memory; see worktree-probe.ts for why there's no `git status` sweep.
+  const worktreeProbe = new WorktreeProbe(
+    () => store.state,
+    () => {
+      void router.broadcastSidebar()
+    }
+  )
+  // Free updates: `performRefresh` already stats every dirty file, so the
+  // client's active project stays current at no extra git cost — and the dot
+  // clears the instant a commit goes through Kanna's git panel.
+  diffStore.onWorkingTreeProbe = (projectId, probe) => {
+    worktreeProbe.recordExternalProbe(projectId, probe)
+  }
+  // A finished turn is the only event that can newly qualify a chat for the
+  // dot, so probe that one project then.
+  store.onTurnEnded = (chatId) => {
+    void worktreeProbe.refreshForChat(chatId)
+  }
   const terminals = new TerminalManager()
   const keybindings = new KeybindingsManager()
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
@@ -208,6 +228,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   router = createWsRouter({
     store,
     diffStore,
+    worktreeProbe,
     agent,
     terminals,
     keybindings,
@@ -285,6 +306,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const staleEmptyChatPruneInterval = setInterval(runPruneStaleEmptyChats, STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS)
   const staleChatAutoArchiveInterval = setInterval(runAutoArchiveStaleChats, STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS)
   const staleChatDeleteInterval = setInterval(runDeleteStaleChats, STALE_CHAT_DELETE_INTERVAL_MS)
+  worktreeProbe.start()
 
   const distDir = path.join(import.meta.dir, "..", "..", "dist", "client")
 
@@ -483,6 +505,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     clearInterval(staleEmptyChatPruneInterval)
     clearInterval(staleChatAutoArchiveInterval)
     clearInterval(staleChatDeleteInterval)
+    worktreeProbe.stop()
     for (const chatId of [...agent.activeTurns.keys()]) {
       await agent.cancel(chatId)
     }

@@ -831,6 +831,13 @@ export interface SidebarChatRow {
   lastAgentMessagePreview?: string
   /** Tool kind the chat is waiting on when status is waiting_for_user (e.g. "ask_user_question"). */
   pendingToolKind?: string
+  /**
+   * Best-effort hint that this chat is relevant to the project's uncommitted
+   * work: its last turn ended after the working tree became dirty. Project-
+   * scoped, so every chat active since the dirt appeared is flagged — not just
+   * whichever one caused it. Drives the muted (non-pulsing) sidebar dot.
+   */
+  uncommittedWork?: boolean
   hasAutomation: boolean
   canFork?: boolean
 }

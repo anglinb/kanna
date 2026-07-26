@@ -168,6 +168,12 @@ export class EventStore {
   // chat, forcing a synchronous full-file re-read on its next event.
   private readonly transcriptCache = new Map<string, TranscriptEntry[]>()
   private static readonly TRANSCRIPT_CACHE_LIMIT = 8
+  /**
+   * Fired after a turn reaches a terminal state — the same three events that
+   * set `lastTurnEndedAt`. Deliberately distinct from `Agent.onStateChange`,
+   * which fires per streamed token.
+   */
+  onTurnEnded?: (chatId: string) => void
 
   constructor(dataDir = getDataDir(homedir())) {
     this.dataDir = dataDir
@@ -1282,6 +1288,7 @@ export class EventStore {
       chatId,
     }
     await this.append(this.turnsLogPath, event)
+    this.onTurnEnded?.(chatId)
   }
 
   async recordTurnFailed(chatId: string, error: string) {
@@ -1294,6 +1301,7 @@ export class EventStore {
       error,
     }
     await this.append(this.turnsLogPath, event)
+    this.onTurnEnded?.(chatId)
   }
 
   async recordTurnCancelled(chatId: string) {
@@ -1305,6 +1313,7 @@ export class EventStore {
       chatId,
     }
     await this.append(this.turnsLogPath, event)
+    this.onTurnEnded?.(chatId)
   }
 
   async setSessionToken(chatId: string, sessionToken: string | null) {
