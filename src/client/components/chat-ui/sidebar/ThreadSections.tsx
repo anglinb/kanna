@@ -56,7 +56,9 @@ function SectionHeader({
               />
           </span>
         ) : null}
-        <span className="max-w-[150px] truncate whitespace-nowrap text-sm max-md:text-base text-muted-foreground">{label}</span>
+        {/* No colour class: inherits full contrast, matching the Projects tab's
+            project headers. These are structural labels, not de-emphasised text. */}
+        <span className="max-w-[150px] truncate whitespace-nowrap text-sm max-md:text-base">{label}</span>
       </div>
       {onArchiveAll ? (
         <div className="absolute right-2 flex items-center gap-[1px] opacity-100 md:opacity-0 md:group-hover/section:opacity-100">
