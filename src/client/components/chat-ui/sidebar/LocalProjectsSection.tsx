@@ -266,19 +266,8 @@ const SortableProjectGroup = memo(function SortableProjectGroup({
       onClick={() => onToggleSection(groupKey)}
       {...(isReorderEnabled ? listeners : undefined)}
     >
-      <div className="flex items-center gap-2">
-        <span className="relative size-3.5 shrink-0 cursor-pointer">
-          <ChevronRight className={`translate-y-[1px] size-3.5 shrink-0 text-slate-400 transition-all duration-200 ${!collapsedSections.has(groupKey) && 'rotate-90'}`} />
-          
-          {/* {collapsedSections.has(groupKey) ? (
-            <ChevronRight className="translate-y-[1px] size-3.5 shrink-0 text-slate-400 transition-all duration-200" />
-          ) : (
-            <>
-              <FolderOpen className="absolute inset-0 translate-y-[1px] size-3.5 shrink-0 text-slate-400 dark:text-slate-500 transition-all duration-200 group-hover/section:opacity-0" />
-              <ChevronRight className="absolute inset-0 translate-y-[1px] size-3.5 shrink-0 rotate-90 text-slate-400 opacity-0 transition-all duration-200 group-hover/section:opacity-100" />
-            </>
-          )} */}
-        </span>
+      {/* Chevron trails the label, matching the Chats tab's section headers. */}
+      <div className="flex items-center gap-1.5">
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="truncate max-w-[150px] whitespace-nowrap text-sm max-md:text-base">
@@ -289,6 +278,18 @@ const SortableProjectGroup = memo(function SortableProjectGroup({
             {localPath}
           </TooltipContent>
         </Tooltip>
+        <span className="relative size-3.5 shrink-0 cursor-pointer">
+          <ChevronRight className={`translate-y-[1px] size-3.5 shrink-0 text-slate-400 transition-all duration-200 ${!collapsedSections.has(groupKey) && 'rotate-90'}`} />
+
+          {/* {collapsedSections.has(groupKey) ? (
+            <ChevronRight className="translate-y-[1px] size-3.5 shrink-0 text-slate-400 transition-all duration-200" />
+          ) : (
+            <>
+              <FolderOpen className="absolute inset-0 translate-y-[1px] size-3.5 shrink-0 text-slate-400 dark:text-slate-500 transition-all duration-200 group-hover/section:opacity-0" />
+              <ChevronRight className="absolute inset-0 translate-y-[1px] size-3.5 shrink-0 rotate-90 text-slate-400 opacity-0 transition-all duration-200 group-hover/section:opacity-100" />
+            </>
+          )} */}
+        </span>
       </div>
       {(hasProjectMenu || onNewLocalChat) && (
         <div className="absolute right-2 flex items-center gap-[1px] opacity-100 md:opacity-0 md:group-hover/section:opacity-100">

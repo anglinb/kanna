@@ -45,7 +45,13 @@ function SectionHeader({
       )}
       onClick={onToggle}
     >
-      <div className="flex items-center gap-2.5">
+      {/* Chevron trails the label rather than leading it, so every title starts
+          at the same left edge — including the non-collapsible In Progress /
+          Review headers, which have no chevron to occupy a leading slot. */}
+      <div className="flex items-center gap-1.5">
+        {/* No colour class: inherits full contrast, matching the Projects tab's
+            project headers. These are structural labels, not de-emphasised text. */}
+        <span className="max-w-[150px] truncate whitespace-nowrap text-sm max-md:text-base">{label}</span>
         {collapsible ? (
           <span className="relative size-3.5 shrink-0">
               <ChevronRight
@@ -56,9 +62,6 @@ function SectionHeader({
               />
           </span>
         ) : null}
-        {/* No colour class: inherits full contrast, matching the Projects tab's
-            project headers. These are structural labels, not de-emphasised text. */}
-        <span className="max-w-[150px] truncate whitespace-nowrap text-sm max-md:text-base">{label}</span>
       </div>
       {onArchiveAll ? (
         <div className="absolute right-2 flex items-center gap-[1px] opacity-100 md:opacity-0 md:group-hover/section:opacity-100">
