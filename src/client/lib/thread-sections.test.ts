@@ -259,7 +259,7 @@ describe("computeThreadDateBuckets", () => {
     expect(buckets.map((bucket) => [bucket.label, bucket.defaultExpanded])).toEqual([
       ["Today", true],
       ["Yesterday", true],
-      ["Last Monday", true],
+      ["Monday", true],
       ["Last Week", false],
       ["Last 30 Days", false],
     ])
@@ -275,7 +275,7 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "monday", title: "m", lastMessageAt: at(2026, 7, 13) }),
       makeChatRow({ chatId: "sunday", title: "s", lastMessageAt: at(2026, 7, 12) }),
     ])
-    expect(buckets.map((bucket) => bucket.label)).toEqual(["Today", "Yesterday", "Last Monday", "Last Week"])
+    expect(buckets.map((bucket) => bucket.label)).toEqual(["Today", "Yesterday", "Monday", "Last Week"])
     expect(buckets[3].threads.map((thread) => thread.chatId)).toEqual(["sunday"])
   })
 
@@ -285,6 +285,47 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "friday", title: "f", lastMessageAt: at(2026, 7, 10) }), // Fri, 5 days back
     ])
     expect(buckets.map((bucket) => bucket.label)).toEqual(["Today", "Last Friday"])
+  })
+
+  test("weekday labels follow the same week boundary as the This Week / Last Week buckets", () => {
+    // Sunday Jul 26 2026 — the last day of its own week (weeks start Monday),
+    // which is where a rolling 6-day window used to go wrong: it called this
+    // week's Friday "Last Friday" while this week's Monday sat in "This Week".
+    const sunday = new Date(2026, 6, 26, 12).getTime()
+    const buckets = computeThreadDateBuckets(
+      flattenSidebarThreads(makeData([
+        makeChatRow({ chatId: "today", title: "a", lastMessageAt: at(2026, 7, 26) }), // Sun (today)
+        makeChatRow({ chatId: "fri", title: "b", lastMessageAt: at(2026, 7, 24) }), // Fri, this week
+        makeChatRow({ chatId: "thu", title: "c", lastMessageAt: at(2026, 7, 23) }), // Thu, this week
+        makeChatRow({ chatId: "mon", title: "d", lastMessageAt: at(2026, 7, 20) }), // Mon, this week
+        makeChatRow({ chatId: "prev-fri", title: "e", lastMessageAt: at(2026, 7, 17) }), // Fri, last week
+      ])),
+      sunday,
+    )
+    expect(buckets.map((bucket) => bucket.label)).toEqual([
+      "Today",
+      "Friday", // same week as today → bare weekday, matching "This Week" below
+      "Thursday",
+      "This Week", // Monday's leftovers, named for the same week as Friday/Thursday
+      "Last Week",
+    ])
+    expect(buckets[3].threads.map((thread) => thread.chatId)).toEqual(["mon"])
+    expect(buckets[4].threads.map((thread) => thread.chatId)).toEqual(["prev-fri"])
+  })
+
+  test("a day in the previous week keeps the Last <weekday> prefix", () => {
+    // Monday Jul 20 2026: this week starts today, so every other day is last week.
+    const monday = new Date(2026, 6, 20, 12).getTime()
+    const buckets = computeThreadDateBuckets(
+      flattenSidebarThreads(makeData([
+        makeChatRow({ chatId: "today", title: "a", lastMessageAt: at(2026, 7, 20) }),
+        makeChatRow({ chatId: "sun", title: "b", lastMessageAt: at(2026, 7, 19) }), // yesterday, but last week
+        makeChatRow({ chatId: "fri", title: "c", lastMessageAt: at(2026, 7, 17) }),
+      ])),
+      monday,
+    )
+    // "Yesterday" still wins over the week rule — it's unambiguous either way.
+    expect(buckets.map((bucket) => bucket.label)).toEqual(["Today", "Yesterday", "Last Friday"])
   })
 
   test("after idle weeks the day sections carry full dates, with the rest in Last 30 Days", () => {

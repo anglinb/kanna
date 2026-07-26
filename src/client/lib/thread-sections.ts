@@ -173,7 +173,7 @@ export const RECENT_ACTIVITY_DAY_BUCKETS = 3
 export interface ThreadDateBucket {
   /** Stable key: "day-2026-7-15" | "this-week" | "last-week" | "last-30-days". */
   key: string
-  /** "Today" | "Yesterday" | "Last Friday" | "Monday Jun 7th" | "This Week" | "Last Week" | "Last 30 Days". */
+  /** "Today" | "Yesterday" | "Friday" | "Last Friday" | "Monday Jun 7th" | "This Week" | "Last Week" | "Last 30 Days". */
   label: string
   threads: SidebarThread[]
   /** Only the recent-activity day buckets start expanded. */
@@ -216,16 +216,24 @@ function ordinal(day: number): string {
 }
 
 /**
- * Label for a recent-activity day: "Today" / "Yesterday", "Last <weekday>"
- * within the past week, then "Monday Jun 7th" (with the year appended when it
- * isn't the current one).
+ * Label for a recent-activity day: "Today" / "Yesterday", then the weekday
+ * qualified by *which* week it belongs to — "Friday" this week, "Last Friday"
+ * the week before, "Monday Jun 7th" older still (with the year appended when
+ * it isn't the current one).
+ *
+ * The week boundary here is deliberately the same Monday-start one the This
+ * Week / Last Week buckets use, not a rolling 6-day window. With a rolling
+ * window a Sunday would call its own Friday "Last Friday" while Monday through
+ * Wednesday of that same week sat under "This Week" — two names for one week.
  */
 function dayBucketLabel(dayStart: number, todayStart: number): string {
   if (dayStart === todayStart) return "Today"
   if (dayStart === addDays(todayStart, -1)) return "Yesterday"
   const date = new Date(dayStart)
   const weekday = date.toLocaleDateString(undefined, { weekday: "long" })
-  if (dayStart >= addDays(todayStart, -6)) return `Last ${weekday}`
+  const thisWeekStart = mondayOfWeek(todayStart)
+  if (dayStart >= thisWeekStart) return weekday
+  if (dayStart >= addDays(thisWeekStart, -7)) return `Last ${weekday}`
   const label = `${weekday} ${date.toLocaleDateString(undefined, { month: "short" })} ${ordinal(date.getDate())}`
   return date.getFullYear() === new Date(todayStart).getFullYear() ? label : `${label}, ${date.getFullYear()}`
 }
@@ -234,9 +242,11 @@ function dayBucketLabel(dayStart: number, todayStart: number): string {
  * Buckets threads (already filtered) by walking the timestamps: the
  * RECENT_ACTIVITY_DAY_BUCKETS most recent distinct days of activity each get
  * their own expanded section, labeled by what the day actually is — "Today",
- * "Yesterday" and "Last Monday" when activity is fresh, "Today" and "Last
- * Friday" after a long weekend, "Monday Jun 7th" and "Friday Jun 4th" after
- * two idle weeks. Everything older falls through to This Week (Monday–now), Last Week (the
+ * "Yesterday" and "Monday" when activity is fresh, "Today" and "Last Friday"
+ * after a long weekend, "Monday Jun 7th" and "Friday Jun 4th" after two idle
+ * weeks. Day labels and bucket labels agree on the week boundary, so a day
+ * section is always named for the same week its leftovers land in. Everything
+ * older falls through to This Week (Monday–now), Last Week (the
  * prior Mon–Sun), and Last 30 Days. No client-side age cutoff — server
  * garbage collection (auto-archive 30 days behind the latest activity,
  * delete at 90) bounds the list. Empty buckets are never emitted.
