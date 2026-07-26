@@ -6,6 +6,7 @@ import {
   flattenSidebarThreads,
   type SidebarThread,
 } from "../../../lib/thread-sections"
+import { getThreadDetailLabel } from "../../../lib/thread-detail-label"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
 import {
@@ -162,7 +163,14 @@ function ThreadSectionsImpl({
     { key: "review", heading: "Review", threads: sections.review },
   ].filter((group) => group.threads.length > 0)
 
-  if (pinnedGroups.length === 0 && sections.buckets.length === 0 && sections.archived.length === 0) return null
+  // Relevant counts here too: it drains chats out of the buckets, so a tab whose
+  // every chat is flagged would otherwise have an empty `buckets` and render nothing.
+  if (
+    pinnedGroups.length === 0
+    && sections.relevant.length === 0
+    && sections.buckets.length === 0
+    && sections.archived.length === 0
+  ) return null
 
   const renderRow = (thread: SidebarThread) => (
     <ThreadRow
@@ -170,9 +178,7 @@ function ThreadSectionsImpl({
       thread={thread}
       isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
       editorLabel={editorLabel}
-      // This tab spans projects, so the project is the useful thing to show —
-      // as `repo/branch` where we know it (see `formatProjectSidebarLabel`).
-      trailingLabel={thread.projectLabel}
+      detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
       onSelect={onSelectChat}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
@@ -196,6 +202,29 @@ function ThreadSectionsImpl({
           </div>
         </div>
       ))}
+      {sections.relevant.length > 0 ? (() => {
+        // Collapsible like a date bucket, but starts open — it's the reason the
+        // section exists. Sits above Today so everything touching the current
+        // diff reads as one group rather than scattered across the buckets.
+        const isExpanded = expandOverrides["relevant"] ?? true
+        return (
+          <div>
+            <SectionHeader
+              label="Relevant"
+              isExpanded={isExpanded}
+              onToggle={() => toggleBucket("relevant", true)}
+              onArchiveAll={() => {
+                for (const thread of sections.relevant) onArchiveChat(thread.row)
+              }}
+            />
+            {isExpanded ? (
+              <div className="space-y-[2px] mb-3">
+                {sections.relevant.map(renderRow)}
+              </div>
+            ) : null}
+          </div>
+        )
+      })() : null}
       {sections.buckets.map((bucket) => {
         const isExpanded = expandOverrides[bucket.key] ?? bucket.defaultExpanded
         return (
@@ -234,6 +263,7 @@ function ThreadSectionsImpl({
                     archived
                     isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
                     editorLabel={editorLabel}
+                    detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
                     onSelect={onOpenArchivedChat}
                     onCreateChat={onCreateChat}
                     onRenameChat={onRenameChat}

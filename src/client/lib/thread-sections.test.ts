@@ -7,6 +7,7 @@ import {
   flattenSidebarThreads,
   getInProgressThreads,
   getRecentThreads,
+  getRelevantThreads,
   getReviewThreads,
   RECENT_THREADS_LIMIT,
 } from "./thread-sections"
@@ -305,6 +306,45 @@ describe("computeThreadDateBuckets", () => {
   })
 })
 
+describe("getRelevantThreads", () => {
+  test("keeps only flagged chats, oldest first like Review and In Progress", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "newer", title: "n", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "older", title: "o", uncommittedWork: true, lastMessageAt: at(2026, 7, 10) }),
+      makeChatRow({ chatId: "clean", title: "c", lastMessageAt: at(2026, 7, 14) }),
+    ])
+
+    // Oldest leads: this is a worklist, and the thing you touched longest ago is
+    // the one you're most likely to have forgotten.
+    expect(getRelevantThreads(flattenSidebarThreads(data)).map((t) => t.chatId)).toEqual(["older", "newer"])
+  })
+
+  test("never surfaces archived chats, even when flagged", () => {
+    const data = makeData(
+      [],
+      [makeChatRow({ chatId: "archived", title: "a", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) })],
+    )
+
+    expect(getRelevantThreads(flattenSidebarThreads(data))).toEqual([])
+  })
+
+  test("skips empty new chats", () => {
+    const data = makeData([makeChatRow({ chatId: "draft", title: "d", uncommittedWork: true })])
+
+    expect(getRelevantThreads(flattenSidebarThreads(data))).toEqual([])
+  })
+
+  test("honours the exclude set", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "a", title: "a", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "b", title: "b", uncommittedWork: true, lastMessageAt: at(2026, 7, 14) }),
+    ])
+
+    const kept = getRelevantThreads(flattenSidebarThreads(data), new Set(["a"]))
+    expect(kept.map((t) => t.chatId)).toEqual(["b"])
+  })
+})
+
 describe("computeSidebarThreadSections", () => {
   test("buckets exclude review/in-progress chats and empty new chats; archived get their own list", () => {
     const data = makeData(
@@ -325,5 +365,44 @@ describe("computeSidebarThreadSections", () => {
     expect(sections.buckets).toHaveLength(1)
     expect(sections.buckets[0].threads.map((thread) => thread.chatId)).toEqual(["idle"])
     expect(sections.archived.map((thread) => thread.chatId)).toEqual(["archived-new", "archived-old"])
+  })
+
+  test("Relevant drains flagged chats out of the date buckets", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "dirty-old", title: "a", uncommittedWork: true, lastMessageAt: at(2026, 7, 10) }),
+      makeChatRow({ chatId: "dirty-new", title: "b", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "clean", title: "c", lastMessageAt: at(2026, 7, 15) }),
+    ])
+
+    const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
+    expect(sections.relevant.map((t) => t.chatId)).toEqual(["dirty-old", "dirty-new"])
+    const bucketed = sections.buckets.flatMap((bucket) => bucket.threads.map((t) => t.chatId))
+    expect(bucketed).toEqual(["clean"])
+  })
+
+  test("Review and In Progress outrank Relevant", () => {
+    // Asking for something now beats touching the current diff, so a flagged
+    // chat that is also unread or running stays where it was.
+    const data = makeData([
+      makeChatRow({ chatId: "unread", title: "u", unread: true, uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "running", title: "r", status: "running", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "idle-dirty", title: "d", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+    ])
+
+    const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
+    expect(sections.review.map((t) => t.chatId)).toEqual(["unread"])
+    expect(sections.inProgress.map((t) => t.chatId)).toEqual(["running"])
+    expect(sections.relevant.map((t) => t.chatId)).toEqual(["idle-dirty"])
+  })
+
+  test("archived flagged chats stay in Archived", () => {
+    const data = makeData(
+      [],
+      [makeChatRow({ chatId: "archived", title: "a", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) })],
+    )
+
+    const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
+    expect(sections.relevant).toEqual([])
+    expect(sections.archived.map((t) => t.chatId)).toEqual(["archived"])
   })
 })

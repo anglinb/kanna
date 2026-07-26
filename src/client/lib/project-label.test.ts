@@ -6,15 +6,27 @@ describe("formatProjectSidebarLabel", () => {
     expect(formatProjectSidebarLabel({ title: "notes" })).toBe("notes")
   })
 
-  test("uses repo/branch when the project is in a repo", () => {
+  test("uses repo/branch when the project is on a branch worth naming", () => {
+    expect(formatProjectSidebarLabel({ title: "kanna", repoName: "kanna", branchName: "feat/x" }))
+      .toBe("kanna/feat/x")
+  })
+
+  test("drops the branch on main and master", () => {
     expect(formatProjectSidebarLabel({ title: "kanna", repoName: "kanna", branchName: "main" }))
-      .toBe("kanna/main")
+      .toBe("kanna")
+    expect(formatProjectSidebarLabel({ title: "kanna", repoName: "kanna", branchName: "master" }))
+      .toBe("kanna")
+  })
+
+  test("only drops an exact match, not a branch that merely starts with it", () => {
+    expect(formatProjectSidebarLabel({ title: "kanna", repoName: "kanna", branchName: "maintenance" }))
+      .toBe("kanna/maintenance")
   })
 
   test("prefers the repo root over the project's own folder name", () => {
     // A project opened at <repo>/packages/ui: the repo is what identifies it.
-    expect(formatProjectSidebarLabel({ title: "ui", repoName: "kanna", branchName: "main" }))
-      .toBe("kanna/main")
+    expect(formatProjectSidebarLabel({ title: "ui", repoName: "kanna", branchName: "feat/x" }))
+      .toBe("kanna/feat/x")
   })
 
   test("a rename wins over the repo", () => {
@@ -22,7 +34,7 @@ describe("formatProjectSidebarLabel", () => {
       title: "Work",
       sidebarTitle: "Work",
       repoName: "kanna",
-      branchName: "main",
+      branchName: "feat/x",
     })).toBe("Work")
   })
 
@@ -31,6 +43,6 @@ describe("formatProjectSidebarLabel", () => {
   })
 
   test("never renders empty while the repo is still being resolved", () => {
-    expect(formatProjectSidebarLabel({ title: "kanna", branchName: "main" })).toBe("kanna")
+    expect(formatProjectSidebarLabel({ title: "kanna", branchName: "feat/x" })).toBe("kanna")
   })
 })

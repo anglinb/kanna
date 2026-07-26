@@ -52,7 +52,10 @@ export function searchThreadsByTitle(threads: SidebarThread[], query: string, li
 
   const scored: ScoredThread[] = []
   for (const thread of threads) {
-    const score = scorePaletteItem(trimmed, thread.title, [thread.projectTitle])
+    // Both project names: `projectTitle` is what the project is called,
+    // `projectLabel` is what the row actually shows — so typing a branch you can
+    // see on screen finds the chat.
+    const score = scorePaletteItem(trimmed, thread.title, [thread.projectTitle, thread.projectLabel])
     if (score > 0) {
       scored.push({ ...thread, score })
     }

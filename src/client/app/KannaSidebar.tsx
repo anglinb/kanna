@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog"
 import { formatSidebarAgeLabel } from "../lib/formatters"
 import { getSidebarChatTimestamp } from "../lib/sidebarChats"
+import { getThreadDetailLabel } from "../lib/thread-detail-label"
 import { flattenSidebarThreads } from "../lib/thread-sections"
 import { cn, normalizeChatId } from "../lib/utils"
 import { LocalProjectsSection, projectActivity } from "../components/chat-ui/sidebar/LocalProjectsSection"
@@ -244,17 +245,14 @@ function KannaSidebarImpl({
         thread={thread}
         isActive={activeChatId === normalizeChatId(chat.chatId)}
         editorLabel={editorLabel}
-        // Rows are already grouped under their project here, so the trailing
-        // slot shows the chat's age instead — swapped for a keycap while the
-        // number-jump modifier is held. Deliberately
-        // `getSidebarChatTimestamp` and not `thread.lastActivityAt`: the latter
-        // folds in turn-end, which would read "now" for a chat that just
-        // finished where this has always read its last message's age.
-        trailingLabel={showNumberJumpHints && shortcutHint ? (
+        // Project-scoped: rows already sit under their project header, so the
+        // slot shows the chat's age — swapped for a keycap while the
+        // number-jump modifier is held.
+        detailLabel={showNumberJumpHints && shortcutHint ? (
           <Kbd className="h-4 min-w-4 rounded-sm border-border/50 bg-transparent px-1 text-[10px]">
             {shortcutHint}
           </Kbd>
-        ) : formatSidebarAgeLabel(getSidebarChatTimestamp(chat), nowMs)}
+        ) : getThreadDetailLabel(thread, "project-scoped", nowMs)}
         onSelect={selectChat}
         onCreateChat={onCreateChat}
         onRenameChat={onRenameChat}

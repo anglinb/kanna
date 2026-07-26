@@ -12,9 +12,9 @@ export interface SidebarThread {
   projectId: string
   projectTitle: string
   /**
-   * The New Sidebar's project name — a rename, else `repo/branch`, else the
-   * folder. Separate from `projectTitle` because the command palette still
-   * wants the plain project name; only the sidebar shows the branch.
+   * The New Sidebar's project name — see `formatProjectSidebarLabel`. Separate
+   * from `projectTitle` because the command palette still wants the plain
+   * project name; only the sidebar shows the branch.
    */
   projectLabel: string
   archived: boolean
@@ -97,6 +97,33 @@ export function getInProgressThreads(
     .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
 }
 
+/**
+ * Chats whose work is sitting in their project's dirty tree — the same
+ * `uncommittedWork` flag that tints the row's harness icon. Pulled out of the
+ * date buckets so everything bearing on the current diff sits together instead
+ * of scattered across Today / This Week / Last 30 Days.
+ *
+ * Sorted OLDEST first, matching Review and In Progress rather than the
+ * temporal sections: this is a worklist, and the thing you touched longest ago
+ * is the one you're most likely to have forgotten.
+ *
+ * Archived chats never qualify, even when flagged — archiving is an explicit
+ * "done here", and promoting one back to the top would fight that.
+ */
+export function getRelevantThreads(
+  threads: SidebarThread[],
+  exclude?: ReadonlySet<string>,
+): SidebarThread[] {
+  return threads
+    .filter((thread) =>
+      !thread.archived
+      && !(exclude?.has(thread.chatId))
+      // Empty new chats are hidden everywhere else; don't let the flag resurface one.
+      && thread.row.lastMessageAt != null
+      && Boolean(thread.row.uncommittedWork))
+    .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
+}
+
 /** How many chats the "Recents" section shows. */
 export const RECENT_THREADS_LIMIT = 5
 
@@ -156,6 +183,8 @@ export interface ThreadDateBucket {
 export interface SidebarThreadSections {
   inProgress: SidebarThread[]
   review: SidebarThread[]
+  /** Chats bearing on the project's uncommitted work — sits above the buckets. */
+  relevant: SidebarThread[]
   buckets: ThreadDateBucket[]
   /** Archived chats, most recent first — rendered as the trailing collapsed section. */
   archived: SidebarThread[]
@@ -261,15 +290,22 @@ export function computeThreadDateBuckets(threads: SidebarThread[], nowMs: number
 
 /**
  * The New Sidebar's Chats tab: In Progress and Review lead (same membership
- * as the palette sections), then everything else bucketed by date, with
- * archived chats trailing as their own section. Same exclusions as
- * computeThreadSections — empty new chats hidden, nothing appears both up
- * top and in a bucket.
+ * as the palette sections), then Relevant (bearing on the current diff), then
+ * everything else bucketed by date, with archived chats trailing as their own
+ * section. Same exclusions as computeThreadSections — empty new chats hidden,
+ * nothing appears both up top and in a bucket.
+ *
+ * Relevant deliberately sits *below* Review and In Progress in that cascade: a
+ * chat waiting on you or still running is asking for something now, which
+ * outranks "this touches the current diff". So it only claims chats that would
+ * otherwise have fallen through to a date bucket.
  */
 export function computeSidebarThreadSections(threads: SidebarThread[], nowMs: number): SidebarThreadSections {
   const review = getReviewThreads(threads)
   const inProgress = getInProgressThreads(threads, new Set(review.map((thread) => thread.chatId)))
-  const excludeIds = new Set([...review, ...inProgress].map((thread) => thread.chatId))
+  const pinnedIds = new Set([...review, ...inProgress].map((thread) => thread.chatId))
+  const relevant = getRelevantThreads(threads, pinnedIds)
+  const excludeIds = new Set([...pinnedIds, ...relevant.map((thread) => thread.chatId)])
   const rest = threads.filter((thread) =>
     !thread.archived
     && thread.row.lastMessageAt != null
@@ -279,5 +315,5 @@ export function computeSidebarThreadSections(threads: SidebarThread[], nowMs: nu
     // server also filters them out of the snapshot; this is defense in depth).
     .filter((thread) => thread.archived && thread.row.lastMessageAt != null)
     .sort((left, right) => right.lastActivityAt - left.lastActivityAt)
-  return { inProgress, review, buckets: computeThreadDateBuckets(rest, nowMs), archived }
+  return { inProgress, review, relevant, buckets: computeThreadDateBuckets(rest, nowMs), archived }
 }

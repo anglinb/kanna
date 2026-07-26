@@ -54,7 +54,8 @@ export function ThreadRowContent({
   showStatus = false,
   showPreview = false,
   isActive = false,
-  trailingLabel,
+  dimIdleTitles = true,
+  detailLabel,
   hoverActions,
 }: {
   thread: SidebarThread
@@ -65,12 +66,28 @@ export function ThreadRowContent({
   /** The chat currently open. Exempts the row from title dimming. */
   isActive?: boolean
   /**
-   * Replaces the trailing project label — e.g. a relative age ("4h") in
-   * project-scoped lists where the project would be redundant. `null` hides
-   * the trailing label entirely; `undefined` keeps the project title. Accepts a
-   * node so callers can render chrome there (the sidebar's number-jump keycap).
+   * Fade the titles of chats that aren't asking for anything — idle, read, no
+   * uncommitted work. That's a scanning affordance for the sidebar, where the
+   * list sits there all day and read rows should recede.
+   *
+   * The command palette turns it off: you opened it to pick something, so every
+   * row is a live candidate and none of them should read as background. Note
+   * the harness-icon tint for uncommitted work stays either way — that's a
+   * signal about the chat, not about how much attention the row is worth.
    */
-  trailingLabel?: ReactNode
+  dimIdleTitles?: boolean
+  /**
+   * The trailing detail slot — the project in cross-project lists, the chat's
+   * age in project-scoped ones. **Required, and deliberately so**: this used to
+   * default to the project title when omitted, which meant every new surface
+   * silently opted into one policy and improvements to it (repo/branch) reached
+   * only the call sites someone remembered to update.
+   *
+   * Get the value from `getThreadDetailLabel(thread, scope, nowMs)` rather than
+   * composing one here. `null` renders an empty slot; a node is for transient
+   * chrome only (the sidebar's number-jump keycap).
+   */
+  detailLabel: ReactNode
   /**
    * Hover actions swapped in place of the trailing label on desktop: the label
    * fades out while the icons are hovered. Desktop only — mobile has no real
@@ -94,16 +111,19 @@ export function ThreadRowContent({
   // when the provider is unknown). Archived chats keep their harness icon,
   // dimmed — the Archived section/subtitle carries the archived signal.
   const HarnessIcon = thread.row.provider ? PROVIDER_ICONS[thread.row.provider] : null
-  // One relevance signal, two expressions: the chat has work sitting in its
-  // project's dirty tree, so tint its harness icon with the brand colour and
-  // keep the title at full contrast. Archived rows never qualify.
-  const relevant = !thread.archived && Boolean(thread.row.uncommittedWork)
-  const iconClass = cn("h-4 w-4", relevant ? "text-logo" : statusDotClass(thread.archived))
+  // One signal, two expressions: the chat has work sitting in its project's
+  // dirty tree, so tint its harness icon with the brand colour and keep the
+  // title at full contrast. Archived rows never qualify. Named for the wire
+  // field it reads (`SidebarChatRow.uncommittedWork`) so the concept has one
+  // word from git probe to pixel.
+  const hasUncommittedWork = !thread.archived && Boolean(thread.row.uncommittedWork)
+  const iconClass = cn("h-4 w-4", hasUncommittedWork ? "text-logo" : statusDotClass(thread.archived))
   // Anything with a status dot or a shimmer is already asking for attention and
   // must never dim; so must the chat you're looking at. What's left — idle,
-  // read, and not part of the current diff — recedes.
+  // read, and not part of the current diff — recedes, unless the surface has
+  // opted out of receding entirely.
   const needsAttention = thread.row.status !== "idle" || thread.row.unread
-  const dimTitle = !isActive && !relevant && !needsAttention
+  const dimTitle = dimIdleTitles && !isActive && !hasUncommittedWork && !needsAttention
   return (
     <>
       {statusDot ?? (HarnessIcon
@@ -144,20 +164,14 @@ export function ThreadRowContent({
             {/* `truncate` has to sit on a block, not on the flex parent —
                 text-overflow doesn't apply to a flex container, so putting it
                 up there clips a long `repo/branch` with no ellipsis. */}
-            <span className="min-w-0 truncate">
-              {trailingLabel !== undefined ? trailingLabel ?? "" : thread.projectTitle}
-            </span>
+            <span className="min-w-0 truncate">{detailLabel ?? ""}</span>
           </span>
         </span>
       ) : (
         // See above: natural width, capped at half the row.
         <span className="ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 pl-3 text-xs">
-          {trailingLabel !== undefined ? (
-            trailingLabel !== null ? (
-              <span className="min-w-0 truncate text-muted-foreground">{trailingLabel}</span>
-            ) : null
-          ) : (
-            <span className="min-w-0 truncate text-muted-foreground">{thread.projectTitle}</span>
+          {detailLabel == null ? null : (
+            <span className="min-w-0 truncate text-muted-foreground">{detailLabel}</span>
           )}
         </span>
       )}

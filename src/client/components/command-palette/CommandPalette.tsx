@@ -42,6 +42,7 @@ import { CHAT_MODE_LABELS } from "../../lib/composer"
 import type { ProjectRequest } from "../../app/kannaStateHelpers"
 import { actionMatchesEvent, getBindingsForAction } from "../../lib/keybindings"
 import { formatSidebarAgeLabel, getPathBasename } from "../../lib/formatters"
+import { getThreadDetailLabel, type ThreadDetailScope } from "../../lib/thread-detail-label"
 import { formatPathWithTilde } from "../../lib/pathUtils"
 import {
   abbreviateHomePath,
@@ -183,18 +184,32 @@ function ThreadItem({
   thread,
   onSelect,
   showStatus = false,
-  trailingLabel,
+  scope,
+  nowMs,
 }: {
   thread: SidebarThread
   onSelect: (thread: SidebarThread) => void
   /** Use the sidebar status glyph (ping dots / spinner) instead of the chat icon. */
   showStatus?: boolean
-  /** Replaces the trailing project label (e.g. a relative age in project-scoped lists). */
-  trailingLabel?: string | null
+  /**
+   * Whether this list spans projects. The detail slot follows from it — see
+   * `getThreadDetailLabel`. Taking the scope rather than a finished label is
+   * what keeps the palette in step with the sidebar.
+   */
+  scope: ThreadDetailScope
+  nowMs: number
 }) {
   return (
     <CommandItem value={`thread-${thread.chatId}`} onSelect={() => onSelect(thread)}>
-      <ThreadRowContent thread={thread} showStatus={showStatus} showPreview trailingLabel={trailingLabel} />
+      <ThreadRowContent
+        thread={thread}
+        showStatus={showStatus}
+        showPreview
+        // Every palette row is something you might be about to open, so none of
+        // them recede the way an ambient sidebar list does.
+        dimIdleTitles={false}
+        detailLabel={getThreadDetailLabel(thread, scope, nowMs)}
+      />
     </CommandItem>
   )
 }
@@ -1513,7 +1528,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
             const reviewGroup = reviewResults.length > 0 ? (
               <CommandGroup key="review" heading="Review">
                 {reviewResults.map((thread) => (
-                  <ThreadItem key={thread.chatId} thread={thread} onSelect={openThread} showStatus />
+                  <ThreadItem key={thread.chatId} thread={thread} onSelect={openThread} showStatus scope="cross-project" nowMs={nowMs} />
                 ))}
               </CommandGroup>
             ) : null
@@ -1521,7 +1536,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
             const inProgressGroup = inProgressResults.length > 0 ? (
               <CommandGroup key="in-progress" heading="In Progress">
                 {inProgressResults.map((thread) => (
-                  <ThreadItem key={thread.chatId} thread={thread} onSelect={openThread} showStatus />
+                  <ThreadItem key={thread.chatId} thread={thread} onSelect={openThread} showStatus scope="cross-project" nowMs={nowMs} />
                 ))}
               </CommandGroup>
             ) : null
@@ -1529,7 +1544,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
             const threadsGroup = threadResults.length > 0 ? (
               <CommandGroup key="threads" heading={trimmedQuery ? "Chats" : "Recents"}>
                 {threadResults.map((thread) => (
-                  <ThreadItem key={thread.chatId} thread={thread} onSelect={openThread} showStatus={!trimmedQuery} />
+                  <ThreadItem key={thread.chatId} thread={thread} onSelect={openThread} showStatus={!trimmedQuery} scope="cross-project" nowMs={nowMs} />
                 ))}
               </CommandGroup>
             ) : null
@@ -1735,7 +1750,8 @@ export function CommandPalette({ state }: { state: KannaState }) {
                         thread={thread}
                         onSelect={openThread}
                         showStatus
-                        trailingLabel={formatSidebarAgeLabel(thread.lastActivityAt, nowMs)}
+                        scope="project-scoped"
+                        nowMs={nowMs}
                       />
                     ))}
                   </CommandGroup>
@@ -1748,7 +1764,8 @@ export function CommandPalette({ state }: { state: KannaState }) {
                     thread={thread}
                     onSelect={openThread}
                     showStatus
-                    trailingLabel={formatSidebarAgeLabel(thread.lastActivityAt, nowMs)}
+                    scope="project-scoped"
+                    nowMs={nowMs}
                   />
                 ))}
               </CommandGroup>

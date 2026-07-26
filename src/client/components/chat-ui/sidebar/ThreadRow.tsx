@@ -9,9 +9,8 @@ import { ChatRowMenu } from "./Menus"
 /**
  * The canonical sidebar chat row: right-click menu, click target, status glyph /
  * harness icon, title, and hover-revealed Fork/Archive. Used by both sidebar
- * tabs — the cross-project Chats tab leaves `trailingLabel` unset so rows show
- * their project, while the Projects tab passes a relative age (the project would
- * be redundant inside a project group).
+ * tabs; each passes `detailLabel` from `getThreadDetailLabel` with its own
+ * scope — the Chats tab spans projects, the Projects tab is already inside one.
  *
  * A div rather than a button so the hover-action Buttons can nest inside it.
  */
@@ -20,7 +19,7 @@ export function ThreadRow({
   isActive,
   archived = false,
   editorLabel,
-  trailingLabel,
+  detailLabel,
   onSelect,
   onCreateChat,
   onRenameChat,
@@ -37,8 +36,8 @@ export function ThreadRow({
   /** Archived rows swap Fork/Archive for Restore and get the archived menu. */
   archived?: boolean
   editorLabel: string
-  /** `undefined` keeps the project title; a node replaces it; `null` hides it. */
-  trailingLabel?: ReactNode
+  /** From `getThreadDetailLabel`; a node only for transient chrome (keycap). */
+  detailLabel: ReactNode
   onSelect: (chatId: string) => void
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
@@ -127,7 +126,7 @@ export function ThreadRow({
           thread={thread}
           showStatus
           isActive={isActive}
-          trailingLabel={trailingLabel}
+          detailLabel={detailLabel}
           hoverActions={hoverActions}
         />
       </div>

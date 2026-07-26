@@ -24,6 +24,7 @@ function thread(overrides: Partial<SidebarChatRow> = {}, archived = false): Side
     title: row.title,
     projectId: "project-1",
     projectTitle: "Project",
+    projectLabel: "Project/feature",
     archived,
     lastActivityAt: 1,
     row,
@@ -76,14 +77,14 @@ describe("renderChatStatusDot", () => {
 
 describe("ThreadRowContent relevance treatment", () => {
   test("tints the harness icon and keeps the title bright for uncommitted work", () => {
-    const html = renderRow({ thread: thread({ uncommittedWork: true }), showStatus: true })
+    const html = renderRow({ thread: thread({ uncommittedWork: true }), showStatus: true, detailLabel: null })
 
     expect(html).toContain("text-logo")
     expect(html).not.toContain(DIM_CLASS)
   })
 
   test("dims an idle chat with nothing to say", () => {
-    const html = renderRow({ thread: thread(), showStatus: true })
+    const html = renderRow({ thread: thread(), showStatus: true, detailLabel: null })
 
     expect(html).toContain(DIM_CLASS)
     expect(html).not.toContain("text-logo")
@@ -101,43 +102,62 @@ describe("ThreadRowContent relevance treatment", () => {
       { status: "waiting_for_user" as const },
       { status: "failed" as const },
     ]) {
-      expect(renderRow({ thread: thread(overrides), showStatus: true })).not.toContain(DIM_CLASS)
+      expect(renderRow({ thread: thread(overrides), showStatus: true, detailLabel: null })).not.toContain(DIM_CLASS)
     }
   })
 
   test("archived chats are never tinted, however dirty the tree", () => {
-    const html = renderRow({ thread: thread({ uncommittedWork: true }, true), showStatus: true })
+    const html = renderRow({ thread: thread({ uncommittedWork: true }, true), showStatus: true, detailLabel: null })
 
     expect(html).not.toContain("text-logo")
     expect(html).toContain("text-muted-foreground/50")
   })
 
+  test("dimIdleTitles=false keeps every title at full contrast", () => {
+    // The command palette: you opened it to pick something, so no row is
+    // background. Applies to the rows that would otherwise dim — idle and read.
+    const html = renderRow({ thread: thread(), showStatus: true, detailLabel: null, dimIdleTitles: false })
+
+    expect(html).not.toContain(DIM_CLASS)
+  })
+
+  test("dimIdleTitles=false still tints the icon for uncommitted work", () => {
+    // Opting out of dimming is about attention weighting, not about hiding
+    // which chats have work sitting in a dirty tree.
+    const html = renderRow({
+      thread: thread({ uncommittedWork: true }),
+      showStatus: true,
+      detailLabel: null,
+      dimIdleTitles: false,
+    })
+
+    expect(html).toContain("text-logo")
+  })
+
   test("falls back to a tinted chat bubble when the provider is unknown", () => {
-    const html = renderRow({ thread: thread({ provider: null, uncommittedWork: true }), showStatus: true })
+    const html = renderRow({ thread: thread({ provider: null, uncommittedWork: true }), showStatus: true, detailLabel: null })
 
     expect(html).toContain("text-logo")
   })
 })
 
-describe("ThreadRowContent trailing label", () => {
-  test("shows the project title by default", () => {
-    expect(renderRow({ thread: thread() })).toContain("Project")
+describe("ThreadRowContent detail label", () => {
+  test("renders exactly what it is given", () => {
+    expect(renderRow({ thread: thread(), detailLabel: "4h" })).toContain("4h")
   })
 
-  test("a string label replaces the project title", () => {
-    const html = renderRow({ thread: thread(), trailingLabel: "4h" })
+  test("has no implicit project fallback", () => {
+    // The old prop defaulted to the project title when omitted, which is how
+    // the palette and the sidebar drifted apart. Nothing renders unasked now.
+    const html = renderRow({ thread: thread(), detailLabel: null })
 
-    expect(html).toContain("4h")
     expect(html).not.toContain("Project")
-  })
-
-  test("null hides the trailing label entirely", () => {
-    expect(renderRow({ thread: thread(), trailingLabel: null })).not.toContain("Project")
+    expect(html).not.toContain("feature")
   })
 
   test("accepts a node so callers can render chrome there", () => {
     // The sidebar's number-jump keycap needs more than a string.
-    const html = renderRow({ thread: thread(), trailingLabel: <kbd data-testid="keycap">3</kbd> })
+    const html = renderRow({ thread: thread(), detailLabel: <kbd data-testid="keycap">3</kbd> })
 
     expect(html).toContain("<kbd")
     expect(html).toContain("3")

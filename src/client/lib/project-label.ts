@@ -1,15 +1,23 @@
 import type { SidebarProjectGroup } from "../../shared/types"
 
 /**
+ * Branches that carry no information by being shown. Being on `main` is the
+ * assumption, so naming it is noise in a slot this narrow — the branch is worth
+ * the room exactly when it's a surprise. Note this is a *name* check, not a
+ * default-branch lookup: a repo whose default is `develop` will still show it.
+ */
+const UNREMARKABLE_BRANCHES = new Set(["main", "master"])
+
+/**
  * How the New Sidebar names a project — the trailing label on Chats-tab rows
  * and the Projects-tab section header, kept in one place so the two can't drift.
  *
  * Precedence is "most specific thing the user asked for" first:
  *
  * 1. A rename wins outright. If you named it, that's the name.
- * 2. Otherwise a repo shows as `repo/branch` — the branch is the thing that
- *    actually changes under you, and the repo root's name is not always the
- *    project's folder name (a project can be a subdirectory of its repo).
+ * 2. Otherwise a repo shows as `repo/branch`, dropping to just `repo` when the
+ *    branch is unremarkable. The repo root's name is not always the project's
+ *    folder name (a project can be a subdirectory of its repo).
  * 3. Otherwise the plain folder name.
  *
  * `repoName` is best-effort (see `WorktreeProbe`): a project whose repo hasn't
@@ -21,7 +29,9 @@ export function formatProjectSidebarLabel(
 ): string {
   if (group.sidebarTitle) return group.sidebarTitle
   if (!group.repoName) return group.title
-  // Detached HEAD has no branch to name — the bare repo is still truer than
-  // the folder name, so don't fall back.
-  return group.branchName ? `${group.repoName}/${group.branchName}` : group.repoName
+  // No branch at all on a detached HEAD — the bare repo is still truer than the
+  // folder name, so that lands in the same place as being on `main`.
+  const branchName = group.branchName
+  if (!branchName || UNREMARKABLE_BRANCHES.has(branchName)) return group.repoName
+  return `${group.repoName}/${branchName}`
 }

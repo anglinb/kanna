@@ -25,6 +25,7 @@ function thread(overrides: Partial<SidebarChatRow> = {}, archived = false): Side
     title: row.title,
     projectId: "project-1",
     projectTitle: "Project",
+    projectLabel: "Project/feature",
     archived,
     lastActivityAt: 1,
     row,
@@ -37,6 +38,7 @@ function render(props: Partial<Parameters<typeof ThreadRow>[0]> = {}) {
       thread={thread()}
       isActive={false}
       editorLabel="VS Code"
+      detailLabel={null}
       onSelect={() => undefined}
       onCreateChat={() => undefined}
       onRenameChat={() => undefined}
@@ -58,19 +60,15 @@ describe("ThreadRow", () => {
     expect(render()).toContain('data-chat-id="chat-1"')
   })
 
-  test("shows the project title when no trailing label is given", () => {
-    expect(render()).toContain("Project")
-  })
-
-  test("a trailing label replaces the project title", () => {
-    const html = render({ trailingLabel: "4h" })
+  test("renders the detail label it is given", () => {
+    const html = render({ detailLabel: "4h" })
 
     expect(html).toContain("4h")
     expect(html).not.toContain("Project")
   })
 
-  test("renders a node trailing label, e.g. the number-jump keycap", () => {
-    const html = render({ trailingLabel: <kbd>3</kbd> })
+  test("renders a node detail label, e.g. the number-jump keycap", () => {
+    const html = render({ detailLabel: <kbd>3</kbd> })
 
     expect(html).toContain("<kbd")
   })
