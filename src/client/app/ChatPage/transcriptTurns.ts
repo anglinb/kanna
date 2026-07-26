@@ -24,6 +24,10 @@ export interface TranscriptTurn {
    * before it can say anything — so without this the turn would read as blank.
    */
   error: string | null
+  /** ISO time the turn was asked, or null if the entry carries no usable one. */
+  timestamp: string | null
+  /** Wall time the turn took, or null while it is still running. */
+  durationMs: number | null
 }
 
 /**
@@ -37,6 +41,12 @@ export interface TranscriptTurn {
  */
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
+}
+
+/** An ISO timestamp only if it is one — same append-only-log caveat as asText. */
+function asTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return null
+  return value
 }
 
 /**
@@ -63,6 +73,8 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
         prompt: asText(row.message.content),
         response: null,
         error: null,
+        timestamp: asTimestamp(row.message.timestamp),
+        durationMs: null,
       })
       continue
     }
@@ -80,10 +92,17 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
       continue
     }
 
-    // A cancelled turn is a choice, not a failure, so it stays unmarked and
-    // keeps whatever text it managed to produce.
-    if (row.message.kind === "result" && !row.message.success && !row.message.cancelled) {
-      current.error = asText(row.message.result) || "Turn failed"
+    if (row.message.kind === "result") {
+      // Every result carries a duration, including a failed one — how long a
+      // turn ran before dying is worth as much as how long a good one took.
+      if (typeof row.message.durationMs === "number") {
+        current.durationMs = row.message.durationMs
+      }
+      // A cancelled turn is a choice, not a failure, so it stays unmarked and
+      // keeps whatever text it managed to produce.
+      if (!row.message.success && !row.message.cancelled) {
+        current.error = asText(row.message.result) || "Turn failed"
+      }
     }
   }
 
@@ -102,6 +121,66 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
  */
 export function isTurnInView(turn: TranscriptTurn, visibleStart: number, visibleEnd: number): boolean {
   return turn.rowIndex <= visibleEnd && turn.endRowIndex >= visibleStart
+}
+
+/** Row geometry, as read from the virtualized list. */
+export interface RowMetrics {
+  count: number
+  /** Content-space offset of a row's top edge. */
+  positionAtIndex: (index: number) => number
+  sizeAtIndex: (index: number) => number
+}
+
+/**
+ * The rows overlapping a band of content space, by binary search over row
+ * positions (which are monotonic, measured or estimated).
+ *
+ * Derived from pixels rather than from the list's own `start`/`end` because
+ * those are virtualization bookkeeping: they hold `-1` before the first pass
+ * and `null` during one, and both sentinels leak out as "no rows are visible".
+ * Positions never have that problem.
+ *
+ * Returns null when nothing overlaps, which callers should treat as "keep what
+ * you had" rather than "nothing is on screen".
+ */
+export function getVisibleRowRange(
+  metrics: RowMetrics,
+  bandTopPx: number,
+  bandBottomPx: number,
+): { start: number; end: number } | null {
+  const { count, positionAtIndex, sizeAtIndex } = metrics
+  if (count <= 0 || !(bandBottomPx > bandTopPx)) return null
+
+  // First row whose bottom edge falls below the top of the band.
+  let low = 0
+  let high = count - 1
+  let start = count
+  while (low <= high) {
+    const mid = (low + high) >> 1
+    if (positionAtIndex(mid) + sizeAtIndex(mid) > bandTopPx) {
+      start = mid
+      high = mid - 1
+    } else {
+      low = mid + 1
+    }
+  }
+  if (start >= count || positionAtIndex(start) >= bandBottomPx) return null
+
+  // Last row whose top edge falls above the bottom of the band.
+  low = start
+  high = count - 1
+  let end = start
+  while (low <= high) {
+    const mid = (low + high) >> 1
+    if (positionAtIndex(mid) < bandBottomPx) {
+      end = mid
+      low = mid + 1
+    } else {
+      high = mid - 1
+    }
+  }
+
+  return { start, end }
 }
 
 /**

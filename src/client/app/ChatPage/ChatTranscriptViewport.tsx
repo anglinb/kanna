@@ -31,7 +31,7 @@ import {
   type TranscriptScrollTarget,
 } from "./transcriptScrollAnchors"
 import { TranscriptMinimap } from "./TranscriptMinimap"
-import { buildTranscriptTurns, type TranscriptTurn } from "./transcriptTurns"
+import { buildTranscriptTurns, getVisibleRowRange, type TranscriptTurn } from "./transcriptTurns"
 import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
@@ -169,6 +169,17 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   /** Scroll pane width, driving whether the minimap has a gutter to live in. */
   const [transcriptWidth, setTranscriptWidth] = useState(0)
 
+  /**
+   * Overlay insets, in a ref so the geometry sync stays referentially stable —
+   * the bottom inset changes on every keystroke that grows the input, and
+   * re-subscribing the list listeners that often would be wasteful.
+   */
+  const viewportInsetsRef = useRef({ top: 0, bottom: 0 })
+  viewportInsetsRef.current = {
+    top: headerOffsetPx,
+    bottom: Math.max(0, transcriptPaddingBottom - TRANSCRIPT_PADDING_BOTTOM_OFFSET),
+  }
+
   // Kept in a ref so the native scroll handler can read the current rows
   // without being re-created (and re-attached) on every transcript change.
   const resolvedRowsRef = useRef(resolvedRows)
@@ -305,18 +316,35 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   const syncListGeometry = useCallback(() => {
     const state = listRef.current?.getState?.()
     if (!state) return
-    const { start, end } = state
-    if (typeof start !== "number" || typeof end !== "number") return
 
     const scrollNode = listRef.current?.getScrollableNode?.()
     const overflows = scrollNode instanceof HTMLElement
       && scrollNode.scrollHeight - scrollNode.clientHeight > OVERFLOW_EPSILON_PX
 
-    setListGeometry((current) => (
-      current.start === start && current.end === end && current.overflows === overflows
+    // The band the reader can actually see: the navbar and the input dock are
+    // overlays, so rows sliding under them are on the scroll surface but not
+    // on screen.
+    const { top: insetTop, bottom: insetBottom } = viewportInsetsRef.current
+    const range = getVisibleRowRange(
+      {
+        count: resolvedRowsRef.current.length,
+        positionAtIndex: state.positionAtIndex,
+        sizeAtIndex: state.sizeAtIndex,
+      },
+      state.scroll + insetTop,
+      state.scroll + state.scrollLength - insetBottom,
+    )
+
+    setListGeometry((current) => {
+      // A null range means the list has not laid out yet, not that the reader
+      // is looking at nothing — keep the last known rows rather than blanking
+      // every tick.
+      const start = range?.start ?? current.start
+      const end = range?.end ?? current.end
+      return current.start === start && current.end === end && current.overflows === overflows
         ? current
         : { start, end, overflows }
-    ))
+    })
   }, [listRef])
 
   /**

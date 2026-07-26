@@ -6,9 +6,12 @@ import {
   getMinimapCapacity,
   getTranscriptGutterWidth,
   isTurnInView,
+  getVisibleRowRange,
   selectVisibleTurns,
   type TranscriptTurn,
 } from "./transcriptTurns"
+
+const TIMESTAMP = "2026-07-26T00:00:00.000Z"
 
 function singleRow(id: string, message: Record<string, unknown>): ResolvedTranscriptRow {
   return {
@@ -16,7 +19,7 @@ function singleRow(id: string, message: Record<string, unknown>): ResolvedTransc
     id,
     index: 0,
     isLoading: false,
-    message: { id, timestamp: "2026-07-26T00:00:00.000Z", ...message },
+    message: { id, timestamp: TIMESTAMP, ...message },
   } as unknown as ResolvedTranscriptRow
 }
 
@@ -49,8 +52,8 @@ describe("buildTranscriptTurns", () => {
     ])
 
     expect(turns).toEqual([
-      { id: "p1", rowIndex: 0, endRowIndex: 2, prompt: "first question", response: "first answer", error: null },
-      { id: "p2", rowIndex: 3, endRowIndex: 4, prompt: "second question", response: "second answer", error: null },
+      { id: "p1", rowIndex: 0, endRowIndex: 2, prompt: "first question", response: "first answer", error: null, timestamp: TIMESTAMP, durationMs: null },
+      { id: "p2", rowIndex: 3, endRowIndex: 4, prompt: "second question", response: "second answer", error: null, timestamp: TIMESTAMP, durationMs: null },
     ])
   })
 
@@ -83,6 +86,59 @@ describe("buildTranscriptTurns", () => {
 
   test("returns nothing for an empty transcript", () => {
     expect(buildTranscriptTurns([])).toEqual([])
+  })
+})
+
+describe("buildTranscriptTurns — timing", () => {
+  test("takes the timestamp from the prompt that opened the turn", () => {
+    const asked = "2026-07-26T09:15:00.000Z"
+    const turns = buildTranscriptTurns([
+      singleRow("p1", { kind: "user_prompt", content: "go", timestamp: asked }),
+      singleRow("a1", { kind: "assistant_text", text: "done", timestamp: "2026-07-26T09:16:00.000Z" }),
+    ])
+
+    expect(turns[0]?.timestamp).toBe(asked)
+  })
+
+  test("takes the duration from the result", () => {
+    const turns = buildTranscriptTurns([
+      prompt("p1", "go"),
+      singleRow("r1", { kind: "result", success: true, result: "", durationMs: 12_000 }),
+    ])
+
+    expect(turns[0]?.durationMs).toBe(12_000)
+  })
+
+  // How long a turn ran before dying is worth as much as how long a good one took.
+  test("keeps the duration of a failed turn", () => {
+    const turns = buildTranscriptTurns([
+      prompt("p1", "go"),
+      singleRow("r1", { kind: "result", success: false, result: "boom", durationMs: 400 }),
+    ])
+
+    expect(turns[0]).toMatchObject({ durationMs: 400, error: "boom" })
+  })
+
+  test("a running turn has no duration yet", () => {
+    expect(buildTranscriptTurns([prompt("p1", "go")])[0]?.durationMs).toBeNull()
+  })
+
+  test("rejects a timestamp that is not a usable date", () => {
+    const rows = [
+      singleRow("p1", { kind: "user_prompt", content: "a", timestamp: "not a date" }),
+      singleRow("p2", { kind: "user_prompt", content: "b", timestamp: undefined }),
+    ]
+
+    expect(buildTranscriptTurns(rows).map((turn) => turn.timestamp)).toEqual([null, null])
+  })
+
+  test("ignores a non-numeric duration", () => {
+    const turns = buildTranscriptTurns([
+      prompt("p1", "go"),
+      singleRow("r1", { kind: "result", success: true, result: "", durationMs: undefined }),
+    ])
+
+    expect(turns[0]?.durationMs).toBeNull()
   })
 })
 
@@ -194,7 +250,7 @@ describe("buildTranscriptTurns — errored turns", () => {
 
 describe("isTurnInView", () => {
   const turn = (rowIndex: number, endRowIndex: number) =>
-    ({ id: "t", rowIndex, endRowIndex, prompt: "", response: null, error: null }) satisfies TranscriptTurn
+    ({ id: "t", rowIndex, endRowIndex, prompt: "", response: null, error: null, timestamp: null, durationMs: null }) satisfies TranscriptTurn
 
   test("counts a turn that merely overlaps the window", () => {
     // Turn spans the whole viewport with neither edge inside it.
@@ -211,6 +267,58 @@ describe("isTurnInView", () => {
   test("includes turns touching the window edges", () => {
     expect(isTurnInView(turn(0, 40), 40, 50)).toBe(true)
     expect(isTurnInView(turn(50, 80), 40, 50)).toBe(true)
+  })
+})
+
+describe("getVisibleRowRange", () => {
+  /** `count` rows of uniform `size`, laid out end to end from 0. */
+  const uniform = (count: number, size = 100) => ({
+    count,
+    positionAtIndex: (index: number) => index * size,
+    sizeAtIndex: () => size,
+  })
+
+  test("finds the rows overlapping the band", () => {
+    // Band 250-450 touches rows 2 (200-300), 3 (300-400) and 4 (400-500).
+    expect(getVisibleRowRange(uniform(10), 250, 450)).toEqual({ start: 2, end: 4 })
+  })
+
+  test("includes a row that only partly overlaps each edge", () => {
+    expect(getVisibleRowRange(uniform(10), 299, 301)).toEqual({ start: 2, end: 3 })
+  })
+
+  test("handles the first and last rows", () => {
+    expect(getVisibleRowRange(uniform(10), 0, 150)).toEqual({ start: 0, end: 1 })
+    expect(getVisibleRowRange(uniform(10), 950, 1000)).toEqual({ start: 9, end: 9 })
+  })
+
+  test("returns a single row when the band sits inside one", () => {
+    expect(getVisibleRowRange(uniform(10), 320, 380)).toEqual({ start: 3, end: 3 })
+  })
+
+  test("returns null when the band is past the end of the content", () => {
+    expect(getVisibleRowRange(uniform(10), 2000, 2100)).toBeNull()
+  })
+
+  test("returns null for an empty or degenerate list", () => {
+    expect(getVisibleRowRange(uniform(0), 0, 100)).toBeNull()
+    expect(getVisibleRowRange(uniform(10), 100, 100)).toBeNull()
+    expect(getVisibleRowRange(uniform(10), 400, 200)).toBeNull()
+  })
+
+  test("copes with rows of differing heights", () => {
+    // Tops at 0, 10, 510, 530 — a tall row 1 spans most of the band.
+    const sizes = [10, 500, 20, 40]
+    const tops = [0, 10, 510, 530]
+    const metrics = {
+      count: 4,
+      positionAtIndex: (index: number) => tops[index]!,
+      sizeAtIndex: (index: number) => sizes[index]!,
+    }
+
+    expect(getVisibleRowRange(metrics, 200, 300)).toEqual({ start: 1, end: 1 })
+    expect(getVisibleRowRange(metrics, 0, 5)).toEqual({ start: 0, end: 0 })
+    expect(getVisibleRowRange(metrics, 505, 560)).toEqual({ start: 1, end: 3 })
   })
 })
 
@@ -233,7 +341,7 @@ describe("getMinimapCapacity", () => {
 
 describe("selectVisibleTurns", () => {
   const turns = Array.from({ length: 5 }, (_, index) => (
-    { id: `t${index}`, rowIndex: index, endRowIndex: index, prompt: "", response: null, error: null }
+    { id: `t${index}`, rowIndex: index, endRowIndex: index, prompt: "", response: null, error: null, timestamp: null, durationMs: null }
   ))
 
   test("keeps the most recent turns when over capacity", () => {

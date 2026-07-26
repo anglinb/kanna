@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { formatDuration, formatPromptTimestamp } from "../../components/messages/ResultMessage"
 import { cn } from "../../lib/utils"
 import {
   getMagnifyFalloff,
@@ -26,17 +27,37 @@ const STRIP_LEFT_PX = 15
  */
 const GOLDEN_MAJOR = 1.618
 const GOLDEN_MINOR = 0.618
-const TICK_BASE_WIDTH_PX = 15
+const TICK_BASE_WIDTH_PX = 13
 const TICK_PITCH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MINOR
 const TICK_MAX_WIDTH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MAJOR
 const TICK_BASE_HEIGHT_PX = 2
 const TICK_MAX_HEIGHT_PX = 3
+
 /**
- * Ticks within this distance of the cursor swell. Derived from the pitch so the
- * swell always spans the same four neighbours either side, whatever the
- * spacing — a fixed radius silently widens the effect as ticks get denser.
+ * Tick opacity is a resting value plus one exception.
+ *
+ * At rest the strip is near-invisible, brighter for the turns on screen. Once
+ * the cursor picks out a tick, that one goes fully opaque — the same one the
+ * hover card describes — and every other tick drops to the floor, including
+ * the ones on screen: while you are pointing at something, where you are
+ * reading is no longer the question being asked.
+ *
+ * Opacity is deliberately a step rather than a gradient like size is. Two
+ * competing highlights would make it ambiguous which tick the card belongs to.
  */
-const MAGNIFY_RADIUS_PX = TICK_PITCH_PX * 4
+const TICK_OPACITY_OFF_SCREEN = 0.15
+/** On-screen ticks read this many times brighter than off-screen ones. */
+const TICK_ON_SCREEN_CONTRAST = 5
+const TICK_OPACITY_ON_SCREEN = TICK_OPACITY_OFF_SCREEN * TICK_ON_SCREEN_CONTRAST
+const TICK_OPACITY_FOCUSED = 1
+/**
+ * How many neighbours either side of the cursor swell. The radius is derived
+ * from the pitch so the effect keeps its shape whatever the spacing, and capped
+ * by the tick count so a short strip does not get a radius reaching past both
+ * of its ends — which would magnify every tick at once and read as a wobble
+ * rather than a dock.
+ */
+const MAGNIFY_NEIGHBOURS = 4
 /** Upper bound on ticks regardless of window height — beyond this it reads as noise. */
 const MAX_TICKS = 40
 
@@ -47,8 +68,14 @@ const HIT_PADDING_Y_PX = 20
 
 const CARD_WIDTH_PX = 320
 const CARD_GAP_PX = 16
-/** Estimate used only to keep the card inside the pane; the card itself is clamped. */
-const CARD_MAX_HEIGHT_PX = 132
+/**
+ * Roughly how tall the card gets, used only to keep it inside the pane.
+ *
+ * Not a cap on the card itself: its height is already bounded by the line
+ * clamps (2 lines of prompt, 3 of body, one meta row), and capping it as well
+ * only risks shearing off the bottom padding when the content runs long.
+ */
+const CARD_ESTIMATED_HEIGHT_PX = 152
 
 interface TranscriptMinimapProps {
   turns: TranscriptTurn[]
@@ -118,6 +145,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
     MAX_TICKS,
   )
   const ticks = useMemo(() => selectVisibleTurns(turns, capacity), [capacity, turns])
+  const magnifyRadiusPx = TICK_PITCH_PX * Math.min(MAGNIFY_NEIGHBOURS, ticks.length)
 
   // Pointer samples land far faster than paint; coalesce to one per frame.
   const pointerFrameRef = useRef<number | null>(null)
@@ -149,12 +177,16 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
     setPointerY(null)
   }, [capacity, hasRoom, transcriptOverflows])
 
-  // The wrapper always renders — it is what the ResizeObserver measures, and
-  // remounting it on every resize past the threshold would mean a frame of
-  // stale height each time the strip reappears.
-  // `ticks.length` covers "at least one turn": capacity is only ever zero
-  // before the strip has been measured, so a non-empty slice implies a turn.
-  const isVisible = hasFinePointer && hasRoom && transcriptOverflows && ticks.length > 0
+  /**
+   * Whether the strip earns its place. A single tick maps nothing — there is
+   * nowhere else to jump to — so it would be pure decoration.
+   *
+   * Note this only gates the strip's *contents*: the wrapper below always
+   * renders, because it is what the ResizeObserver measures, and remounting it
+   * whenever a resize crosses the threshold would cost a frame of stale height
+   * every time the strip reappears.
+   */
+  const isVisible = hasFinePointer && hasRoom && transcriptOverflows && ticks.length > 1
 
   const stripHeight = ticks.length * TICK_PITCH_PX
   const stripTop = Math.max(0, (wrapperHeight - stripHeight) / 2)
@@ -172,15 +204,21 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
         focusedIndex = index
       }
     })
-    if (focusedDistance > MAGNIFY_RADIUS_PX) focusedIndex = -1
+    if (focusedDistance > magnifyRadiusPx) focusedIndex = -1
   }
 
   const focusedTurn = focusedIndex >= 0 ? ticks[focusedIndex] : null
+  const focusedMeta = focusedTurn
+    ? [
+        focusedTurn.timestamp ? formatPromptTimestamp(focusedTurn.timestamp) : null,
+        focusedTurn.durationMs === null ? null : formatDuration(focusedTurn.durationMs),
+      ].filter(Boolean).join(" · ")
+    : ""
   const cardCenterY = focusedIndex >= 0
     ? clamp(
         hitTop + tickCenterY(focusedIndex),
-        CARD_MAX_HEIGHT_PX / 2,
-        Math.max(CARD_MAX_HEIGHT_PX / 2, wrapperHeight - CARD_MAX_HEIGHT_PX / 2),
+        CARD_ESTIMATED_HEIGHT_PX / 2,
+        Math.max(CARD_ESTIMATED_HEIGHT_PX / 2, wrapperHeight - CARD_ESTIMATED_HEIGHT_PX / 2),
       )
     : 0
 
@@ -199,9 +237,13 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
       >
         {ticks.map((turn, index) => {
           const centerY = tickCenterY(index)
-          const falloff = pointerY === null ? 0 : getMagnifyFalloff(pointerY - centerY, MAGNIFY_RADIUS_PX)
-          const inView = isTurnInView(turn, visibleStart, visibleEnd)
-          const restingOpacity = inView ? 0.8 : 0.22
+          const falloff = pointerY === null ? 0 : getMagnifyFalloff(pointerY - centerY, magnifyRadiusPx)
+          // The in-view highlight only applies while nothing is focused: once
+          // a tick is picked out, every other tick sits at the floor.
+          const inView = focusedIndex < 0 && isTurnInView(turn, visibleStart, visibleEnd)
+          const opacity = index === focusedIndex
+            ? TICK_OPACITY_FOCUSED
+            : inView ? TICK_OPACITY_ON_SCREEN : TICK_OPACITY_OFF_SCREEN
 
           return (
             // The bar is a hairline, so the button is a full-pitch invisible
@@ -222,17 +264,24 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
             >
               <span
                 className={cn(
-                  "absolute rounded-full",
-                  turn.error ? "bg-destructive" : "bg-foreground",
-                  // Transitions only once the cursor is gone: during a hover
-                  // they lag the pointer and the dock feels rubbery.
+                  // Deliberately uniform: a tick's only job is to show where a
+                  // turn sits and whether it is on screen. Tinting failures
+                  // would make the strip a status display and compete with the
+                  // in-view contrast that carries the actual meaning.
+                  "absolute rounded-full bg-foreground",
+                  // Opacity always eases, including mid-hover: it now steps
+                  // between two fixed values rather than following a gradient,
+                  // and an untweened step reads as a flicker as the focus
+                  // moves. Size still snaps — tweening it lags the pointer and
+                  // the dock feels rubbery.
+                  "transition-opacity duration-150 ease-out",
                   pointerY === null && "transition-[width,height,opacity] duration-200 ease-out",
                 )}
                 style={{
                   left: STRIP_LEFT_PX,
                   width: TICK_BASE_WIDTH_PX + (TICK_MAX_WIDTH_PX - TICK_BASE_WIDTH_PX) * falloff,
                   height: TICK_BASE_HEIGHT_PX + (TICK_MAX_HEIGHT_PX - TICK_BASE_HEIGHT_PX) * falloff,
-                  opacity: restingOpacity + (1 - restingOpacity) * falloff,
+                  opacity,
                 }}
               />
             </button>
@@ -244,12 +293,11 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
       {focusedTurn ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute animate-fade-in overflow-hidden rounded-2xl border border-border bg-popover/95 px-4 py-3 shadow-xl backdrop-blur-sm transition-[top] duration-150 ease-out"
+          className="pointer-events-none absolute animate-fade-in rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-xl backdrop-blur-sm transition-[top] duration-150 ease-out"
           style={{
             left: STRIP_LEFT_PX + TICK_MAX_WIDTH_PX + CARD_GAP_PX,
             top: cardCenterY,
             width: CARD_WIDTH_PX,
-            maxHeight: CARD_MAX_HEIGHT_PX,
             transform: "translateY(-50%)",
           }}
         >
@@ -263,6 +311,13 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
           ) : focusedTurn.response ? (
             <div className="mt-1 line-clamp-3 text-sm text-muted-foreground">
               {focusedTurn.response}
+            </div>
+          ) : null}
+          {/* Same treatment as the turn-boundary dividers in the transcript,
+              so the two readings of the same facts look like one thing. */}
+          {focusedMeta ? (
+            <div className="mt-1.5 text-[12px] tracking-wide text-muted-foreground/60">
+              {focusedMeta}
             </div>
           ) : null}
         </div>
