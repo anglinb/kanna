@@ -17,11 +17,18 @@ export const OPEN_EXTERNAL_SELECT_STORAGE_KEY = "kanna:last-open-external"
 /** localStorage: active sidebar view ("recents" | "projects") when the recent-chats Labs mode is on. */
 export const SIDEBAR_VIEW_STORAGE_KEY = "kanna:sidebar-view"
 
-/** localStorage: the setup wizard was completed (finished the last step). */
-/** localStorage: the setup wizard has been shown at least once (first-launch marker). */
-export const SETUP_WIZARD_SHOWN_STORAGE_KEY = "kanna:setup-shown"
+// Legacy setup-wizard markers. Onboarding progress is now machine-wide state
+// in the server's settings file (`setupShown`/`setupCompleted`/`setupDismissed`
+// on the app-settings snapshot) so a second browser — local or via the cloud
+// tunnel — never re-runs a wizard this machine already finished. These keys are
+// only read once, to migrate a pre-upgrade browser, then removed; see
+// readLegacySetupFlagsPatch in app/useAppSettingsSync.ts.
 
-export const SETUP_WIZARD_COMPLETED_STORAGE_KEY = "kanna:setup-completed"
+/** localStorage (legacy): the setup wizard has been shown at least once. */
+export const LEGACY_SETUP_SHOWN_STORAGE_KEY = "kanna:setup-shown"
 
-/** localStorage: the setup wizard was dismissed ("Set up later") — suppresses auto-launch, not the Setup card. */
-export const SETUP_WIZARD_DISMISSED_STORAGE_KEY = "kanna:setup-dismissed"
+/** localStorage (legacy): the setup wizard was completed (finished the last step). */
+export const LEGACY_SETUP_COMPLETED_STORAGE_KEY = "kanna:setup-completed"
+
+/** localStorage (legacy): the setup wizard was dismissed ("Set up later"). */
+export const LEGACY_SETUP_DISMISSED_STORAGE_KEY = "kanna:setup-dismissed"

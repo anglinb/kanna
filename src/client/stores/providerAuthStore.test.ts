@@ -30,9 +30,30 @@ function snapshotWith(status: AuthServiceSnapshot["authStatus"]): ProviderAuthSn
   }
 }
 
-const FLAGS = { setupShown: false, setupCompleted: false, setupDismissed: false }
+const FLAGS = {
+  setupLoaded: true,
+  setupShown: false,
+  setupCompleted: false,
+  setupDismissed: false,
+}
 
 describe("getSetupLaunchAction", () => {
+  test("waits for the machine's settings before deciding anything", () => {
+    // A fresh browser starts with every flag false; acting on that would
+    // re-run onboarding per browser instead of per machine.
+    const unloaded = { ...FLAGS, setupLoaded: false }
+    expect(getSetupLaunchAction(null, unloaded)).toBe("wait")
+    expect(getSetupLaunchAction(snapshotWith("signed_in"), unloaded)).toBe("wait")
+    expect(getSetupLaunchAction(snapshotWith("signed_out"), unloaded)).toBe("wait")
+  })
+
+  test("a machine that finished setup never re-onboards a new browser", () => {
+    const completed = { ...FLAGS, setupShown: true, setupCompleted: true }
+    expect(getSetupLaunchAction(null, completed)).toBe("none")
+    // Even with services since signed out, a completed machine stays quiet.
+    expect(getSetupLaunchAction(snapshotWith("signed_out"), completed)).toBe("none")
+  })
+
   test("first-ever launch opens instantly, before any probe resolves", () => {
     expect(getSetupLaunchAction(null, FLAGS)).toBe("open")
     expect(getSetupLaunchAction(snapshotWith("unknown"), FLAGS)).toBe("open")

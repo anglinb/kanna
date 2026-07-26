@@ -7,9 +7,15 @@ import type {
   LlmProviderSnapshot,
   LlmProviderValidationResult,
 } from "../../shared/types"
+import {
+  LEGACY_SETUP_COMPLETED_STORAGE_KEY,
+  LEGACY_SETUP_DISMISSED_STORAGE_KEY,
+  LEGACY_SETUP_SHOWN_STORAGE_KEY,
+} from "../lib/storageKeys"
 import { useAppSettingsStore } from "../stores/appSettingsStore"
 import { useChatPreferencesStore } from "../stores/chatPreferencesStore"
 import { useChatSoundPreferencesStore } from "../stores/chatSoundPreferencesStore"
+import { useProviderAuthStore } from "../stores/providerAuthStore"
 import { useTerminalPreferencesStore } from "../stores/terminalPreferencesStore"
 import type { KannaSocket, SocketStatus } from "./socket"
 
@@ -123,6 +129,48 @@ function syncRuntimeStoresFromAppSettings(snapshot: AppSettingsSnapshot) {
   chatSoundPreferences.setChatSoundId(snapshot.chatSoundId)
 
   useChatPreferencesStore.getState().syncProviderDefaults(snapshot.defaultProvider, snapshot.providerDefaults)
+
+  useProviderAuthStore.getState().setSetupFlagsFromServer({
+    setupShown: snapshot.setupShown,
+    setupCompleted: snapshot.setupCompleted,
+    setupDismissed: snapshot.setupDismissed,
+  })
+}
+
+/**
+ * Onboarding markers used to live in this browser's localStorage, which meant
+ * every new browser (and every cloud visit) re-ran the wizard. They are now
+ * machine-wide settings; lift any legacy local flags up to the server once so
+ * the browser that completed setup doesn't get asked again after upgrading.
+ */
+function readLegacySetupFlagsPatch(snapshot: AppSettingsSnapshot): AppSettingsPatch | null {
+  if (typeof window === "undefined") return null
+
+  const patch: AppSettingsPatch = {}
+  const has = (key: string) => {
+    try {
+      return window.localStorage.getItem(key) !== null
+    } catch {
+      return false
+    }
+  }
+
+  if (!snapshot.setupShown && has(LEGACY_SETUP_SHOWN_STORAGE_KEY)) patch.setupShown = true
+  if (!snapshot.setupCompleted && has(LEGACY_SETUP_COMPLETED_STORAGE_KEY)) patch.setupCompleted = true
+  if (!snapshot.setupDismissed && has(LEGACY_SETUP_DISMISSED_STORAGE_KEY)) patch.setupDismissed = true
+
+  return Object.keys(patch).length > 0 ? patch : null
+}
+
+function clearLegacySetupFlags() {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.removeItem(LEGACY_SETUP_SHOWN_STORAGE_KEY)
+    window.localStorage.removeItem(LEGACY_SETUP_COMPLETED_STORAGE_KEY)
+    window.localStorage.removeItem(LEGACY_SETUP_DISMISSED_STORAGE_KEY)
+  } catch {
+    // Private mode etc. — the server copy is authoritative either way.
+  }
 }
 
 export function useAppSettingsSync(params: {
@@ -247,6 +295,19 @@ export function useAppSettingsSync(params: {
       .then(clearLegacyBrowserSettings)
       .catch(() => undefined)
   }, [appSettings?.browserSettingsMigrated, connectionStatus, handleWriteAppSettings])
+
+  useEffect(() => {
+    if (connectionStatus !== "connected") return
+    if (!appSettings) return
+    const patch = readLegacySetupFlagsPatch(appSettings)
+    if (!patch) {
+      clearLegacySetupFlags()
+      return
+    }
+    void handleWriteAppSettings(patch)
+      .then(clearLegacySetupFlags)
+      .catch(() => undefined)
+  }, [appSettings, connectionStatus, handleWriteAppSettings])
 
   useEffect(() => {
     if (connectionStatus !== "connected") return

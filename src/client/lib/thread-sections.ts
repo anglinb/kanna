@@ -103,9 +103,10 @@ export function getInProgressThreads(
  * date buckets so everything bearing on the current diff sits together instead
  * of scattered across Today / This Week / Last 30 Days.
  *
- * Sorted OLDEST first, matching Review and In Progress rather than the
- * temporal sections: this is a worklist, and the thing you touched longest ago
- * is the one you're most likely to have forgotten.
+ * Sorted NEWEST first, like the date buckets below it rather than the
+ * oldest-first Review / In Progress sections above: those two are queues you
+ * drain from the bottom, while this is a view of the diff you're in the middle
+ * of, where the chat you just touched is the one you want back.
  *
  * Archived chats never qualify, even when flagged — archiving is an explicit
  * "done here", and promoting one back to the top would fight that.
@@ -121,7 +122,7 @@ export function getRelevantThreads(
       // Empty new chats are hidden everywhere else; don't let the flag resurface one.
       && thread.row.lastMessageAt != null
       && Boolean(thread.row.uncommittedWork))
-    .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
+    .sort((left, right) => right.lastActivityAt - left.lastActivityAt)
 }
 
 /** How many chats the "Recents" section shows. */

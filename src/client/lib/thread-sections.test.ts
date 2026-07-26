@@ -363,16 +363,17 @@ describe("computeThreadDateBuckets", () => {
 })
 
 describe("getRelevantThreads", () => {
-  test("keeps only flagged chats, oldest first like Review and In Progress", () => {
+  test("keeps only flagged chats, newest first like the date buckets", () => {
     const data = makeData([
       makeChatRow({ chatId: "newer", title: "n", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
       makeChatRow({ chatId: "older", title: "o", uncommittedWork: true, lastMessageAt: at(2026, 7, 10) }),
       makeChatRow({ chatId: "clean", title: "c", lastMessageAt: at(2026, 7, 14) }),
     ])
 
-    // Oldest leads: this is a worklist, and the thing you touched longest ago is
-    // the one you're most likely to have forgotten.
-    expect(getRelevantThreads(flattenSidebarThreads(data)).map((t) => t.chatId)).toEqual(["older", "newer"])
+    // Newest leads: this is the diff you're in the middle of, so the chat you
+    // just touched is the one you want back. (Review / In Progress stay
+    // oldest-first — they're queues you drain.)
+    expect(getRelevantThreads(flattenSidebarThreads(data)).map((t) => t.chatId)).toEqual(["newer", "older"])
   })
 
   test("never surfaces archived chats, even when flagged", () => {
@@ -431,7 +432,7 @@ describe("computeSidebarThreadSections", () => {
     ])
 
     const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
-    expect(sections.relevant.map((t) => t.chatId)).toEqual(["dirty-old", "dirty-new"])
+    expect(sections.relevant.map((t) => t.chatId)).toEqual(["dirty-new", "dirty-old"])
     const bucketed = sections.buckets.flatMap((bucket) => bucket.threads.map((t) => t.chatId))
     expect(bucketed).toEqual(["clean"])
   })

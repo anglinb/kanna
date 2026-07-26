@@ -1001,6 +1001,14 @@ export interface AppSettingsSnapshot {
   newSidebarEnabled: boolean
   /** Base directory where cloned and newly created projects are placed. */
   newProjectsDirectory: string
+  /**
+   * Setup-wizard progress. Persisted per machine (not per browser) so signing
+   * in from a second browser — locally or through the cloud tunnel — never
+   * re-runs onboarding that was already finished or dismissed here.
+   */
+  setupShown: boolean
+  setupCompleted: boolean
+  setupDismissed: boolean
   warning: string | null
   filePathDisplay: string
   /**
@@ -1019,6 +1027,9 @@ export interface AppSettingsPatch {
   chatSoundId?: ChatSoundId
   newSidebarEnabled?: boolean
   newProjectsDirectory?: string
+  setupShown?: boolean
+  setupCompleted?: boolean
+  setupDismissed?: boolean
   terminal?: Partial<AppSettingsSnapshot["terminal"]>
   editor?: Partial<AppSettingsSnapshot["editor"]>
   defaultProvider?: DefaultProviderPreference

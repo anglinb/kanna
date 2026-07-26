@@ -3,32 +3,12 @@ import { create } from "zustand"
 import {
   authServiceForProvider,
   type AgentProvider,
+  type AppSettingsPatch,
   type AuthServiceId,
   type AuthServiceSnapshot,
   type ProviderAuthSnapshot,
 } from "../../shared/types"
 import type { KannaSocket } from "../app/socket"
-import {
-  SETUP_WIZARD_COMPLETED_STORAGE_KEY,
-  SETUP_WIZARD_DISMISSED_STORAGE_KEY,
-  SETUP_WIZARD_SHOWN_STORAGE_KEY,
-} from "../lib/storageKeys"
-
-function readStorageFlag(key: string): boolean {
-  try {
-    return window.localStorage.getItem(key) !== null
-  } catch {
-    return false
-  }
-}
-
-function writeStorageFlag(key: string) {
-  try {
-    window.localStorage.setItem(key, String(Date.now()))
-  } catch {
-    // Private mode etc. — the in-memory flag still applies for this session.
-  }
-}
 
 interface ProviderAuthStore {
   snapshot: ProviderAuthSnapshot | null
@@ -36,7 +16,14 @@ interface ProviderAuthStore {
   socket: KannaSocket | null
   /** Full-screen setup wizard visibility. */
   setupWizardOpen: boolean
-  /** The wizard has been shown at least once (persisted first-launch marker). */
+  /**
+   * The server's app-settings snapshot has arrived, so the three flags below
+   * reflect this machine rather than their pre-load defaults. Until then the
+   * auto-launch decision has to wait — otherwise a browser that has never
+   * connected would read `false` and re-run onboarding on every new browser.
+   */
+  setupLoaded: boolean
+  /** The wizard has been shown at least once (persisted per machine). */
   setupShown: boolean
   /** The wizard's final step was completed (persisted). Hides the Setup cards. */
   setupCompleted: boolean
@@ -44,6 +31,12 @@ interface ProviderAuthStore {
   setupDismissed: boolean
   setSnapshot: (snapshot: ProviderAuthSnapshot | null) => void
   setSocket: (socket: KannaSocket | null) => void
+  /** Adopt the machine-wide setup flags pushed on the `app-settings` topic. */
+  setSetupFlagsFromServer: (flags: {
+    setupShown: boolean
+    setupCompleted: boolean
+    setupDismissed: boolean
+  }) => void
   openSetupWizard: () => void
   /** Close without finishing — persists the dismissal so we never auto-launch again. */
   dismissSetupWizard: () => void
@@ -51,28 +44,53 @@ interface ProviderAuthStore {
   completeSetupWizard: () => void
 }
 
-export const useProviderAuthStore = create<ProviderAuthStore>((set) => ({
-  snapshot: null,
-  socket: null,
-  setupWizardOpen: false,
-  setupShown: readStorageFlag(SETUP_WIZARD_SHOWN_STORAGE_KEY),
-  setupCompleted: readStorageFlag(SETUP_WIZARD_COMPLETED_STORAGE_KEY),
-  setupDismissed: readStorageFlag(SETUP_WIZARD_DISMISSED_STORAGE_KEY),
-  setSnapshot: (snapshot) => set({ snapshot }),
-  setSocket: (socket) => set({ socket }),
-  openSetupWizard: () => {
-    writeStorageFlag(SETUP_WIZARD_SHOWN_STORAGE_KEY)
-    set({ setupWizardOpen: true, setupShown: true })
-  },
-  dismissSetupWizard: () => {
-    writeStorageFlag(SETUP_WIZARD_DISMISSED_STORAGE_KEY)
-    set({ setupWizardOpen: false, setupDismissed: true })
-  },
-  completeSetupWizard: () => {
-    writeStorageFlag(SETUP_WIZARD_COMPLETED_STORAGE_KEY)
-    set({ setupWizardOpen: false, setupCompleted: true, setupDismissed: true })
-  },
-}))
+export const useProviderAuthStore = create<ProviderAuthStore>((set, get) => {
+  /**
+   * Persist an onboarding marker on the machine. Fire-and-forget: the local
+   * flag is already set optimistically, and the server echoes the settings
+   * snapshot back on the `app-settings` topic to every connected browser.
+   */
+  const persistSetupFlags = (patch: AppSettingsPatch) => {
+    const { socket } = get()
+    if (!socket) return
+    void socket
+      .command({ type: "settings.writeAppSettingsPatch", patch })
+      .catch(() => undefined)
+  }
+
+  return {
+    snapshot: null,
+    socket: null,
+    setupWizardOpen: false,
+    setupLoaded: false,
+    setupShown: false,
+    setupCompleted: false,
+    setupDismissed: false,
+    setSnapshot: (snapshot) => set({ snapshot }),
+    setSocket: (socket) => set({ socket }),
+    setSetupFlagsFromServer: (flags) =>
+      set({
+        setupLoaded: true,
+        // Markers are one-way latches: never let a snapshot un-set a flag this
+        // browser just set optimistically while its write is still in flight.
+        setupShown: get().setupShown || flags.setupShown,
+        setupCompleted: get().setupCompleted || flags.setupCompleted,
+        setupDismissed: get().setupDismissed || flags.setupDismissed,
+      }),
+    openSetupWizard: () => {
+      persistSetupFlags({ setupShown: true })
+      set({ setupWizardOpen: true, setupShown: true })
+    },
+    dismissSetupWizard: () => {
+      persistSetupFlags({ setupDismissed: true })
+      set({ setupWizardOpen: false, setupDismissed: true })
+    },
+    completeSetupWizard: () => {
+      persistSetupFlags({ setupCompleted: true, setupDismissed: true })
+      set({ setupWizardOpen: false, setupCompleted: true, setupDismissed: true })
+    },
+  }
+})
 
 export function selectAuthService(
   snapshot: ProviderAuthSnapshot | null,
@@ -143,17 +161,28 @@ export function getSetupStatus(snapshot: ProviderAuthSnapshot | null): SetupStat
 /**
  * Auto-launch decision for the setup wizard on app load.
  *
- * First-ever launch ("shown" never persisted) opens IMMEDIATELY — the cards
- * inside render live "Checking…" states as the CLI probes resolve, so there
- * is nothing to wait for; if everything turns out connected the user just
- * sees checks and clicks through. Later launches wait for the probe round
+ * The flags are machine-wide (persisted in the server's settings file), so the
+ * decision has to wait for the first `app-settings` snapshot — a brand-new
+ * browser starts with all three false, and acting on that would re-run
+ * onboarding for every browser that ever visits this machine.
+ *
+ * Once loaded: a first-ever launch ("shown" never persisted) opens IMMEDIATELY
+ * — the cards inside render live "Checking…" states as the CLI probes resolve,
+ * so there is nothing to wait for; if everything turns out connected the user
+ * just sees checks and clicks through. Later launches wait for the probe round
  * (avoids flashing the wizard at fully-set-up users) and re-open only while
  * something the flow covers is still unconnected.
  */
 export function getSetupLaunchAction(
   snapshot: ProviderAuthSnapshot | null,
-  flags: { setupShown: boolean; setupCompleted: boolean; setupDismissed: boolean }
+  flags: {
+    setupLoaded: boolean
+    setupShown: boolean
+    setupCompleted: boolean
+    setupDismissed: boolean
+  }
 ): "open" | "wait" | "none" {
+  if (!flags.setupLoaded) return "wait"
   if (flags.setupCompleted || flags.setupDismissed) return "none"
   if (!flags.setupShown) return "open"
   const status = getSetupStatus(snapshot)
@@ -166,9 +195,14 @@ export function useSetupStatus(): SetupStatus {
   return useMemo(() => getSetupStatus(snapshot), [snapshot])
 }
 
-/** The Setup card (home + new-chat) shows until the wizard has been finished. */
+/**
+ * The Setup card (home + new-chat) shows until the wizard has been finished.
+ * Gated on `setupLoaded` too, so a machine that already completed setup never
+ * flashes the card at a fresh browser while the settings snapshot is in flight.
+ */
 export function useShowSetupCard(): boolean {
   const status = useSetupStatus()
+  const setupLoaded = useProviderAuthStore((store) => store.setupLoaded)
   const setupCompleted = useProviderAuthStore((store) => store.setupCompleted)
-  return status.resolved && status.missingAny && !setupCompleted
+  return setupLoaded && status.resolved && status.missingAny && !setupCompleted
 }

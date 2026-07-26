@@ -30,6 +30,8 @@ import {
   type LatestUserPrompt,
   type TranscriptScrollTarget,
 } from "./transcriptScrollAnchors"
+import { TranscriptMinimap } from "./TranscriptMinimap"
+import { buildTranscriptTurns, type TranscriptTurn } from "./transcriptTurns"
 import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
@@ -40,6 +42,20 @@ import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../..
 
 /** Max auto-fetched history pages per chat when the list is too short to scroll. */
 const MAX_HISTORY_AUTO_FILL_PAGES = 4
+
+/**
+ * LegendList state changes that can move which rows are on screen.
+ * `footerSize` is the one that catches a turn ending: the processing indicator
+ * and any error box live in the footer, outside `data`.
+ */
+const LIST_LAYOUT_EVENTS = ["lastPositionUpdate", "totalSize", "footerSize", "lastItemKeys"] as const
+
+/**
+ * Slack before the transcript counts as scrollable. Content and viewport rarely
+ * land on equal subpixel values, and a hairline of scroll is not something
+ * worth offering a map for.
+ */
+const OVERFLOW_EPSILON_PX = 8
 
 /** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
 const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
@@ -142,6 +158,16 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   }, [activeChatId])
 
   const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
+  const turns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
+
+  /**
+   * Rendered row window plus whether the list can scroll at all — together they
+   * drive the minimap, which only earns its space once there is something to
+   * navigate.
+   */
+  const [listGeometry, setListGeometry] = useState({ start: 0, end: 0, overflows: false })
+  /** Scroll pane width, driving whether the minimap has a gutter to live in. */
+  const [transcriptWidth, setTranscriptWidth] = useState(0)
 
   // Kept in a ref so the native scroll handler can read the current rows
   // without being re-created (and re-attached) on every transcript change.
@@ -268,7 +294,61 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     onReportReadAnchor(messageId, isAtEnd)
   }, [listRef, onReportReadAnchor])
 
+  /**
+   * Mirror the list's geometry into state for the minimap.
+   *
+   * `start`/`end` are already the on-screen range, so no measurement of our own.
+   * Overflow comes from the scroll node rather than LegendList's `contentLength`
+   * because only the node accounts for the header offset and the tall bottom
+   * padding that clears the input dock — a large share of this list's height.
+   */
+  const syncListGeometry = useCallback(() => {
+    const state = listRef.current?.getState?.()
+    if (!state) return
+    const { start, end } = state
+    if (typeof start !== "number" || typeof end !== "number") return
+
+    const scrollNode = listRef.current?.getScrollableNode?.()
+    const overflows = scrollNode instanceof HTMLElement
+      && scrollNode.scrollHeight - scrollNode.clientHeight > OVERFLOW_EPSILON_PX
+
+    setListGeometry((current) => (
+      current.start === start && current.end === end && current.overflows === overflows
+        ? current
+        : { start, end, overflows }
+    ))
+  }, [listRef])
+
+  /**
+   * Track the row window from LegendList's own layout events rather than from
+   * scroll events plus a guessed frame.
+   *
+   * Plenty of things move rows under a stationary scroll position and emit no
+   * `scroll` of their own — streaming, and especially a turn ending: the
+   * processing indicator leaves the footer and an error box may join it, which
+   * is a pure footer resize the row count never sees. Sampling one rAF after a
+   * data change also lands before virtualized rows have re-measured, so the
+   * range would stick until the next manual scroll.
+   */
+  useEffect(() => {
+    let unsubscribes: Array<() => void> = []
+
+    const frameId = window.requestAnimationFrame(() => {
+      const state = listRef.current?.getState?.()
+      if (!state?.listen) return
+      unsubscribes = LIST_LAYOUT_EVENTS.map((event) => state.listen(event, syncListGeometry))
+      syncListGeometry()
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      for (const unsubscribe of unsubscribes) unsubscribe()
+    }
+  }, [activeChatId, listRef, syncListGeometry])
+
   const handleScroll = useCallback((event?: unknown) => {
+    syncListGeometry()
+
     const currentTarget = (
       typeof event === "object"
       && event !== null
@@ -291,7 +371,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
       onIsAtEndChange(state.isAtEnd)
       reportTopVisibleMessage(state.isAtEnd)
     }
-  }, [listRef, onIsAtEndChange, reportTopVisibleMessage])
+  }, [listRef, onIsAtEndChange, reportTopVisibleMessage, syncListGeometry])
 
   useEffect(() => {
     let cleanup: (() => void) | undefined
@@ -313,12 +393,24 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
       }
       const userIntentEvents = ["wheel", "touchmove", "pointerdown", "keydown"] as const
 
+      // Resizing the pane changes both the gutter and whether the same content
+      // still overflows, neither of which emits a scroll or a list layout event.
+      const syncSize = () => {
+        const nextWidth = scrollNode.clientWidth
+        setTranscriptWidth((current) => (Math.abs(current - nextWidth) < 1 ? current : nextWidth))
+        syncListGeometry()
+      }
+      const sizeObserver = new ResizeObserver(syncSize)
+      sizeObserver.observe(scrollNode)
+      syncSize()
+
       scrollNode.addEventListener("scroll", handleNativeScroll, { passive: true })
       for (const eventName of userIntentEvents) {
         scrollNode.addEventListener(eventName, markUserScrolled, { passive: true })
       }
       handleNativeScroll()
       cleanup = () => {
+        sizeObserver.disconnect()
         scrollNode.removeEventListener("scroll", handleNativeScroll)
         for (const eventName of userIntentEvents) {
           scrollNode.removeEventListener(eventName, markUserScrolled)
@@ -338,6 +430,14 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     hasUserScrolledRef.current = true
     scrollToBottom()
   }, [scrollToBottom])
+
+  // Same reasoning as the scroll-to-bottom button: the minimap sits outside the
+  // scroll node, so it never trips the input listeners, but jumping to a turn is
+  // as deliberate a read-position choice as scrolling there by hand.
+  const handleSelectTurn = useCallback((turn: TranscriptTurn) => {
+    hasUserScrolledRef.current = true
+    applyScrollTarget({ kind: "pin", index: turn.rowIndex })
+  }, [applyScrollTarget])
 
   const handleStartReached = useCallback(() => {
     if (isHistoryLoading || !hasOlderHistory) {
@@ -487,6 +587,21 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
           ListFooterComponent={listFooter}
         />
       </OpenLocalLinkProvider>
+
+      {showEmptyState ? null : (
+        <TranscriptMinimap
+          turns={turns}
+          visibleStart={listGeometry.start}
+          visibleEnd={listGeometry.end}
+          transcriptOverflows={listGeometry.overflows}
+          topPx={headerOffsetPx}
+          // Match the empty state: transcriptPaddingBottom carries extra
+          // clearance the message list needs but overlays should not.
+          bottomPx={Math.max(0, transcriptPaddingBottom - TRANSCRIPT_PADDING_BOTTOM_OFFSET)}
+          containerWidthPx={transcriptWidth}
+          onSelectTurn={handleSelectTurn}
+        />
+      )}
 
       <ContextMenu onOpenChange={(open) => {
         if (!open) {

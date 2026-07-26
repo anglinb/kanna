@@ -23,6 +23,9 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
     devbox: false,
     analyticsEnabled: true,
     browserSettingsMigrated: false,
+    setupShown: false,
+    setupCompleted: false,
+    setupDismissed: false,
     theme: "system",
     chatSoundPreference: "always",
     chatSoundId: "funk",
@@ -202,6 +205,34 @@ describe("AppSettingsManager", () => {
     expect(nextPayload.analyticsUserId).toBe(initialPayload.analyticsUserId)
 
     manager.dispose()
+  })
+
+  test("persists setup-wizard markers across restarts so onboarding is per machine", async () => {
+    const filePath = await createTempFilePath()
+    const manager = new AppSettingsManager(filePath)
+
+    await manager.initialize()
+    expect(manager.getSnapshot().setupCompleted).toBe(false)
+
+    await manager.writePatch({ setupShown: true, setupCompleted: true, setupDismissed: true })
+
+    const payload = JSON.parse(await readFile(filePath, "utf8")) as {
+      setupShown: boolean
+      setupCompleted: boolean
+      setupDismissed: boolean
+    }
+    expect(payload).toMatchObject({ setupShown: true, setupCompleted: true, setupDismissed: true })
+    manager.dispose()
+
+    // A second process (or any other browser) reads the same completed state.
+    const reopened = new AppSettingsManager(filePath)
+    await reopened.initialize()
+    expect(reopened.getSnapshot()).toMatchObject({
+      setupShown: true,
+      setupCompleted: true,
+      setupDismissed: true,
+    })
+    reopened.dispose()
   })
 
   test("patches expanded settings without replacing the stored user id", async () => {

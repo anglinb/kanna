@@ -46,6 +46,9 @@ interface AppSettingsFile {
   }
   newSidebarEnabled?: unknown
   newProjectsDirectory?: unknown
+  setupShown?: unknown
+  setupCompleted?: unknown
+  setupDismissed?: unknown
 }
 
 // devbox is a server-runtime fact (the --cloud flag), not settings state.
@@ -150,6 +153,9 @@ function toFilePayload(state: AppSettingsState) {
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
     newProjectsDirectory: state.newProjectsDirectory,
+    setupShown: state.setupShown,
+    setupCompleted: state.setupCompleted,
+    setupDismissed: state.setupDismissed,
   }
 }
 
@@ -167,6 +173,9 @@ function toSnapshot(state: AppSettingsState, devbox = false): AppSettingsSnapsho
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
     newProjectsDirectory: state.newProjectsDirectory,
+    setupShown: state.setupShown,
+    setupCompleted: state.setupCompleted,
+    setupDismissed: state.setupDismissed,
     warning: state.warning,
     filePathDisplay: state.filePathDisplay,
   }
@@ -236,6 +245,11 @@ function normalizeAppSettings(
     providerDefaults: normalizeProviderDefaults(source?.providerDefaults),
     newSidebarEnabled,
     newProjectsDirectory,
+    // Onboarding markers default to false so a machine that has never run the
+    // wizard still gets it; once set they stay set for every browser.
+    setupShown: source?.setupShown === true,
+    setupCompleted: source?.setupCompleted === true,
+    setupDismissed: source?.setupDismissed === true,
     warning: null,
     filePathDisplay: formatDisplayPath(filePath),
   }
@@ -268,6 +282,9 @@ function toComparablePayload(source: AppSettingsFile) {
     newProjectsDirectory: typeof source.newProjectsDirectory === "string"
       ? source.newProjectsDirectory.trim()
       : source.newProjectsDirectory,
+    setupShown: source.setupShown,
+    setupCompleted: source.setupCompleted,
+    setupDismissed: source.setupDismissed,
   }
 }
 

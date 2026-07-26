@@ -221,20 +221,28 @@ function KannaLayout() {
   // opens the wizard instantly — cards show live probe status inside — while
   // later launches wait for the probe round and re-open only when something
   // is still unconnected. Decided at most once per app load; "Set up later"
-  // and a completed run are both persisted and suppress future launches.
+  // and a completed run are both persisted per machine (server settings, not
+  // this browser's localStorage) and suppress future launches everywhere, so
+  // we also wait for `setupLoaded` before deciding anything.
   const authSnapshot = useProviderAuthStore((store) => store.snapshot)
+  const setupLoaded = useProviderAuthStore((store) => store.setupLoaded)
   const setupLaunchDecidedRef = useRef(false)
   useEffect(() => {
     if (setupLaunchDecidedRef.current) return
     const { setupShown, setupCompleted, setupDismissed, openSetupWizard } =
       useProviderAuthStore.getState()
-    const action = getSetupLaunchAction(authSnapshot, { setupShown, setupCompleted, setupDismissed })
+    const action = getSetupLaunchAction(authSnapshot, {
+      setupLoaded,
+      setupShown,
+      setupCompleted,
+      setupDismissed,
+    })
     if (action === "wait") return
     setupLaunchDecidedRef.current = true
     if (action === "open") {
       openSetupWizard()
     }
-  }, [authSnapshot])
+  }, [authSnapshot, setupLoaded])
 
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
