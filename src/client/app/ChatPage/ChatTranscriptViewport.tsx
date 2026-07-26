@@ -41,16 +41,6 @@ import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../..
 /** Max auto-fetched history pages per chat when the list is too short to scroll. */
 const MAX_HISTORY_AUTO_FILL_PAGES = 4
 
-/**
- * Blank space held below the transcript while a turn is streaming, so a freshly
- * sent prompt (which is the last row, with nothing beneath it) has something to
- * scroll against and can rise toward the top of the viewport.
- *
- * Smaller on mobile, where a quarter of the viewport is a lot of dead space and
- * the on-screen keyboard already eats into the visible transcript.
- */
-const STREAMING_TAIL_SPACER_CLASS = "h-[10vh] md:h-[25vh]"
-
 /** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
 const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
 
@@ -468,9 +458,6 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
         <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {commandError}
         </div>
-      ) : null}
-      {isProcessing || isDraining ? (
-        <div className={STREAMING_TAIL_SPACER_CLASS} aria-hidden="true" />
       ) : null}
     </div>
   )
