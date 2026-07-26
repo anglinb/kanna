@@ -176,9 +176,12 @@ describe("WorktreeProbe", () => {
       changes += 1
     })
 
-    probe.recordExternalProbe("project-1", { dirty: true, dirtySinceMs: 1_234 })
+    // A real mtime, not a synthetic small number: the anchor floor discards
+    // anything older than a week, and epoch-1970 would be silently dropped.
+    const mtimeMs = Date.now() - 60_000
+    probe.recordExternalProbe("project-1", { dirty: true, files: [{ path: "a.txt", mtimeMs }] })
 
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: true, dirtySinceMs: 1_234 })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: true, dirtySinceMs: mtimeMs })
     expect(changes).toBe(1)
   })
 
@@ -372,5 +375,113 @@ describe("WorktreeProbe integration", () => {
 
     expect(sidebar.projectGroups[0]?.repoName).toBe(path.basename(repoRoot))
     expect(sidebar.projectGroups[0]?.branchName).toBe("main")
+  })
+})
+
+/**
+ * The anchor has to survive operations that rewrite the working tree without
+ * changing what is dirty. `git pull --rebase --autostash` is the one that bit
+ * us: it pops the stash, rewriting still-dirty files, so their mtimes jump to
+ * now. Reading mtimes fresh each time made dirtySinceMs leap forward past
+ * chats that were correctly flagged before the pull.
+ */
+describe("WorktreeProbe dirty-since ledger", () => {
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  const NOON = 1_800_000_000_000
+
+  function probeWith(onChange = () => {}) {
+    const state = createEmptyState()
+    return new WorktreeProbe(() => state, onChange)
+  }
+
+  test("keeps the first-seen time when a path's mtime later churns", async () => {
+    const probe = probeWith()
+
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON }] })
+    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON)
+
+    // The pull: same path, same content, brand-new mtime.
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON + 30 * 60_000 }] })
+
+    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON)
+  })
+
+  test("a chat flagged before a pull stays flagged after it", async () => {
+    const probe = probeWith()
+    const turnEndedAt = NOON + 5 * 60_000
+
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON }] })
+    const beforePull = probe.getStates().get("p")!
+    expect(turnEndedAt > beforePull.dirtySinceMs!).toBe(true)
+
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON + 30 * 60_000 }] })
+    const afterPull = probe.getStates().get("p")!
+
+    // The whole point of the ledger.
+    expect(turnEndedAt > afterPull.dirtySinceMs!).toBe(true)
+  })
+
+  test("a newly dirtied path cannot pull the anchor backwards", async () => {
+    const probe = probeWith()
+
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "a.txt", mtimeMs: NOON }] })
+    probe.recordExternalProbe("p", {
+      dirty: true,
+      files: [{ path: "a.txt", mtimeMs: NOON }, { path: "b.txt", mtimeMs: NOON + 60_000 }],
+    })
+
+    // Oldest still wins; the new file just joins the episode.
+    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON)
+  })
+
+  test("a path that goes clean drops out of the anchor", async () => {
+    const probe = probeWith()
+
+    probe.recordExternalProbe("p", {
+      dirty: true,
+      files: [{ path: "old.txt", mtimeMs: NOON }, { path: "new.txt", mtimeMs: NOON + 60_000 }],
+    })
+    // old.txt was committed; only new.txt is still dirty.
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "new.txt", mtimeMs: NOON + 60_000 }] })
+
+    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON + 60_000)
+  })
+
+  test("a clean tree clears the ledger, so a re-dirtied path starts a new episode", async () => {
+    const probe = probeWith()
+
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON }] })
+    probe.recordExternalProbe("p", { dirty: false, files: [] })
+    expect(probe.getStates().get("p")).toEqual({ dirty: false })
+
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON + 60_000 }] })
+
+    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON + 60_000)
+  })
+
+  test("ignores first-seen times older than the anchor floor", async () => {
+    const probe = probeWith()
+    const stale = Date.now() - 30 * 24 * 60 * 60 * 1000
+    const recent = Date.now()
+
+    probe.recordExternalProbe("p", {
+      dirty: true,
+      files: [{ path: "stale.txt", mtimeMs: stale }, { path: "recent.txt", mtimeMs: recent }],
+    })
+
+    // A long-lived scratch file must not pin the anchor weeks back.
+    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(recent)
+  })
+
+  test("dirty with every path stale reports no anchor at all", async () => {
+    const probe = probeWith()
+    const stale = Date.now() - 30 * 24 * 60 * 60 * 1000
+
+    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "stale.txt", mtimeMs: stale }] })
+
+    expect(probe.getStates().get("p")).toEqual({ dirty: true })
   })
 })

@@ -956,13 +956,30 @@ async function mapWithConcurrency<T, R>(
  * snapshot version, and costs one `git status` (plus a bounded stat fan-out)
  * rather than the ~6 git commands `performRefresh` runs.
  */
+/**
+ * A raw look at the working tree: is it dirty, and what are the current mtimes
+ * of the dirty files.
+ *
+ * Deliberately *not* a "when did this get dirty" answer. Raw mtimes can't carry
+ * that on their own — `git pull --rebase --autostash` pops the stash and
+ * rewrites your still-dirty files, so their mtimes jump to now even though the
+ * content never changed. Same for a rebase, a branch switch, or a formatter
+ * sweep. `WorktreeProbe` turns these readings into a stable `dirtySinceMs` by
+ * remembering when each path was *first* seen dirty.
+ */
+export interface WorkingTreeScan {
+  dirty: boolean
+  /** Dirty paths that exist on disk. Deletions are omitted — nothing to stat. */
+  files: Array<{ path: string; mtimeMs: number }>
+}
+
+/** Derived from a series of `WorkingTreeScan`s — see `WorktreeProbe`. */
 export interface WorkingTreeProbe {
   dirty: boolean
   /**
-   * Oldest mtime among dirty files — when the current dirty episode began.
-   * Absent when the tree is clean, when every dirty entry is a deletion (no
-   * file left to stat), or when all dirty files are older than
-   * `DIRTY_ANCHOR_MAX_AGE_MS`.
+   * When the current dirty episode began. Absent when the tree is clean, when
+   * every dirty entry is a deletion (no file left to stat), or when everything
+   * dirty is older than `DIRTY_ANCHOR_MAX_AGE_MS`.
    */
   dirtySinceMs?: number
 }
@@ -978,11 +995,11 @@ export interface WorkingTreeLocation {
  * which makes every "was this chat active since the tree got dirty?" comparison
  * trivially true forever.
  */
-const DIRTY_ANCHOR_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+export const DIRTY_ANCHOR_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /**
- * We only need the *minimum* mtime, so sampling is safe: a min over a subset can
- * only land later than the true min, i.e. err toward reporting less recent
- * dirt. Keeps a repo with a huge untracked tree from stalling the probe.
+ * We only need the *minimum* first-seen time, so sampling is safe: a min over a
+ * subset can only land later than the true min, i.e. err toward reporting less
+ * recent dirt. Keeps a repo with a huge untracked tree from stalling the probe.
  */
 const DIRTY_PROBE_MAX_FILES = 200
 
@@ -1003,17 +1020,17 @@ export async function resolveWorkingTreeLocation(projectPath: string): Promise<W
   return gitDir ? { repoRoot, gitDir } : null
 }
 
-/** Never throws — a probe failure is reported as "not dirty", not an error. */
-export async function probeWorkingTree(repoRoot: string): Promise<WorkingTreeProbe> {
+/** Never throws — a probe failure is reported as a clean tree, not an error. */
+export async function probeWorkingTree(repoRoot: string): Promise<WorkingTreeScan> {
   let dirtyPaths: DirtyPathEntry[]
   try {
     dirtyPaths = await listDirtyPaths(repoRoot, { noOptionalLocks: true })
   } catch {
-    return { dirty: false }
+    return { dirty: false, files: [] }
   }
 
   if (dirtyPaths.length === 0) {
-    return { dirty: false }
+    return { dirty: false, files: [] }
   }
 
   // Deletions have no worktree file to stat, so they can't anchor the window.
@@ -1021,21 +1038,14 @@ export async function probeWorkingTree(repoRoot: string): Promise<WorkingTreePro
     .filter((entry) => entry.changeType !== "deleted")
     .slice(0, DIRTY_PROBE_MAX_FILES)
 
-  const anchorFloorMs = Date.now() - DIRTY_ANCHOR_MAX_AGE_MS
-  const mtimes = await mapWithConcurrency(candidates, FILE_SCAN_CONCURRENCY, async (entry) => {
+  const scanned = await mapWithConcurrency(candidates, FILE_SCAN_CONCURRENCY, async (entry) => {
     const fileInfo = await stat(path.join(repoRoot, entry.path)).catch(() => null)
-    return fileInfo?.isFile() ? fileInfo.mtimeMs : null
+    return fileInfo?.isFile() ? { path: entry.path, mtimeMs: fileInfo.mtimeMs } : null
   })
 
-  let dirtySinceMs: number | undefined
-  for (const mtimeMs of mtimes) {
-    if (mtimeMs === null || mtimeMs < anchorFloorMs) continue
-    if (dirtySinceMs === undefined || mtimeMs < dirtySinceMs) {
-      dirtySinceMs = mtimeMs
-    }
-  }
-
-  return dirtySinceMs === undefined ? { dirty: true } : { dirty: true, dirtySinceMs }
+  // `dirty` stays true even when nothing was stat-able (a deletion-only tree):
+  // the tree really is dirty, we just have no anchor for it.
+  return { dirty: true, files: scanned.filter((file): file is { path: string; mtimeMs: number } => file !== null) }
 }
 
 async function countFileLines(absolutePath: string, size: number): Promise<number> {
@@ -1153,19 +1163,17 @@ async function computeCurrentFiles(
   repoRoot: string,
   baseCommit: string | null,
   lineCounts?: { cache: LineCountCache; nextCache: LineCountCache }
-): Promise<{ files: ChatDiffFile[]; dirtySinceMs?: number }> {
+): Promise<{ files: ChatDiffFile[]; scan: WorkingTreeScan }> {
   const currentDirtyPaths = await listDirtyPaths(repoRoot)
   const trackedStatsByPath = await getTrackedDiffStats(repoRoot, baseCommit)
   const lineCountCache = lineCounts?.cache ?? new Map<string, LineCountCacheEntry>()
   const nextLineCountCache = lineCounts?.nextCache ?? new Map<string, LineCountCacheEntry>()
 
-  // This scan already stats every dirty file, so the working-tree probe's
-  // `dirtySinceMs` comes along for free — no extra git or stat calls. Keeps the
-  // sidebar's uncommitted-work dot current for whichever project the client is
+  // This scan already stats every dirty file, so the working-tree reading comes
+  // along for free — no extra git or stat calls. Keeps the sidebar's
+  // uncommitted-work signal current for whichever project the client is
   // refreshing, and clears it the instant a commit goes through Kanna.
-  // Mirrors `probeWorkingTree`: same anchor floor, deletions can't anchor.
-  const anchorFloorMs = Date.now() - DIRTY_ANCHOR_MAX_AGE_MS
-  let dirtySinceMs: number | undefined
+  const scanFiles: Array<{ path: string; mtimeMs: number }> = []
 
   const files = await mapWithConcurrency(currentDirtyPaths, FILE_SCAN_CONCURRENCY, async (entry): Promise<ChatDiffFile | null> => {
     const relativePath = entry.path
@@ -1183,8 +1191,8 @@ async function computeCurrentFiles(
     const size = isFile ? fileInfo!.size : undefined
     const mtimeMs = isFile ? fileInfo!.mtimeMs : undefined
 
-    if (mtimeMs !== undefined && mtimeMs >= anchorFloorMs && (dirtySinceMs === undefined || mtimeMs < dirtySinceMs)) {
-      dirtySinceMs = mtimeMs
+    if (mtimeMs !== undefined) {
+      scanFiles.push({ path: relativePath, mtimeMs })
     }
 
     const trackedStats = trackedStatsByPath.get(relativePath)
@@ -1222,7 +1230,7 @@ async function computeCurrentFiles(
 
   return {
     files: files.filter((file): file is ChatDiffFile => file !== null),
-    dirtySinceMs,
+    scan: { dirty: currentDirtyPaths.length > 0, files: scanFiles },
   }
 }
 
@@ -1305,7 +1313,7 @@ export class DiffStore {
    * on a scan that already stat'ed every dirty file. A callback rather than a
    * direct import because `worktree-probe.ts` imports from this module.
    */
-  onWorkingTreeProbe?: (projectId: string, probe: WorkingTreeProbe) => void
+  onWorkingTreeProbe?: (projectId: string, scan: WorkingTreeScan) => void
 
   private getPrBranchKey(repoRoot: string, branchName: string) {
     return `${repoRoot}\n${branchName}`
@@ -1616,7 +1624,7 @@ export class DiffStore {
     const repo = await resolveRepo(projectPath)
     if (!repo) {
       this.lineCountCaches.delete(projectId)
-      this.onWorkingTreeProbe?.(projectId, { dirty: false })
+      this.onWorkingTreeProbe?.(projectId, { dirty: false, files: [] })
       const nextState = {
         status: "no_repo",
         branchName: undefined,
@@ -1650,10 +1658,7 @@ export class DiffStore {
     ])
     this.lineCountCaches.set(projectId, nextLineCountCache)
     const files = currentFiles.files
-    this.onWorkingTreeProbe?.(projectId, {
-      dirty: files.length > 0,
-      ...(currentFiles.dirtySinceMs === undefined ? {} : { dirtySinceMs: currentFiles.dirtySinceMs }),
-    })
+    this.onWorkingTreeProbe?.(projectId, currentFiles.scan)
     const hasOriginRemote = originRemoteUrl !== null
     const originRepoSlug = extractGitHubRepoSlug(originRemoteUrl) ?? undefined
     const [upstreamCounts, branchHistory] = await Promise.all([

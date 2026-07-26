@@ -5,7 +5,9 @@ import {
   probeWorkingTree,
   resolveWorkingTreeLocation,
   type WorkingTreeLocation,
+  DIRTY_ANCHOR_MAX_AGE_MS,
   type WorkingTreeProbe,
+  type WorkingTreeScan,
 } from "./diff-store"
 
 /**
@@ -86,6 +88,11 @@ async function readHeadBranch(gitDir: string) {
 export class WorktreeProbe {
   private readonly entries = new Map<string, ProjectProbeEntry>()
   private readonly probes = new Map<string, WorkingTreeProbe>()
+  /**
+   * projectId -> path -> when that path was first seen dirty. Sticky against
+   * mtime churn from pull/rebase/checkout; see `foldScanIntoLedger`.
+   */
+  private readonly dirtySinceByPath = new Map<string, Map<string, number>>()
   /** Absent for projects that aren't in a repo (or haven't been resolved yet). */
   private readonly repoLabels = new Map<string, ProjectRepoLabel>()
   private timer: ReturnType<typeof setInterval> | null = null
@@ -131,8 +138,8 @@ export class WorktreeProbe {
    * (see `DiffStore.onWorkingTreeProbe`). Also refreshes the stamp so the tick
    * doesn't immediately redo the same scan.
    */
-  recordExternalProbe(projectId: string, probe: WorkingTreeProbe) {
-    void this.applyProbe(projectId, probe)
+  recordExternalProbe(projectId: string, scan: WorkingTreeScan) {
+    void this.applyProbe(projectId, scan)
   }
 
   /** Full probe for a single project. Called when one of its turns ends. */
@@ -144,7 +151,7 @@ export class WorktreeProbe {
       const entry = await this.ensureEntry(projectId, project.localPath)
       if (!entry.location) {
         this.applyRepoLabel(projectId, null)
-        await this.applyProbe(projectId, { dirty: false })
+        await this.applyProbe(projectId, { dirty: false, files: [] })
         return
       }
       this.applyRepoLabel(projectId, await this.readRepoLabel(entry.location))
@@ -283,7 +290,46 @@ export class WorktreeProbe {
     this.notifyChanged()
   }
 
-  private async applyProbe(projectId: string, probe: WorkingTreeProbe) {
+  /**
+   * Fold a raw scan into the per-path ledger and derive `dirtySinceMs`.
+   *
+   * A path keeps whatever timestamp it was *first* seen with. That's the whole
+   * point: `git pull --rebase --autostash` pops the stash and rewrites your
+   * still-dirty files, so their mtimes jump to now. Reading mtimes fresh each
+   * time made `dirtySinceMs` leap forward past chats that were correctly
+   * flagged before the pull, silently un-flagging them. A rebase, a branch
+   * switch, or a formatter sweep does the same.
+   *
+   * Paths that go clean drop out, so committing still clears the anchor. A
+   * path that goes clean and dirties again re-enters with a fresh timestamp,
+   * which is correct — that is a new episode.
+   */
+  private foldScanIntoLedger(projectId: string, scan: WorkingTreeScan): WorkingTreeProbe {
+    if (!scan.dirty) {
+      this.dirtySinceByPath.delete(projectId)
+      return { dirty: false }
+    }
+
+    const previous = this.dirtySinceByPath.get(projectId)
+    const next = new Map<string, number>()
+    for (const file of scan.files) {
+      next.set(file.path, previous?.get(file.path) ?? file.mtimeMs)
+    }
+    this.dirtySinceByPath.set(projectId, next)
+
+    const anchorFloorMs = Date.now() - DIRTY_ANCHOR_MAX_AGE_MS
+    let dirtySinceMs: number | undefined
+    for (const firstSeenMs of next.values()) {
+      if (firstSeenMs < anchorFloorMs) continue
+      if (dirtySinceMs === undefined || firstSeenMs < dirtySinceMs) {
+        dirtySinceMs = firstSeenMs
+      }
+    }
+    return dirtySinceMs === undefined ? { dirty: true } : { dirty: true, dirtySinceMs }
+  }
+
+  private async applyProbe(projectId: string, scan: WorkingTreeScan) {
+    const probe = this.foldScanIntoLedger(projectId, scan)
     // Publish before the stamp read so `getStates()` is correct the moment this
     // returns control — `recordExternalProbe` doesn't await us.
     const changed = !probesEqual(this.probes.get(projectId), probe)
