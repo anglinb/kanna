@@ -45,8 +45,11 @@ const MAX_HISTORY_AUTO_FILL_PAGES = 4
  * Blank space held below the transcript while a turn is streaming, so a freshly
  * sent prompt (which is the last row, with nothing beneath it) has something to
  * scroll against and can rise toward the top of the viewport.
+ *
+ * Smaller on mobile, where a quarter of the viewport is a lot of dead space and
+ * the on-screen keyboard already eats into the visible transcript.
  */
-const STREAMING_TAIL_SPACER_CLASS = "h-[25vh]"
+const STREAMING_TAIL_SPACER_CLASS = "h-[10vh] md:h-[25vh]"
 
 /** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
 const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
