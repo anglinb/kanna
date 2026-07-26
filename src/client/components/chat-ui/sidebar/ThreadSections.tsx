@@ -50,11 +50,9 @@ function SectionHeader({
           at the same left edge — including the non-collapsible In Progress /
           Review headers, which have no chevron to occupy a leading slot. */}
       <div className="flex items-center gap-1.5">
-        {/* Faint by design: in this tab the chat rows carry full contrast, so
-            the section labels stay quiet chrome you scan past. (The Projects
-            tab is the other way round — full-contrast project headers over
-            dimmable rows.) */}
-        <span className="max-w-[150px] truncate whitespace-nowrap text-sm text-slate-500 max-md:text-base dark:text-slate-400">{label}</span>
+        {/* No colour class: inherits full contrast, matching the Projects tab's
+            project headers. These are structural labels, not de-emphasised text. */}
+        <span className="max-w-[150px] truncate whitespace-nowrap text-sm max-md:text-base">{label}</span>
         {collapsible ? (
           <span className="relative size-3.5 shrink-0">
               <ChevronRight
@@ -181,7 +179,6 @@ function ThreadSectionsImpl({
       isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
       editorLabel={editorLabel}
       detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
-      dimIdleTitles={false}
       onSelect={onSelectChat}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
@@ -267,7 +264,6 @@ function ThreadSectionsImpl({
                     isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
                     editorLabel={editorLabel}
                     detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
-                    dimIdleTitles={false}
                     onSelect={onOpenArchivedChat}
                     onCreateChat={onCreateChat}
                     onRenameChat={onRenameChat}

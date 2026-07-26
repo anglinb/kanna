@@ -20,7 +20,6 @@ export function ThreadRow({
   archived = false,
   editorLabel,
   detailLabel,
-  dimIdleTitles = true,
   onSelect,
   onCreateChat,
   onRenameChat,
@@ -39,14 +38,6 @@ export function ThreadRow({
   editorLabel: string
   /** From `getThreadDetailLabel`; a node only for transient chrome (keycap). */
   detailLabel: ReactNode
-  /**
-   * Fade idle/read titles (see `ThreadRowContent`). The Projects tab keeps it —
-   * a project's chat list is a long backlog where read rows should recede. The
-   * Chats tab turns it off: its rows are already filtered into
-   * In Progress / Review / recent-day sections, so the *section* carries the
-   * emphasis and dimming inside one would just fight it.
-   */
-  dimIdleTitles?: boolean
   onSelect: (chatId: string) => void
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
@@ -135,7 +126,6 @@ export function ThreadRow({
           thread={thread}
           showStatus
           isActive={isActive}
-          dimIdleTitles={dimIdleTitles}
           detailLabel={detailLabel}
           hoverActions={hoverActions}
         />
