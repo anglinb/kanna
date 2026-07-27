@@ -991,14 +991,10 @@ export function ChatPage() {
           transcriptPaddingBottom={transcriptPaddingBottom}
           localPath={state.runtime?.localPath}
           latestToolIds={state.latestToolIds}
-          isHistoryLoading={state.isHistoryLoading}
-          hasOlderHistory={state.hasOlderHistory}
           isProcessing={state.isProcessing}
           runtimeStatus={state.runtimeStatus}
           isDraining={state.isDraining}
           commandError={state.commandError}
-          loadOlderHistory={state.loadOlderHistory}
-          chatTurnIndex={state.chatTurnIndex}
           onStopDraining={state.handleStopDraining}
           onSteerQueuedMessage={state.handleSteerQueuedMessage}
           onRemoveQueuedMessage={state.handleRemoveQueuedMessage}

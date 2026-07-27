@@ -147,6 +147,7 @@ export function deriveSidebarData(
           provider: chat.provider,
           lastMessageAt: chat.lastMessageAt,
           ...(chat.lastTurnEndedAt != null ? { lastTurnEndedAt: chat.lastTurnEndedAt } : {}),
+          ...(chat.lastAgentMessageAt != null ? { lastAgentMessageAt: chat.lastAgentMessageAt } : {}),
           ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
           ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
           ...(pendingToolKind ? { pendingToolKind } : {}),
@@ -170,6 +171,7 @@ export function deriveSidebarData(
       ...(project.sidebarTitle ? { sidebarTitle: project.sidebarTitle } : {}),
       ...(repoLabel ? { repoName: repoLabel.repoName } : {}),
       ...(repoLabel?.branchName ? { branchName: repoLabel.branchName } : {}),
+      ...(repoLabel?.repoOwner ? { repoOwner: repoLabel.repoOwner } : {}),
       localPath: project.localPath,
       chats,
       previewChats,
@@ -267,7 +269,7 @@ export function deriveChatSnapshot(
   activeStatuses: Map<string, KannaStatus>,
   drainingChatIds: Set<string>,
   chatId: string,
-  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "history" | "readAnchor">
+  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "readAnchor">
 ): ChatSnapshot | null {
   const chat = state.chatsById.get(chatId)
   if (!chat || chat.deletedAt) return null
@@ -297,7 +299,6 @@ export function deriveChatSnapshot(
     })),
     messages: transcript.messages,
     startIndex: transcript.startIndex,
-    history: transcript.history,
     availableProviders: [...SERVER_PROVIDERS],
     readAnchor: transcript.readAnchor,
   }

@@ -3,7 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { SubscriptionTopic } from "../shared/protocol"
-import type { TranscriptEntry } from "../shared/types"
+import type { ChatSnapshot, TranscriptEntry } from "../shared/types"
+import { applyIncrementalChatSnapshot } from "../client/app/snapshotEquality"
 import { createEmptyState } from "./events"
 import { createWsRouter } from "./ws-router"
 
@@ -44,8 +45,27 @@ class FakeWebSocket {
     return this.sent.filter((entry) => entry.type === "snapshot" && entry.id === id)
   }
 
+  /**
+   * The state this socket actually holds for a topic.
+   *
+   * Chat frames may be incremental — carrying only the entries appended since
+   * the last push — so the latest frame alone is not the socket's state. Folding
+   * them is exactly what the client does, and it is what makes "every
+   * subscriber ends up current" checkable against a fresh subscriber, whose
+   * first frame is always whole.
+   */
   lastSnapshot(id: string) {
-    return this.snapshotsById(id).at(-1)?.snapshot
+    const frames = this.snapshotsById(id)
+    const latest = frames.at(-1)?.snapshot
+    if (!latest || latest.type !== "chat" || !latest.data) return latest
+
+    let folded: ChatSnapshot | null = null
+    for (const frame of frames) {
+      const snapshot = frame.snapshot
+      if (snapshot?.type !== "chat") continue
+      folded = applyIncrementalChatSnapshot(folded, snapshot.data as ChatSnapshot | null) ?? folded
+    }
+    return folded ? { type: "chat" as const, data: folded } : latest
   }
 }
 
@@ -151,9 +171,10 @@ function createWorld(options?: { projectPath?: string }) {
       if (!chat || (chat as { deletedAt?: number | null }).deletedAt) return null
       return chat
     },
-    getRecentChatHistory: (chatId: string) => ({
+    getClientTranscript: (chatId: string) => ({
       messages: [...(messagesByChatId.get(chatId) ?? [])],
-      history: { hasOlder: false, olderCursor: null },
+      startIndex: 0,
+      readAnchor: null,
     }),
     openProject: async (localPath: string, title?: string) => {
       const existingId = state.projectIdsByPath.get(localPath)

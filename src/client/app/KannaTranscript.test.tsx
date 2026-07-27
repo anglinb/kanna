@@ -14,11 +14,10 @@ import {
 const ROW_WRAPPER_CLASS = "mx-auto max-w-[800px] pb-5"
 
 // Minimal test harness mirroring how ChatTranscriptViewport renders resolved rows.
-function TestTranscript({ messages, hasOlderHistory }: { messages: HydratedTranscriptMessage[]; hasOlderHistory?: boolean }) {
+function TestTranscript({ messages }: { messages: HydratedTranscriptMessage[] }) {
   const rows = buildResolvedTranscriptRows(messages, {
     isLoading: false,
     latestToolIds: { AskUserQuestion: null, ExitPlanMode: null, TodoWrite: null },
-    hasOlderHistory,
   })
 
   return (
@@ -41,8 +40,8 @@ function TestTranscript({ messages, hasOlderHistory }: { messages: HydratedTrans
   )
 }
 
-function renderTranscript(messages: HydratedTranscriptMessage[], hasOlderHistory?: boolean) {
-  return renderToStaticMarkup(<TestTranscript messages={messages} hasOlderHistory={hasOlderHistory} />)
+function renderTranscript(messages: HydratedTranscriptMessage[]) {
+  return renderToStaticMarkup(<TestTranscript messages={messages} />)
 }
 
 function countRowWrappers(html: string) {
@@ -478,46 +477,7 @@ Please check the latest error first.`,
     expect(html).not.toContain("Model Changed")
   })
 
-  test("suppresses window-first system and account rows while older history is unloaded", () => {
-    const messages: HydratedTranscriptMessage[] = [
-      {
-        id: "user-1",
-        kind: "user_prompt",
-        content: "Back after a while",
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: "system-resume-1",
-        kind: "system_init",
-        provider: "claude",
-        model: "claude-opus-4-8",
-        tools: [],
-        agents: [],
-        slashCommands: [],
-        mcpServers: [],
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: "account-resume-1",
-        kind: "account_info",
-        accountInfo: { email: "a@example.com", subscriptionType: "Pro" },
-        timestamp: new Date().toISOString(),
-      },
-    ]
-
-    // The loaded window starts mid-transcript: the resume init is not the true
-    // first, so it must not render the harness label.
-    const truncatedHtml = renderTranscript(messages, true)
-    expect(truncatedHtml).not.toContain("Claude Code")
-    expect(truncatedHtml).not.toContain("Account")
-
-    // Once the full history is loaded, the same rows render as first.
-    const fullHtml = renderTranscript(messages, false)
-    expect(fullHtml).toContain("Claude Code")
-    expect(fullHtml).toContain("Account")
-  })
-
-  test("still renders model changes while older history is unloaded", () => {
+  test("renders a model change on a later session init", () => {
     const html = renderTranscript([
       {
         id: "system-1",
@@ -541,9 +501,8 @@ Please check the latest error first.`,
         mcpServers: [],
         timestamp: new Date().toISOString(),
       },
-    ], true)
+    ])
 
-    expect(html).not.toContain("Claude Code")
     expect(html).toContain("Model Changed")
   })
 

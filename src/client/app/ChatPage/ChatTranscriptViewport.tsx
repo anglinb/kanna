@@ -1,7 +1,6 @@
 import { LegendList, type LegendListRef } from "@legendapp/list/react"
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDown, Flower, Upload } from "lucide-react"
-import { AnimatedShinyText } from "../../components/ui/animated-shiny-text"
 import { DrainingIndicator } from "../../components/messages/DrainingIndicator"
 import { QueuedUserMessage } from "../../components/messages/QueuedUserMessage"
 import { OpenLocalLinkProvider, type OpenLocalLinkTarget } from "../../components/messages/shared"
@@ -20,7 +19,6 @@ import {
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
 import type { ChatReadAnchorState } from "../useChatReadAnchor"
-import type { ChatTurnSummary } from "../../../shared/types"
 import {
   buildRowIndexByMessageId,
   getLatestUserPrompt,
@@ -32,7 +30,7 @@ import {
   type TranscriptScrollTarget,
 } from "./transcriptScrollAnchors"
 import { TranscriptMinimap } from "./TranscriptMinimap"
-import { buildTranscriptTurns, getVisibleRowRange, mergeTurnIndex, type TranscriptTurn } from "./transcriptTurns"
+import { buildTranscriptTurns, getVisibleRowRange, type TranscriptTurn } from "./transcriptTurns"
 import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
@@ -85,14 +83,8 @@ const NARROW_VIEWPORT_PX = 640
 const DRAW_DISTANCE_PX = 1200
 const DRAW_DISTANCE_NARROW_PX = 400
 
-/** Max auto-fetched history pages per chat when the list is too short to scroll. */
-const MAX_HISTORY_AUTO_FILL_PAGES = 4
 
-/** Cap on older-history pages fetched to reach a turn clicked in the minimap. */
-const MAX_HISTORY_SEEK_PAGES = 20
 
-/** Stable empty default so the export viewer does not re-merge every render. */
-const EMPTY_TURN_INDEX: ChatTurnSummary[] = []
 
 /**
  * LegendList state changes that can move which rows are on screen.
@@ -119,15 +111,10 @@ interface ChatTranscriptViewportProps {
   transcriptPaddingBottom: number
   localPath: string | null | undefined
   latestToolIds: KannaState["latestToolIds"]
-  isHistoryLoading: boolean
-  hasOlderHistory: boolean
   isProcessing: boolean
   runtimeStatus: string | null
   isDraining: boolean
   commandError: string | null
-  loadOlderHistory: () => Promise<void>
-  /** Whole-transcript turn summaries; the map covers more than the loaded rows. */
-  chatTurnIndex?: ChatTurnSummary[]
   onStopDraining: () => void
   onSteerQueuedMessage: (queuedMessageId: string) => Promise<void>
   onRemoveQueuedMessage: (queuedMessageId: string) => Promise<void>
@@ -163,14 +150,10 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   transcriptPaddingBottom,
   localPath,
   latestToolIds,
-  isHistoryLoading,
-  hasOlderHistory,
   isProcessing,
   runtimeStatus,
   isDraining,
   commandError,
-  loadOlderHistory,
-  chatTurnIndex = EMPTY_TURN_INDEX,
   onStopDraining,
   onSteerQueuedMessage,
   onRemoveQueuedMessage,
@@ -203,8 +186,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     isLoading: isProcessing,
     localPath: localPath ?? undefined,
     latestToolIds,
-    hasOlderHistory,
-  }), [hasOlderHistory, isProcessing, latestToolIds, localPath, messages])
+  }), [isProcessing, latestToolIds, localPath, messages])
   const resolvedRows = useStableResolvedRows(rawRows)
 
   useEffect(() => {
@@ -213,10 +195,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
 
   const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
   const loadedTurns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
-  const turns = useMemo(
-    () => mergeTurnIndex(chatTurnIndex, loadedTurns),
-    [chatTurnIndex, loadedTurns],
-  )
+  const turns = loadedTurns
 
   /**
    * Rendered row window plus whether the list can scroll at all — together they
@@ -580,76 +559,13 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   // each history page produced, not the one it started in.
   const rowIndexByMessageIdRef = useRef(rowIndexByMessageId)
   rowIndexByMessageIdRef.current = rowIndexByMessageId
-  const loadOlderHistoryRef = useRef(loadOlderHistory)
-  loadOlderHistoryRef.current = loadOlderHistory
-  const hasOlderHistoryRef = useRef(hasOlderHistory)
-  hasOlderHistoryRef.current = hasOlderHistory
-
   // Same reasoning as the scroll-to-bottom button: the minimap sits outside the
   // scroll node, so it never trips the input listeners, but jumping to a turn is
   // as deliberate a read-position choice as scrolling there by hand.
-  const handleSelectTurn = useCallback(async (turn: TranscriptTurn) => {
+  const handleSelectTurn = useCallback((turn: TranscriptTurn) => {
     hasUserScrolledRef.current = true
-
-    if (turn.rowIndex !== null) {
-      applyScrollTarget({ kind: "pin", index: turn.rowIndex })
-      return
-    }
-
-    // The map covers the whole transcript, so a tick can point at a turn that
-    // has not been paged in. Fetch older pages until its row exists, then jump.
-    for (let attempt = 0; attempt < MAX_HISTORY_SEEK_PAGES; attempt += 1) {
-      const index = rowIndexByMessageIdRef.current.get(turn.id)
-      if (index !== undefined) {
-        applyScrollTarget({ kind: "pin", index })
-        return
-      }
-      if (!hasOlderHistoryRef.current) return
-      await loadOlderHistoryRef.current()
-      // Yield past the microtask queue so React commits the new page and the
-      // refs above point at the widened row list before the next look.
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    }
+    applyScrollTarget({ kind: "pin", index: turn.rowIndex })
   }, [applyScrollTarget])
-
-  const handleStartReached = useCallback(() => {
-    if (isHistoryLoading || !hasOlderHistory) {
-      return
-    }
-    void loadOlderHistory()
-  }, [hasOlderHistory, isHistoryLoading, loadOlderHistory])
-
-  // A long tool-call run can collapse the entire loaded window into a single
-  // tool-group row, leaving the list too short to scroll — so onStartReached
-  // can never fire. Auto-fetch older pages until the viewport overflows
-  // (capped); the header button below is the manual escape hatch beyond that.
-  const autoFillPagesRef = useRef(0)
-
-  useEffect(() => {
-    autoFillPagesRef.current = 0
-  }, [activeChatId])
-
-  useEffect(() => {
-    if (isHistoryLoading || !hasOlderHistory || resolvedRows.length === 0) {
-      return
-    }
-    if (autoFillPagesRef.current >= MAX_HISTORY_AUTO_FILL_PAGES) {
-      return
-    }
-
-    const frameId = window.requestAnimationFrame(() => {
-      const scrollNode = listRef.current?.getScrollableNode?.()
-      if (!(scrollNode instanceof HTMLElement)) {
-        return
-      }
-      if (scrollNode.scrollHeight > scrollNode.clientHeight + 1) {
-        return
-      }
-      autoFillPagesRef.current += 1
-      void loadOlderHistory()
-    })
-    return () => window.cancelAnimationFrame(frameId)
-  }, [activeChatId, hasOlderHistory, isHistoryLoading, listRef, loadOlderHistory, resolvedRows.length])
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
     if (target.trigger !== "contextmenu") {
@@ -696,30 +612,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   )
 
   const listHeader = (
-    <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }}>
-      {isHistoryLoading ? (
-        <div className="flex justify-center pb-4">
-          <span className="text-sm translate-y-[-0.5px]">
-            <AnimatedShinyText
-              animate
-              shimmerWidth={Math.max(20, "Loading more messages...".length * 3)}
-            >
-              Loading more messages...
-            </AnimatedShinyText>
-          </span>
-        </div>
-      ) : hasOlderHistory ? (
-        <div className="flex justify-center pb-4">
-          <button
-            type="button"
-            onClick={() => void loadOlderHistory()}
-            className="cursor-pointer rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            Load older messages
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }} />
   )
 
   const listFooter = (
@@ -766,8 +659,6 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
           maintainScrollAtEndThreshold={AT_END_THRESHOLD_RATIO}
           maintainVisibleContentPosition
           onScroll={handleScroll}
-          onStartReached={handleStartReached}
-          onStartReachedThreshold={0.1}
           // Rows unmount as soon as they leave this band, and a remounted row
           // renders collapsed while the list still holds its expanded height —
           // the size delta both re-anchors layout and re-triggers follow-the-

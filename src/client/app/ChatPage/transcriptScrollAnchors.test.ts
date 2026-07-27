@@ -169,24 +169,24 @@ describe("resolveRestoreTarget", () => {
   const map = buildRowIndexByMessageId(rows)
 
   test("follows the stream for an atEnd anchor", () => {
-    expect(resolveRestoreTarget(rows, { messageId: "m1", atEnd: true, distanceFromEnd: 4 }, map))
+    expect(resolveRestoreTarget(rows, { messageId: "m1", atEnd: true }, map))
       .toEqual({ kind: "end" })
   })
 
   test("pins an in-window message anchor", () => {
-    expect(resolveRestoreTarget(rows, { messageId: "a1", atEnd: false, distanceFromEnd: 3 }, map))
+    expect(resolveRestoreTarget(rows, { messageId: "a1", atEnd: false }, map))
       .toEqual({ kind: "pin", index: 1 })
   })
 
   test("resolves an anchor inside a collapsed tool group to the group row", () => {
     const groupRows = [promptRow("m1", "hi"), toolGroupRow(["t1", "t2"]), textRow("a1", "done")]
     const groupMap = buildRowIndexByMessageId(groupRows)
-    expect(resolveRestoreTarget(groupRows, { messageId: "t2", atEnd: false, distanceFromEnd: 2 }, groupMap))
+    expect(resolveRestoreTarget(groupRows, { messageId: "t2", atEnd: false }, groupMap))
       .toEqual({ kind: "pin", index: 1 })
   })
 
   test("falls back to the latest prompt when the anchor is out of window", () => {
-    expect(resolveRestoreTarget(rows, { messageId: "gone", atEnd: false, distanceFromEnd: 9999 }, map))
+    expect(resolveRestoreTarget(rows, { messageId: "gone", atEnd: false }, map))
       .toEqual({ kind: "pin", index: 2 })
   })
 

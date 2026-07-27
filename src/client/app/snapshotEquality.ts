@@ -54,13 +54,6 @@ function sameProviders(left: ProviderCatalogEntry[] | null | undefined, right: P
   })
 }
 
-function sameHistory(left: ChatSnapshot["history"] | null | undefined, right: ChatSnapshot["history"] | null | undefined) {
-  if (left === right) return true
-  if (!left || !right) return false
-  return left.hasOlder === right.hasOlder
-    && left.olderCursor === right.olderCursor
-    && left.recentLimit === right.recentLimit
-}
 
 function sameQueuedMessage(left: QueuedChatMessage, right: QueuedChatMessage) {
   return left.id === right.id
@@ -143,7 +136,6 @@ export function sameChatSnapshotCore(left: ChatSnapshot | null, right: ChatSnaps
   return sameRuntime(left.runtime, right.runtime)
     && sameQueuedMessages(left.queuedMessages, right.queuedMessages)
     && sameTranscriptEntries(left.messages, right.messages)
-    && sameHistory(left.history, right.history)
     && sameProviders(left.availableProviders, right.availableProviders)
 }
 

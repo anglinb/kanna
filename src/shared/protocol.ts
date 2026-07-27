@@ -6,9 +6,7 @@ import type {
   ProviderAuthSnapshot,
   ChatAttachment,
   ChatDiffSnapshot,
-  ChatHistoryPage,
   ChatSnapshot,
-  ChatTurnIndexSnapshot,
   DiffCommitMode,
   KeybindingsSnapshot,
   LlmProviderSnapshot,
@@ -57,7 +55,6 @@ export type SubscriptionTopic =
   | {
     type: "chat"
     chatId: string
-    recentLimit?: number
     /**
      * The absolute transcript span the client already holds from its local
      * cache, so the first push can be incremental instead of a full window.
@@ -70,7 +67,6 @@ export type SubscriptionTopic =
      */
     cachedSpan?: { start: number; end: number; endEntryId: string }
   }
-  | { type: "chat-turns"; chatId: string }
   | { type: "project-git"; projectId: string }
   | { type: "terminal"; terminalId: string }
 
@@ -245,7 +241,6 @@ export type ClientCommand =
       theme: "light" | "dark"
       attachmentMode: StandaloneTranscriptAttachmentMode
     }
-  | { type: "chat.loadHistory"; chatId: string; beforeCursor: string; limit: number }
   | { type: "chat.respondTool"; chatId: string; toolUseId: string; result: unknown }
   | {
       type: "message.enqueue"
@@ -291,14 +286,13 @@ export type ServerSnapshot =
   | { type: "provider-auth"; data: ProviderAuthSnapshot }
   | { type: "llm-provider"; data: LlmProviderSnapshot }
   | { type: "chat"; data: ChatSnapshot | null }
-  | { type: "chat-turns"; data: ChatTurnIndexSnapshot | null }
   | { type: "project-git"; data: ChatDiffSnapshot | null }
   | { type: "terminal"; data: TerminalSnapshot | null }
 
 export type ServerEnvelope =
   | { v: 1; type: "snapshot"; id: string; snapshot: ServerSnapshot }
   | { v: 1; type: "event"; id: string; event: TerminalEvent }
-  | { v: 1; type: "ack"; id: string; result?: unknown | ChatHistoryPage | StandaloneTranscriptExportResult }
+  | { v: 1; type: "ack"; id: string; result?: unknown | StandaloneTranscriptExportResult }
   | { v: 1; type: "error"; id?: string; message: string }
 
 export function isClientEnvelope(value: unknown): value is ClientEnvelope {

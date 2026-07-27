@@ -158,15 +158,12 @@ function getTranscriptMessageRenderState(
 
 function buildTranscriptMessageRenderStates(
   messages: HydratedTranscriptMessage[],
-  latestToolIds: Record<string, string | null>,
-  hasOlderHistory: boolean
+  latestToolIds: Record<string, string | null>
 ) {
-  // When older history hasn't been loaded, the window may start mid-transcript,
-  // so nothing in it can be proven to be the chat's true first system/account
-  // row — treat none as first rather than rendering a mid-transcript
-  // initial harness label. Self-heals as older pages load.
-  const firstSystemIndex = hasOlderHistory ? -1 : messages.findIndex((entry) => entry.kind === "system_init")
-  const firstAccountIndex = hasOlderHistory ? -1 : messages.findIndex((entry) => entry.kind === "account_info")
+  // The transcript always arrives whole, so the first system/account row here
+  // is genuinely the chat's first.
+  const firstSystemIndex = messages.findIndex((entry) => entry.kind === "system_init")
+  const firstAccountIndex = messages.findIndex((entry) => entry.kind === "account_info")
 
   // Timestamp of the next visible user prompt after each message (undefined when none follows).
   const nextPromptTimestamps = new Array<string | undefined>(messages.length)
@@ -659,16 +656,14 @@ export function buildResolvedTranscriptRows(
     isLoading,
     localPath,
     latestToolIds,
-    hasOlderHistory = false,
   }: {
     isLoading: boolean
     localPath?: string
     latestToolIds: Record<string, string | null>
     /** True when the loaded window may not include the start of the transcript. */
-    hasOlderHistory?: boolean
   }
 ): ResolvedTranscriptRow[] {
-  const renderStates = buildTranscriptMessageRenderStates(messages, latestToolIds, hasOlderHistory)
+  const renderStates = buildTranscriptMessageRenderStates(messages, latestToolIds)
   const renderItems = buildTranscriptRenderItems(messages, renderStates)
   const rows: ResolvedTranscriptRow[] = []
 

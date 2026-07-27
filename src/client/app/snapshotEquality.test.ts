@@ -24,7 +24,6 @@ function snapshot(startIndex: number, ids: string[], incremental?: boolean): Cha
     messages: ids.map(entry),
     startIndex,
     ...(incremental ? { incremental: true } : {}),
-    history: { hasOlder: startIndex > 0, olderCursor: null, recentLimit: 200 },
     availableProviders: [],
     readAnchor: null,
   }

@@ -1,15 +1,10 @@
 import { appendFile, mkdir, rename, rm, writeFile } from "node:fs/promises"
-import { closeSync, existsSync, fstatSync, openSync, readSync, readFileSync as readFileSyncImmediate } from "node:fs"
+import { existsSync, readFileSync as readFileSyncImmediate } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
-import type { AgentProvider, ChatHistoryPage, ChatHistorySnapshot, ChatTurnSummary, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
-import {
-  CHAT_READ_ANCHOR_PADDING,
-  CHAT_RECENT_LIMIT_DEFAULT,
-  CHAT_RECENT_LIMIT_MAX,
-  STORE_VERSION,
-} from "../shared/types"
+import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
+import { STORE_VERSION } from "../shared/types"
 import {
   type ChatEvent,
   type ProjectEvent,
@@ -22,7 +17,6 @@ import {
   cloneTranscriptEntriesForClient,
   createEmptyState,
 } from "./events"
-import { appendTurnEntry, buildTurnIndexFromBuffer } from "./chat-turn-index"
 import { resolveLocalPath } from "./paths"
 
 const COMPACTION_THRESHOLD_BYTES = 2 * 1024 * 1024
@@ -36,24 +30,6 @@ const CHAT_MESSAGE_PREVIEW_MAX_LENGTH = 160
 // How much of each transcript tail is scanned at boot to rebuild chat metadata
 // (lastMessageAt, previews) that only lives in snapshots between compactions.
 const TRANSCRIPT_METADATA_TAIL_BYTES = 256 * 1024
-/**
- * Initial tail chunk read when serving a recent page, quadrupled until it
- * covers the requested entry count. 512KB holds a few hundred typical entries,
- * so the default window is usually one read.
- */
-const TRANSCRIPT_TAIL_CHUNK_BYTES = 512 * 1024
-
-/** A line at least this long can't be whitespace-only, so skip the check. */
-const BLANK_LINE_MAX_BYTES = 8
-
-function isBlankRange(buffer: Buffer, start: number, end: number) {
-  for (let index = start; index < end; index++) {
-    const byte = buffer[index]!
-    if (byte !== 0x20 && byte !== 0x09 && byte !== 0x0d) return false
-  }
-  return true
-}
-
 function buildChatMessagePreview(text: string) {
   const collapsed = text.replace(/\s+/g, " ").trim()
   if (!collapsed) return undefined
@@ -108,24 +84,6 @@ interface LegacyTranscriptStats {
   entryCount: number
 }
 
-interface TranscriptPageResult {
-  entries: TranscriptEntry[]
-  hasOlder: boolean
-  olderCursor: string | null
-}
-
-/**
- * A cached transcript, possibly only its tail.
- *
- * `startIndex` is the absolute index of `entries[0]` within the file, so a
- * suffix still yields correct `idx:` history cursors. `startIndex === 0` means
- * the whole transcript is present.
- */
-interface CachedTranscript {
-  entries: TranscriptEntry[]
-  startIndex: number
-}
-
 interface ParsedReplayEvent {
   event: StoreEvent
   sourceIndex: number
@@ -172,30 +130,6 @@ function getReplayEventPriority(event: StoreEvent) {
   }
 }
 
-function encodeHistoryCursor(index: number) {
-  return `idx:${index}`
-}
-
-function decodeCursor(cursor: string) {
-  if (cursor.startsWith("idx:")) {
-    const value = Number.parseInt(cursor.slice("idx:".length), 10)
-    if (!Number.isInteger(value) || value < 0) {
-      throw new Error("Invalid history cursor")
-    }
-    return value
-  }
-
-  throw new Error("Invalid history cursor")
-}
-
-function getHistorySnapshot(page: TranscriptPageResult, recentLimit: number): ChatHistorySnapshot {
-  return {
-    hasOlder: page.hasOlder,
-    olderCursor: page.olderCursor,
-    recentLimit,
-  }
-}
-
 function getForkedChatTitle(title: string) {
   const trimmed = title.trim()
   if (!trimmed) return "Fork: New Chat"
@@ -228,14 +162,10 @@ export class EventStore {
   // file to serve 0.3MB was the bulk of a cold chat open. `startIndex` is the
   // absolute index of `entries[0]`, so history cursors stay absolute and
   // appends can extend a suffix in place.
-  private readonly transcriptCache = new Map<string, CachedTranscript>()
-  /** Turn summaries per chat, built lazily and extended by `appendMessage`. */
-  private readonly turnIndexes = new Map<string, ChatTurnSummary[]>()
+  private readonly transcriptCache = new Map<string, TranscriptEntry[]>()
   /** Entry count per transcript, keyed by the file size it was measured at. */
   private readonly transcriptEntryCounts = new Map<string, { size: number; count: number }>()
   private static readonly TRANSCRIPT_CACHE_LIMIT = 8
-  /** Turn indexes are ~26KB each; more slots than transcripts, far cheaper. */
-  private static readonly TURN_INDEX_CACHE_LIMIT = 32
   /**
    * Fired after a turn reaches a terminal state — the same three events that
    * set `lastTurnEndedAt`. Deliberately distinct from `Agent.onStateChange`,
@@ -390,7 +320,6 @@ export class EventStore {
     this.legacySidebarProjectOrder = []
     this.transcriptCache.clear()
     this.transcriptEntryCounts.clear()
-    this.turnIndexes.clear()
   }
 
   private clearLegacyTranscriptState() {
@@ -811,173 +740,34 @@ export class EventStore {
   }
 
   /**
-   * The complete entry list for a chat, loading from disk on miss. Callers
-   * must not mutate.
+   * Every entry for a chat, loading from disk on miss. Callers must not mutate.
    *
-   * Use `getRecentMessagesPage` for rendering — it serves the tail without
-   * reading the whole file. This is for the callers that genuinely need every
-   * entry (export, handoff, anchor resolution, debugRaw lookup).
+   * This is the only transcript read there is: rendering, export, handoff and
+   * anchor resolution all want the whole thing.
    */
   private getTranscriptEntries(chatId: string): TranscriptEntry[] {
     const cached = this.transcriptCache.get(chatId)
-    if (cached && cached.startIndex === 0) {
+    if (cached) {
       // Refresh LRU recency.
       this.transcriptCache.delete(chatId)
       this.transcriptCache.set(chatId, cached)
-      return cached.entries
+      return cached
     }
 
     const legacyEntries = this.legacyMessagesByChatId.get(chatId)
     const entries = legacyEntries ? cloneTranscriptEntries(legacyEntries) : this.loadTranscriptFromDisk(chatId)
-    // Replaces any cached suffix — a complete list supersedes it.
-    this.setCachedTranscript(chatId, entries, 0)
+    this.setCachedTranscript(chatId, entries)
     return entries
   }
 
-  private setCachedTranscript(chatId: string, entries: TranscriptEntry[], startIndex: number) {
+  private setCachedTranscript(chatId: string, entries: TranscriptEntry[]) {
     this.transcriptCache.delete(chatId)
     while (this.transcriptCache.size >= EventStore.TRANSCRIPT_CACHE_LIMIT) {
       const oldest = this.transcriptCache.keys().next().value
       if (oldest === undefined) break
       this.transcriptCache.delete(oldest)
     }
-    this.transcriptCache.set(chatId, { entries, startIndex })
-  }
-
-  /**
-   * Count non-empty lines by scanning bytes, without parsing them.
-   *
-   * Needed once per chat so a tail read can place its window at an absolute
-   * index. Costs a read of the file (~8ms for 24MB) but skips the JSON parse
-   * that dominates a full load; after that the count is maintained by
-   * `appendMessage`.
-   */
-  private countTranscriptEntries(chatId: string): number {
-    const transcriptPath = this.transcriptPath(chatId)
-    if (!existsSync(transcriptPath)) return 0
-
-    // Keyed by size so widening a window (which reads the tail again) doesn't
-    // re-scan the file. Appends invalidate it, but streaming reads are served
-    // from the cached window and never land here.
-    const size = Bun.file(transcriptPath).size
-    const cached = this.transcriptEntryCounts.get(chatId)
-    if (cached && cached.size === size) return cached.count
-
-    const buffer = readFileSyncImmediate(transcriptPath)
-    let count = 0
-    let lineStart = 0
-    for (;;) {
-      const newline = buffer.indexOf(0x0a, lineStart)
-      const end = newline === -1 ? buffer.length : newline
-      // Only short segments can be blank; a serialized entry is far longer, so
-      // this keeps the scan in `indexOf`'s native memchr rather than a JS loop
-      // over every byte.
-      if (end - lineStart >= BLANK_LINE_MAX_BYTES || !isBlankRange(buffer, lineStart, end)) {
-        count++
-      }
-      if (newline === -1) break
-      lineStart = newline + 1
-      if (lineStart >= buffer.length) break
-    }
-    this.transcriptEntryCounts.set(chatId, { size, count })
-    return count
-  }
-
-  /**
-   * Read at least `limit` entries from the end of a transcript.
-   *
-   * Reads a tail chunk and grows it until enough complete lines are in hand,
-   * so a chat open parses a few hundred entries instead of every entry in the
-   * file. Returns null when the file is missing or a line fails to parse, so
-   * the caller can fall back to a full load.
-   */
-  private readTranscriptTail(chatId: string, limit: number): TranscriptEntry[] | null {
-    const transcriptPath = this.transcriptPath(chatId)
-    if (!existsSync(transcriptPath)) return null
-
-    let fd: number
-    try {
-      fd = openSync(transcriptPath, "r")
-    } catch {
-      return null
-    }
-
-    try {
-      const size = fstatSync(fd).size
-      if (size === 0) return []
-
-      let chunk = Math.min(size, TRANSCRIPT_TAIL_CHUNK_BYTES)
-      for (;;) {
-        const start = Math.max(0, size - chunk)
-        const buffer = Buffer.allocUnsafe(size - start)
-        readSync(fd, buffer, 0, buffer.length, start)
-
-        const lines = buffer.toString("utf8").split("\n")
-        // A non-zero offset may land mid-line; that partial line (and any
-        // broken multi-byte char in it) is dropped.
-        if (start > 0) lines.shift()
-        const usable = lines.filter((line) => line.trim())
-
-        if (usable.length >= limit || start === 0) {
-          try {
-            return usable.slice(-limit).map((line) => JSON.parse(line) as TranscriptEntry)
-          } catch {
-            return null
-          }
-        }
-        chunk = Math.min(size, chunk * 4)
-      }
-    } catch {
-      return null
-    } finally {
-      closeSync(fd)
-    }
-  }
-
-  /**
-   * Turn index for a chat, built on first request and extended on append.
-   *
-   * The cold build streams the file and keeps only summaries — deliberately
-   * not via `getTranscriptEntries`, which would cache the full entry list and
-   * evict the hot tail window that streaming reads depend on. Summaries are
-   * small enough to hold for every open chat; entries are not.
-   */
-  getChatTurnIndex(chatId: string): ChatTurnSummary[] {
-    const cached = this.turnIndexes.get(chatId)
-    if (cached) {
-      // Refresh LRU recency.
-      this.turnIndexes.delete(chatId)
-      this.turnIndexes.set(chatId, cached)
-      return cached
-    }
-
-    const turns: ChatTurnSummary[] = []
-    const transcriptPath = this.transcriptPath(chatId)
-    const legacyEntries = this.legacyMessagesByChatId.get(chatId)
-
-    if (legacyEntries) {
-      for (const entry of legacyEntries) appendTurnEntry(turns, entry)
-    } else if (existsSync(transcriptPath)) {
-      turns.push(...buildTurnIndexFromBuffer(readFileSyncImmediate(transcriptPath)))
-    }
-
-    this.setCachedTurnIndex(chatId, turns)
-    return turns
-  }
-
-  /**
-   * Bounded like the transcript cache: an index is small, but one per chat
-   * over a long session is unbounded growth for maps nobody is looking at.
-   * Evicting only costs the next open a rebuild.
-   */
-  private setCachedTurnIndex(chatId: string, turns: ChatTurnSummary[]) {
-    this.turnIndexes.delete(chatId)
-    while (this.turnIndexes.size >= EventStore.TURN_INDEX_CACHE_LIMIT) {
-      const oldest = this.turnIndexes.keys().next().value
-      if (oldest === undefined) break
-      this.turnIndexes.delete(oldest)
-    }
-    this.turnIndexes.set(chatId, turns)
+    this.transcriptCache.set(chatId, entries)
   }
 
   private loadTranscriptFromDisk(chatId: string) {
@@ -1151,8 +941,7 @@ export class EventStore {
             chat.lastAgentMessageAt = Math.max(chat.lastAgentMessageAt ?? 0, sourceChat.lastAgentMessageAt)
           }
         }
-        // The fork's transcript is the source's in full, so this is complete.
-        this.setCachedTranscript(chatId, cloneTranscriptEntries(sourceEntries), 0)
+        this.setCachedTranscript(chatId, cloneTranscriptEntries(sourceEntries))
       })
       await this.writeChain
     }
@@ -1248,7 +1037,6 @@ export class EventStore {
       await rm(transcriptPath, { force: true })
       this.transcriptCache.delete(chat.id)
       this.transcriptEntryCounts.delete(chat.id)
-      this.turnIndexes.delete(chat.id)
 
       prunedChatIds.push(chat.id)
     }
@@ -1355,7 +1143,6 @@ export class EventStore {
       await rm(transcriptPath, { force: true })
       this.transcriptCache.delete(chat.id)
       this.transcriptEntryCounts.delete(chat.id)
-      this.turnIndexes.delete(chat.id)
 
       deletedChatIds.push(chat.id)
     }
@@ -1461,14 +1248,9 @@ export class EventStore {
     if (!anchor) return null
 
     const entries = this.getTranscriptEntries(chatId)
-    const index = entries.findIndex((entry) => entry._id === anchor.messageId)
-    if (index === -1) return null
+    if (!entries.some((entry) => entry._id === anchor.messageId)) return null
 
-    return {
-      messageId: anchor.messageId,
-      atEnd: anchor.atEnd,
-      distanceFromEnd: entries.length - index,
-    }
+    return { messageId: anchor.messageId, atEnd: anchor.atEnd }
   }
 
   /**
@@ -1482,11 +1264,7 @@ export class EventStore {
    */
   getEntryIdAt(chatId: string, index: number): string | null {
     if (index < 0) return null
-    const cached = this.transcriptCache.get(chatId)
-    if (!cached) return null
-    const offset = index - cached.startIndex
-    if (offset < 0 || offset >= cached.entries.length) return null
-    return cached.entries[offset]?._id ?? null
+    return this.transcriptCache.get(chatId)?.[index]?._id ?? null
   }
 
   /**
@@ -1537,14 +1315,7 @@ export class EventStore {
       // Deep clone via the already-serialized payload: the cached entry is
       // byte-identical to what a cold disk read would produce, and callers
       // that keep mutating their entry can't alias into the cache.
-      // Extends a cached suffix as happily as a complete list — `startIndex`
-      // is unaffected by appending at the end.
-      this.transcriptCache.get(chatId)?.entries.push(JSON.parse(payload) as TranscriptEntry)
-      // Extend the turn index only if it has been built. An absent index is
-      // not stale — it gets built on demand, and this entry is on disk by
-      // then, so building it here would just be work nobody asked for.
-      const turns = this.turnIndexes.get(chatId)
-      if (turns) appendTurnEntry(turns, entry)
+      this.transcriptCache.get(chatId)?.push(JSON.parse(payload) as TranscriptEntry)
     })
     return this.writeChain
   }
@@ -1687,20 +1458,6 @@ export class EventStore {
     return [...this.sidebarProjectOrder]
   }
 
-  private getMessagesPageFromEntries(entries: TranscriptEntry[], limit: number, beforeIndex?: number): TranscriptPageResult {
-    if (entries.length === 0) {
-      return { entries: [], hasOlder: false, olderCursor: null }
-    }
-
-    const endIndex = beforeIndex === undefined ? entries.length : Math.max(0, Math.min(beforeIndex, entries.length))
-    const startIndex = Math.max(0, endIndex - limit)
-    return {
-      entries: cloneTranscriptEntriesForClient(entries.slice(startIndex, endIndex)),
-      hasOlder: startIndex > 0,
-      olderCursor: startIndex > 0 ? encodeHistoryCursor(startIndex) : null,
-    }
-  }
-
   getMessages(chatId: string) {
     return cloneTranscriptEntries(this.getTranscriptEntries(chatId))
   }
@@ -1717,129 +1474,24 @@ export class EventStore {
     return this.getQueuedMessages(chatId).find((entry) => entry.id === queuedMessageId) ?? null
   }
 
-  getRecentMessagesPage(chatId: string, limit: number): ChatHistoryPage {
-    if (limit <= 0) {
-      return { messages: [], hasOlder: false, olderCursor: null, startIndex: 0 }
-    }
-
-    const window = this.getRecentEntryWindow(chatId, limit)
-    const startIndex = window.startIndex + Math.max(0, window.entries.length - limit)
-    const slice = window.entries.slice(Math.max(0, window.entries.length - limit))
-
-    return {
-      messages: cloneTranscriptEntriesForClient(slice),
-      hasOlder: startIndex > 0,
-      olderCursor: startIndex > 0 ? encodeHistoryCursor(startIndex) : null,
-      startIndex,
-    }
-  }
-
   /**
-   * A cached window covering at least the last `limit` entries.
+   * The whole transcript, reduced for the wire, plus the resolved read anchor.
    *
-   * Prefers whatever is already cached (the streaming case — `appendMessage`
-   * keeps it current), then a tail read, and only falls back to loading the
-   * entire file when the tail read can't serve.
-   */
-  private getRecentEntryWindow(chatId: string, limit: number): CachedTranscript {
-    const cached = this.transcriptCache.get(chatId)
-    if (cached && (cached.startIndex === 0 || cached.entries.length >= limit)) {
-      this.transcriptCache.delete(chatId)
-      this.transcriptCache.set(chatId, cached)
-      return cached
-    }
-
-    if (this.legacyMessagesByChatId.has(chatId)) {
-      return { entries: this.getTranscriptEntries(chatId), startIndex: 0 }
-    }
-
-    const tail = this.readTranscriptTail(chatId, limit)
-    if (tail) {
-      // Only entries at or past this point are held, so the absolute index of
-      // the first one is the total minus what we kept.
-      const startIndex = Math.max(0, this.countTranscriptEntries(chatId) - tail.length)
-      this.setCachedTranscript(chatId, tail, startIndex)
-      return { entries: tail, startIndex }
-    }
-
-    return { entries: this.getTranscriptEntries(chatId), startIndex: 0 }
-  }
-
-  getMessagesPageBefore(chatId: string, beforeCursor: string, limit: number): ChatHistoryPage {
-    if (limit <= 0) {
-      return { messages: [], hasOlder: false, olderCursor: null, startIndex: 0 }
-    }
-
-    const beforeIndex = decodeCursor(beforeCursor)
-    const page = this.getMessagesPageFromEntries(this.getTranscriptEntries(chatId), limit, beforeIndex)
-
-    return {
-      messages: page.entries,
-      hasOlder: page.hasOlder,
-      olderCursor: page.olderCursor,
-      startIndex: beforeIndex - page.entries.length,
-    }
-  }
-
-  /**
-   * Recent history plus the resolved read anchor, with the window auto-sized
-   * to include that anchor when `recentLimit` is left open.
+   * There is no window. Once consecutive tool calls collapse into single rows a
+   * chat is a few hundred rows — the largest here is 1,096 — and with the tool
+   * payloads trimmed the entire thing is smaller than one page of untrimmed
+   * history used to be. Sending all of it means the client can render, search
+   * and map the whole conversation without ever asking for more.
    *
-   * Resolving the anchor here is what lets a chat open be one round trip. The
-   * common case costs nothing extra: the anchor is found in the default window
-   * and no widening happens. Only an anchor scrolled back past the default
-   * window triggers a second, wider read.
+   * `startIndex` is always 0. It stays on the shape because streamed appends
+   * are sent as slices positioned against it.
    */
-  getRecentChatHistory(chatId: string, recentLimit?: number) {
-    const stored = this.state.chatsById.get(chatId)?.readAnchor
-    const baseLimit = recentLimit ?? CHAT_RECENT_LIMIT_DEFAULT
-    let limit = baseLimit
-    let anchor: ResolvedChatReadAnchor | null = null
-
-    if (stored) {
-      anchor = this.resolveAnchorInWindow(chatId, stored, baseLimit)
-      if (!anchor && !stored.atEnd) {
-        anchor = this.resolveAnchorInWindow(chatId, stored, CHAT_RECENT_LIMIT_MAX)
-        if (anchor && recentLimit === undefined) {
-          limit = Math.min(anchor.distanceFromEnd + CHAT_READ_ANCHOR_PADDING, CHAT_RECENT_LIMIT_MAX)
-        }
-      }
-    }
-
-    const page = this.getRecentMessagesPage(chatId, limit)
+  getClientTranscript(chatId: string) {
     return {
-      messages: page.messages,
-      startIndex: page.startIndex,
-      history: getHistorySnapshot({
-        entries: page.messages,
-        hasOlder: page.hasOlder,
-        olderCursor: page.olderCursor,
-      }, limit),
-      readAnchor: anchor,
+      messages: cloneTranscriptEntriesForClient(this.getTranscriptEntries(chatId)),
+      startIndex: 0,
+      readAnchor: this.getChatReadAnchor(chatId),
     }
-  }
-
-  /**
-   * Locate a stored anchor within the last `limit` entries, or null if it does
-   * not appear there (deleted, compacted away, or scrolled back further than
-   * the window reaches).
-   */
-  private resolveAnchorInWindow(
-    chatId: string,
-    stored: { messageId: string; atEnd: boolean },
-    limit: number
-  ): ResolvedChatReadAnchor | null {
-    const window = this.getRecentEntryWindow(chatId, limit)
-    const searchFrom = Math.max(0, window.entries.length - limit)
-    for (let index = window.entries.length - 1; index >= searchFrom; index--) {
-      if (window.entries[index]!._id !== stored.messageId) continue
-      return {
-        messageId: stored.messageId,
-        atEnd: stored.atEnd,
-        distanceFromEnd: window.entries.length - index,
-      }
-    }
-    return null
   }
 
   listProjects() {
@@ -1938,7 +1590,6 @@ export class EventStore {
     await this.compact()
     this.transcriptCache.clear()
     this.transcriptEntryCounts.clear()
-    this.turnIndexes.clear()
     onProgress?.(`${LOG_PREFIX} transcript migration complete`)
     return true
   }

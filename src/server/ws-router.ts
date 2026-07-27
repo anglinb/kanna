@@ -105,8 +105,8 @@ interface SnapshotComputationCache {
     signature: string
   }
   /**
-   * Derived chat snapshots keyed by `chatId:recentLimit`, shared across sockets
-   * in one broadcast.
+   * Derived chat snapshots keyed by chat, shared across sockets in one
+   * broadcast.
    *
    * The derive is shared but the serialization is not: each socket is at its
    * own point in the transcript, so the body it needs differs. Deriving once
@@ -250,7 +250,7 @@ export function createWsRouter({
     if (topic.type === "provider-auth") {
       return Boolean(filter.includeProviderAuth)
     }
-    if (topic.type === "chat" || topic.type === "chat-turns") {
+    if (topic.type === "chat") {
       return filter.chatIds?.has(topic.chatId) ?? false
     }
     if (topic.type === "project-git") {
@@ -429,24 +429,6 @@ export function createWsRouter({
       }
     }
 
-    // Its own topic rather than a field on the chat snapshot: that snapshot is
-    // re-derived and re-serialized on every streamed delta, while the turn
-    // index only moves when a turn starts or ends. On this topic the generic
-    // signature dedupe collapses the rest into no-ops.
-    if (topic.type === "chat-turns") {
-      return {
-        v: PROTOCOL_VERSION,
-        type: "snapshot",
-        id,
-        snapshot: {
-          type: "chat-turns",
-          data: store.getChat(topic.chatId)
-            ? { chatId: topic.chatId, turns: store.getChatTurnIndex(topic.chatId) }
-            : null,
-        },
-      }
-    }
-
     return {
       v: PROTOCOL_VERSION,
       type: "snapshot",
@@ -458,16 +440,14 @@ export function createWsRouter({
           agent.getActiveStatuses(),
           agent.getDrainingChatIds(),
           topic.chatId,
-          (chatId) => store.getRecentChatHistory(chatId, topic.recentLimit)
+          (chatId) => store.getClientTranscript(chatId)
         ),
       },
     }
   }
 
-  function getChatSnapshotData(chatId: string, recentLimit: number | undefined, cache?: SnapshotComputationCache) {
-    // An absent limit means "size the window to reach the read anchor" — a
-    // distinct cache key from any explicit limit.
-    const key = `${chatId}:${recentLimit ?? "auto"}`
+  function getChatSnapshotData(chatId: string, cache?: SnapshotComputationCache) {
+    const key = chatId
     const existing = cache?.chat?.get(key)
     if (existing !== undefined) {
       return existing
@@ -477,7 +457,7 @@ export function createWsRouter({
       agent.getActiveStatuses(),
       agent.getDrainingChatIds(),
       chatId,
-      (id) => store.getRecentChatHistory(id, recentLimit)
+      (id) => store.getClientTranscript(id)
     )
     if (cache) {
       (cache.chat ??= new Map()).set(key, data)
@@ -526,9 +506,9 @@ export function createWsRouter({
     if (topic.type !== "chat") return
     const span = topic.cachedSpan
     if (!span || span.end <= 0 || span.start < 0 || span.start > span.end) return
-    // Populates the window cache as a side effect, which is what makes the
+    // Populates the transcript cache as a side effect, which is what makes the
     // boundary entry visible to `getEntryIdAt`.
-    store.getRecentChatHistory(topic.chatId, topic.recentLimit)
+    store.getClientTranscript(topic.chatId)
     if (store.getEntryIdAt(topic.chatId, span.end - 1) !== span.endEntryId) return
     ensureChatEntrySpans(ws).set(subscriptionId, { start: span.start, end: span.end })
   }
@@ -559,7 +539,7 @@ export function createWsRouter({
         continue
       }
       if (topic.type === "chat") {
-        const data = getChatSnapshotData(topic.chatId, topic.recentLimit, options?.cache)
+        const data = getChatSnapshotData(topic.chatId, options?.cache)
         const spans = ensureChatEntrySpans(ws)
         const snapshotJson = JSON.stringify({ type: "chat", data: toSocketChatSnapshot(data, spans.get(id)) })
         if (snapshotSignatures.get(id) === snapshotJson) {
@@ -1453,13 +1433,6 @@ export function createWsRouter({
             messages: store.getMessages(command.chatId),
           })
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
-          return
-        }
-        case "chat.loadHistory": {
-          const chat = store.getChat(command.chatId)
-          if (!chat) throw new Error("Chat not found")
-          const page = store.getMessagesPageBefore(command.chatId, command.beforeCursor, command.limit)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: page })
           return
         }
         case "chat.respondTool": {

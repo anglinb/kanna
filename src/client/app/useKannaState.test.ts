@@ -287,11 +287,6 @@ describe("getActiveChatSnapshot", () => {
       },
       queuedMessages: [],
       messages: [],
-      history: {
-        hasOlder: false,
-        olderCursor: null,
-        recentLimit: 200,
-      },
       availableProviders: [],
       readAnchor: null,
       startIndex: 0,
@@ -316,11 +311,6 @@ describe("getActiveChatSnapshot", () => {
       },
       queuedMessages: [],
       messages: [],
-      history: {
-        hasOlder: false,
-        olderCursor: null,
-        recentLimit: 200,
-      },
       availableProviders: [],
       readAnchor: null,
       startIndex: 0,

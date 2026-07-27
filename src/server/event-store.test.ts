@@ -146,36 +146,6 @@ describe("EventStore", () => {
     expect(existsSync(store.getTranscriptPath(chat.id))).toBe(true)
   })
 
-  test("pages recent transcript history and older entries by cursor", async () => {
-    const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
-
-    const project = await store.openProject("/tmp/project")
-    const chat = await store.createChat(project.id)
-
-    for (let index = 1; index <= 5; index += 1) {
-      await store.appendMessage(chat.id, entry(index % 2 === 0 ? "assistant_text" : "user_prompt", 200 + index, {
-        content: `message-${index}`,
-      }))
-    }
-
-    const recentPage = store.getRecentMessagesPage(chat.id, 2)
-    expect(recentPage.messages.map((message) => message._id)).toEqual(["assistant_text-204", "user_prompt-205"])
-    expect(recentPage.hasOlder).toBe(true)
-    expect(recentPage.olderCursor).not.toBeNull()
-
-    const olderPage = store.getMessagesPageBefore(chat.id, recentPage.olderCursor!, 2)
-    expect(olderPage.messages.map((message) => message._id)).toEqual(["assistant_text-202", "user_prompt-203"])
-    expect(olderPage.hasOlder).toBe(true)
-    expect(olderPage.olderCursor).not.toBeNull()
-
-    const oldestPage = store.getMessagesPageBefore(chat.id, olderPage.olderCursor!, 2)
-    expect(oldestPage.messages.map((message) => message._id)).toEqual(["user_prompt-201"])
-    expect(oldestPage.hasOlder).toBe(false)
-    expect(oldestPage.olderCursor).toBeNull()
-  })
-
   test("persists queued messages across restart and removes promoted entries", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)
@@ -262,11 +232,9 @@ describe("EventStore", () => {
 
     await store.setChatReadAnchor(chat.id, "user_prompt-200", false)
 
-    // 3 entries total, anchor at index 0 -> 3 entries at or after it.
     expect(store.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: false,
-      distanceFromEnd: 3,
     })
 
     const reloaded = new EventStore(dataDir)
@@ -274,11 +242,10 @@ describe("EventStore", () => {
     expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: false,
-      distanceFromEnd: 3,
     })
   })
 
-  test("survives compaction and tracks distance as the transcript grows", async () => {
+  test("survives compaction", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)
     await store.initialize()
@@ -288,10 +255,7 @@ describe("EventStore", () => {
 
     await store.appendMessage(chat.id, entry("user_prompt", 200, { content: "hello" }))
     await store.setChatReadAnchor(chat.id, "user_prompt-200", true)
-    expect(store.getChatReadAnchor(chat.id)?.distanceFromEnd).toBe(1)
-
     await store.appendMessage(chat.id, entry("assistant_text", 201, { content: "world" }))
-    expect(store.getChatReadAnchor(chat.id)?.distanceFromEnd).toBe(2)
 
     await store.compact()
 
@@ -300,7 +264,6 @@ describe("EventStore", () => {
     expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: true,
-      distanceFromEnd: 2,
     })
   })
 
@@ -1017,61 +980,6 @@ describe("EventStore", () => {
     await reloaded.setChatDoneState(chat.id, true)
     await reloaded.setChatDoneState(chat.id, false)
     expect(reloaded.getChat(chat.id)?.doneAt).toBeUndefined()
-  })
-})
-
-describe("transcript window resume", () => {
-  async function seedChat(entryCount: number) {
-    const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
-    const project = await store.openProject(dataDir, "resume")
-    const chat = await store.createChat(project.id)
-    for (let index = 0; index < entryCount; index++) {
-      await store.appendMessage(chat.id, entry("assistant_text", 100 + index, { text: `m${index}` }))
-    }
-    return { store, chatId: chat.id }
-  }
-
-  test("a page reports where it sits in the transcript", async () => {
-    const { store, chatId } = await seedChat(12)
-    const page = store.getRecentMessagesPage(chatId, 5)
-
-    expect(page.messages).toHaveLength(5)
-    // Last 5 of 12 start at index 7 — the same index the older-cursor encodes.
-    expect(page.startIndex).toBe(7)
-    expect(page.olderCursor).toBe("idx:7")
-  })
-
-  test("entry ids are addressable by absolute index, for validating a client's cached position", async () => {
-    const { store, chatId } = await seedChat(12)
-    const page = store.getRecentMessagesPage(chatId, 5)
-    const lastId = page.messages[page.messages.length - 1]?._id
-
-    expect(store.getEntryIdAt(chatId, 11)).toBe(lastId!)
-    expect(store.getEntryIdAt(chatId, page.startIndex)).toBe(page.messages[0]!._id)
-    // Past the end is unknown, not an error.
-    expect(store.getEntryIdAt(chatId, 12)).toBeNull()
-    expect(store.getEntryIdAt(chatId, -1)).toBeNull()
-  })
-
-  test("an index older than the loaded window is unverifiable rather than triggering a full read", async () => {
-    const { store, chatId } = await seedChat(12)
-    // Load only the tail, so indexes 0..6 are outside what is held.
-    store.getRecentMessagesPage(chatId, 5)
-
-    expect(store.getEntryIdAt(chatId, 0)).toBeNull()
-  })
-
-  test("appends extend the window in place, so the next page continues from the same start", async () => {
-    const { store, chatId } = await seedChat(12)
-    const before = store.getRecentMessagesPage(chatId, 5)
-    await store.appendMessage(chatId, entry("assistant_text", 999, { text: "after" }))
-    const after = store.getRecentMessagesPage(chatId, 5)
-
-    expect(after.startIndex).toBe(before.startIndex + 1)
-    expect(after.messages[after.messages.length - 1]?.kind).toBe("assistant_text")
-    expect(store.getEntryIdAt(chatId, 12)).toBe(after.messages[after.messages.length - 1]!._id)
   })
 })
 

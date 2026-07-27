@@ -159,13 +159,10 @@ function StandaloneTranscriptApp() {
             transcriptPaddingBottom={120}
             localPath={state.bundle.localPath}
             latestToolIds={latestToolIds}
-            isHistoryLoading={false}
-            hasOlderHistory={false}
             isProcessing={false}
             runtimeStatus={null}
             isDraining={false}
             commandError={null}
-            loadOlderHistory={noopPromise}
             onStopDraining={noop}
             onSteerQueuedMessage={noopPromise}
             onRemoveQueuedMessage={noopPromise}

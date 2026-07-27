@@ -1887,63 +1887,15 @@ export interface ChatRuntime {
   sessionToken: string | null
 }
 
-export interface ChatHistorySnapshot {
-  hasOlder: boolean
-  olderCursor: string | null
-  recentLimit: number
-}
-
-/** Default number of recent entries in a chat snapshot. */
-/**
- * One turn, summarised for the transcript overview map.
- *
- * Deliberately tiny and text-truncated: this is an index over the whole
- * transcript, and the client only ever renders a couple of clamped lines of it.
- */
-export interface ChatTurnSummary {
-  /** Entry id of the user prompt that opens the turn — the scroll target. */
-  id: string
-  prompt: string
-  /** The turn's final assistant message, if it produced one. */
-  response: string | null
-  /** Failure text, when the turn ended in an error. */
-  error: string | null
-  createdAt: number
-  /** Wall time the turn took, or null while it is still running. */
-  durationMs: number | null
-}
-
-/** Longest text kept per field in a turn summary. */
-export const CHAT_TURN_SUMMARY_TEXT_LIMIT = 160
-
-/**
- * Most recent turns indexed per chat. The map only ever shows a few dozen
- * ticks, so indexing further back would be payload with no reader.
- */
-export const CHAT_TURN_INDEX_LIMIT = 80
-
-export interface ChatTurnIndexSnapshot {
-  chatId: string
-  turns: ChatTurnSummary[]
-}
-
-export const CHAT_RECENT_LIMIT_DEFAULT = 200
-
-/**
- * Ceiling on auto-widening the window to reach a read anchor. Past this the
- * payload gets unreasonable and the client restores to the latest user message
- * instead.
- */
-export const CHAT_RECENT_LIMIT_MAX = 2000
-
-/** Extra entries kept beyond a read anchor so there is context above it. */
-export const CHAT_READ_ANCHOR_PADDING = 50
-
 export interface ChatSnapshot {
   runtime: ChatRuntime
   queuedMessages: QueuedChatMessage[]
   messages: TranscriptEntry[]
-  /** Absolute index of `messages[0]`; see `ChatHistoryPage.startIndex`. */
+  /**
+   * Absolute index of `messages[0]` in the transcript. Always 0 on a full
+   * snapshot; non-zero on an incremental one, where it says where the slice
+   * belongs.
+   */
   startIndex: number
   /**
    * When true, `messages` extends what the client already holds rather than
@@ -1951,37 +1903,20 @@ export interface ChatSnapshot {
    * unchanged.
    *
    * The transcript is the only part of this snapshot that grows without bound,
-   * and it grows only at the end, so re-sending the whole window on every
-   * streamed entry was the dominant cost on the socket. Everything else here
-   * is small and still ships whole.
+   * and it grows only at the end, so re-sending all of it on every streamed
+   * entry was the dominant cost on the socket. Everything else here is small
+   * and still ships whole.
    */
   incremental?: boolean
-  history: ChatHistorySnapshot
   availableProviders: ProviderCatalogEntry[]
   /**
-   * The stored read position, resolved against this snapshot's window.
+   * The stored read position, resolved against the transcript.
    *
-   * Carried inline so opening a chat is a single round trip: the server sizes
-   * the window to cover the anchor rather than the client probing for it and
-   * then re-subscribing at a wider limit (which fetched the transcript twice).
-   * Null when nothing is stored or the anchor is out of reach.
+   * Carried inline so opening a chat is a single round trip rather than a
+   * probe followed by a subscription. Null when nothing is stored or the
+   * anchored entry no longer exists.
    */
   readAnchor: ResolvedChatReadAnchor | null
-}
-
-export interface ChatHistoryPage {
-  messages: TranscriptEntry[]
-  hasOlder: boolean
-  olderCursor: string | null
-  /**
-   * Absolute index of `messages[0]` in the transcript.
-   *
-   * A transcript is append-only, so an entry's line index is a stable
-   * monotonic sequence for the life of the chat. It is what history cursors
-   * already encode, and what lets a subscription resume by sending only the
-   * entries past what a client holds instead of the whole window.
-   */
-  startIndex: number
 }
 
 /**
@@ -1989,14 +1924,11 @@ export interface ChatHistoryPage {
  *
  * `messageId` is a `TranscriptEntry._id`. `atEnd` means the user was parked at
  * the bottom following the stream, so restoring should keep following rather
- * than pin to that message. `distanceFromEnd` is how many entries sit at or
- * after the anchor, letting the client widen its subscription window in one
- * round trip when the anchor predates the default recent page.
+ * than pin to that message.
  */
 export interface ResolvedChatReadAnchor {
   messageId: string
   atEnd: boolean
-  distanceFromEnd: number
 }
 
 export interface PendingToolSnapshot {
