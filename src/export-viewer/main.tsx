@@ -1,9 +1,8 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
-import { type LegendListRef } from "@legendapp/list/react"
 import { ChevronRight, Flower } from "lucide-react"
 import "@fontsource-variable/bricolage-grotesque"
-import { ChatTranscriptViewport } from "../client/app/ChatPage/ChatTranscriptViewport"
+import { ChatTranscriptViewport, type TranscriptScrollHandle } from "../client/app/ChatPage/ChatTranscriptViewport"
 import { getLatestToolIds } from "../client/app/derived"
 import { TranscriptRenderOptionsProvider } from "../client/components/messages/render-context"
 import { processTranscriptMessages } from "../client/lib/parseTranscript"
@@ -21,7 +20,7 @@ type ViewerState =
 function StandaloneTranscriptApp() {
   const [state, setState] = useState<ViewerState>({ status: "loading" })
   const [isAtEnd, setIsAtEnd] = useState(true)
-  const listRef = useRef<LegendListRef | null>(null)
+  const listRef = useRef<TranscriptScrollHandle | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -94,7 +93,7 @@ function StandaloneTranscriptApp() {
   ) => Promise.resolve(), [])
   const handleOpenLocalLink = useCallback(() => Promise.resolve(), [])
   const scrollToBottom = useCallback(() => {
-    void listRef.current?.scrollToEnd?.({ animated: true })
+    listRef.current?.scrollToEnd()
   }, [])
 
   const handleOpenMarketingSite = useCallback(() => {

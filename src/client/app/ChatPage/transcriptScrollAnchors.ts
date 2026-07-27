@@ -60,6 +60,8 @@ export interface LatestUserPrompt {
   /** Content signature, used to recognise an optimistic prompt across reconciliation. */
   signature: string
   rowIndex: number
+  /** `ResolvedTranscriptRow.id` — the scroll target for pinning this prompt. */
+  rowId: string
 }
 
 export function getLatestUserPrompt(rows: ResolvedTranscriptRow[]): LatestUserPrompt | null {
@@ -71,6 +73,7 @@ export function getLatestUserPrompt(rows: ResolvedTranscriptRow[]): LatestUserPr
     messageId: row.message.id,
     signature: getUserPromptSignature(row.message.content, row.message.attachments ?? []),
     rowIndex,
+    rowId: row.id,
   }
 }
 
@@ -102,7 +105,8 @@ export function shouldPinForNewPrompt(
 
 export type TranscriptScrollTarget =
   | { kind: "end" }
-  | { kind: "pin"; index: number }
+  /** `rowId` is a `ResolvedTranscriptRow.id` — what the scroller addresses rows by. */
+  | { kind: "pin"; rowId: string }
 
 /**
  * Decide where a freshly opened chat should land.
@@ -121,12 +125,14 @@ export function resolveRestoreTarget(
 
   if (anchor) {
     const index = rowIndexByMessageId.get(anchor.messageId)
-    if (index !== undefined) return { kind: "pin", index }
-    // Anchor sits outside the loaded window, or its message is gone.
+    // Absent when the anchored message is gone from the transcript.
+    const rowId = index === undefined ? undefined : rows[index]?.id
+    if (rowId !== undefined) return { kind: "pin", rowId }
   }
 
   const latestPromptIndex = findLatestUserPromptRowIndex(rows)
-  if (latestPromptIndex !== null) return { kind: "pin", index: latestPromptIndex }
+  const latestPromptRowId = latestPromptIndex === null ? undefined : rows[latestPromptIndex]?.id
+  if (latestPromptRowId !== undefined) return { kind: "pin", rowId: latestPromptRowId }
 
   return { kind: "end" }
 }

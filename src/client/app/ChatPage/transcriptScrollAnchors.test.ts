@@ -173,25 +173,25 @@ describe("resolveRestoreTarget", () => {
       .toEqual({ kind: "end" })
   })
 
-  test("pins an in-window message anchor", () => {
+  test("pins the row holding a message anchor", () => {
     expect(resolveRestoreTarget(rows, { messageId: "a1", atEnd: false }, map))
-      .toEqual({ kind: "pin", index: 1 })
+      .toEqual({ kind: "pin", rowId: rows[1]!.id })
   })
 
   test("resolves an anchor inside a collapsed tool group to the group row", () => {
     const groupRows = [promptRow("m1", "hi"), toolGroupRow(["t1", "t2"]), textRow("a1", "done")]
     const groupMap = buildRowIndexByMessageId(groupRows)
     expect(resolveRestoreTarget(groupRows, { messageId: "t2", atEnd: false }, groupMap))
-      .toEqual({ kind: "pin", index: 1 })
+      .toEqual({ kind: "pin", rowId: groupRows[1]!.id })
   })
 
-  test("falls back to the latest prompt when the anchor is out of window", () => {
+  test("falls back to the latest prompt when the anchored message is gone", () => {
     expect(resolveRestoreTarget(rows, { messageId: "gone", atEnd: false }, map))
-      .toEqual({ kind: "pin", index: 2 })
+      .toEqual({ kind: "pin", rowId: rows[2]!.id })
   })
 
   test("falls back to the latest prompt when there is no anchor", () => {
-    expect(resolveRestoreTarget(rows, null, map)).toEqual({ kind: "pin", index: 2 })
+    expect(resolveRestoreTarget(rows, null, map)).toEqual({ kind: "pin", rowId: rows[2]!.id })
   })
 
   test("falls back to the end when there is no prompt to pin", () => {

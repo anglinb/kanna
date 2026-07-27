@@ -1,5 +1,4 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react"
-import { type LegendListRef } from "@legendapp/list/react"
 import type { GroupImperativeHandle } from "react-resizable-panels"
 import { useOutletContext } from "react-router-dom"
 import type { ChatInputHandle } from "../../components/chat-ui/ChatInput"
@@ -30,7 +29,7 @@ import type { KannaState } from "../useKannaState"
 import { getNextMeasuredInputHeight, getTranscriptPaddingBottom } from "../useKannaState"
 import { ChatInputDock } from "./ChatInputDock"
 import { DefaultModelsDialog } from "../../components/DefaultModelsDialog"
-import { ChatTranscriptViewport } from "./ChatTranscriptViewport"
+import { ChatTranscriptViewport, type TranscriptScrollHandle } from "./ChatTranscriptViewport"
 import { TranscriptRenderOptionsProvider } from "../../components/messages/render-context"
 import { ToolPayloadProvider } from "../../components/messages/tool-payload-context"
 import { createToolPayloadStore } from "./toolPayloadStore"
@@ -475,7 +474,7 @@ export function ChatPage() {
   const state = useOutletContext<KannaState>()
   const dialog = useAppDialog()
   const layoutRootRef = useRef<HTMLDivElement>(null)
-  const transcriptListRef = useRef<LegendListRef | null>(null)
+  const transcriptListRef = useRef<TranscriptScrollHandle | null>(null)
   const isAtEndRef = useRef(true)
   const showScrollTimeoutRef = useRef<number | null>(null)
   const chatCardRef = useRef<HTMLDivElement>(null)
@@ -755,18 +754,11 @@ export function ChatPage() {
     }, 150)
   }, [clearShowScrollTimeout])
 
-  const syncIsAtEndFromList = useCallback(() => {
-    const state = transcriptListRef.current?.getState?.()
-    if (state) {
-      onIsAtEndChange(state.isAtEnd)
-    }
-  }, [onIsAtEndChange])
-
-  const scrollToTranscriptEnd = useCallback(async (animated = true) => {
+  const scrollToTranscriptEnd = useCallback(() => {
     isAtEndRef.current = true
     clearShowScrollTimeout()
     setShowScrollToBottom(false)
-    await transcriptListRef.current?.scrollToEnd?.({ animated })
+    transcriptListRef.current?.scrollToEnd()
   }, [clearShowScrollTimeout])
 
   const handleChatSubmit = useCallback(async (
@@ -866,28 +858,9 @@ export function ChatPage() {
     return () => window.removeEventListener("keydown", handleGlobalKeydown)
   }, [addTerminal, handleToggleEmbeddedTerminal, handleToggleGitPanel, projectId, resolvedKeybindings, state.handleOpenExternal])
 
-  useEffect(() => {
-    const frameId = window.requestAnimationFrame(() => {
-      syncIsAtEndFromList()
-    })
-    const timeoutId = window.setTimeout(() => {
-      syncIsAtEndFromList()
-    }, TERMINAL_TOGGLE_ANIMATION_DURATION_MS)
-
-    return () => {
-      window.cancelAnimationFrame(frameId)
-      window.clearTimeout(timeoutId)
-    }
-  }, [shouldRenderTerminalLayout, showTerminalPane, syncIsAtEndFromList])
-
-  useEffect(() => {
-    function handleResize() {
-      syncIsAtEndFromList()
-    }
-
-    window.addEventListener("resize", handleResize)
-    return () => window.removeEventListener("resize", handleResize)
-  }, [syncIsAtEndFromList])
+  // Re-checking "is the reader at the end" after a terminal toggle or a window
+  // resize used to live here. The transcript observes its own element now, so
+  // it sees those the moment they change the scroll box.
 
   useEffect(() => {
     if (!showRightSidebar || !isMobileRightSidebarOverlay) return
@@ -1008,7 +981,7 @@ export function ChatPage() {
           onIsAtEndChange={onIsAtEndChange}
           readAnchorState={state.readAnchorState}
           onReportReadAnchor={state.reportReadAnchor}
-          scrollToBottom={() => scrollToTranscriptEnd(true)}
+          scrollToBottom={scrollToTranscriptEnd}
           typedEmptyStateText={typedEmptyStateText}
           isEmptyStateTypingComplete={isEmptyStateTypingComplete}
           isPageFileDragActive={isPageFileDragActive}

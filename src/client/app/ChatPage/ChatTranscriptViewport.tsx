@@ -1,5 +1,13 @@
-import { LegendList, type LegendListRef } from "@legendapp/list/react"
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  MessageScroller,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller,
+  useMessageScrollerVisibility,
+} from "../../components/ui/message-scroller"
 import { ArrowDown, Flower, Upload } from "lucide-react"
 import { DrainingIndicator } from "../../components/messages/DrainingIndicator"
 import { QueuedUserMessage } from "../../components/messages/QueuedUserMessage"
@@ -13,7 +21,6 @@ import { formatPathWithTilde, shouldOpenLocalFileLinkInEditor } from "../../lib/
 import {
   buildResolvedTranscriptRows,
   KannaTranscriptRow,
-  type ResolvedTranscriptRow,
   useStableResolvedRows,
 } from "../KannaTranscript"
 import type { KannaState } from "../useKannaState"
@@ -30,7 +37,7 @@ import {
   type TranscriptScrollTarget,
 } from "./transcriptScrollAnchors"
 import { TranscriptMinimap } from "./TranscriptMinimap"
-import { buildTranscriptTurns, getVisibleRowRange, type TranscriptTurn } from "./transcriptTurns"
+import { buildTranscriptTurns, type TranscriptTurn } from "./transcriptTurns"
 import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
@@ -53,45 +60,8 @@ import { estimateTranscriptRowSize } from "./transcriptRowSize"
  */
 const AT_END_THRESHOLD_RATIO = 0.05
 
-/**
- * Frames a restore may re-issue its scroll for before giving up.
- *
- * Each pass pulls more real row measurements into range, which moves where the
- * anchor actually is; the loop exits as soon as the offset stops changing, so
- * this is a ceiling for pathological lists rather than a frame count anyone
- * normally pays.
- */
-const RESTORE_SETTLE_FRAMES = 8
-
-/**
- * Viewport width below which this is a phone-shaped layout.
- *
- * Two things key off it, both about spending less per scroll frame on a device
- * that has less to spend: the overview map has no gutter to live in, so the
- * geometry it needs is not worth computing, and far fewer rows are kept mounted
- * around the viewport.
- */
-const NARROW_VIEWPORT_PX = 640
-
-/**
- * Rows are kept mounted this far beyond the viewport. Generous on a desktop —
- * a remounted row renders collapsed while the list still holds its expanded
- * height, and that mismatch both re-anchors layout and re-triggers
- * follow-the-bottom. On a phone the extra mounted DOM costs more in paint than
- * the occasional remount costs in jumpiness.
- */
-const DRAW_DISTANCE_PX = 1200
-const DRAW_DISTANCE_NARROW_PX = 400
 
 
-
-
-/**
- * LegendList state changes that can move which rows are on screen.
- * `footerSize` is the one that catches a turn ending: the processing indicator
- * and any error box live in the footer, outside `data`.
- */
-const LIST_LAYOUT_EVENTS = ["lastPositionUpdate", "totalSize", "footerSize", "lastItemKeys"] as const
 
 /**
  * Slack before the transcript counts as scrollable. Content and viewport rarely
@@ -103,9 +73,14 @@ const OVERFLOW_EPSILON_PX = 8
 /** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
 const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
 
+/** What ChatPage drives the transcript with, in place of a list ref. */
+export interface TranscriptScrollHandle {
+  scrollToEnd: () => void
+}
+
 interface ChatTranscriptViewportProps {
   activeChatId: string | null
-  listRef: React.RefObject<LegendListRef | null>
+  listRef: React.RefObject<TranscriptScrollHandle | null>
   messages: KannaState["messages"]
   queuedMessages: KannaState["queuedMessages"]
   transcriptPaddingBottom: number
@@ -142,7 +117,19 @@ interface ChatTranscriptViewportProps {
   onReportReadAnchor?: (messageId: string, atEnd: boolean) => void
 }
 
-export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
+/**
+ * The provider owns scroll anchoring and follow-the-end; the body below reads
+ * them through hooks, which is why they are separate components.
+ */
+export const ChatTranscriptViewport = memo(function ChatTranscriptViewport(props: ChatTranscriptViewportProps) {
+  return (
+    <MessageScrollerProvider autoScroll scrollEdgeThreshold={AT_END_THRESHOLD_RATIO}>
+      <TranscriptScrollerBody {...props} />
+    </MessageScrollerProvider>
+  )
+})
+
+const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   activeChatId,
   listRef,
   messages,
@@ -177,6 +164,9 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   readAnchorState = DEFAULT_READ_ANCHOR_STATE,
   onReportReadAnchor,
 }: ChatTranscriptViewportProps) {
+  const { scrollToEnd, scrollToMessage } = useMessageScroller()
+  const { currentAnchorId, visibleMessageIds } = useMessageScrollerVisibility()
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
   const [localLinkMenuTarget, setLocalLinkMenuTarget] = useState<OpenLocalLinkTarget | null>(null)
@@ -193,7 +183,17 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     setToolGroupExpanded({})
   }, [activeChatId])
 
+  useEffect(() => {
+    listRef.current = { scrollToEnd: () => { scrollToEnd() } }
+    return () => { listRef.current = null }
+  }, [listRef, scrollToEnd])
+
   const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
+  const rowsById = useMemo(() => new Map(resolvedRows.map((row) => [row.id, row])), [resolvedRows])
+  const rowIndexByRowId = useMemo(
+    () => new Map(resolvedRows.map((row, index) => [row.id, index])),
+    [resolvedRows]
+  )
   const loadedTurns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
   const turns = loadedTurns
 
@@ -202,15 +202,9 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
    * drive the minimap, which only earns its space once there is something to
    * navigate.
    */
-  const [listGeometry, setListGeometry] = useState({ start: 0, end: 0, overflows: false })
+  const [transcriptOverflows, setTranscriptOverflows] = useState(false)
   /** Scroll pane width, driving whether the minimap has a gutter to live in. */
   const [transcriptWidth, setTranscriptWidth] = useState(0)
-  // Read inside a scroll handler, so it lives in a ref rather than being a
-  // dependency that would rebuild the handler on every resize.
-  const transcriptWidthRef = useRef(0)
-  transcriptWidthRef.current = transcriptWidth
-  const isNarrowViewport = transcriptWidth > 0 && transcriptWidth < NARROW_VIEWPORT_PX
-  const drawDistance = isNarrowViewport ? DRAW_DISTANCE_NARROW_PX : DRAW_DISTANCE_PX
 
   /**
    * Overlay insets, in a ref so the geometry sync stays referentially stable —
@@ -241,26 +235,11 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
    * on every open. Real input events are the one signal those can't fake.
    */
   const hasUserScrolledRef = useRef(false)
-  const scrollFramesRef = useRef<number[]>([])
-  // `syncListGeometry` is defined below this callback; the ref keeps the
-  // restore loop able to reach it without reordering the file.
-  const syncListGeometryRef = useRef<() => void>(() => {})
-
-  const cancelPendingScrollFrames = useCallback(() => {
-    for (const frameId of scrollFramesRef.current) {
-      window.cancelAnimationFrame(frameId)
-    }
-    scrollFramesRef.current = []
-  }, [])
 
   const applyScrollTarget = useCallback((target: TranscriptScrollTarget) => {
-    cancelPendingScrollFrames()
-
     if (target.kind === "end") {
       onIsAtEndChange(true)
-      scrollFramesRef.current.push(window.requestAnimationFrame(() => {
-        void listRef.current?.scrollToEnd?.({ animated: false })
-      }))
+      scrollToEnd()
       return
     }
 
@@ -268,47 +247,13 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     // auto-follow effect bails on this same commit instead of yanking us to
     // the bottom — child effects flush before parent effects.
     onIsAtEndChange(false)
-
-    const scrollToTarget = () => {
-      void listRef.current?.scrollToIndex?.({
-        index: target.index,
-        viewPosition: 0,
-        viewOffset: headerOffsetPx,
-        animated: false,
-      })
+    // Rows are real elements, so this lands on the row rather than near it.
+    // `scrollMargin` clears the floating navbar the row would otherwise sit
+    // under.
+    if (!scrollToMessage(target.rowId, { align: "start", scrollMargin: headerOffsetPx })) {
+      scrollToEnd()
     }
-
-    /**
-     * Re-issue until the anchor row actually sits at the top and stays there.
-     *
-     * `scrollToIndex` computes its offset from the sizes the list knows, and on
-     * a cold open most rows above the target have only an estimate. Each pass
-     * brings more real measurements into range, which moves the correct offset
-     * — so a fixed number of frames lands near the target rather than on it,
-     * and the row the reader left at the top is not the row they come back to.
-     *
-     * Stops as soon as the scroll offset repeats (settled) or the budget runs
-     * out, so a list that never converges cannot spin.
-     */
-    const settleToTarget = (attemptsLeft: number, previousOffset: number) => {
-      scrollToTarget()
-      scrollFramesRef.current.push(window.requestAnimationFrame(() => {
-        const offset = listRef.current?.getState?.()?.scroll ?? previousOffset
-        // The minimap reads the visible range from this; without a sync here it
-        // keeps whatever it had before the restore, which on a fresh load is
-        // "nothing in view".
-        syncListGeometryRef.current()
-        if (attemptsLeft <= 0 || Math.abs(offset - previousOffset) < 1) return
-        settleToTarget(attemptsLeft - 1, offset)
-      }))
-    }
-
-    scrollFramesRef.current.push(window.requestAnimationFrame(() => {
-      settleToTarget(RESTORE_SETTLE_FRAMES, Number.NaN)
-    }))
-  }, [cancelPendingScrollFrames, headerOffsetPx, listRef, onIsAtEndChange])
-
-  useEffect(() => cancelPendingScrollFrames, [cancelPendingScrollFrames])
+  }, [headerOffsetPx, onIsAtEndChange, scrollToEnd, scrollToMessage])
 
   // Restore once per chat open: wait until rows exist *and* the stored anchor
   // has resolved, otherwise we'd land on the fallback and visibly jump when the
@@ -342,7 +287,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     latestPromptRef.current = nextPrompt
 
     if (!shouldPinForNewPrompt(previousPrompt, nextPrompt) || nextPrompt === null) return
-    applyScrollTarget({ kind: "pin", index: nextPrompt.rowIndex })
+    applyScrollTarget({ kind: "pin", rowId: nextPrompt.rowId })
   }, [activeChatId, applyScrollTarget, resolvedRows])
 
   const handleToolGroupExpandedChange = useCallback((groupId: string, next: boolean) => {
@@ -367,9 +312,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     // Never let a programmatic scroll move the stored position.
     if (!hasUserScrolledRef.current) return
 
-    const start = listRef.current?.getState?.()?.start
-    if (typeof start !== "number") return
-    const row = resolvedRowsRef.current[start]
+    const row = currentAnchorId === null ? undefined : rowsById.get(currentAnchorId)
     if (!row) return
 
     const messageId = getRowAnchorMessageId(row)
@@ -377,176 +320,72 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     if (!messageId || isOptimisticMessageId(messageId)) return
 
     onReportReadAnchor(messageId, isAtEnd)
-  }, [listRef, onReportReadAnchor])
+  }, [currentAnchorId, onReportReadAnchor, rowsById])
 
   /**
-   * Mirror the list's geometry into state for the minimap.
+   * Which rows are on screen, as the scroller observes them.
    *
-   * `start`/`end` are already the on-screen range, so no measurement of our own.
-   * Overflow comes from the scroll node rather than LegendList's `contentLength`
-   * because only the node accounts for the header offset and the tall bottom
-   * padding that clears the input dock — a large share of this list's height.
+   * Real elements report their own visibility, so there is no geometry to
+   * mirror and nothing to re-derive when something moves rows under a
+   * stationary scroll position.
    */
-  const syncListGeometry = useCallback(() => {
-    // The map is the only reader, and it has no room to render on a narrow
-    // viewport. Sampling anyway would commit React state on every scroll
-    // event — the most expensive thing this component does per frame — to
-    // feed something nobody can see.
-    if (transcriptWidthRef.current > 0 && transcriptWidthRef.current < NARROW_VIEWPORT_PX) return
-
-    const state = listRef.current?.getState?.()
-    if (!state) return
-
-    const scrollNode = listRef.current?.getScrollableNode?.()
-    const overflows = scrollNode instanceof HTMLElement
-      && scrollNode.scrollHeight - scrollNode.clientHeight > OVERFLOW_EPSILON_PX
-
-    // The band the reader can actually see: the navbar and the input dock are
-    // overlays, so rows sliding under them are on the scroll surface but not
-    // on screen.
-    const { top: insetTop, bottom: insetBottom } = viewportInsetsRef.current
-    const range = getVisibleRowRange(
-      {
-        count: resolvedRowsRef.current.length,
-        positionAtIndex: state.positionAtIndex,
-        sizeAtIndex: state.sizeAtIndex,
-      },
-      state.scroll + insetTop,
-      state.scroll + state.scrollLength - insetBottom,
-    )
-
-    setListGeometry((current) => {
-      // A null range means the list has not laid out yet, not that the reader
-      // is looking at nothing — keep the last known rows rather than blanking
-      // every tick.
-      const start = range?.start ?? current.start
-      const end = range?.end ?? current.end
-      return current.start === start && current.end === end && current.overflows === overflows
-        ? current
-        : { start, end, overflows }
-    })
-  }, [listRef])
-
-  /**
-   * Track the row window from LegendList's own layout events rather than from
-   * scroll events plus a guessed frame.
-   *
-   * Plenty of things move rows under a stationary scroll position and emit no
-   * `scroll` of their own — streaming, and especially a turn ending: the
-   * processing indicator leaves the footer and an error box may join it, which
-   * is a pure footer resize the row count never sees. Sampling one rAF after a
-   * data change also lands before virtualized rows have re-measured, so the
-   * range would stick until the next manual scroll.
-   */
-  useEffect(() => {
-    let unsubscribes: Array<() => void> = []
-    const frames: number[] = []
-
-    // Sampled over several frames, not once. A single rAF after mount lands
-    // before the list has laid out, so the range stays at its initial value
-    // and the map reads as "nothing on screen" until something else moves the
-    // list. That is the whole story when a chat is reopened without a restore
-    // — the scroll position is already correct, so nothing else ever fires.
-    const settleGeometry = (attemptsLeft: number) => {
-      frames.push(window.requestAnimationFrame(() => {
-        syncListGeometry()
-        if (attemptsLeft > 0) settleGeometry(attemptsLeft - 1)
-      }))
+  const visibleRowRange = useMemo(() => {
+    let start = Number.POSITIVE_INFINITY
+    let end = Number.NEGATIVE_INFINITY
+    for (const rowId of visibleMessageIds) {
+      const index = rowIndexByRowId.get(rowId)
+      if (index === undefined) continue
+      if (index < start) start = index
+      if (index > end) end = index
     }
+    return Number.isFinite(start) ? { start, end } : null
+  }, [rowIndexByRowId, visibleMessageIds])
 
-    const frameId = window.requestAnimationFrame(() => {
-      const state = listRef.current?.getState?.()
-      if (!state?.listen) return
-      unsubscribes = LIST_LAYOUT_EVENTS.map((event) => state.listen(event, syncListGeometry))
-      settleGeometry(RESTORE_SETTLE_FRAMES)
-    })
+  const handleScroll = useCallback(() => {
+    const scrollNode = viewportRef.current
+    if (!scrollNode) return
+    const distanceFromEnd = scrollNode.scrollHeight - scrollNode.clientHeight - scrollNode.scrollTop
+    const isAtEnd = distanceFromEnd <= scrollNode.clientHeight * AT_END_THRESHOLD_RATIO
+    onIsAtEndChange(isAtEnd)
+    reportTopVisibleMessage(isAtEnd)
+    setTranscriptOverflows(scrollNode.scrollHeight - scrollNode.clientHeight > OVERFLOW_EPSILON_PX)
+  }, [onIsAtEndChange, reportTopVisibleMessage])
+
+  useEffect(() => {
+    const scrollNode = viewportRef.current
+    if (!scrollNode) return
+
+    // Input events are the only reliable way to tell the user's own scrolling
+    // apart from a restore or a pin, which also emit `scroll`.
+    const markUserScrolled = () => {
+      hasUserScrolledRef.current = true
+    }
+    const userIntentEvents = ["wheel", "touchmove", "pointerdown", "keydown"] as const
+
+    // Resizing the pane changes both the minimap's gutter and whether the same
+    // content still overflows, neither of which emits a scroll.
+    const syncSize = () => {
+      const nextWidth = scrollNode.clientWidth
+      setTranscriptWidth((current) => (Math.abs(current - nextWidth) < 1 ? current : nextWidth))
+      handleScroll()
+    }
+    const sizeObserver = new ResizeObserver(syncSize)
+    sizeObserver.observe(scrollNode)
+    syncSize()
+
+    scrollNode.addEventListener("scroll", handleScroll, { passive: true })
+    for (const eventName of userIntentEvents) {
+      scrollNode.addEventListener(eventName, markUserScrolled, { passive: true })
+    }
 
     return () => {
-      window.cancelAnimationFrame(frameId)
-      for (const frame of frames) window.cancelAnimationFrame(frame)
-      for (const unsubscribe of unsubscribes) unsubscribe()
-    }
-  }, [activeChatId, listRef, syncListGeometry])
-
-  syncListGeometryRef.current = syncListGeometry
-
-  const handleScroll = useCallback((event?: unknown) => {
-    syncListGeometry()
-
-    const currentTarget = (
-      typeof event === "object"
-      && event !== null
-      && "currentTarget" in event
-      && event.currentTarget instanceof HTMLElement
-    )
-      ? event.currentTarget
-      : listRef.current?.getScrollableNode?.()
-
-    if (currentTarget instanceof HTMLElement) {
-      const distanceFromEnd = currentTarget.scrollHeight - currentTarget.clientHeight - currentTarget.scrollTop
-      const isAtEnd = distanceFromEnd <= currentTarget.clientHeight * AT_END_THRESHOLD_RATIO
-      onIsAtEndChange(isAtEnd)
-      reportTopVisibleMessage(isAtEnd)
-      return
-    }
-
-    const state = listRef.current?.getState?.()
-    if (state) {
-      onIsAtEndChange(state.isAtEnd)
-      reportTopVisibleMessage(state.isAtEnd)
-    }
-  }, [listRef, onIsAtEndChange, reportTopVisibleMessage, syncListGeometry])
-
-  useEffect(() => {
-    let cleanup: (() => void) | undefined
-    const frameId = window.requestAnimationFrame(() => {
-      const scrollNode = listRef.current?.getScrollableNode?.()
-      if (!(scrollNode instanceof HTMLElement)) {
-        return
-      }
-
-      const handleNativeScroll = () => {
-        handleScroll({ currentTarget: scrollNode })
-      }
-
-      // Input events are the only reliable way to tell the user's own
-      // scrolling apart from a restore/pin/auto-follow, which also emit
-      // `scroll` and keep settling for several frames as rows measure.
-      const markUserScrolled = () => {
-        hasUserScrolledRef.current = true
-      }
-      const userIntentEvents = ["wheel", "touchmove", "pointerdown", "keydown"] as const
-
-      // Resizing the pane changes both the gutter and whether the same content
-      // still overflows, neither of which emits a scroll or a list layout event.
-      const syncSize = () => {
-        const nextWidth = scrollNode.clientWidth
-        setTranscriptWidth((current) => (Math.abs(current - nextWidth) < 1 ? current : nextWidth))
-        syncListGeometry()
-      }
-      const sizeObserver = new ResizeObserver(syncSize)
-      sizeObserver.observe(scrollNode)
-      syncSize()
-
-      scrollNode.addEventListener("scroll", handleNativeScroll, { passive: true })
+      sizeObserver.disconnect()
+      scrollNode.removeEventListener("scroll", handleScroll)
       for (const eventName of userIntentEvents) {
-        scrollNode.addEventListener(eventName, markUserScrolled, { passive: true })
+        scrollNode.removeEventListener(eventName, markUserScrolled)
       }
-      handleNativeScroll()
-      cleanup = () => {
-        sizeObserver.disconnect()
-        scrollNode.removeEventListener("scroll", handleNativeScroll)
-        for (const eventName of userIntentEvents) {
-          scrollNode.removeEventListener(eventName, markUserScrolled)
-        }
-      }
-    })
-
-    return () => {
-      window.cancelAnimationFrame(frameId)
-      cleanup?.()
     }
-  }, [activeChatId, handleScroll, listRef, resolvedRows.length])
+  }, [activeChatId, handleScroll])
 
   // The button lives outside the scroll node, so it never trips the input
   // listeners — but jumping to the bottom is an explicit read-position choice.
@@ -564,7 +403,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   // as deliberate a read-position choice as scrolling there by hand.
   const handleSelectTurn = useCallback((turn: TranscriptTurn) => {
     hasUserScrolledRef.current = true
-    applyScrollTarget({ kind: "pin", index: turn.rowIndex })
+    applyScrollTarget({ kind: "pin", rowId: turn.id })
   }, [applyScrollTarget])
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
@@ -589,18 +428,6 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
       }))
     })
   }, [onOpenLocalLink])
-
-  const renderItem = useCallback(({ item }: { item: ResolvedTranscriptRow }) => (
-    <div className="mx-auto w-full max-w-[800px] pb-5" data-transcript-row-id={item.id}>
-      <KannaTranscriptRow
-        row={item}
-        toolGroupExpanded={item.kind === "tool-group" ? (toolGroupExpanded[item.id] ?? false) : undefined}
-        onToolGroupExpandedChange={handleToolGroupExpandedChange}
-        onAskUserQuestionSubmit={onAskUserQuestionSubmit}
-        onExitPlanModeConfirm={onExitPlanModeConfirm}
-      />
-    </div>
-  ), [handleToolGroupExpandedChange, onAskUserQuestionSubmit, onExitPlanModeConfirm, toolGroupExpanded])
 
   // Stable identity: the viewport commits a render on every scroll event (the
   // visible row range changes constantly), and a fresh style object hands the
@@ -640,44 +467,50 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   return (
     <>
       <OpenLocalLinkProvider onOpenLocalLink={handleOpenLocalLinkClick}>
-        <LegendList<ResolvedTranscriptRow>
-          ref={listRef}
-          data={resolvedRows}
-          extraData={toolGroupExpanded}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          // Per row, not one number for all of them: a collapsed tool header
-          // and a long answer differ by more than an order of magnitude, and
-          // the estimate is what unmeasured rows — including every row
-          // `scrollToIndex` jumps over — are assumed to be.
-          getEstimatedItemSize={getEstimatedItemSize}
-          estimatedItemSize={48}
-          // No initialScrollAtEnd: the prop is captured at mount, and opening a
-          // chat now restores to a stored anchor rather than the bottom. The
-          // restore effect above drives the initial position instead.
-          maintainScrollAtEnd
-          maintainScrollAtEndThreshold={AT_END_THRESHOLD_RATIO}
-          maintainVisibleContentPosition
-          onScroll={handleScroll}
-          // Rows unmount as soon as they leave this band, and a remounted row
-          // renders collapsed while the list still holds its expanded height —
-          // the size delta both re-anchors layout and re-triggers follow-the-
-          // bottom. Keeping more of the transcript mounted makes that rare, at
-          // the cost of some retained DOM.
-          drawDistance={drawDistance}
-          className="h-full flex-1 overflow-x-hidden overscroll-y-contain px-3 scroll-pt-[72px] [scrollbar-gutter:auto]"
-          contentContainerStyle={contentContainerStyle}
-          ListHeaderComponent={listHeader}
-          ListFooterComponent={listFooter}
-        />
+        <MessageScroller className="h-full flex-1">
+          <MessageScrollerViewport
+            ref={viewportRef}
+            className="h-full overflow-x-hidden overscroll-y-contain px-3"
+            style={{ scrollPaddingTop: headerOffsetPx }}
+          >
+            <MessageScrollerContent style={contentContainerStyle}>
+              {listHeader}
+              {resolvedRows.map((row) => (
+                <MessageScrollerItem
+                  key={row.id}
+                  messageId={row.id}
+                  // Anchors are what the scroller restores to and reports as the
+                  // current position, so they mark where turns begin.
+                  scrollAnchor={row.kind === "single" && row.message.kind === "user_prompt"}
+                  // A per-row estimate of the height an offscreen row reserves.
+                  // A collapsed tool header and a long answer differ by more
+                  // than an order of magnitude, and the browser only keeps this
+                  // until it has laid the row out once.
+                  style={{ containIntrinsicSize: `auto ${estimateTranscriptRowSize(row)}px` }}
+                >
+                  <div className="mx-auto w-full max-w-[800px] pb-5" data-transcript-row-id={row.id}>
+                    <KannaTranscriptRow
+                      row={row}
+                      toolGroupExpanded={row.kind === "tool-group" ? (toolGroupExpanded[row.id] ?? false) : undefined}
+                      onToolGroupExpandedChange={handleToolGroupExpandedChange}
+                      onAskUserQuestionSubmit={onAskUserQuestionSubmit}
+                      onExitPlanModeConfirm={onExitPlanModeConfirm}
+                    />
+                  </div>
+                </MessageScrollerItem>
+              ))}
+              {listFooter}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+        </MessageScroller>
       </OpenLocalLinkProvider>
 
       {showEmptyState ? null : (
         <TranscriptMinimap
           turns={turns}
-          visibleStart={listGeometry.start}
-          visibleEnd={listGeometry.end}
-          transcriptOverflows={listGeometry.overflows}
+          visibleStart={visibleRowRange?.start ?? -1}
+          visibleEnd={visibleRowRange?.end ?? -1}
+          transcriptOverflows={transcriptOverflows}
           topPx={headerOffsetPx}
           // Match the empty state: transcriptPaddingBottom carries extra
           // clearance the message list needs but overlays should not.
@@ -838,11 +671,3 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     </>
   )
 })
-
-function keyExtractor(item: ResolvedTranscriptRow) {
-  return item.id
-}
-
-function getEstimatedItemSize(item: ResolvedTranscriptRow) {
-  return estimateTranscriptRowSize(item)
-}

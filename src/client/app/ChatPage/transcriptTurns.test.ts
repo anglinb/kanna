@@ -6,7 +6,6 @@ import {
   getMinimapCapacity,
   getTranscriptGutterWidth,
   isTurnInView,
-  getVisibleRowRange,
   selectVisibleTurns,
   type TranscriptTurn,
 } from "./transcriptTurns"
@@ -267,58 +266,6 @@ describe("isTurnInView", () => {
   test("includes turns touching the window edges", () => {
     expect(isTurnInView(turn(0, 40), 40, 50)).toBe(true)
     expect(isTurnInView(turn(50, 80), 40, 50)).toBe(true)
-  })
-})
-
-describe("getVisibleRowRange", () => {
-  /** `count` rows of uniform `size`, laid out end to end from 0. */
-  const uniform = (count: number, size = 100) => ({
-    count,
-    positionAtIndex: (index: number) => index * size,
-    sizeAtIndex: () => size,
-  })
-
-  test("finds the rows overlapping the band", () => {
-    // Band 250-450 touches rows 2 (200-300), 3 (300-400) and 4 (400-500).
-    expect(getVisibleRowRange(uniform(10), 250, 450)).toEqual({ start: 2, end: 4 })
-  })
-
-  test("includes a row that only partly overlaps each edge", () => {
-    expect(getVisibleRowRange(uniform(10), 299, 301)).toEqual({ start: 2, end: 3 })
-  })
-
-  test("handles the first and last rows", () => {
-    expect(getVisibleRowRange(uniform(10), 0, 150)).toEqual({ start: 0, end: 1 })
-    expect(getVisibleRowRange(uniform(10), 950, 1000)).toEqual({ start: 9, end: 9 })
-  })
-
-  test("returns a single row when the band sits inside one", () => {
-    expect(getVisibleRowRange(uniform(10), 320, 380)).toEqual({ start: 3, end: 3 })
-  })
-
-  test("returns null when the band is past the end of the content", () => {
-    expect(getVisibleRowRange(uniform(10), 2000, 2100)).toBeNull()
-  })
-
-  test("returns null for an empty or degenerate list", () => {
-    expect(getVisibleRowRange(uniform(0), 0, 100)).toBeNull()
-    expect(getVisibleRowRange(uniform(10), 100, 100)).toBeNull()
-    expect(getVisibleRowRange(uniform(10), 400, 200)).toBeNull()
-  })
-
-  test("copes with rows of differing heights", () => {
-    // Tops at 0, 10, 510, 530 — a tall row 1 spans most of the band.
-    const sizes = [10, 500, 20, 40]
-    const tops = [0, 10, 510, 530]
-    const metrics = {
-      count: 4,
-      positionAtIndex: (index: number) => tops[index]!,
-      sizeAtIndex: (index: number) => sizes[index]!,
-    }
-
-    expect(getVisibleRowRange(metrics, 200, 300)).toEqual({ start: 1, end: 1 })
-    expect(getVisibleRowRange(metrics, 0, 5)).toEqual({ start: 0, end: 0 })
-    expect(getVisibleRowRange(metrics, 505, 560)).toEqual({ start: 1, end: 3 })
   })
 })
 
