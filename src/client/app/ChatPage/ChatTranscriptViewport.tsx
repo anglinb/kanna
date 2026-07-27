@@ -482,9 +482,12 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
                 <MessageScrollerItem
                   key={row.id}
                   messageId={row.id}
-                  // Anchors are what the scroller restores to and reports as the
-                  // current position, so they mark where turns begin.
-                  scrollAnchor={row.kind === "single" && row.message.kind === "user_prompt"}
+                  // Deliberately not a scroll anchor. Marking turn starts makes
+                  // the scroller pull each new one to the top of the viewport —
+                  // its "new turn begins here" behaviour. Sending should land
+                  // at the bottom, where the reply arrives, and the read
+                  // position is taken from the visible rows rather than from
+                  // anchors.
                   // A per-row estimate of the height an offscreen row reserves.
                   // A collapsed tool header and a long answer differ by more
                   // than an order of magnitude, and the browser only keeps this
