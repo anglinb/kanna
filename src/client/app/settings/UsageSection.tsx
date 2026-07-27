@@ -43,23 +43,26 @@ function currencySymbol(currency: string | null): string {
   }
 }
 
-/** One decimal at most, with a bare integer when the decimal is zero: 2 → "2", 7.05 → "7.1". */
-function trimUnit(value: number): string {
-  return value.toLocaleString("en-US", { maximumFractionDigits: 1 })
+/**
+ * Rounded and abbreviated above a thousand: 130.42 → "130", 2000 → "2k",
+ * 7051.8 → "7.1k", 1_200_000 → "1.2m". Fractions are noise at this altitude.
+ */
+function formatCompact(value: number): string {
+  const sign = value < 0 ? "-" : ""
+  const abs = Math.abs(value)
+  const unit = (scaled: number, suffix: string) =>
+    `${sign}${scaled.toLocaleString("en-US", { maximumFractionDigits: 1 })}${suffix}`
+  if (abs >= 1_000_000) return unit(abs / 1_000_000, "m")
+  if (abs >= 1_000) return unit(abs / 1_000, "k")
+  return `${sign}${Math.round(abs)}`
 }
 
-/**
- * Whole-dollar money, abbreviated above a thousand: "$130", "$1.3k", "$2k", "$1.2m".
- * Cents are noise at this altitude and caps are usually round thousands, so the
- * card reads "$130 of $2k used" rather than "$130.42 of $2,000.00 used".
- */
+/** Whole-dollar money, abbreviated above a thousand: "$130", "$1.3k", "$2k", "$1.2m". */
 function formatMoney(amount: number, currency: string | null): string {
+  const compact = formatCompact(amount)
   const symbol = currencySymbol(currency)
-  const sign = amount < 0 ? "-" : ""
-  const abs = Math.abs(amount)
-  if (abs >= 1_000_000) return `${sign}${symbol}${trimUnit(abs / 1_000_000)}m`
-  if (abs >= 1_000) return `${sign}${symbol}${trimUnit(abs / 1_000)}k`
-  return `${sign}${symbol}${Math.round(abs).toLocaleString("en-US")}`
+  // Keep the symbol ahead of the sign: -$5, not $-5.
+  return compact.startsWith("-") ? `-${symbol}${compact.slice(1)}` : `${symbol}${compact}`
 }
 
 function creditsSummary(credits: NonNullable<ProviderUsageSnapshot["credits"]>): string | null {
@@ -73,7 +76,7 @@ function creditsSummary(credits: NonNullable<ProviderUsageSnapshot["credits"]>):
     // Codex reports its prepaid balance as a bare numeric string ("1000");
     // render it as a remaining count. Non-numeric details ("Unlimited") pass through.
     const numeric = /^\d+(\.\d+)?$/.test(credits.detail.trim()) ? Number(credits.detail) : null
-    parts.push(numeric !== null ? `${numeric.toLocaleString("en-US")} credits remaining` : credits.detail)
+    parts.push(numeric !== null ? `${formatCompact(numeric)} credits remaining` : credits.detail)
   }
   return parts.length > 0 ? parts.join(" · ") : null
 }
