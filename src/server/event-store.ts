@@ -62,6 +62,25 @@ function buildChatMessagePreview(text: string) {
     : collapsed
 }
 
+/**
+ * Entries the agent itself produced, as opposed to the user's prompts or the
+ * bookkeeping entries a session emits around them (system_init, account_info,
+ * context_window_updated, compaction/handoff boundaries…). Only these advance
+ * `lastAgentMessageAt`, so idle session housekeeping can't make a chat look
+ * freshly active.
+ *
+ * `tool_call`/`tool_result` count alongside `assistant_text`: a plan lands as
+ * an ExitPlanMode tool call, and a permission prompt may arrive with no text
+ * at all, so text alone would miss exactly the mid-turn stops this timestamp
+ * exists to catch. `result` counts too — it's the agent's closing entry.
+ */
+function isAgentAuthoredEntry(entry: TranscriptEntry) {
+  return entry.kind === "assistant_text"
+    || entry.kind === "tool_call"
+    || entry.kind === "tool_result"
+    || entry.kind === "result"
+}
+
 function normalizeSidebarProjectOrder(value: unknown) {
   if (!Array.isArray(value)) {
     return []
@@ -765,6 +784,11 @@ export class EventStore {
       const preview = buildChatMessagePreview(entry.text)
       if (preview) chat.lastAgentMessagePreview = preview
     }
+    if (isAgentAuthoredEntry(entry)) {
+      // Hidden entries count: this is "when did the agent last do something",
+      // not "what can we show" — same split as lastMessageAt vs its preview.
+      chat.lastAgentMessageAt = Math.max(chat.lastAgentMessageAt ?? 0, entry.createdAt)
+    }
     chat.updatedAt = Math.max(chat.updatedAt, entry.createdAt)
   }
 
@@ -1121,6 +1145,11 @@ export class EventStore {
           }
           if (sourceChat.lastUserMessagePreview) chat.lastUserMessagePreview = sourceChat.lastUserMessagePreview
           if (sourceChat.lastAgentMessagePreview) chat.lastAgentMessagePreview = sourceChat.lastAgentMessagePreview
+          // Same transcript, so the same last-agent-activity timestamp a
+          // reload would derive from it.
+          if (sourceChat.lastAgentMessageAt != null) {
+            chat.lastAgentMessageAt = Math.max(chat.lastAgentMessageAt ?? 0, sourceChat.lastAgentMessageAt)
+          }
         }
         // The fork's transcript is the source's in full, so this is complete.
         this.setCachedTranscript(chatId, cloneTranscriptEntries(sourceEntries), 0)
@@ -1458,6 +1487,31 @@ export class EventStore {
     const offset = index - cached.startIndex
     if (offset < 0 || offset >= cached.entries.length) return null
     return cached.entries[offset]?._id ?? null
+  }
+
+  /**
+   * Entries by id, with their payloads intact.
+   *
+   * Backs the tool-payload fetch: snapshots ship tool calls and results without
+   * their unbounded fields, and a row that gets opened asks for the real thing.
+   * Batched because expanding a tool group asks for every member at once.
+   * `debugRaw` is stripped as everywhere else on the wire — the raw JSON view
+   * has its own request for that.
+   *
+   * Ids that no longer exist are simply absent from the result.
+   */
+  getEntriesById(chatId: string, entryIds: string[]): TranscriptEntry[] {
+    this.requireChat(chatId)
+    if (entryIds.length === 0) return []
+    const wanted = new Set(entryIds)
+    const found: TranscriptEntry[] = []
+    for (const entry of this.getTranscriptEntries(chatId)) {
+      if (!wanted.has(entry._id)) continue
+      const { debugRaw, ...rest } = entry
+      found.push(rest as TranscriptEntry)
+      if (found.length === wanted.size) break
+    }
+    return found
   }
 
   /**

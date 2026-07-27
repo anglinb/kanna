@@ -33,6 +33,12 @@ import type {
 } from "../shared/types"
 
 
+/**
+ * Cap on ids per `chat.getToolEntries`. The largest honest request is one tool
+ * group's members; beyond that something is walking the transcript.
+ */
+const MAX_TOOL_ENTRY_REQUEST = 256
+
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
   snapshotSignatures: Map<string, string>
@@ -1247,6 +1253,16 @@ export function createWsRouter({
         }
         case "chat.getEntryDebugRaw": {
           const result = store.getEntryDebugRaw(command.chatId, command.entryId)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "chat.getToolEntries": {
+          // Bounded so a malformed client cannot ask for the whole transcript
+          // one id at a time; the largest real request is one tool group.
+          if (command.entryIds.length > MAX_TOOL_ENTRY_REQUEST) {
+            throw new Error(`Too many entry ids (max ${MAX_TOOL_ENTRY_REQUEST})`)
+          }
+          const result = store.getEntriesById(command.chatId, command.entryIds)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }

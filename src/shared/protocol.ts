@@ -182,6 +182,13 @@ export type ClientCommand =
    * JSON debug view pulls it on demand when opened.
    */
   | { type: "chat.getEntryDebugRaw"; chatId: string; entryId: string }
+  /**
+   * Fetch tool entries with their payloads intact. Snapshots ship tool calls
+   * and results without their unbounded fields — a collapsed row draws none of
+   * them — so opening a row asks for the real thing. Batched: expanding a tool
+   * group wants every member at once. Result: TranscriptEntry[].
+   */
+  | { type: "chat.getToolEntries"; chatId: string; entryIds: string[] }
   | {
       type: "chat.send"
       chatId?: string

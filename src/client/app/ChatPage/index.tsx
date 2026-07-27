@@ -25,13 +25,15 @@ import { TERMINAL_TOGGLE_ANIMATION_DURATION_MS } from "../terminalToggleAnimatio
 import { useRightSidebarToggleAnimation } from "../useRightSidebarToggleAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
 import { useTerminalToggleAnimation } from "../useTerminalToggleAnimation"
-import type { AgentProvider, ChatSkillsSnapshot } from "../../../shared/types"
+import type { AgentProvider, ChatSkillsSnapshot, TranscriptEntry } from "../../../shared/types"
 import type { KannaState } from "../useKannaState"
 import { getNextMeasuredInputHeight, getTranscriptPaddingBottom } from "../useKannaState"
 import { ChatInputDock } from "./ChatInputDock"
 import { DefaultModelsDialog } from "../../components/DefaultModelsDialog"
 import { ChatTranscriptViewport } from "./ChatTranscriptViewport"
 import { TranscriptRenderOptionsProvider } from "../../components/messages/render-context"
+import { ToolPayloadProvider } from "../../components/messages/tool-payload-context"
+import { createToolPayloadStore } from "./toolPayloadStore"
 import { TerminalWorkspaceShell } from "./TerminalWorkspaceShell"
 import { useChatPageSidebarActions, EMPTY_DIFF_SNAPSHOT } from "./useChatPageSidebarActions"
 import {
@@ -803,6 +805,20 @@ export function ChatPage() {
 
   const transcriptRenderOptions = useMemo(() => ({ loadEntryDebugRaw }), [loadEntryDebugRaw])
 
+  // One cache per chat: entry ids are chat-scoped, and leaving a chat should
+  // not keep its payloads resident.
+  const toolPayloadStore = useMemo(
+    () => createToolPayloadStore(async (entryIds) => {
+      if (!state.activeChatId) return []
+      return await state.socket.command<TranscriptEntry[]>({
+        type: "chat.getToolEntries",
+        chatId: state.activeChatId,
+        entryIds,
+      }) ?? []
+    }),
+    [state.socket, state.activeChatId]
+  )
+
   useEffect(() => {
     return () => clearShowScrollTimeout()
   }, [clearShowScrollTimeout])
@@ -966,6 +982,7 @@ export function ChatPage() {
           gitStatus={state.chatDiffSnapshot?.status}
         />
         <TranscriptRenderOptionsProvider value={transcriptRenderOptions}>
+        <ToolPayloadProvider store={toolPayloadStore}>
         <ChatTranscriptViewport
           activeChatId={state.activeChatId}
           listRef={transcriptListRef}
@@ -1004,6 +1021,7 @@ export function ChatPage() {
           emptyStateProjectPath={state.navbarLocalPath}
           onOpenProjectExternal={handleOpenExternal}
         />
+        </ToolPayloadProvider>
         </TranscriptRenderOptionsProvider>
       </CardContent>
 

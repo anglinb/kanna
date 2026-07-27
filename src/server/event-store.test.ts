@@ -876,6 +876,35 @@ describe("EventStore", () => {
     expect(store.getMessages(forked.id)).toEqual(store.getMessages(source.id))
   })
 
+  test("lastAgentMessageAt tracks agent entries mid-turn, ignoring user prompts", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 1_000, { content: "plan this" }))
+    // The user's own prompt is not agent activity.
+    expect(store.requireChat(chat.id).lastAgentMessageAt).toBeUndefined()
+
+    await store.appendMessage(chat.id, entry("assistant_text", 2_000, { text: "here's the plan" }))
+    expect(store.requireChat(chat.id).lastAgentMessageAt).toBe(2_000)
+
+    // No turn ended (the chat is parked waiting on plan approval), so this is
+    // the only timestamp that reflects how fresh the chat actually is.
+    expect(store.requireChat(chat.id).lastTurnEndedAt).toBeUndefined()
+    expect(store.requireChat(chat.id).lastMessageAt).toBe(1_000)
+
+    // A later user prompt doesn't drag the agent timestamp backwards.
+    await store.appendMessage(chat.id, entry("user_prompt", 3_000, { content: "go" }))
+    expect(store.requireChat(chat.id).lastAgentMessageAt).toBe(2_000)
+
+    // Rebuilt from the transcript on boot, like lastMessageAt.
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.requireChat(chat.id).lastAgentMessageAt).toBe(2_000)
+  })
+
   test("a fork inherits lastTurnEndedAt, so it derives the same uncommittedWork flag", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)
@@ -1043,5 +1072,50 @@ describe("transcript window resume", () => {
     expect(after.startIndex).toBe(before.startIndex + 1)
     expect(after.messages[after.messages.length - 1]?.kind).toBe("assistant_text")
     expect(store.getEntryIdAt(chatId, 12)).toBe(after.messages[after.messages.length - 1]!._id)
+  })
+})
+
+describe("on-demand tool payloads", () => {
+  test("returns the requested entries with their payloads, minus debugRaw", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "payloads")
+    const chat = await store.createChat(project.id)
+
+    await store.appendMessage(chat.id, {
+      _id: "call-1",
+      createdAt: 1,
+      kind: "tool_call",
+      debugRaw: "{}",
+      tool: { kind: "tool", toolKind: "write_file", toolName: "Write", toolId: "t1", input: { filePath: "a.ts", content: "body" } },
+    } as unknown as TranscriptEntry)
+    await store.appendMessage(chat.id, {
+      _id: "result-1",
+      createdAt: 2,
+      kind: "tool_result",
+      toolId: "t1",
+      content: "written",
+    } as unknown as TranscriptEntry)
+
+    const found = store.getEntriesById(chat.id, ["call-1", "result-1"])
+
+    expect(found).toHaveLength(2)
+    // The payloads the wire dropped are exactly what this exists to return.
+    expect((found[0] as unknown as { tool: { input: { content?: string } } }).tool.input.content).toBe("body")
+    expect((found[1] as unknown as { content?: unknown }).content).toBe("written")
+    expect(found[0]?.debugRaw).toBeUndefined()
+  })
+
+  test("silently omits ids that are not in the transcript", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "payloads")
+    const chat = await store.createChat(project.id)
+    await store.appendMessage(chat.id, entry("assistant_text", 1, { text: "hi" }))
+
+    expect(store.getEntriesById(chat.id, ["nope"])).toEqual([])
+    expect(store.getEntriesById(chat.id, [])).toEqual([])
   })
 })

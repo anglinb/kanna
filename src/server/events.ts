@@ -39,6 +39,12 @@ export interface ChatRecord {
   lastMessageAt?: number
   /** When the last turn ended (finished/failed/cancelled) — i.e. when the last agent response was received. */
   lastTurnEndedAt?: number
+  /**
+   * When the agent last wrote to the transcript (assistant text, tool call, or
+   * tool result). Advances mid-turn, unlike `lastTurnEndedAt` — the timestamp
+   * a chat waiting on a plan or a permission prompt sorts by.
+   */
+  lastAgentMessageAt?: number
   lastUserMessagePreview?: string
   lastAgentMessagePreview?: string
   lastTurnOutcome: "success" | "failed" | "cancelled" | null
@@ -252,42 +258,113 @@ export function cloneTranscriptEntries(entries: TranscriptEntry[]): TranscriptEn
 const STRUCTURED_RESULT_TOOL_KINDS = new Set(["ask_user_question", "exit_plan_mode"])
 
 /**
- * Clone a page of entries for the wire, dropping `debugRaw`.
+ * Tool kinds that render inline and interactively, so their payloads have to
+ * travel with the transcript rather than being fetched when a row is opened —
+ * there is no row to open. Superset of the structured-result kinds.
+ */
+const INLINE_TOOL_KINDS = new Set([...STRUCTURED_RESULT_TOOL_KINDS, "todo_write"])
+
+/** Strip the raw provider payload; it duplicates `content` and dwarfs it. */
+function withoutDebugRaw<TEntry extends TranscriptEntry>(entry: TEntry) {
+  const { debugRaw, ...rest } = entry
+  return rest as TEntry
+}
+
+/**
+ * Drop a tool call's unbounded input fields, keeping everything a collapsed
+ * row draws. Returns the entry unchanged when there was nothing to drop, so
+ * the `trimmed` marker always means "fetching will reveal more".
+ */
+function trimToolCallEntry(entry: Extract<TranscriptEntry, { kind: "tool_call" }>) {
+  const { rawInput, ...tool } = entry.tool
+  let input = tool.input as Record<string, unknown>
+  let dropped = rawInput !== undefined
+
+  // Only these five kinds carry input that can grow without bound. The other
+  // ten are already header-sized — a path, a pattern, a query — and travel
+  // whole.
+  const unbounded: Record<string, readonly string[]> = {
+    write_file: ["content"],
+    delete_file: ["content"],
+    edit_file: ["oldString", "newString"],
+    mcp_generic: ["payload"],
+    unknown_tool: ["payload"],
+  }
+
+  for (const field of unbounded[tool.toolKind] ?? []) {
+    if (input[field] === undefined) continue
+    if (!dropped || input === tool.input) input = { ...input }
+    delete input[field]
+    dropped = true
+  }
+
+  if (!dropped) return entry
+  return { ...entry, tool: { ...tool, input }, trimmed: true } as TranscriptEntry
+}
+
+/**
+ * Clone entries for the wire, leaving the bulky parts on the server.
  *
- * `debugRaw` is the provider's whole raw message and duplicates `content`; it
- * measured at ~66% of a typical chat snapshot, and the snapshot is re-sent on
- * every streamed delta. The client reads it in only two places, both handled
- * here or on demand:
+ * A transcript is mostly tool traffic, and a collapsed tool row draws none of
+ * it — a group of a dozen calls renders as one line reading "3 reads, 1
+ * command". Sending the payloads anyway is how a 6,000-entry chat became 24MB
+ * on the wire to paint a few hundred headers. Dropped here, the same chat is
+ * under 2MB, and the payloads are fetched by id if a row is actually opened.
  *
- * - `ask_user_question` / `exit_plan_mode` need `tool_use_result`, so it is
- *   lifted into `structuredResult` (a few hundred bytes) for those two kinds.
- * - The raw JSON debug view fetches the original via `chat.getEntryDebugRaw`.
+ * Two things are deliberately never dropped:
  *
- * A tool_result whose tool_call falls outside this page is left alone: the
- * client only attaches results to calls it saw in the same pass, so that row
- * never renders as a tool row anyway.
+ * - `ask_user_question` / `exit_plan_mode` / `todo_write` render inline, so
+ *   there is no expansion to fetch on. The first two additionally get
+ *   `tool_use_result` lifted out of `debugRaw` into `structuredResult`.
+ * - `isError` and the entry ids, which is everything a collapsed row and its
+ *   group label need to describe a finished call.
+ *
+ * This is the only place the reduction happens. Full-fidelity consumers —
+ * export, handoff, fork — read through `getMessages` and never pass here.
  */
 export function cloneTranscriptEntriesForClient(entries: TranscriptEntry[]): TranscriptEntry[] {
   const structuredToolIds = new Set<string>()
+  const inlineToolIds = new Set<string>()
   for (const entry of entries) {
-    if (entry.kind === "tool_call" && STRUCTURED_RESULT_TOOL_KINDS.has(entry.tool.toolKind)) {
+    if (entry.kind !== "tool_call") continue
+    if (STRUCTURED_RESULT_TOOL_KINDS.has(entry.tool.toolKind)) {
       structuredToolIds.add(entry.tool.toolId)
+    }
+    if (INLINE_TOOL_KINDS.has(entry.tool.toolKind)) {
+      inlineToolIds.add(entry.tool.toolId)
     }
   }
 
   return entries.map((entry) => {
-    const { debugRaw, ...rest } = entry
-    if (debugRaw === undefined) return rest as TranscriptEntry
-    if (rest.kind !== "tool_result" || !structuredToolIds.has(rest.toolId)) {
-      return rest as TranscriptEntry
+    if (entry.kind === "tool_call") {
+      const stripped = withoutDebugRaw(entry)
+      return INLINE_TOOL_KINDS.has(stripped.tool.toolKind) ? stripped : trimToolCallEntry(stripped)
     }
-    try {
-      const parsed = JSON.parse(debugRaw) as { tool_use_result?: unknown }
-      if (parsed.tool_use_result === undefined) return rest as TranscriptEntry
-      return { ...rest, structuredResult: parsed.tool_use_result } as TranscriptEntry
-    } catch {
-      // Corrupt debugRaw is not worth failing a page render over.
-      return rest as TranscriptEntry
+
+    if (entry.kind === "tool_result") {
+      const structured = structuredToolIds.has(entry.toolId)
+        ? readStructuredResult(entry.debugRaw)
+        : undefined
+      const stripped = withoutDebugRaw(entry)
+      if (inlineToolIds.has(stripped.toolId)) {
+        return structured === undefined ? stripped : { ...stripped, structuredResult: structured }
+      }
+      // An orphan result — no call in this transcript — is trimmed too: the
+      // client only renders results attached to a call it saw.
+      const { content, ...rest } = stripped
+      return { ...rest, trimmed: true } as TranscriptEntry
     }
+
+    return withoutDebugRaw(entry)
   })
+}
+
+function readStructuredResult(debugRaw: string | undefined): unknown {
+  if (debugRaw === undefined) return undefined
+  try {
+    return (JSON.parse(debugRaw) as { tool_use_result?: unknown }).tool_use_result
+  } catch {
+    // Corrupt debugRaw is not worth failing a transcript render over.
+    return undefined
+  }
 }

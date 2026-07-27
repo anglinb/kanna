@@ -870,6 +870,14 @@ export interface SidebarChatRow {
   lastMessageAt?: number
   /** When the last turn ended (agent response received). Drives Review/In Progress ordering. */
   lastTurnEndedAt?: number
+  /**
+   * When the agent last produced something — assistant text, a tool call, or a
+   * tool result. Unlike `lastTurnEndedAt` this advances *during* a turn, so a
+   * chat parked mid-turn (plan mode / a permission prompt, which end no turn)
+   * still sorts by when it actually started asking for you rather than by when
+   * you last hit send. Drives sidebar recency alongside `lastMessageAt`.
+   */
+  lastAgentMessageAt?: number
   /** One-line preview of the latest user prompt. */
   lastUserMessagePreview?: string
   /** One-line preview of the latest agent text message. */
@@ -901,6 +909,13 @@ export interface SidebarProjectGroup {
   repoName?: string
   /** Current branch of `repoName`'s repo; absent on a detached HEAD. */
   branchName?: string
+  /**
+   * Owner segment of the `origin` remote (`owner` in `owner/repo`), absent when
+   * there's no origin or its URL doesn't carry one. Purely for display — the
+   * sidebar's branch tooltip qualifies the repo with it — so a missing owner
+   * degrades to the bare `repoName`, never to an error.
+   */
+  repoOwner?: string
   localPath: string
   chats: SidebarChatRow[]
   previewChats: SidebarChatRow[]
@@ -1341,6 +1356,16 @@ interface TranscriptEntryBase {
   createdAt: number
   hidden?: boolean
   debugRaw?: string
+  /**
+   * Set only when this entry was reduced for the wire: its unbounded tool
+   * payload fields were left on the server, to be fetched with
+   * `chat.getToolEntries` if the row is opened.
+   *
+   * Never present on disk, in `getMessages()` results, or in export bundles —
+   * those keep full fidelity. Absent also means "nothing was dropped", so a
+   * reader can treat presence as "fetching will reveal more".
+   */
+  trimmed?: true
 }
 
 interface ToolCallBase<TKind extends string, TInput> {
@@ -1380,22 +1405,22 @@ export interface ReadFileToolCall
   extends ToolCallBase<"read_file", { filePath: string }> { }
 
 export interface WriteFileToolCall
-  extends ToolCallBase<"write_file", { filePath: string; content: string }> { }
+  extends ToolCallBase<"write_file", { filePath: string; content?: string }> { }
 
 export interface EditFileToolCall
-  extends ToolCallBase<"edit_file", { filePath: string; oldString: string; newString: string }> { }
+  extends ToolCallBase<"edit_file", { filePath: string; oldString?: string; newString?: string }> { }
 
 export interface DeleteFileToolCall
-  extends ToolCallBase<"delete_file", { filePath: string; content: string }> { }
+  extends ToolCallBase<"delete_file", { filePath: string; content?: string }> { }
 
 export interface SubagentTaskToolCall
   extends ToolCallBase<"subagent_task", { subagentType?: string }> { }
 
 export interface McpGenericToolCall
-  extends ToolCallBase<"mcp_generic", { server: string; tool: string; payload: Record<string, unknown> }> { }
+  extends ToolCallBase<"mcp_generic", { server: string; tool: string; payload?: Record<string, unknown> }> { }
 
 export interface UnknownToolCall
-  extends ToolCallBase<"unknown_tool", { payload: Record<string, unknown> }> { }
+  extends ToolCallBase<"unknown_tool", { payload?: Record<string, unknown> }> { }
 
 export type NormalizedToolCall =
   | AskUserQuestionToolCall
@@ -1758,6 +1783,13 @@ export interface HydratedToolCallBase<TKind extends string, TInput, TResult> {
    * on every snapshot push.
    */
   resultEntryId?: string
+  /**
+   * The wire left this call's unbounded input fields behind; fetching the entry
+   * by `id` reveals them. Absent means what is here is all there is.
+   */
+  inputTrimmed?: boolean
+  /** As `inputTrimmed`, for the result body — fetch by `resultEntryId`. */
+  resultTrimmed?: boolean
   timestamp: string
 }
 

@@ -96,9 +96,9 @@ export function getToolIcon(toolName: string): LucideIcon {
 }
 
 // Container for meta-style messages (system, tool, result)
-export function MetaRow({ children, className }: { children: ReactNode; className?: string }) {
+export function MetaRow({ children, className, ...props }: ComponentPropsWithoutRef<"div">) {
   return (
-    <div className={cn("flex gap-3 justify-start items-center", className)}>
+    <div className={cn("flex gap-3 justify-start items-center", className)} {...props}>
       {children}
     </div>
   )

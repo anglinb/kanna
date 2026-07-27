@@ -1,7 +1,10 @@
 import { useMemo } from "react"
 import type { ProcessedToolCall } from "./types"
+import type { NormalizedToolCall, TranscriptEntry } from "../../../shared/types"
+import { hydrateToolResult } from "../../../shared/tools"
 import { MetaCodeBlock, VerticalLineContainer } from "./shared"
 import { FileContentView } from "./FileContentView"
+import { useToolPayload } from "./tool-payload-context"
 
 /**
  * The body of an expanded tool call.
@@ -64,6 +67,35 @@ function extractReadImageBlocks(value: unknown): ReadImageBlock[] {
   })
 }
 
+/**
+ * Fold fetched entries back onto the row.
+ *
+ * The row carries what a collapsed header needs; the fetched entries carry the
+ * bodies. Hydration of the result happens here rather than in the transcript
+ * parse, because until now there was nothing to hydrate.
+ */
+function resolveToolCallPayloads(
+  row: ProcessedToolCall,
+  fetchedCall: TranscriptEntry | undefined,
+  fetchedResult: TranscriptEntry | undefined
+): ProcessedToolCall {
+  const call = fetchedCall?.kind === "tool_call" ? fetchedCall.tool : undefined
+  const resultContent = fetchedResult?.kind === "tool_result" ? fetchedResult.content : undefined
+  if (!call && resultContent === undefined) return row
+
+  const normalized = (call ?? row) as NormalizedToolCall
+  return {
+    ...row,
+    ...(call ? { input: call.input as ProcessedToolCall["input"] } : {}),
+    ...(resultContent !== undefined
+      ? {
+        result: hydrateToolResult(normalized, resultContent) as ProcessedToolCall["result"],
+        rawResult: resultContent,
+      }
+      : {}),
+  } as ProcessedToolCall
+}
+
 export function ReadResultImages({ images }: { images: ReadonlyArray<ReadImageBlock> }) {
   return (
     <div className="flex flex-col gap-3">
@@ -83,7 +115,18 @@ export function ReadResultImages({ images }: { images: ReadonlyArray<ReadImageBl
   )
 }
 
-export function ToolCallExpandedContent({ message }: { message: ProcessedToolCall }) {
+export function ToolCallExpandedContent({ message: row }: { message: ProcessedToolCall }) {
+  // Mounting this component is the signal that the payloads are wanted; these
+  // request them if the transcript arrived without them.
+  const fetchedCall = useToolPayload(row.inputTrimmed ? row.id : undefined)
+  const fetchedResult = useToolPayload(row.resultTrimmed ? row.resultEntryId : undefined)
+  const message = useMemo(
+    () => resolveToolCallPayloads(row, fetchedCall, fetchedResult),
+    [row, fetchedCall, fetchedResult]
+  )
+  const isAwaitingPayload = (row.inputTrimmed && !fetchedCall)
+    || (row.resultTrimmed && row.resultEntryId !== undefined && !fetchedResult)
+
   const hasResult = message.resultEntryId !== undefined
   const isBashTool = message.toolKind === "bash"
   const isWriteTool = message.toolKind === "write_file"
@@ -131,6 +174,16 @@ export function ToolCallExpandedContent({ message }: { message: ProcessedToolCal
     }
   }, [message])
 
+  if (isAwaitingPayload) {
+    // Reserving the row rather than rendering half a body: the fields are
+    // in flight, and flashing empty code blocks first would reflow twice.
+    return (
+      <VerticalLineContainer className="my-4 text-sm">
+        <span className="text-muted-foreground">Loading…</span>
+      </VerticalLineContainer>
+    )
+  }
+
   return (
     <VerticalLineContainer className="my-4 text-sm">
       <div className="flex flex-col gap-2">
@@ -143,7 +196,7 @@ export function ToolCallExpandedContent({ message }: { message: ProcessedToolCal
           />
         ) : isDeleteTool ? (
           <FileContentView
-            content={message.input.content}
+            content={message.input.content ?? ""}
           />
         ) : !isReadTool && !isWriteTool && (
           <MetaCodeBlock label={
@@ -178,7 +231,7 @@ export function ToolCallExpandedContent({ message }: { message: ProcessedToolCal
         )}
         {isWriteTool && !message.isError && (
           <FileContentView
-            content={message.input.content}
+            content={message.input.content ?? ""}
           />
         )}
         {hasResult && !isReadTool && !(isWriteTool && !message.isError) && !(isEditTool && !message.isError) && !(isDeleteTool && !message.isError) && (

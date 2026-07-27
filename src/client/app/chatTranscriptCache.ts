@@ -22,7 +22,7 @@ const STORE_NAME = "windows"
  * Bumped when the cached shape changes. Entries written by an older version
  * fail the check and are treated as a cold cache rather than migrated.
  */
-const CACHE_SCHEMA_VERSION = 1
+const CACHE_SCHEMA_VERSION = 2
 
 /** Windows past this age are dropped on open — stale chats are not worth disk. */
 const MAX_ENTRY_AGE_MS = 30 * 24 * 60 * 60 * 1000
@@ -32,6 +32,14 @@ const MAX_ENTRY_AGE_MS = 30 * 24 * 60 * 60 * 1000
  * not free, and an active turn changes it many times a second.
  */
 const WRITE_DEBOUNCE_MS = 500
+
+/**
+ * Ceiling on one chat's cached window. Trimming keeps a whole transcript well
+ * under this, so the cap only catches pathological chats — and skipping the
+ * write leaves whatever smaller window is already stored, which is still a
+ * valid prefix to resume from.
+ */
+const MAX_CACHED_WINDOW_BYTES = 8 * 1024 * 1024
 
 export interface CachedTranscriptWindow {
   schemaVersion: number
@@ -166,7 +174,11 @@ export function createTranscriptCacheWriter() {
     }
     const value = pending
     pending = null
-    if (value) void writeCachedWindow(value)
+    if (!value) return
+    // Runs once a turn has settled, so a single stringify of a trimmed
+    // transcript is cheap next to the write it guards.
+    if (JSON.stringify(value.entries).length > MAX_CACHED_WINDOW_BYTES) return
+    void writeCachedWindow(value)
   }
 
   return {

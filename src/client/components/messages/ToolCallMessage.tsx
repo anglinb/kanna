@@ -6,6 +6,7 @@ import { stripWorkspacePath } from "../../lib/pathUtils"
 import { AnimatedShinyText } from "../ui/animated-shiny-text"
 import { formatBashCommandTitle, toTitleCase } from "../../lib/formatters"
 import { ToolCallExpandedContent } from "./ToolCallExpandedContent"
+import { useToolPayloadPrefetch } from "./tool-payload-context"
 
 interface Props {
   message: ProcessedToolCall
@@ -67,8 +68,20 @@ export function ToolCallMessage({ message, isLoading = false, localPath }: Props
 
   const isAgent = message.toolKind === "subagent_task"
 
+  // Warm the payload on hover so the body is usually already there by the time
+  // the row is clicked. Pointer-only by nature; touch falls through to the
+  // fetch the expanded view issues on mount.
+  const prefetchPayloads = useToolPayloadPrefetch()
+  const prefetchOwnPayloads = () => {
+    if (!message.inputTrimmed && !message.resultTrimmed) return
+    prefetchPayloads([
+      message.inputTrimmed ? message.id : undefined,
+      message.resultTrimmed ? message.resultEntryId : undefined,
+    ])
+  }
+
   return (
-    <MetaRow className="w-full">
+    <MetaRow className="w-full" onPointerEnter={prefetchOwnPayloads}>
       {/* Creating the element is free; `ExpandableRow` only mounts it — and so
           only runs the work inside it — once the row is opened. */}
       <ExpandableRow expandedContent={<ToolCallExpandedContent message={message} />}>
