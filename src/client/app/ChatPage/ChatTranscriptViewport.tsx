@@ -53,12 +53,13 @@ import { estimateTranscriptRowSize } from "./transcriptRowSize"
  *
  * Deliberately one number shared by two consumers: the list uses it to decide
  * whether to keep following new content, and the viewport uses it to decide
- * whether the reader is following. When those disagreed — the list treating a
- * tenth of the viewport as "at the end" while the viewport insisted on 4px —
- * scrolling up slightly put them in opposite states, so the list kept pulling
- * back to the bottom while the UI showed a scroll-to-bottom button.
+ * whether the reader is following. When those disagreed, scrolling up slightly
+ * put them in opposite states — one pulling back to the bottom while the other
+ * offered a scroll-to-bottom button. In pixels because that is what the
+ * scroller measures in; a ratio silently read as 0.05px meant "at the end" was
+ * never true and following never engaged.
  */
-const AT_END_THRESHOLD_RATIO = 0.05
+const AT_END_THRESHOLD_PX = 48
 
 
 
@@ -123,7 +124,7 @@ interface ChatTranscriptViewportProps {
  */
 export const ChatTranscriptViewport = memo(function ChatTranscriptViewport(props: ChatTranscriptViewportProps) {
   return (
-    <MessageScrollerProvider autoScroll scrollEdgeThreshold={AT_END_THRESHOLD_RATIO}>
+    <MessageScrollerProvider autoScroll scrollEdgeThreshold={AT_END_THRESHOLD_PX}>
       <TranscriptScrollerBody {...props} />
     </MessageScrollerProvider>
   )
@@ -276,8 +277,9 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     applyScrollTarget(resolveRestoreTarget(resolvedRows, readAnchorState.anchor, rowIndexByMessageId))
   }, [activeChatId, applyScrollTarget, readAnchorState, resolvedRows, rowIndexByMessageId])
 
-  // Pin a newly sent prompt to the top. Streaming output never trips this
-  // because it leaves the latest prompt untouched.
+  // Sending jumps to the bottom, where the new prompt and the reply that
+  // follows it are. Streaming output never trips this because it leaves the
+  // latest prompt untouched — only a genuinely new one does.
   useEffect(() => {
     if (!activeChatId || restoredChatIdRef.current !== activeChatId) return
 
@@ -286,7 +288,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     latestPromptRef.current = nextPrompt
 
     if (!shouldPinForNewPrompt(previousPrompt, nextPrompt) || nextPrompt === null) return
-    applyScrollTarget({ kind: "pin", rowId: nextPrompt.rowId })
+    applyScrollTarget({ kind: "end" })
   }, [activeChatId, applyScrollTarget, resolvedRows])
 
   const handleToolGroupExpandedChange = useCallback((groupId: string, next: boolean) => {
@@ -346,7 +348,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     const scrollNode = viewportRef.current
     if (!scrollNode) return
     const distanceFromEnd = scrollNode.scrollHeight - scrollNode.clientHeight - scrollNode.scrollTop
-    const isAtEnd = distanceFromEnd <= scrollNode.clientHeight * AT_END_THRESHOLD_RATIO
+    const isAtEnd = distanceFromEnd <= AT_END_THRESHOLD_PX
     onIsAtEndChange(isAtEnd)
     reportTopVisibleMessage(isAtEnd)
     setTranscriptOverflows(scrollNode.scrollHeight - scrollNode.clientHeight > OVERFLOW_EPSILON_PX)
