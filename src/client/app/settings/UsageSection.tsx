@@ -29,13 +29,37 @@ function formatPercent(value: number | null): string {
   return `${Math.round(value)}%`
 }
 
-/** "$1,234.56" with comma grouping; falls back to a bare number for odd codes. */
-function formatMoney(amount: number, currency: string | null): string {
+/** The currency symbol for a code ("$"), or "" for codes Intl doesn't know. */
+function currencySymbol(currency: string | null): string {
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency ?? "USD" }).format(amount)
+    const parts = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency ?? "USD",
+      maximumFractionDigits: 0,
+    }).formatToParts(0)
+    return parts.find((part) => part.type === "currency")?.value ?? ""
   } catch {
-    return amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    return ""
   }
+}
+
+/** One decimal at most, with a bare integer when the decimal is zero: 2 → "2", 7.05 → "7.1". */
+function trimUnit(value: number): string {
+  return value.toLocaleString("en-US", { maximumFractionDigits: 1 })
+}
+
+/**
+ * Whole-dollar money, abbreviated above a thousand: "$130", "$1.3k", "$2k", "$1.2m".
+ * Cents are noise at this altitude and caps are usually round thousands, so the
+ * card reads "$130 of $2k used" rather than "$130.42 of $2,000.00 used".
+ */
+function formatMoney(amount: number, currency: string | null): string {
+  const symbol = currencySymbol(currency)
+  const sign = amount < 0 ? "-" : ""
+  const abs = Math.abs(amount)
+  if (abs >= 1_000_000) return `${sign}${symbol}${trimUnit(abs / 1_000_000)}m`
+  if (abs >= 1_000) return `${sign}${symbol}${trimUnit(abs / 1_000)}k`
+  return `${sign}${symbol}${Math.round(abs).toLocaleString("en-US")}`
 }
 
 function creditsSummary(credits: NonNullable<ProviderUsageSnapshot["credits"]>): string | null {

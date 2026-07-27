@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import type { SidebarChatRow, SidebarData } from "../../../shared/types"
+import type { LocalProjectSummary, SidebarChatRow, SidebarData } from "../../../shared/types"
 import {
   flattenVisibleProjectGroups,
   flattenSidebarThreads,
   getSettingsPaletteEntries,
   scorePaletteItem,
+  searchLocalProjects,
   searchProjects,
   searchSettingsEntries,
   searchThreadsByTitle,
@@ -133,6 +134,34 @@ describe("searchProjects", () => {
     expect(searchProjects(projects, "")).toEqual([])
     expect(searchProjects(projects, "kanna").map((project) => project.projectId)).toEqual(["project-a"])
     expect(searchProjects(projects, "superwall").map((project) => project.projectId)).toEqual(["project-b"])
+  })
+})
+
+describe("searchLocalProjects", () => {
+  const localProjects: LocalProjectSummary[] = [
+    { localPath: "/Users/j/Projects/kanna", title: "kanna", source: "saved", lastOpenedAt: 3_000, chatCount: 2 },
+    { localPath: "/Users/j/Projects/kanna-site", title: "kanna-site", source: "discovered", folderModifiedAt: 2_000, chatCount: 0 },
+    { localPath: "/Users/j/Projects/other", title: "other", source: "discovered", folderModifiedAt: 1_000, chatCount: 0 },
+  ]
+
+  test("empty query returns nothing", () => {
+    expect(searchLocalProjects(localProjects, "  ")).toEqual([])
+  })
+
+  test("matches title and path, and skips excluded paths", () => {
+    expect(searchLocalProjects(localProjects, "kanna").map((project) => project.localPath))
+      .toEqual(["/Users/j/Projects/kanna", "/Users/j/Projects/kanna-site"])
+
+    const excluded = new Set(["/Users/j/Projects/kanna"])
+    expect(searchLocalProjects(localProjects, "kanna", excluded).map((project) => project.localPath))
+      .toEqual(["/Users/j/Projects/kanna-site"])
+
+    expect(searchLocalProjects(localProjects, "Projects/other").map((project) => project.localPath))
+      .toEqual(["/Users/j/Projects/other"])
+  })
+
+  test("respects the limit", () => {
+    expect(searchLocalProjects(localProjects, "kanna", new Set(), 1)).toHaveLength(1)
   })
 })
 

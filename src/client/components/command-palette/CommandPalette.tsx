@@ -81,6 +81,7 @@ import {
   flattenSidebarThreads,
   getSettingsPaletteEntries,
   scorePaletteItem,
+  searchLocalProjects,
   searchProjects,
   searchSettingsEntries,
   searchThreadsByTitle,
@@ -1020,6 +1021,16 @@ export function CommandPalette({ state }: { state: KannaState }) {
     [paletteProjects, trimmedQuery]
   )
 
+  // Search-only "All Projects" group: everything the "/" route lists (incl.
+  // projects with no chats), minus the ones already in the Projects group
+  // above. Never shown on the empty-query quick switcher.
+  const allProjectSearchResults = useMemo(() => {
+    if (page !== "root" || !trimmedQuery) return []
+    const shown = new Set(projectSearchResults.map((project) => project.localPath))
+    for (const project of paletteProjects) shown.add(project.localPath)
+    return searchLocalProjects(state.localProjects?.projects ?? [], trimmedQuery, shown)
+  }, [page, paletteProjects, projectSearchResults, state.localProjects?.projects, trimmedQuery])
+
   const modelResults = useMemo(() => {
     if (page !== "models") return []
     if (!trimmedQuery) return composer.models
@@ -1311,6 +1322,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
         { value: rankedActions[0] ? `action-${rankedActions[0].action.id}` : null, score: rankedActions[0]?.score ?? -Infinity },
         { value: projectSearchResults[0] ? `palette-project-${projectSearchResults[0].localPath}` : null, score: projectSearchResults[0]?.score ?? -Infinity },
         { value: threadResults[0] ? `thread-${threadResults[0].chatId}` : null, score: threadResults[0]?.score ?? -Infinity },
+        { value: allProjectSearchResults[0] ? `all-project-${allProjectSearchResults[0].localPath}` : null, score: allProjectSearchResults[0]?.score ?? -Infinity },
       ]
         .filter((candidate) => candidate.value !== null)
         .sort((left, right) => right.score - left.score)[0]?.value ?? ""
@@ -1323,6 +1335,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
     addProjectActionRows,
     addProjectGroups,
     addProjectRepo,
+    allProjectSearchResults,
     browseCreateVisible,
     browseInputMode,
     cloneRun,
@@ -1389,6 +1402,9 @@ export function CommandPalette({ state }: { state: KannaState }) {
     for (const project of projectSearchResults) {
       map.set(`palette-project-${project.localPath}`, project.localPath)
     }
+    for (const project of allProjectSearchResults) {
+      map.set(`all-project-${project.localPath}`, project.localPath)
+    }
     if (page === "project-chats" && projectChatsTargetId !== null && projectChatsGroup) {
       map.set("project-chats-new", projectChatsGroup.localPath)
     }
@@ -1396,7 +1412,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
       map.set(`project-${group.groupKey}`, group.localPath)
     }
     return map
-  }, [inProgressResults, page, projectChatResults, projectChatSections, projectChatsGroup, projectChatsTargetId, projectResults, projectSearchResults, reviewResults, threadResults])
+  }, [allProjectSearchResults, inProgressResults, page, projectChatResults, projectChatSections, projectChatsGroup, projectChatsTargetId, projectResults, projectSearchResults, reviewResults, threadResults])
   const footerCopyPath = selectedValue ? copyPathByValue.get(selectedValue) : undefined
   // Browse pages swap the copy-path footer for the "⌘↵ Open <highlighted>" button.
   const footerBrowseTarget = page === "browse" && selectedValue ? browseOpenTargets.get(selectedValue) : undefined
@@ -1585,6 +1601,40 @@ export function CommandPalette({ state }: { state: KannaState }) {
               </CommandGroup>
             ) : null
 
+            // Every other project on the machine (the "/" route's list) —
+            // search-only, and selecting one opens it and starts a chat.
+            const allProjectsGroup = allProjectSearchResults.length > 0 ? (
+              <CommandGroup key="all-projects" heading="All Projects">
+                {allProjectSearchResults.map((project) => {
+                  const value = `all-project-${project.localPath}`
+                  const busy = pendingActionValue === value || state.startingLocalPath === project.localPath
+                  return (
+                    <CommandItem
+                      key={project.localPath}
+                      value={value}
+                      onSelect={() => {
+                        void runProjectAction(value, {
+                          mode: "existing",
+                          localPath: project.localPath,
+                          title: getPathBasename(project.localPath),
+                        })
+                      }}
+                    >
+                      <Folder className={ICON_CLASS} />
+                      <span className="min-w-0 truncate">{project.title}</span>
+                      {busy ? (
+                        <Loader2 className="ml-auto h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                      ) : (
+                        <span className="ml-auto max-w-[220px] shrink-0 truncate pl-3 text-xs text-muted-foreground">
+                          {formatPathWithTilde(project.localPath)}
+                        </span>
+                      )}
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            ) : null
+
             // A pasted repo URL gets a pinned "Clone owner/repo" row.
             const cloneGroup = rootCloneRepo ? (
               <CommandGroup key="clone">
@@ -1613,10 +1663,12 @@ export function CommandPalette({ state }: { state: KannaState }) {
                 { node: actionsGroup, topScore: rankedActions[0]?.score ?? 0 },
                 { node: projectsGroup, topScore: projectSearchResults[0]?.score ?? 0 },
                 { node: threadsGroup, topScore: threadResults[0]?.score ?? 0 },
+                { node: allProjectsGroup, topScore: allProjectSearchResults[0]?.score ?? 0 },
               ]
                 .filter((group) => group.node !== null)
                 .sort((left, right) => right.topScore - left.topScore)
                 .map((group) => group.node),
+              actionError ? <PaletteErrorRow key="root-error" message={actionError} /> : null,
             ]
           })() : null}
 

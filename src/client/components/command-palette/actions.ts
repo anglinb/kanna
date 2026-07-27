@@ -1,5 +1,5 @@
 import commandScore from "command-score"
-import type { SidebarProjectGroup } from "../../../shared/types"
+import type { LocalProjectSummary, SidebarProjectGroup } from "../../../shared/types"
 import type { SidebarThread } from "../../lib/thread-sections"
 import {
   listAllSettingsRowDefs,
@@ -128,6 +128,51 @@ export function searchProjects(projects: PaletteProject[], query: string, limit 
       right.score !== left.score
         ? right.score - left.score
         : right.lastActivityAt - left.lastActivityAt
+    ))
+    .slice(0, limit)
+}
+
+export interface ScoredLocalProject {
+  localPath: string
+  title: string
+  score: number
+  /** Recency tiebreaker: last opened, else folder mtime. */
+  sortAt: number
+}
+
+/**
+ * The "All Projects" search group: every project the "/" route lists (saved +
+ * discovered, including ones with no chats yet), minus whatever the
+ * sidebar-backed Projects group already shows. Search-only — this never
+ * renders on the empty-query quick switcher.
+ */
+export function searchLocalProjects(
+  projects: LocalProjectSummary[],
+  query: string,
+  excludePaths: ReadonlySet<string> = new Set(),
+  limit = 6
+): ScoredLocalProject[] {
+  const trimmed = query.trim()
+  if (!trimmed) return []
+
+  const scored: ScoredLocalProject[] = []
+  for (const project of projects) {
+    if (excludePaths.has(project.localPath)) continue
+    const score = scorePaletteItem(trimmed, project.title, [project.localPath])
+    if (score <= 0) continue
+    scored.push({
+      localPath: project.localPath,
+      title: project.title,
+      score,
+      sortAt: project.lastOpenedAt ?? project.folderModifiedAt ?? 0,
+    })
+  }
+
+  return scored
+    .sort((left, right) => (
+      right.score !== left.score
+        ? right.score - left.score
+        : right.sortAt - left.sortAt
     ))
     .slice(0, limit)
 }
