@@ -98,6 +98,12 @@ export function getReviewThreads(threads: SidebarThread[]): SidebarThread[] {
  * exclude set (typically the review section). Special case: sorted OLDEST
  * first (unlike every other section) — the chat that's gone longest without a
  * response leads since it's most likely to need you next.
+ *
+ * Sorted by `lastMessageAt` — when *you* last hit send — not the shared
+ * `lastActivityAt`. Every chat here is running by definition, so agent activity
+ * is constant churn: sorting by it would reshuffle the section every time any
+ * agent emitted a token, and a chatty agent would sink below a quiet one you
+ * kicked off later. "How long since I asked" is the stable thing to queue on.
  */
 export function getInProgressThreads(
   threads: SidebarThread[],
@@ -108,7 +114,12 @@ export function getInProgressThreads(
       !thread.archived
       && !(exclude?.has(thread.chatId))
       && (thread.row.status === "running" || thread.row.status === "starting"))
-    .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
+    .sort((left, right) => userMessageAt(left) - userMessageAt(right))
+}
+
+/** When the user last sent a prompt, falling back to creation for never-prompted chats. */
+function userMessageAt(thread: SidebarThread): number {
+  return thread.row.lastMessageAt ?? thread.row._creationTime
 }
 
 /**

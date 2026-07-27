@@ -122,9 +122,10 @@ interface DirtyPathEntry {
 }
 
 
-async function runGit(args: string[], cwd: string, options?: { stdin?: string }) {
+export async function runGit(args: string[], cwd: string, options?: { stdin?: string; env?: Record<string, string | undefined> }) {
   const process = Bun.spawn(["git", "-C", cwd, ...args], {
     stdin: options?.stdin === undefined ? undefined : Buffer.from(options.stdin),
+    ...(options?.env ? { env: options.env } : {}),
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -957,31 +958,29 @@ async function mapWithConcurrency<T, R>(
  * rather than the ~6 git commands `performRefresh` runs.
  */
 /**
- * A raw look at the working tree: is it dirty, and what are the current mtimes
- * of the dirty files.
+ * A raw look at the working tree: is it dirty, and which paths are dirty.
  *
- * Deliberately *not* a "when did this get dirty" answer. Raw mtimes can't carry
- * that on their own — `git pull --rebase --autostash` pops the stash and
- * rewrites your still-dirty files, so their mtimes jump to now even though the
- * content never changed. Same for a rebase, a branch switch, or a formatter
- * sweep. `WorktreeProbe` turns these readings into a stable `dirtySinceMs` by
- * remembering when each path was *first* seen dirty.
+ * Paths only — no timestamps. "Is this chat relevant to your uncommitted work"
+ * is answered by intersecting these paths with the files a chat actually
+ * touched (see `TurnFileTracker`), so nothing here needs to know *when*
+ * anything got dirty. The previous mtime-anchored version couldn't answer that
+ * question honestly anyway: one file left uncommitted overnight dragged the
+ * anchor back far enough to flag every chat that had run since.
  */
 export interface WorkingTreeScan {
   dirty: boolean
-  /** Dirty paths that exist on disk. Deletions are omitted — nothing to stat. */
-  files: Array<{ path: string; mtimeMs: number }>
+  /**
+   * Every dirty path, repo-root-relative — including deletions, and including
+   * both sides of a rename, since either name can be what a chat touched.
+   */
+  paths: string[]
 }
 
-/** Derived from a series of `WorkingTreeScan`s — see `WorktreeProbe`. */
+/** Derived from a `WorkingTreeScan` — see `WorktreeProbe`. */
 export interface WorkingTreeProbe {
   dirty: boolean
-  /**
-   * When the current dirty episode began. Absent when the tree is clean, when
-   * every dirty entry is a deletion (no file left to stat), or when everything
-   * dirty is older than `DIRTY_ANCHOR_MAX_AGE_MS`.
-   */
-  dirtySinceMs?: number
+  /** Dirty paths, for intersecting against a chat's touched-path set. */
+  paths: ReadonlySet<string>
 }
 
 export interface WorkingTreeLocation {
@@ -989,19 +988,15 @@ export interface WorkingTreeLocation {
   gitDir: string
 }
 
-/**
- * Dirty files older than this don't anchor `dirtySinceMs`. Without the floor a
- * single long-lived untracked scratch file pins the anchor weeks into the past,
- * which makes every "was this chat active since the tree got dirty?" comparison
- * trivially true forever.
- */
-export const DIRTY_ANCHOR_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
-/**
- * We only need the *minimum* first-seen time, so sampling is safe: a min over a
- * subset can only land later than the true min, i.e. err toward reporting less
- * recent dirt. Keeps a repo with a huge untracked tree from stalling the probe.
- */
-const DIRTY_PROBE_MAX_FILES = 200
+/** Every path a status entry implicates: the file itself, plus a rename's source. */
+function toDirtyPaths(entries: DirtyPathEntry[]): string[] {
+  const paths = new Set<string>()
+  for (const entry of entries) {
+    paths.add(entry.path)
+    if (entry.previousPath) paths.add(entry.previousPath)
+  }
+  return [...paths]
+}
 
 /**
  * Resolve a project path to its repo root and git dir. Callers should cache the
@@ -1020,32 +1015,22 @@ export async function resolveWorkingTreeLocation(projectPath: string): Promise<W
   return gitDir ? { repoRoot, gitDir } : null
 }
 
-/** Never throws — a probe failure is reported as a clean tree, not an error. */
+/**
+ * Never throws — a probe failure is reported as a clean tree, not an error.
+ *
+ * One `git status`, no `stat` calls: the paths are the whole answer now, so
+ * there is nothing to sample or cap. A repo with thousands of dirty paths costs
+ * exactly one process here.
+ */
 export async function probeWorkingTree(repoRoot: string): Promise<WorkingTreeScan> {
   let dirtyPaths: DirtyPathEntry[]
   try {
     dirtyPaths = await listDirtyPaths(repoRoot, { noOptionalLocks: true })
   } catch {
-    return { dirty: false, files: [] }
+    return { dirty: false, paths: [] }
   }
 
-  if (dirtyPaths.length === 0) {
-    return { dirty: false, files: [] }
-  }
-
-  // Deletions have no worktree file to stat, so they can't anchor the window.
-  const candidates = dirtyPaths
-    .filter((entry) => entry.changeType !== "deleted")
-    .slice(0, DIRTY_PROBE_MAX_FILES)
-
-  const scanned = await mapWithConcurrency(candidates, FILE_SCAN_CONCURRENCY, async (entry) => {
-    const fileInfo = await stat(path.join(repoRoot, entry.path)).catch(() => null)
-    return fileInfo?.isFile() ? { path: entry.path, mtimeMs: fileInfo.mtimeMs } : null
-  })
-
-  // `dirty` stays true even when nothing was stat-able (a deletion-only tree):
-  // the tree really is dirty, we just have no anchor for it.
-  return { dirty: true, files: scanned.filter((file): file is { path: string; mtimeMs: number } => file !== null) }
+  return { dirty: dirtyPaths.length > 0, paths: toDirtyPaths(dirtyPaths) }
 }
 
 async function countFileLines(absolutePath: string, size: number): Promise<number> {
@@ -1169,12 +1154,10 @@ async function computeCurrentFiles(
   const lineCountCache = lineCounts?.cache ?? new Map<string, LineCountCacheEntry>()
   const nextLineCountCache = lineCounts?.nextCache ?? new Map<string, LineCountCacheEntry>()
 
-  // This scan already stats every dirty file, so the working-tree reading comes
-  // along for free — no extra git or stat calls. Keeps the sidebar's
+  // This refresh already listed every dirty path, so the working-tree reading
+  // comes along for free — no extra git call. Keeps the sidebar's
   // uncommitted-work signal current for whichever project the client is
   // refreshing, and clears it the instant a commit goes through Kanna.
-  const scanFiles: Array<{ path: string; mtimeMs: number }> = []
-
   const files = await mapWithConcurrency(currentDirtyPaths, FILE_SCAN_CONCURRENCY, async (entry): Promise<ChatDiffFile | null> => {
     const relativePath = entry.path
     const beforePath = entry.previousPath ?? relativePath
@@ -1190,10 +1173,6 @@ async function computeCurrentFiles(
     const mimeType = isFile ? inferProjectFileContentType(relativePath, Bun.file(absolutePath).type) : undefined
     const size = isFile ? fileInfo!.size : undefined
     const mtimeMs = isFile ? fileInfo!.mtimeMs : undefined
-
-    if (mtimeMs !== undefined) {
-      scanFiles.push({ path: relativePath, mtimeMs })
-    }
 
     const trackedStats = trackedStatsByPath.get(relativePath)
     const additions = trackedStats
@@ -1230,7 +1209,7 @@ async function computeCurrentFiles(
 
   return {
     files: files.filter((file): file is ChatDiffFile => file !== null),
-    scan: { dirty: currentDirtyPaths.length > 0, files: scanFiles },
+    scan: { dirty: currentDirtyPaths.length > 0, paths: toDirtyPaths(currentDirtyPaths) },
   }
 }
 
@@ -1624,7 +1603,7 @@ export class DiffStore {
     const repo = await resolveRepo(projectPath)
     if (!repo) {
       this.lineCountCaches.delete(projectId)
-      this.onWorkingTreeProbe?.(projectId, { dirty: false, files: [] })
+      this.onWorkingTreeProbe?.(projectId, { dirty: false, paths: [] })
       const nextState = {
         status: "no_repo",
         branchName: undefined,

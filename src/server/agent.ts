@@ -1293,7 +1293,7 @@ export class AgentCoordinator {
       )
       await this.store.appendMessage(args.chatId, userPromptEntry)
     }
-    await this.store.recordTurnStarted(args.chatId)
+    await this.store.recordTurnStarted(args.chatId, args.model)
 
     if (shouldGenerateTitle) {
       void this.generateTitleInBackground(args.chatId, args.content, project.localPath, optimisticTitle ?? "New Chat")
@@ -1828,7 +1828,7 @@ export class AgentCoordinator {
       cancelRecorded: false,
     }
     this.activeTurns.set(session.chatId, active)
-    await this.store.recordTurnStarted(session.chatId)
+    await this.store.recordTurnStarted(session.chatId, session.model)
     this.emitStateChange(session.chatId)
   }
 

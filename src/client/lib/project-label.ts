@@ -28,11 +28,25 @@ export interface ProjectSidebarLabel {
    */
   branchName?: string
   /**
-   * `owner/repo` for the tooltip's second line, falling back to the bare repo
-   * when the origin owner isn't known (no remote, or not yet probed). Absent
-   * entirely when the project isn't in a repo.
+   * The branch whatever it is, `main` included — for surfaces with room to
+   * always name it (the hover card), as opposed to the narrow row slot that
+   * only wants to know when the branch is a surprise. Absent on a detached
+   * HEAD and outside a repo; unaffected by a rename, which renames the project,
+   * not the checkout.
+   */
+  currentBranch?: string
+  /**
+   * `owner/repo` for the hover card's project line, falling back to the bare
+   * repo when the origin owner isn't known. Absent entirely when the project
+   * isn't in a repo.
    */
   repoPath?: string
+  /**
+   * Whether `repoPath` is qualified by an owner. Carried separately so a
+   * surface can *say* a repo has nowhere to push rather than leaving a bare
+   * name that could equally be a repo we haven't resolved yet.
+   */
+  hasOwner?: boolean
   /**
    * Flat `repo/branch` form. Kept for text-only consumers — command-palette
    * search scoring, which matches what a row *says* including its branch.
@@ -60,20 +74,28 @@ export interface ProjectSidebarLabel {
 export function getProjectSidebarLabel(
   group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner">
 ): ProjectSidebarLabel {
-  if (group.sidebarTitle) return { name: group.sidebarTitle, text: group.sidebarTitle }
-  if (!group.repoName) return { name: group.title, text: group.title }
+  // The checkout is a fact about the folder, so it survives a rename even
+  // though the *name* doesn't.
+  const currentBranch = group.branchName ? { currentBranch: group.branchName } : {}
+  if (group.sidebarTitle) {
+    return { name: group.sidebarTitle, ...currentBranch, text: group.sidebarTitle }
+  }
+  if (!group.repoName) return { name: group.title, ...currentBranch, text: group.title }
 
   const repoPath = group.repoOwner ? `${group.repoOwner}/${group.repoName}` : group.repoName
+  const hasOwner = Boolean(group.repoOwner)
   // No branch at all on a detached HEAD — the bare repo is still truer than the
   // folder name, so that lands in the same place as being on `main`.
   const branchName = group.branchName
   if (!branchName || UNREMARKABLE_BRANCHES.has(branchName)) {
-    return { name: group.repoName, repoPath, text: group.repoName }
+    return { name: group.repoName, ...currentBranch, repoPath, hasOwner, text: group.repoName }
   }
   return {
     name: group.repoName,
     branchName,
+    ...currentBranch,
     repoPath,
+    hasOwner,
     text: `${group.repoName}/${branchName}`,
   }
 }

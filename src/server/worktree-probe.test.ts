@@ -1,11 +1,37 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { EventStore } from "./event-store"
 import { createEmptyState, type StoreState } from "./events"
 import { deriveSidebarData } from "./read-models"
 import { extractRemoteOwner, WorktreeProbe } from "./worktree-probe"
+import { TurnFileTracker } from "./worktree-snapshot"
+
+/**
+ * The exact seam server.ts wires: turn start snapshots the tree, turn end
+ * records the delta and then reprobes. Returns the in-flight promises so tests
+ * can await work the production hooks deliberately fire and forget.
+ */
+function wireTurnTracking(store: EventStore, probe: WorktreeProbe) {
+  const turnStarted: Array<Promise<void>> = []
+  const turnEnded: Array<Promise<void>> = []
+  const tracker = new TurnFileTracker({
+    resolveChatPath: (chatId) => {
+      const chat = store.state.chatsById.get(chatId)
+      const project = chat ? store.state.projectsById.get(chat.projectId) : undefined
+      return project?.localPath ?? null
+    },
+    recordPaths: (chatId, paths) => store.recordFilesTouched(chatId, paths),
+  })
+  store.onTurnStarted = (chatId) => {
+    turnStarted.push(tracker.beginTurn(chatId))
+  }
+  store.onTurnEnded = (chatId) => {
+    turnEnded.push(tracker.endTurn(chatId).then(() => probe.refreshForChat(chatId)))
+  }
+  return { tracker, turnStarted, turnEnded }
+}
 
 async function run(command: string[], cwd: string) {
   const process = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" })
@@ -79,14 +105,14 @@ describe("WorktreeProbe", () => {
 
     expect(probe.getStates().get("project-1")).toBeUndefined()
     await probe.refreshForChat("chat-1")
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: false })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set() })
 
     await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
     await probe.refreshForChat("chat-1")
 
     const recorded = probe.getStates().get("project-1")
     expect(recorded?.dirty).toBe(true)
-    expect(recorded?.dirtySinceMs).toBeGreaterThan(0)
+    expect([...(recorded?.paths ?? [])]).toEqual(["app.txt"])
   })
 
   test("onChange fires only when the probe result actually changes", async () => {
@@ -141,7 +167,7 @@ describe("WorktreeProbe", () => {
     await run(["git", "commit", "-am", "external"], repoRoot)
     await tick(probe)
 
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: false })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set() })
   })
 
   test("the tick skips projects whose chats never finished a turn", async () => {
@@ -176,12 +202,9 @@ describe("WorktreeProbe", () => {
       changes += 1
     })
 
-    // A real mtime, not a synthetic small number: the anchor floor discards
-    // anything older than a week, and epoch-1970 would be silently dropped.
-    const mtimeMs = Date.now() - 60_000
-    probe.recordExternalProbe("project-1", { dirty: true, files: [{ path: "a.txt", mtimeMs }] })
+    probe.recordExternalProbe("project-1", { dirty: true, paths: ["a.txt"] })
 
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: true, dirtySinceMs: mtimeMs })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: true, paths: new Set(["a.txt"]) })
     expect(changes).toBe(1)
   })
 
@@ -193,7 +216,7 @@ describe("WorktreeProbe", () => {
 
     await probe.refreshForChat("chat-1")
 
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: false })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set() })
   })
 })
 
@@ -221,17 +244,17 @@ describe("WorktreeProbe integration", () => {
       broadcasts += 1
     })
     // Mirrors server.ts.
-    const turnEnded: Array<Promise<void>> = []
-    store.onTurnEnded = (chatId) => {
-      turnEnded.push(probe.refreshForChat(chatId))
-    }
+    const { turnStarted, turnEnded } = wireTurnTracking(store, probe)
 
-    // An agent edits a file, then the turn ends.
+    // An agent edits a file during its turn.
+    await store.recordTurnStarted(chat.id)
+    await Promise.all(turnStarted)
     await writeFile(path.join(repoRoot, "app.txt"), "changed by agent\n", "utf8")
     await store.recordTurnFinished(chat.id)
     await Promise.all(turnEnded)
 
     expect(broadcasts).toBeGreaterThan(0)
+    expect(store.state.chatsById.get(chat.id)?.touchedPaths).toEqual(["app.txt"])
     const flagged = deriveSidebarData(store.state, new Map(), { workingTrees: probe.getStates() })
     expect(flagged.projectGroups[0]?.chats[0]?.uncommittedWork).toBe(true)
 
@@ -243,7 +266,9 @@ describe("WorktreeProbe integration", () => {
     expect(cleared.projectGroups[0]?.chats[0]?.uncommittedWork).toBeUndefined()
   })
 
-  test("a chat whose turn predates the dirt is not flagged", async () => {
+  test("a chat that touched none of the dirty files is not flagged", async () => {
+    // The case the old timestamp rule got wrong: this chat ran, and the tree is
+    // dirty, but somebody else's file is what's outstanding.
     const repoRoot = await createRepo()
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-data-"))
     tempDirs.push(dataDir)
@@ -251,19 +276,22 @@ describe("WorktreeProbe integration", () => {
     const store = new EventStore(dataDir)
     await store.initialize()
     const project = await store.openProject(repoRoot)
-    const older = await store.createChat(project.id)
-    await store.recordTurnFinished(older.id)
-
-    // Dirt appears strictly after that turn ended. Stamped explicitly rather
-    // than slept for: filesystem mtime granularity is a whole second on some
-    // filesystems, so a real delay would be both slow and racy.
-    await writeFile(path.join(repoRoot, "app.txt"), "changed later\n", "utf8")
-    const turnEndedAt = store.state.chatsById.get(older.id)?.lastTurnEndedAt ?? 0
-    const dirtiedAt = new Date(turnEndedAt + 5_000)
-    await utimes(path.join(repoRoot, "app.txt"), dirtiedAt, dirtiedAt)
+    const chat = await store.createChat(project.id)
 
     const probe = new WorktreeProbe(() => store.state, () => {})
-    await probe.refreshForChat(older.id)
+    const { turnStarted, turnEnded } = wireTurnTracking(store, probe)
+
+    await store.recordTurnStarted(chat.id)
+    await Promise.all(turnStarted)
+    await writeFile(path.join(repoRoot, "mine.txt"), "this chat's work\n", "utf8")
+    await store.recordTurnFinished(chat.id)
+    await Promise.all(turnEnded)
+
+    // That work lands; someone else's edit is what stays outstanding.
+    await run(["git", "add", "."], repoRoot)
+    await run(["git", "commit", "-m", "land it"], repoRoot)
+    await writeFile(path.join(repoRoot, "theirs.txt"), "another agent\n", "utf8")
+    await probe.refreshForChat(chat.id)
 
     const sidebar = deriveSidebarData(store.state, new Map(), { workingTrees: probe.getStates() })
     expect(sidebar.projectGroups[0]?.chats[0]?.uncommittedWork).toBeUndefined()
@@ -393,114 +421,6 @@ describe("WorktreeProbe integration", () => {
 
     expect(sidebar.projectGroups[0]?.repoName).toBe(path.basename(repoRoot))
     expect(sidebar.projectGroups[0]?.branchName).toBe("main")
-  })
-})
-
-/**
- * The anchor has to survive operations that rewrite the working tree without
- * changing what is dirty. `git pull --rebase --autostash` is the one that bit
- * us: it pops the stash, rewriting still-dirty files, so their mtimes jump to
- * now. Reading mtimes fresh each time made dirtySinceMs leap forward past
- * chats that were correctly flagged before the pull.
- */
-describe("WorktreeProbe dirty-since ledger", () => {
-  afterEach(async () => {
-    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
-  })
-
-  const NOON = 1_800_000_000_000
-
-  function probeWith(onChange = () => {}) {
-    const state = createEmptyState()
-    return new WorktreeProbe(() => state, onChange)
-  }
-
-  test("keeps the first-seen time when a path's mtime later churns", async () => {
-    const probe = probeWith()
-
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON }] })
-    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON)
-
-    // The pull: same path, same content, brand-new mtime.
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON + 30 * 60_000 }] })
-
-    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON)
-  })
-
-  test("a chat flagged before a pull stays flagged after it", async () => {
-    const probe = probeWith()
-    const turnEndedAt = NOON + 5 * 60_000
-
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON }] })
-    const beforePull = probe.getStates().get("p")!
-    expect(turnEndedAt > beforePull.dirtySinceMs!).toBe(true)
-
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON + 30 * 60_000 }] })
-    const afterPull = probe.getStates().get("p")!
-
-    // The whole point of the ledger.
-    expect(turnEndedAt > afterPull.dirtySinceMs!).toBe(true)
-  })
-
-  test("a newly dirtied path cannot pull the anchor backwards", async () => {
-    const probe = probeWith()
-
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "a.txt", mtimeMs: NOON }] })
-    probe.recordExternalProbe("p", {
-      dirty: true,
-      files: [{ path: "a.txt", mtimeMs: NOON }, { path: "b.txt", mtimeMs: NOON + 60_000 }],
-    })
-
-    // Oldest still wins; the new file just joins the episode.
-    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON)
-  })
-
-  test("a path that goes clean drops out of the anchor", async () => {
-    const probe = probeWith()
-
-    probe.recordExternalProbe("p", {
-      dirty: true,
-      files: [{ path: "old.txt", mtimeMs: NOON }, { path: "new.txt", mtimeMs: NOON + 60_000 }],
-    })
-    // old.txt was committed; only new.txt is still dirty.
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "new.txt", mtimeMs: NOON + 60_000 }] })
-
-    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON + 60_000)
-  })
-
-  test("a clean tree clears the ledger, so a re-dirtied path starts a new episode", async () => {
-    const probe = probeWith()
-
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON }] })
-    probe.recordExternalProbe("p", { dirty: false, files: [] })
-    expect(probe.getStates().get("p")).toEqual({ dirty: false })
-
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "app.txt", mtimeMs: NOON + 60_000 }] })
-
-    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(NOON + 60_000)
-  })
-
-  test("ignores first-seen times older than the anchor floor", async () => {
-    const probe = probeWith()
-    const stale = Date.now() - 30 * 24 * 60 * 60 * 1000
-    const recent = Date.now()
-
-    probe.recordExternalProbe("p", {
-      dirty: true,
-      files: [{ path: "stale.txt", mtimeMs: stale }, { path: "recent.txt", mtimeMs: recent }],
-    })
-
-    // A long-lived scratch file must not pin the anchor weeks back.
-    expect(probe.getStates().get("p")?.dirtySinceMs).toBe(recent)
-  })
-
-  test("dirty with every path stale reports no anchor at all", async () => {
-    const probe = probeWith()
-    const stale = Date.now() - 30 * 24 * 60 * 60 * 1000
-
-    probe.recordExternalProbe("p", { dirty: true, files: [{ path: "stale.txt", mtimeMs: stale }] })
-
-    expect(probe.getStates().get("p")).toEqual({ dirty: true })
   })
 })
 

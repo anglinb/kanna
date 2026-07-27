@@ -1031,19 +1031,14 @@ describe("probeWorkingTree", () => {
   test("reports a clean tree as not dirty", async () => {
     const repoRoot = await createCommittedRepo()
 
-    expect(await probeWorkingTree(repoRoot)).toEqual({ dirty: false, files: [] })
+    expect(await probeWorkingTree(repoRoot)).toEqual({ dirty: false, paths: [] })
   })
 
-  test("reports a modified file with its current mtime", async () => {
+  test("reports a modified file's path", async () => {
     const repoRoot = await createCommittedRepo()
-    const before = Date.now()
     await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
 
-    const scan = await probeWorkingTree(repoRoot)
-
-    expect(scan.dirty).toBe(true)
-    expect(scan.files.map((file) => file.path)).toEqual(["app.txt"])
-    expect(scan.files[0]!.mtimeMs).toBeGreaterThanOrEqual(before - 2_000)
+    expect(await probeWorkingTree(repoRoot)).toEqual({ dirty: true, paths: ["app.txt"] })
   })
 
   test("reports untracked files too", async () => {
@@ -1052,12 +1047,12 @@ describe("probeWorkingTree", () => {
 
     const scan = await probeWorkingTree(repoRoot)
 
-    expect(scan.files.map((file) => file.path)).toEqual(["scratch.txt"])
+    expect(scan.paths).toEqual(["scratch.txt"])
   })
 
-  test("reports every dirty file, not just the oldest", async () => {
-    // Picking a winner is the ledger's job in WorktreeProbe — this layer just
-    // reports readings, because a raw mtime can't say when a file *became* dirty.
+  test("reports every dirty path, regardless of age", async () => {
+    // No mtimes anywhere: the reading is the set of paths, and a chat is
+    // relevant because it touched one of them, not because of when they moved.
     const repoRoot = await createCommittedRepo()
     await writeFile(path.join(repoRoot, "old.txt"), "old\n", "utf8")
     const oldMs = Date.now() - 60 * 60 * 1000
@@ -1066,24 +1061,32 @@ describe("probeWorkingTree", () => {
 
     const scan = await probeWorkingTree(repoRoot)
 
-    expect(scan.files.map((file) => file.path).sort()).toEqual(["new.txt", "old.txt"])
-    const old = scan.files.find((file) => file.path === "old.txt")!
-    expect(old.mtimeMs).toBeLessThanOrEqual(oldMs + 2_000)
+    expect(scan.paths.sort()).toEqual(["new.txt", "old.txt"])
   })
 
-  test("reports dirty with no files for a deletion-only tree", async () => {
+  test("reports a deleted file's path — it can still be what a chat touched", async () => {
     const repoRoot = await createCommittedRepo()
     await rm(path.join(repoRoot, "app.txt"))
 
-    // The tree is dirty, but there is nothing left on disk to stat.
-    expect(await probeWorkingTree(repoRoot)).toEqual({ dirty: true, files: [] })
+    // The old version stat'ed each dirty file and so dropped deletions
+    // entirely; a chat that deleted a file had changed it all the same.
+    expect(await probeWorkingTree(repoRoot)).toEqual({ dirty: true, paths: ["app.txt"] })
+  })
+
+  test("reports both sides of a rename", async () => {
+    const repoRoot = await createCommittedRepo()
+    await run(["git", "mv", "app.txt", "renamed.txt"], repoRoot)
+
+    const scan = await probeWorkingTree(repoRoot)
+
+    expect(scan.paths.sort()).toEqual(["app.txt", "renamed.txt"])
   })
 
   test("reports not dirty outside a repo instead of throwing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "kanna-probe-no-repo-"))
     tempDirs.push(root)
 
-    expect(await probeWorkingTree(root)).toEqual({ dirty: false, files: [] })
+    expect(await probeWorkingTree(root)).toEqual({ dirty: false, paths: [] })
   })
 })
 

@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatDuration, formatPromptTimestamp } from "../../components/messages/ResultMessage"
-import { cn } from "../../lib/utils"
 import {
   getMagnifyFalloff,
   getMinimapCapacity,
@@ -21,22 +20,27 @@ const MIN_GUTTER_PX = 88
 const STRIP_INSET_PX = 15
 
 /**
- * Tick geometry is proportioned off the resting width, so retuning the strip
- * is a single number: spacing is the golden minor of it, and a tick under the
- * cursor grows by the magnification scale.
+ * Tick geometry is proportioned off one basis value: spacing is its golden
+ * minor, and a tick under the cursor grows by the magnification scale.
  */
 const GOLDEN_MINOR = 0.618
 const MAGNIFY_SCALE = 2
-const TICK_BASE_WIDTH_PX = 13
-const TICK_PITCH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MINOR
-const TICK_MAX_WIDTH_PX = TICK_BASE_WIDTH_PX * MAGNIFY_SCALE
 /**
- * Width of a tick the cursor has passed over — outside the swell, but on a
- * strip that is being pointed at. Receding by the same golden minor the
- * spacing uses makes the magnified neighbours read as taken from these rather
- * than simply added on top.
+ * The number the rest of the geometry is proportioned from, so retuning the
+ * strip stays a single value. Never rendered as a width itself — every tick
+ * sits at the resting width until the cursor's swell reaches it.
  */
-const TICK_RECEDED_WIDTH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MINOR
+const TICK_SCALE_BASIS_PX = 13
+/** Width of every tick outside the swell, hovered or not. */
+const TICK_RESTING_WIDTH_PX = 10
+/** The basis's golden minor, tightened a pixel by eye. */
+const TICK_PITCH_PX = TICK_SCALE_BASIS_PX * GOLDEN_MINOR - 1
+const TICK_MAX_WIDTH_PX = TICK_SCALE_BASIS_PX * MAGNIFY_SCALE
+
+/** Quick while the cursor is on the strip, slower settling back once it leaves. */
+const SIZE_ENTER_DURATION_MS = 100
+const SIZE_EXIT_DURATION_MS = 200
+const OPACITY_DURATION_MS = 150
 const TICK_BASE_HEIGHT_PX = 2
 const TICK_MAX_HEIGHT_PX = 3
 
@@ -213,9 +217,8 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
     if (focusedDistance > magnifyRadiusPx) focusedIndex = -1
   }
 
-  // Only once a tick is actually picked out. If the cursor is on the strip but
-  // past every radius, nothing grows — so nothing should recede either.
-  const restingWidth = focusedIndex >= 0 ? TICK_RECEDED_WIDTH_PX : TICK_BASE_WIDTH_PX
+  // Quick while the cursor is engaged, gentler once it has left the strip.
+  const sizeDurationMs = focusedIndex >= 0 ? SIZE_ENTER_DURATION_MS : SIZE_EXIT_DURATION_MS
 
   const focusedTurn = focusedIndex >= 0 ? ticks[focusedIndex] : null
   const focusedMeta = focusedTurn
@@ -250,6 +253,8 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
           const falloff = pointerY === null ? 0 : getMagnifyFalloff(pointerY - centerY, magnifyRadiusPx)
           // The in-view highlight only applies while nothing is focused: once
           // a tick is picked out, every other tick sits at the floor.
+          const isGrowing = falloff > 0
+
           const inView = focusedIndex < 0 && isTurnInView(turn, visibleStart, visibleEnd)
           const opacity = index === focusedIndex
             ? TICK_OPACITY_FOCUSED
@@ -272,26 +277,28 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
                 height: TICK_PITCH_PX,
               }}
             >
+              {/* Deliberately uniform in colour: a tick's only job is to show
+                  where a turn sits and whether it is on screen. Tinting
+                  failures would make the strip a status display and compete
+                  with the in-view contrast that carries the actual meaning. */}
               <span
-                className={cn(
-                  // Deliberately uniform: a tick's only job is to show where a
-                  // turn sits and whether it is on screen. Tinting failures
-                  // would make the strip a status display and compete with the
-                  // in-view contrast that carries the actual meaning.
-                  "absolute rounded-full bg-foreground",
-                  // Opacity always eases, including mid-hover: it now steps
-                  // between two fixed values rather than following a gradient,
-                  // and an untweened step reads as a flicker as the focus
-                  // moves. Size still snaps — tweening it lags the pointer and
-                  // the dock feels rubbery.
-                  "transition-opacity duration-150 ease-out",
-                  pointerY === null && "transition-[width,height,opacity] duration-200 ease-out",
-                )}
+                className="absolute rounded-full bg-foreground"
                 style={{
                   left: STRIP_INSET_PX,
-                  width: restingWidth + (TICK_MAX_WIDTH_PX - restingWidth) * falloff,
+                  width: TICK_RESTING_WIDTH_PX
+                    + (TICK_MAX_WIDTH_PX - TICK_RESTING_WIDTH_PX) * falloff,
                   height: TICK_BASE_HEIGHT_PX + (TICK_MAX_HEIGHT_PX - TICK_BASE_HEIGHT_PX) * falloff,
                   opacity,
+                  // A tick inside the swell tracks the cursor, so its size must
+                  // not tween — that is what made the dock feel rubbery. One
+                  // that has just left the swell eases back instead. Opacity
+                  // always eases: it steps between fixed values, and an
+                  // untweened step reads as a flicker as the focus moves.
+                  transition: isGrowing
+                    ? `opacity ${OPACITY_DURATION_MS}ms ease-out`
+                    : `width ${sizeDurationMs}ms ease-out,`
+                      + ` height ${sizeDurationMs}ms ease-out,`
+                      + ` opacity ${OPACITY_DURATION_MS}ms ease-out`,
                 }}
               />
             </button>

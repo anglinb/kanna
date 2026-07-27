@@ -125,16 +125,20 @@ export function deriveSidebarData(
 
   function toSidebarChatRows(project: NonNullable<typeof projects[number]>, projectChats: ChatRecord[]) {
     const workingTree = options?.workingTrees?.get(project.id)
-    // Project-scoped by nature: every chat that finished a turn after the tree
-    // got dirty is flagged, not just whichever one caused the dirt.
-    const dirtySinceMs = workingTree?.dirty ? workingTree.dirtySinceMs : undefined
+    // Authorship, not recency: a chat is relevant because a file it actually
+    // changed is still uncommitted. `touchedPaths` comes from diffing worktree
+    // snapshots at each turn boundary, so it covers edits made through any
+    // tool — including a Bash command we never parsed.
+    const dirtyPaths = workingTree?.dirty ? workingTree.paths : undefined
     return projectChats
       .sort((a, b) => getSidebarChatSortTimestamp(b) - getSidebarChatSortTimestamp(a))
       .map((chat) => {
         const pendingToolKind = options?.pendingToolKinds?.get(chat.id)
-        const uncommittedWork = dirtySinceMs != null
-          && chat.lastTurnEndedAt != null
-          && chat.lastTurnEndedAt > dirtySinceMs
+        // Chats that predate file tracking have no paths and so are never
+        // flagged — the safe direction: they simply sit in their date bucket
+        // until their next turn records something.
+        const uncommittedWork = dirtyPaths != null
+          && (chat.touchedPaths?.some((touched) => dirtyPaths.has(touched)) ?? false)
         return {
           _id: chat.id,
           _creationTime: chat.createdAt,
@@ -145,11 +149,16 @@ export function deriveSidebarData(
           ...(chat.doneAt ? { done: true, doneAt: chat.doneAt } : {}),
           localPath: project.localPath,
           provider: chat.provider,
+          ...(chat.lastModel ? { model: chat.lastModel } : {}),
           lastMessageAt: chat.lastMessageAt,
+          ...(chat.lastTurnStartedAt != null ? { lastTurnStartedAt: chat.lastTurnStartedAt } : {}),
           ...(chat.lastTurnEndedAt != null ? { lastTurnEndedAt: chat.lastTurnEndedAt } : {}),
           ...(chat.lastAgentMessageAt != null ? { lastAgentMessageAt: chat.lastAgentMessageAt } : {}),
           ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
           ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
+          ...(chat.lastAgentMessagePreviewAt != null
+            ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
+            : {}),
           ...(pendingToolKind ? { pendingToolKind } : {}),
           ...(uncommittedWork ? { uncommittedWork: true } : {}),
           hasAutomation: false,

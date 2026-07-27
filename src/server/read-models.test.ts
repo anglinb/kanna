@@ -583,9 +583,7 @@ describe("read models", () => {
   })
 
   describe("uncommittedWork", () => {
-    const DIRTY_SINCE_MS = 10_000
-
-    function stateWithChats(chats: Array<{ id: string; lastTurnEndedAt?: number }>) {
+    function stateWithChats(chats: Array<{ id: string; touchedPaths?: string[] }>) {
       const state = createEmptyState()
       state.projectsById.set("project-1", {
         id: "project-1",
@@ -608,15 +606,19 @@ describe("read models", () => {
           autoPlan: false,
           sessionToken: null,
           lastTurnOutcome: null,
-          ...(chat.lastTurnEndedAt == null ? {} : { lastTurnEndedAt: chat.lastTurnEndedAt }),
+          ...(chat.touchedPaths == null ? {} : { touchedPaths: chat.touchedPaths }),
         })
       }
       return state
     }
 
+    function tree(dirty: boolean, ...paths: string[]) {
+      return new Map([["project-1", { dirty, paths: new Set(paths) }]])
+    }
+
     function rowsFor(
-      chats: Array<{ id: string; lastTurnEndedAt?: number }>,
-      workingTrees?: Map<string, { dirty: boolean; dirtySinceMs?: number }>
+      chats: Array<{ id: string; touchedPaths?: string[] }>,
+      workingTrees?: ReadonlyMap<string, { dirty: boolean; paths: ReadonlySet<string> }>
     ) {
       const sidebar = deriveSidebarData(stateWithChats(chats), new Map(), {
         nowMs: 1_000_000,
@@ -625,81 +627,71 @@ describe("read models", () => {
       return sidebar.projectGroups[0]?.chats ?? []
     }
 
-    test("flags a chat whose last turn ended after the tree became dirty", () => {
+    test("flags a chat that touched a file which is still dirty", () => {
+      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(true, "src/app.ts"))
+
+      expect(rows[0]?.uncommittedWork).toBe(true)
+    })
+
+    test("leaves a chat whose files were all committed unflagged", () => {
+      // The whole point: this chat ran recently, but nothing it changed is
+      // still outstanding, so it is not part of your current diff.
+      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(true, "src/other.ts"))
+
+      expect(rows[0]?.uncommittedWork).toBeUndefined()
+    })
+
+    test("one dirty file out of many is enough", () => {
       const rows = rowsFor(
-        [{ id: "chat-after", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }],
-        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
+        [{ id: "chat-1", touchedPaths: ["a.ts", "b.ts", "c.ts"] }],
+        tree(true, "zz.ts", "b.ts"),
       )
 
       expect(rows[0]?.uncommittedWork).toBe(true)
     })
 
-    test("leaves a chat whose last turn predates the dirt unflagged", () => {
-      const rows = rowsFor(
-        [{ id: "chat-before", lastTurnEndedAt: DIRTY_SINCE_MS - 1 }],
-        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
-      )
-
-      expect(rows[0]?.uncommittedWork).toBeUndefined()
-    })
-
     test("flags nothing when the tree is clean", () => {
-      const rows = rowsFor(
-        [{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }],
-        new Map([["project-1", { dirty: false }]])
-      )
+      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(false))
 
       expect(rows[0]?.uncommittedWork).toBeUndefined()
     })
 
-    test("flags nothing when the tree is dirty but unanchored", () => {
-      // Deletion-only trees have nothing to stat, so there is no anchor to
-      // compare against and we must not guess.
-      const rows = rowsFor(
-        [{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }],
-        new Map([["project-1", { dirty: true }]])
-      )
-
-      expect(rows[0]?.uncommittedWork).toBeUndefined()
-    })
-
-    test("leaves a chat that never finished a turn unflagged", () => {
-      const rows = rowsFor(
-        [{ id: "chat-no-turn" }],
-        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
-      )
+    test("leaves a chat with no recorded paths unflagged", () => {
+      // Chats that predate file tracking, and chats whose turns never changed
+      // anything. Never flagged rather than guessed at.
+      const rows = rowsFor([{ id: "chat-untracked" }], tree(true, "src/app.ts"))
 
       expect(rows[0]?.uncommittedWork).toBeUndefined()
     })
 
     test("flags nothing when the project has no probe entry yet", () => {
-      const rows = rowsFor([{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS + 1 }], new Map())
+      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], new Map())
 
       expect(rows[0]?.uncommittedWork).toBeUndefined()
     })
 
     test("omits the field entirely rather than emitting false", () => {
-      const rows = rowsFor([{ id: "chat-1", lastTurnEndedAt: DIRTY_SINCE_MS - 1 }], new Map([
-        ["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }],
-      ]))
+      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(true, "other.ts"))
 
       // The sidebar dedupe signature is a JSON.stringify of the whole snapshot,
       // so an always-present `false` would be pure wire noise.
       expect("uncommittedWork" in (rows[0] ?? {})).toBe(false)
     })
 
-    test("flags every qualifying chat in the project, not just one", () => {
+    test("flags each chat on its own files, not on the project's", () => {
+      // The old rule was project-scoped: any chat active since the tree went
+      // dirty was flagged, so one agent's edit lit up every other chat.
       const rows = rowsFor(
         [
-          { id: "chat-a", lastTurnEndedAt: DIRTY_SINCE_MS + 1 },
-          { id: "chat-b", lastTurnEndedAt: DIRTY_SINCE_MS + 2 },
-          { id: "chat-c", lastTurnEndedAt: DIRTY_SINCE_MS - 1 },
+          { id: "chat-a", touchedPaths: ["a.ts"] },
+          { id: "chat-b", touchedPaths: ["b.ts"] },
+          { id: "chat-c", touchedPaths: ["c.ts"] },
         ],
-        new Map([["project-1", { dirty: true, dirtySinceMs: DIRTY_SINCE_MS }]])
+        tree(true, "a.ts", "c.ts"),
       )
 
       const flagged = rows.filter((row) => row.uncommittedWork).map((row) => row.chatId).sort()
-      expect(flagged).toEqual(["chat-a", "chat-b"])
+      expect(flagged).toEqual(["chat-a", "chat-c"])
     })
   })
 })

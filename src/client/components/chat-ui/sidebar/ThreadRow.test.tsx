@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { SidebarChatRow } from "../../../../shared/types"
 import type { SidebarThread } from "../../../lib/thread-sections"
+import { TooltipProvider } from "../../ui/tooltip"
 import { ThreadRow } from "./ThreadRow"
 
 const baseChat: SidebarChatRow = {
@@ -34,6 +35,8 @@ function thread(overrides: Partial<SidebarChatRow> = {}, archived = false): Side
 
 function render(props: Partial<Parameters<typeof ThreadRow>[0]> = {}) {
   return renderToStaticMarkup(
+    // The row is a hover-card trigger, and Radix tooltips need their provider.
+    <TooltipProvider>
     <ThreadRow
       thread={thread()}
       isActive={false}
@@ -51,6 +54,7 @@ function render(props: Partial<Parameters<typeof ThreadRow>[0]> = {}) {
       onDeleteChat={() => undefined}
       {...props}
     />
+    </TooltipProvider>
   )
 }
 

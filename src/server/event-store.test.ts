@@ -868,7 +868,29 @@ describe("EventStore", () => {
     expect(reloaded.requireChat(chat.id).lastAgentMessageAt).toBe(2_000)
   })
 
-  test("a fork inherits lastTurnEndedAt, so it derives the same uncommittedWork flag", async () => {
+  test("a fork inherits the source's touched paths", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const source = await store.createChat(project.id)
+    await store.setChatProvider(source.id, "claude")
+    await store.setSessionToken(source.id, "session-1")
+    await store.appendMessage(source.id, entry("user_prompt", 1_000, { content: "edit files" }))
+    await store.recordFilesTouched(source.id, ["src/app.ts", "src/util.ts"])
+
+    const forked = await store.forkChat(source.id)
+
+    // Same conversation, same claim on the files it changed — the fork belongs
+    // in Relevant next to its source, not with an empty touched set.
+    expect(forked.touchedPaths).toEqual(["src/app.ts", "src/util.ts"])
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.requireChat(forked.id).touchedPaths).toEqual(["src/app.ts", "src/util.ts"])
+  })
+
+  test("a fork inherits lastTurnEndedAt, so it keeps the conversation's recency", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)
     await store.initialize()

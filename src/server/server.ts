@@ -19,6 +19,7 @@ import { AppSettingsManager } from "./app-settings"
 import { UsageLimitsManager } from "./usage-limits"
 import { DiffStore } from "./diff-store"
 import { WorktreeProbe } from "./worktree-probe"
+import { TurnFileTracker } from "./worktree-snapshot"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { clearGitHubRepoCache } from "./github"
@@ -150,10 +151,25 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   diffStore.onWorkingTreeProbe = (projectId, probe) => {
     worktreeProbe.recordExternalProbe(projectId, probe)
   }
-  // A finished turn is the only event that can newly qualify a chat for the
-  // dot, so probe that one project then.
+  // Snapshot the worktree either side of a turn and record what changed, so
+  // the sidebar can ask "did this chat touch a file that's still uncommitted?"
+  // instead of comparing timestamps. See worktree-snapshot.ts.
+  const turnFiles = new TurnFileTracker({
+    resolveChatPath: (chatId) => {
+      const chat = store.state.chatsById.get(chatId)
+      const project = chat ? store.state.projectsById.get(chat.projectId) : undefined
+      return project?.localPath ?? null
+    },
+    recordPaths: (chatId, paths) => store.recordFilesTouched(chatId, paths),
+  })
+  store.onTurnStarted = (chatId) => {
+    turnFiles.beginTurn(chatId)
+  }
+  // A finished turn is the likeliest moment for the dirty set to have changed,
+  // so probe that one project then — after recording the turn's own files, so
+  // the broadcast that follows already reflects them.
   store.onTurnEnded = (chatId) => {
-    void worktreeProbe.refreshForChat(chatId)
+    void turnFiles.endTurn(chatId).finally(() => worktreeProbe.refreshForChat(chatId))
   }
   const terminals = new TerminalManager()
   const keybindings = new KeybindingsManager()

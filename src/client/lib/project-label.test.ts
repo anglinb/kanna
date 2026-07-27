@@ -59,7 +59,9 @@ describe("getProjectSidebarLabel", () => {
     })).toEqual({
       name: "kanna",
       branchName: "feat/x",
+      currentBranch: "feat/x",
       repoPath: "jakemor/kanna",
+      hasOwner: true,
       text: "kanna/feat/x",
     })
   })
@@ -92,6 +94,8 @@ describe("getProjectSidebarLabel", () => {
       repoOwner: "jakemor",
     })
 
-    expect(label).toEqual({ name: "Work", text: "Work" })
+    // The checkout survives the rename even though the name doesn't — the card
+    // still has to say which branch you're on.
+    expect(label).toEqual({ name: "Work", currentBranch: "feat/x", text: "Work" })
   })
 })

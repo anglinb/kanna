@@ -4,6 +4,7 @@ import type { SidebarThread } from "../../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
 import { ThreadRowContent } from "../ThreadRowContent"
+import { ChatHoverCard } from "./ChatHoverCard"
 import { ChatRowMenu } from "./Menus"
 
 /**
@@ -118,28 +119,32 @@ export function ThreadRow({
       onArchive={archived ? () => {} : () => onArchiveChat(thread.row)}
       onDelete={() => onDeleteChat(thread.row)}
     >
-      <div
-        // The marker the sidebar's scroll-to-active querySelector looks for.
-        // When the Chats tab renders above the project groups, its copy is found
-        // first and the sidebar scrolls up to it.
-        data-chat-id={normalizeChatId(thread.chatId)}
-        className={cn(
-          "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
-          isActive
-            ? "bg-muted hover:bg-muted border-border"
-            : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
-        )}
-        onClick={() => onSelect(thread.chatId)}
-      >
-        <ThreadRowContent
-          thread={thread}
-          showStatus
-          isActive={isActive}
-          dimIdleTitles={dimIdleTitles}
-          detailLabel={detailLabel}
-          hoverActions={hoverActions}
-        />
-      </div>
+      {/* Sidebar rows only: the palette renders `ThreadRowContent` directly and
+          gets no card — it's already a detail view you opened on purpose. */}
+      <ChatHoverCard thread={thread}>
+        <div
+          // The marker the sidebar's scroll-to-active querySelector looks for.
+          // When the Chats tab renders above the project groups, its copy is
+          // found first and the sidebar scrolls up to it.
+          data-chat-id={normalizeChatId(thread.chatId)}
+          className={cn(
+            "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
+            isActive
+              ? "bg-muted hover:bg-muted border-border"
+              : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
+          )}
+          onClick={() => onSelect(thread.chatId)}
+        >
+          <ThreadRowContent
+            thread={thread}
+            showStatus
+            isActive={isActive}
+            dimIdleTitles={dimIdleTitles}
+            detailLabel={detailLabel}
+            hoverActions={hoverActions}
+          />
+        </div>
+      </ChatHoverCard>
     </ChatRowMenu>
   )
 }

@@ -19,7 +19,7 @@ export type ThreadDetailScope =
  * chat row asks this one question rather than answering it locally:
  *
  * - **Cross-project** → the project, because that's what tells two rows apart.
- *   Rendered by `ProjectLabel`, so it picks up the branch glyph and tooltip.
+ *   Rendered by `ProjectLabel`, so it picks up the branch glyph.
  * - **Project-scoped** → the chat's age, because the project is already on the
  *   header above and would just repeat down the whole list.
  *
