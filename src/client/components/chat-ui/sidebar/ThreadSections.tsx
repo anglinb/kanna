@@ -122,9 +122,10 @@ interface Props {
 
 /**
  * The New Sidebar's Chats tab: In Progress leads, then Relevant (Review folded
- * in — see `mergeRelevantThreads`), followed by collapsible date buckets — This
- * Week, Last Week, Last 30 Days — and a trailing Archived section. Only This
- * Week starts expanded; empty sections never render. Rows reuse the palette's
+ * in — see `mergeRelevantThreads`), followed by collapsible date buckets —
+ * Today, Yesterday, This Week, Last 30 Days — and a trailing Archived section.
+ * Only the first date bucket starts expanded, so everything below the most
+ * recent day of activity is folded away; empty sections never render. Rows reuse the palette's
  * compact thread row (no prompt preview) and the standard chat context menu;
  * bucket headers offer Archive All via "…" or right-click.
  */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatProjectSidebarLabel } from "./project-label"
+import { formatProjectSidebarLabel, getProjectSidebarLabel } from "./project-label"
 
 describe("formatProjectSidebarLabel", () => {
   test("uses the folder name when the project is not in a repo", () => {
@@ -44,5 +44,54 @@ describe("formatProjectSidebarLabel", () => {
 
   test("never renders empty while the repo is still being resolved", () => {
     expect(formatProjectSidebarLabel({ title: "kanna", branchName: "feat/x" })).toBe("kanna")
+  })
+})
+
+describe("getProjectSidebarLabel", () => {
+  test("shows the repo inline and keeps the branch for the tooltip", () => {
+    // The branch is what the glyph and the tooltip are for — it must never be
+    // folded into the inline name, which is the part the sidebar truncates.
+    expect(getProjectSidebarLabel({
+      title: "kanna",
+      repoName: "kanna",
+      branchName: "feat/x",
+      repoOwner: "jakemor",
+    })).toEqual({
+      name: "kanna",
+      branchName: "feat/x",
+      repoPath: "jakemor/kanna",
+      text: "kanna/feat/x",
+    })
+  })
+
+  test("an unremarkable branch leaves nothing to flag", () => {
+    // No branchName → no glyph, so the row reads as a plain project name.
+    expect(getProjectSidebarLabel({ title: "kanna", repoName: "kanna", branchName: "main" }).branchName)
+      .toBeUndefined()
+  })
+
+  test("falls back to the bare repo when the origin owner is unknown", () => {
+    expect(getProjectSidebarLabel({ title: "kanna", repoName: "kanna", branchName: "feat/x" }).repoPath)
+      .toBe("kanna")
+  })
+
+  test("a project outside a repo has no tooltip content at all", () => {
+    const label = getProjectSidebarLabel({ title: "notes" })
+
+    expect(label.branchName).toBeUndefined()
+    expect(label.repoPath).toBeUndefined()
+  })
+
+  test("a rename suppresses the branch flag along with the repo", () => {
+    // You named it; that name is the whole label, glyph included.
+    const label = getProjectSidebarLabel({
+      title: "Work",
+      sidebarTitle: "Work",
+      repoName: "kanna",
+      branchName: "feat/x",
+      repoOwner: "jakemor",
+    })
+
+    expect(label).toEqual({ name: "Work", text: "Work" })
   })
 })

@@ -24,8 +24,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip"
 import type { SidebarChatRow, SidebarProjectGroup } from "../../../../shared/types"
 import { APP_NAME } from "../../../../shared/branding"
 import { getPathBasename } from "../../../lib/formatters"
-import { formatProjectSidebarLabel } from "../../../lib/project-label"
+import { getProjectSidebarLabel, type ProjectSidebarLabel } from "../../../lib/project-label"
 import { cn } from "../../../lib/utils"
+import { ProjectLabelInline, ProjectLabelTooltipLines } from "../ProjectLabel"
 import { ProjectSectionMenu } from "./Menus"
 
 interface Props {
@@ -236,9 +237,15 @@ const SortableProjectGroup = memo(function SortableProjectGroup({
   newSidebar = false,
 }: SortableProjectGroupProps) {
   const { groupKey, localPath, title } = group
-  // The New Sidebar names a project by its repo and branch; the old sidebar
-  // keeps the plain project title.
-  const headerTitle = newSidebar ? formatProjectSidebarLabel(group) : title
+  // The New Sidebar names a project by its repo, flagging an off-main branch
+  // with a glyph; the old sidebar keeps the plain project title.
+  const projectLabel: ProjectSidebarLabel = newSidebar
+    ? getProjectSidebarLabel(group)
+    : { name: title, text: title }
+  // A project whose repo hasn't been probed yet can still have an empty name.
+  const headerLabel: ProjectSidebarLabel = projectLabel.name
+    ? projectLabel
+    : { ...projectLabel, name: getPathBasename(localPath) }
   const isExpanded = newSidebar || expandedGroups.has(groupKey)
   const isEmptyProject = group.chats.length === 0
   const hasMore = group.olderChats.length > 0
@@ -276,12 +283,16 @@ const SortableProjectGroup = memo(function SortableProjectGroup({
       <div className="flex min-w-0 flex-1 items-center gap-1.5 pr-14">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="min-w-0 truncate whitespace-nowrap text-sm max-md:text-base">
-              {headerTitle || getPathBasename(localPath)}
-            </span>
+            <ProjectLabelInline
+              label={headerLabel}
+              className="whitespace-nowrap text-sm max-md:text-base"
+            />
           </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={4}>
-            {localPath}
+          {/* Branch and `owner/repo` lead; the path stays as the last, faintest
+              line so the header tooltip keeps answering "which folder is this?" */}
+          <TooltipContent side="right" sideOffset={4} className="max-w-80 leading-snug">
+            <ProjectLabelTooltipLines label={headerLabel} />
+            <div className="text-muted-foreground break-all">{localPath}</div>
           </TooltipContent>
         </Tooltip>
         <span className="relative size-3.5 shrink-0 cursor-pointer">

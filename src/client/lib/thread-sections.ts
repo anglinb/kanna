@@ -1,5 +1,5 @@
 import type { SidebarChatRow, SidebarData } from "../../shared/types"
-import { formatProjectSidebarLabel } from "./project-label"
+import { getProjectSidebarLabel, type ProjectSidebarLabel } from "./project-label"
 
 /**
  * Canonical thread-section logic shared by the command palette (empty-query
@@ -12,32 +12,46 @@ export interface SidebarThread {
   projectId: string
   projectTitle: string
   /**
-   * The New Sidebar's project name — see `formatProjectSidebarLabel`. Separate
+   * The New Sidebar's project name — see `getProjectSidebarLabel`. Separate
    * from `projectTitle` because the command palette still wants the plain
    * project name; only the sidebar shows the branch.
    */
-  projectLabel: string
+  projectLabel: ProjectSidebarLabel
   archived: boolean
   lastActivityAt: number
   row: SidebarChatRow
 }
 
 /**
- * "Most recent activity" for a chat — the later of when you last sent a
- * message and when the agent last got back to you (turn end). This is the one
- * timestamp every section sorts/buckets by, so a chat you kicked off long ago
- * that only just finished counts as fresh (rises in Today/Recents), not stale.
- * Falls back to creation time for empty chats with neither timestamp.
+ * "Most recent activity" for a chat — the latest of when you last sent a
+ * message, when the agent last wrote to the transcript, and when its last turn
+ * ended. This is the one timestamp every section sorts/buckets by, so a chat
+ * you kicked off long ago that only just produced something counts as fresh
+ * (rises in Today/Recents), not stale.
+ *
+ * `lastAgentMessageAt` is what makes a chat parked mid-turn sort correctly:
+ * plan mode and permission prompts end no turn, so `lastTurnEndedAt` doesn't
+ * move and `lastMessageAt` is still the moment you hit send — a plan that took
+ * ten minutes to land would sort ten minutes stale without it. `lastTurnEndedAt`
+ * stays in the max as a floor for turns that end without the agent writing
+ * anything (a cancel, an empty failure) and for chats whose transcripts predate
+ * the field.
+ *
+ * Falls back to creation time for empty chats with none of the three.
  */
 function activityAt(row: SidebarChatRow): number {
-  return Math.max(row.lastMessageAt ?? 0, row.lastTurnEndedAt ?? 0) || row._creationTime
+  return Math.max(
+    row.lastMessageAt ?? 0,
+    row.lastAgentMessageAt ?? 0,
+    row.lastTurnEndedAt ?? 0,
+  ) || row._creationTime
 }
 
 /** Flattens the sidebar snapshot into one searchable thread list (active + archived). */
 export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
   const threads: SidebarThread[] = []
   for (const group of data.projectGroups) {
-    const projectLabel = formatProjectSidebarLabel(group)
+    const projectLabel = getProjectSidebarLabel(group)
     const pushRows = (rows: SidebarChatRow[], archived: boolean) => {
       for (const row of rows) {
         threads.push({
@@ -177,7 +191,7 @@ export interface ThreadDateBucket {
   /** "Today" | "Yesterday" | "Friday" | "Last Friday" | "Monday Jun 7th" | "This Week" | "Last Week" | "Last 30 Days". */
   label: string
   threads: SidebarThread[]
-  /** Only the recent-activity day buckets start expanded. */
+  /** Only the first (most recent) bucket starts expanded; everything below it is collapsed. */
   defaultExpanded: boolean
 }
 
@@ -242,7 +256,7 @@ function dayBucketLabel(dayStart: number, todayStart: number): string {
 /**
  * Buckets threads (already filtered) by walking the timestamps: the
  * RECENT_ACTIVITY_DAY_BUCKETS most recent distinct days of activity each get
- * their own expanded section, labeled by what the day actually is — "Today",
+ * their own section, labeled by what the day actually is — "Today",
  * "Yesterday" and "Monday" when activity is fresh, "Today" and "Last Friday"
  * after a long weekend, "Monday Jun 7th" and "Friday Jun 4th" after two idle
  * weeks. Day labels and bucket labels agree on the week boundary, so a day
@@ -251,6 +265,9 @@ function dayBucketLabel(dayStart: number, todayStart: number): string {
  * prior Mon–Sun), and Last 30 Days. No client-side age cutoff — server
  * garbage collection (auto-archive 30 days behind the latest activity,
  * delete at 90) bounds the list. Empty buckets are never emitted.
+ *
+ * Only the first bucket returned — the most recent day of activity — starts
+ * expanded. Every section below it defaults collapsed.
  */
 export function computeThreadDateBuckets(threads: SidebarThread[], nowMs: number): ThreadDateBucket[] {
   const todayStart = startOfDay(nowMs)
@@ -268,19 +285,17 @@ export function computeThreadDateBuckets(threads: SidebarThread[], nowMs: number
     if (recentDayStarts.size === RECENT_ACTIVITY_DAY_BUCKETS) break
   }
 
-  const buckets = new Map<string, ThreadDateBucket>()
+  const buckets = new Map<string, Omit<ThreadDateBucket, "defaultExpanded">>()
   for (const thread of sorted) {
     const activityAt = thread.lastActivityAt
     const dayStart = startOfDay(activityAt)
 
     let key: string
     let label: string
-    let defaultExpanded = false
     if (recentDayStarts.has(dayStart)) {
       const date = new Date(dayStart)
       key = `day-${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
       label = dayBucketLabel(dayStart, todayStart)
-      defaultExpanded = true
     } else if (activityAt >= thisWeekStart) {
       key = "this-week"; label = "This Week"
     } else if (activityAt >= lastWeekStart) {
@@ -291,12 +306,16 @@ export function computeThreadDateBuckets(threads: SidebarThread[], nowMs: number
 
     const bucket = buckets.get(key)
     if (bucket) bucket.threads.push(thread)
-    else buckets.set(key, { key, label, threads: [thread], defaultExpanded })
+    else buckets.set(key, { key, label, threads: [thread] })
   }
 
   // Threads are sorted most-recent-first and every non-day thread is older
-  // than the extracted days, so first-seen bucket order is newest → oldest.
-  return [...buckets.values()]
+  // than the extracted days, so first-seen bucket order is newest → oldest —
+  // which makes the first bucket the only one that starts expanded. Everything
+  // below the newest day of activity is history you scroll past, so it stays
+  // folded until asked for; the sections above (In Progress, Relevant) are
+  // where the live work lives.
+  return [...buckets.values()].map((bucket, index) => ({ ...bucket, defaultExpanded: index === 0 }))
 }
 
 /**

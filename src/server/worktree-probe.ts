@@ -63,6 +63,8 @@ export interface ProjectRepoLabel {
   repoName: string
   /** Absent on a detached HEAD, where there is no branch to name. */
   branchName?: string
+  /** Owner segment of the `origin` remote; absent when there is no origin. */
+  repoOwner?: string
 }
 
 function probesEqual(left: WorkingTreeProbe | undefined, right: WorkingTreeProbe) {
@@ -83,6 +85,67 @@ async function readHeadBranch(gitDir: string) {
   const ref = trimmed.slice("ref:".length).trim()
   const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref
   return branch.length > 0 ? branch : undefined
+}
+
+/**
+ * The `url` of the `origin` remote out of a git config file. Same trade as
+ * `readHeadBranch`: one file read per project beats `git config --get` on every
+ * pass. Hand-rolled rather than a general INI parser because we want exactly
+ * one key out of one section.
+ */
+function extractOriginUrl(config: string): string | undefined {
+  let inOrigin = false
+  for (const rawLine of config.split("\n")) {
+    const line = rawLine.trim()
+    if (line.startsWith("[")) {
+      inOrigin = /^\[remote\s+"origin"\]$/u.test(line)
+      continue
+    }
+    if (!inOrigin) continue
+    const match = /^url\s*=\s*(.+)$/u.exec(line)
+    if (match?.[1]) return match[1].trim()
+  }
+  return undefined
+}
+
+/**
+ * The account/org a remote URL belongs to — the segment before the repo in
+ * `owner/repo`. Host-agnostic on purpose (GitHub, GitLab and self-hosted all
+ * shape the path the same way), but it does require a *host*: a bare local path
+ * like `/srv/git/widgets.git` has directories, not an owner, and calling one
+ * "git" would put a lie in the tooltip. No owner is always a valid answer — the
+ * label just shows the repo unqualified.
+ */
+export function extractRemoteOwner(remoteUrl: string | undefined): string | undefined {
+  if (!remoteUrl) return undefined
+  // `git@host:owner/repo.git` — scp syntax, which is not a parseable URL.
+  const scp = /^[^/@]+@[^/:]+:(?<path>.+)$/u.exec(remoteUrl)
+  let rawPath = scp?.groups?.path
+  if (rawPath === undefined) {
+    try {
+      rawPath = new URL(remoteUrl).pathname
+    } catch {
+      return undefined
+    }
+  }
+  const segments = rawPath.replace(/\.git$/u, "").split("/").filter((segment) => segment.length > 0)
+  return segments.length >= 2 ? segments[segments.length - 2] : undefined
+}
+
+/**
+ * A linked worktree's git dir holds no `config` of its own — the remotes live
+ * in the common dir it points at, named by a `commondir` file beside HEAD.
+ */
+async function resolveCommonDir(gitDir: string) {
+  const commonDir = await readFile(path.join(gitDir, "commondir"), "utf8").catch(() => null)
+  const trimmed = commonDir?.trim()
+  return trimmed ? path.resolve(gitDir, trimmed) : gitDir
+}
+
+async function readOriginOwner(gitDir: string) {
+  const configPath = path.join(await resolveCommonDir(gitDir), "config")
+  const config = await readFile(configPath, "utf8").catch(() => null)
+  return config === null ? undefined : extractRemoteOwner(extractOriginUrl(config))
 }
 
 export class WorktreeProbe {
@@ -269,10 +332,14 @@ export class WorktreeProbe {
   }
 
   private async readRepoLabel(location: WorkingTreeLocation): Promise<ProjectRepoLabel> {
-    const branchName = await readHeadBranch(location.gitDir)
+    const [branchName, repoOwner] = await Promise.all([
+      readHeadBranch(location.gitDir),
+      readOriginOwner(location.gitDir),
+    ])
     return {
       repoName: path.basename(location.repoRoot),
       ...(branchName ? { branchName } : {}),
+      ...(repoOwner ? { repoOwner } : {}),
     }
   }
 
@@ -285,7 +352,11 @@ export class WorktreeProbe {
       this.notifyChanged()
       return
     }
-    if (previous?.repoName === label.repoName && previous.branchName === label.branchName) return
+    if (
+      previous?.repoName === label.repoName
+      && previous.branchName === label.branchName
+      && previous.repoOwner === label.repoOwner
+    ) return
     this.repoLabels.set(projectId, label)
     this.notifyChanged()
   }

@@ -53,9 +53,10 @@ export function searchThreadsByTitle(threads: SidebarThread[], query: string, li
   const scored: ScoredThread[] = []
   for (const thread of threads) {
     // Both project names: `projectTitle` is what the project is called,
-    // `projectLabel` is what the row actually shows — so typing a branch you can
-    // see on screen finds the chat.
-    const score = scorePaletteItem(trimmed, thread.title, [thread.projectTitle, thread.projectLabel])
+    // `projectLabel.text` is the flat `repo/branch` — matched in full even
+    // though rows now show the branch as a glyph, so typing a branch still
+    // finds its chats.
+    const score = scorePaletteItem(trimmed, thread.title, [thread.projectTitle, thread.projectLabel.text])
     if (score > 0) {
       scored.push({ ...thread, score })
     }

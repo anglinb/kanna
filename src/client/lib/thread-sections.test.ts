@@ -151,18 +151,22 @@ describe("getReviewThreads", () => {
 })
 
 describe("flattenSidebarThreads", () => {
-  test("lastActivityAt = max(lastMessageAt, lastTurnEndedAt), else creation time", () => {
+  test("lastActivityAt = max(lastMessageAt, lastAgentMessageAt, lastTurnEndedAt), else creation time", () => {
     const data = makeData([
       makeChatRow({ chatId: "finished-after-send", title: "A", lastMessageAt: 100, lastTurnEndedAt: 900 }),
       makeChatRow({ chatId: "sent-after-finish", title: "B", lastMessageAt: 800, lastTurnEndedAt: 400 }),
       makeChatRow({ chatId: "send-only", title: "C", lastMessageAt: 600 }),
       makeChatRow({ chatId: "empty", title: "D", _creationTime: 50 }),
+      // Parked mid-turn (plan mode / permission prompt): no turn has ended, so
+      // only the agent's own last entry says how fresh this chat really is.
+      makeChatRow({ chatId: "waiting-mid-turn", title: "E", lastMessageAt: 100, lastAgentMessageAt: 950 }),
     ])
     const byId = new Map(flattenSidebarThreads(data).map((thread) => [thread.chatId, thread.lastActivityAt]))
     expect(byId.get("finished-after-send")).toBe(900)
     expect(byId.get("sent-after-finish")).toBe(800)
     expect(byId.get("send-only")).toBe(600)
     expect(byId.get("empty")).toBe(50)
+    expect(byId.get("waiting-mid-turn")).toBe(950)
   })
 })
 
@@ -257,10 +261,11 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "last-week", title: "lw", lastMessageAt: at(2026, 7, 8) }),
       makeChatRow({ chatId: "older", title: "o", lastMessageAt: at(2026, 6, 20) }),
     ])
+    // Only the leading bucket starts expanded — everything under it is folded.
     expect(buckets.map((bucket) => [bucket.label, bucket.defaultExpanded])).toEqual([
       ["Today", true],
-      ["Yesterday", true],
-      ["Monday", true],
+      ["Yesterday", false],
+      ["Monday", false],
       ["Last Week", false],
       ["Last 30 Days", false],
     ])
@@ -336,10 +341,12 @@ describe("computeThreadDateBuckets", () => {
       makeChatRow({ chatId: "thu", title: "c", lastMessageAt: at(2026, 6, 25) }), // Thursday
       makeChatRow({ chatId: "older", title: "d", lastMessageAt: at(2026, 6, 20) }),
     ])
+    // The leading bucket starts expanded even when it isn't Today — it's the
+    // most recent activity there is, so it's what you came back to.
     expect(buckets.map((bucket) => [bucket.label, bucket.defaultExpanded])).toEqual([
       ["Monday Jun 29th", true],
-      ["Friday Jun 26th", true],
-      ["Thursday Jun 25th", true],
+      ["Friday Jun 26th", false],
+      ["Thursday Jun 25th", false],
       ["Last 30 Days", false],
     ])
   })
@@ -482,6 +489,24 @@ describe("mergeRelevantThreads", () => {
     // In Progress and the date buckets are untouched by the merge.
     const bucketed = sections.buckets.flatMap((bucket) => bucket.threads.map((t) => t.chatId))
     expect(bucketed).toEqual(["clean"])
+  })
+
+  test("a chat parked in plan mode leads on when its plan landed, not when it was sent", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "dirty", title: "a", uncommittedWork: true, lastMessageAt: at(2026, 7, 15, 9) }),
+      // Sent yesterday, plan came back just now and is waiting on the user. No
+      // turn ended, so lastTurnEndedAt is unset — only lastAgentMessageAt moved.
+      makeChatRow({
+        chatId: "planning",
+        title: "b",
+        status: "waiting_for_user",
+        lastMessageAt: at(2026, 7, 14),
+        lastAgentMessageAt: at(2026, 7, 15, 11),
+      }),
+    ])
+
+    const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
+    expect(mergeRelevantThreads(sections).map((t) => t.chatId)).toEqual(["planning", "dirty"])
   })
 
   test("a chat that is both unread and flagged appears once", () => {

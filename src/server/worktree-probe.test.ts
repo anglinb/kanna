@@ -5,7 +5,7 @@ import path from "node:path"
 import { EventStore } from "./event-store"
 import { createEmptyState, type StoreState } from "./events"
 import { deriveSidebarData } from "./read-models"
-import { WorktreeProbe } from "./worktree-probe"
+import { extractRemoteOwner, WorktreeProbe } from "./worktree-probe"
 
 async function run(command: string[], cwd: string) {
   const process = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" })
@@ -282,6 +282,24 @@ describe("WorktreeProbe integration", () => {
     })
   })
 
+  test("picks up the origin owner, and survives a repo with no origin", async () => {
+    // The owner qualifies the repo in the sidebar's branch tooltip; a repo with
+    // no remote simply has none, which must not disturb the rest of the label.
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await probe.refreshForChat("chat-1")
+    expect(probe.getRepoLabels().get("project-1")?.repoOwner).toBeUndefined()
+
+    await run(["git", "remote", "add", "origin", "git@github.com:acme/widgets.git"], repoRoot)
+    // A remote alone doesn't move HEAD or the index, so the stamp is unchanged —
+    // re-read explicitly rather than via the tick, which is stamp-gated.
+    await probe.refreshForChat("chat-1")
+
+    expect(probe.getRepoLabels().get("project-1")?.repoOwner).toBe("acme")
+  })
+
   test("the tick labels projects with no finished turn, without running git status", async () => {
     const repoRoot = await createRepo()
     // No lastTurnEndedAt: this project can never show the dot, but its label is
@@ -483,5 +501,25 @@ describe("WorktreeProbe dirty-since ledger", () => {
     probe.recordExternalProbe("p", { dirty: true, files: [{ path: "stale.txt", mtimeMs: stale }] })
 
     expect(probe.getStates().get("p")).toEqual({ dirty: true })
+  })
+})
+
+describe("extractRemoteOwner", () => {
+  test("reads the owner out of every remote URL shape git writes", () => {
+    expect(extractRemoteOwner("git@github.com:acme/widgets.git")).toBe("acme")
+    expect(extractRemoteOwner("ssh://git@github.com/acme/widgets.git")).toBe("acme")
+    expect(extractRemoteOwner("https://github.com/acme/widgets.git")).toBe("acme")
+    expect(extractRemoteOwner("https://github.com/acme/widgets")).toBe("acme")
+  })
+
+  test("is host-agnostic, including nested group paths", () => {
+    // GitLab subgroups: the owner is whatever sits directly above the repo.
+    expect(extractRemoteOwner("https://gitlab.com/acme/tools/widgets.git")).toBe("tools")
+    expect(extractRemoteOwner("git@git.internal:acme/widgets.git")).toBe("acme")
+  })
+
+  test("has no owner to give for a local or ownerless remote", () => {
+    expect(extractRemoteOwner("/srv/git/widgets.git")).toBeUndefined()
+    expect(extractRemoteOwner(undefined)).toBeUndefined()
   })
 })

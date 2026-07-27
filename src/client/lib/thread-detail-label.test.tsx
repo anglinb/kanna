@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { renderToStaticMarkup } from "react-dom/server"
 import type { SidebarChatRow } from "../../shared/types"
+import { TooltipProvider } from "../components/ui/tooltip"
 import { getThreadDetailLabel } from "./thread-detail-label"
 import type { SidebarThread } from "./thread-sections"
 
@@ -23,16 +25,31 @@ function thread(overrides: Partial<SidebarChatRow> = {}): SidebarThread {
     title: row.title,
     projectId: "project-1",
     projectTitle: "kanna",
-    projectLabel: "kanna/feat-x",
+    projectLabel: {
+      name: "kanna",
+      branchName: "feat-x",
+      repoPath: "jakemor/kanna",
+      text: "kanna/feat-x",
+    },
     archived: false,
     lastActivityAt: row.lastMessageAt ?? row._creationTime,
     row,
   }
 }
 
+function renderLabel(node: ReturnType<typeof getThreadDetailLabel>) {
+  return renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>)
+}
+
 describe("getThreadDetailLabel", () => {
   test("cross-project lists show the project, named the same way the sidebar names it", () => {
-    expect(getThreadDetailLabel(thread(), "cross-project", NOW)).toBe("kanna/feat-x")
+    const html = renderLabel(getThreadDetailLabel(thread(), "cross-project", NOW))
+
+    // The repo inline; the branch is carried by the glyph and the tooltip, so
+    // the slot's widest element stays the part that identifies the project.
+    expect(html).toContain("kanna")
+    expect(html).not.toContain("kanna/feat-x")
+    expect(html).toContain("lucide-git-branch")
   })
 
   test("project-scoped lists show the chat's age instead", () => {

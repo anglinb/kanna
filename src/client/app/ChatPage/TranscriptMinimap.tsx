@@ -30,6 +30,13 @@ const MAGNIFY_SCALE = 2
 const TICK_BASE_WIDTH_PX = 13
 const TICK_PITCH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MINOR
 const TICK_MAX_WIDTH_PX = TICK_BASE_WIDTH_PX * MAGNIFY_SCALE
+/**
+ * Width of a tick the cursor has passed over — outside the swell, but on a
+ * strip that is being pointed at. Receding by the same golden minor the
+ * spacing uses makes the magnified neighbours read as taken from these rather
+ * than simply added on top.
+ */
+const TICK_RECEDED_WIDTH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MINOR
 const TICK_BASE_HEIGHT_PX = 2
 const TICK_MAX_HEIGHT_PX = 3
 
@@ -206,6 +213,10 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
     if (focusedDistance > magnifyRadiusPx) focusedIndex = -1
   }
 
+  // Only once a tick is actually picked out. If the cursor is on the strip but
+  // past every radius, nothing grows — so nothing should recede either.
+  const restingWidth = focusedIndex >= 0 ? TICK_RECEDED_WIDTH_PX : TICK_BASE_WIDTH_PX
+
   const focusedTurn = focusedIndex >= 0 ? ticks[focusedIndex] : null
   const focusedMeta = focusedTurn
     ? [
@@ -278,7 +289,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
                 )}
                 style={{
                   left: STRIP_INSET_PX,
-                  width: TICK_BASE_WIDTH_PX + (TICK_MAX_WIDTH_PX - TICK_BASE_WIDTH_PX) * falloff,
+                  width: restingWidth + (TICK_MAX_WIDTH_PX - restingWidth) * falloff,
                   height: TICK_BASE_HEIGHT_PX + (TICK_MAX_HEIGHT_PX - TICK_BASE_HEIGHT_PX) * falloff,
                   opacity,
                 }}

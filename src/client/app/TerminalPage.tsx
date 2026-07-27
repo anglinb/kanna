@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useCallback, useEffect } from "react"
 import { Navigate, useOutletContext } from "react-router-dom"
 import { TerminalWorkspace } from "../components/chat-ui/TerminalWorkspace"
 import { useAppSettingsStore } from "../stores/appSettingsStore"
@@ -9,8 +9,9 @@ import type { KannaState } from "./useKannaState"
 /**
  * Dev-box full-screen terminal (`/terminal`): the same multi-pane workspace
  * as the embedded chat terminal — split with the per-pane plus button,
- * resize, clear, archive — but page-sized instead of a collapsible panel,
- * with shells at $HOME (terminal.create with projectId: null).
+ * resize, clear, close a split — but page-sized instead of a collapsible
+ * panel, with shells at $HOME (terminal.create with projectId: null).
+ * The page always shows a shell, so the last pane has no close button.
  *
  * The layout store is keyed by a reserved non-project key, so pane splits
  * and sizes persist like any project's panel; the pane ids are stable, so
@@ -33,8 +34,15 @@ export function TerminalPage() {
   const isDevbox = settingsLoaded && devbox
   const hasTerminals = (layout?.terminals.length ?? 0) > 0
 
-  // The page always shows at least one shell: seed on first visit and re-seed
-  // after the last pane is archived.
+  // Only splits can be closed here (the last pane has no X), and a removed
+  // split is unreachable — kill its shell rather than orphaning it.
+  const handleRemoveTerminal = useCallback((layoutKey: string, terminalId: string) => {
+    void state.socket.command({ type: "terminal.close", terminalId }).catch(() => {})
+    removeTerminal(layoutKey, terminalId)
+  }, [removeTerminal, state.socket])
+
+  // The page always shows at least one shell: seed on first visit, and back
+  // out of any empty persisted layout.
   useEffect(() => {
     if (isDevbox && !hasTerminals) {
       addTerminal(HOME_TERMINAL_LAYOUT_KEY)
@@ -57,8 +65,9 @@ export function TerminalPage() {
           connectionStatus={state.connectionStatus}
           scrollback={scrollback}
           minColumnWidth={minColumnWidth}
+          lastPaneClose="locked"
           onAddTerminal={addTerminal}
-          onRemoveTerminal={removeTerminal}
+          onRemoveTerminal={handleRemoveTerminal}
           onTerminalLayout={setTerminalSizes}
         />
       ) : null}

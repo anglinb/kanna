@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { Eraser, Plus, X } from "lucide-react"
+import { ChevronDown, Eraser, Plus, X } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import type { SocketStatus, KannaSocket } from "../../app/socket"
 import { Button } from "../ui/button"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "../ui/resizable"
@@ -7,6 +8,15 @@ import { HotkeyTooltip, HotkeyTooltipContent, HotkeyTooltipTrigger } from "../ui
 import type { ProjectTerminalLayout } from "../../stores/terminalLayoutStore"
 import { TerminalPane } from "./TerminalPane"
 import { getMinimumTerminalWidth } from "./TerminalWorkspaceLayout"
+
+interface PaneCloseAction {
+  label: string
+  Icon: LucideIcon
+}
+
+/** Stable references, so the memoized pane doesn't re-render on every parent pass. */
+const CLOSE_PANE_ACTION: PaneCloseAction = { label: "Close terminal", Icon: X }
+const HIDE_PANE_ACTION: PaneCloseAction = { label: "Hide terminal", Icon: ChevronDown }
 
 interface Props {
   /** Layout-store key and callback identifier. */
@@ -26,10 +36,13 @@ interface Props {
   pendingCommandsByTerminalId?: Record<string, string>
   splitTerminalShortcut?: string[]
   /**
-   * The embedded chat panel collapses instead of killing the shell when the
-   * only pane is closed — the X is labelled accordingly.
+   * What the X offers on the only remaining pane. Splits always close (a
+   * removed split is unreachable, so its shell has to be killed).
+   * - `close`: kill it, same as a split.
+   * - `hide`: collapse the panel and leave the shell attached (chat panel).
+   * - `locked`: no X — the surface always needs one pane (dev-box page).
    */
-  closeHidesLastPane?: boolean
+  lastPaneClose?: "close" | "hide" | "locked"
   onAddTerminal: (projectId: string, afterTerminalId?: string) => void
   onRemoveTerminal: (projectId: string, terminalId: string) => void
   onTerminalLayout: (projectId: string, sizes: number[]) => void
@@ -52,7 +65,8 @@ interface TerminalWorkspacePaneProps {
   focusRequestVersion: number
   initialCommand?: string
   splitTerminalShortcut?: string[]
-  closeLabel: string
+  /** Button label and icon, or null when this pane cannot be closed. */
+  closeAction: PaneCloseAction | null
   onAddTerminal: (projectId: string, afterTerminalId?: string) => void
   onRemoveTerminal: (projectId: string, terminalId: string) => void
   onClearTerminal: (terminalId: string) => void
@@ -77,7 +91,7 @@ const TerminalWorkspacePane = memo(function TerminalWorkspacePane({
   focusRequestVersion,
   initialCommand,
   splitTerminalShortcut,
-  closeLabel,
+  closeAction,
   onAddTerminal,
   onRemoveTerminal,
   onClearTerminal,
@@ -152,14 +166,16 @@ const TerminalWorkspacePane = memo(function TerminalWorkspacePane({
                 </HotkeyTooltipTrigger>
                 <HotkeyTooltipContent side="bottom" shortcut={splitTerminalShortcut} />
               </HotkeyTooltip>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={closeLabel}
-                onClick={handleRemoveTerminal}
-              >
-                <X className="size-3.5" />
-              </Button>
+              {closeAction ? (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={closeAction.label}
+                  onClick={handleRemoveTerminal}
+                >
+                  <closeAction.Icon className="size-3.5" />
+                </Button>
+              ) : null}
             </div>
           </div>
 
@@ -194,7 +210,7 @@ function TerminalWorkspaceImpl({
   focusRequestVersion = 0,
   pendingCommandsByTerminalId,
   splitTerminalShortcut,
-  closeHidesLastPane = false,
+  lastPaneClose = "close",
   onAddTerminal,
   onRemoveTerminal,
   onTerminalLayout,
@@ -224,7 +240,11 @@ function TerminalWorkspaceImpl({
   }, [])
 
   const paneCount = layout.terminals.length
-  const closeLabel = closeHidesLastPane && paneCount === 1 ? "Hide terminal" : "Close terminal"
+  const closeAction = paneCount > 1
+    ? CLOSE_PANE_ACTION
+    : lastPaneClose === "locked" ? null
+    : lastPaneClose === "hide" ? HIDE_PANE_ACTION
+    : CLOSE_PANE_ACTION
   const minTerminalWidth = getMinimumTerminalWidth(minColumnWidth)
   const effectiveMinTerminalWidth = viewportWidth > 0 ? Math.min(minTerminalWidth, viewportWidth) : minTerminalWidth
   const requiredWidth = Math.max(1, paneCount) * effectiveMinTerminalWidth
@@ -311,7 +331,7 @@ function TerminalWorkspaceImpl({
                 focusRequestVersion={index === 0 ? focusRequestVersion : 0}
                 initialCommand={pendingCommandsByTerminalId?.[terminalPane.id]}
                 splitTerminalShortcut={splitTerminalShortcut}
-                closeLabel={closeLabel}
+                closeAction={closeAction}
                 onAddTerminal={onAddTerminal}
                 onRemoveTerminal={onRemoveTerminal}
                 onClearTerminal={handleClearTerminal}

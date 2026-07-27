@@ -25,7 +25,7 @@ function thread(overrides: Partial<SidebarChatRow> = {}, archived = false): Side
     title: row.title,
     projectId: "project-1",
     projectTitle: "Project",
-    projectLabel: "Project/feature",
+    projectLabel: { name: "Project", branchName: "feature", repoPath: "acme/Project", text: "Project/feature" },
     archived,
     lastActivityAt: 1,
     row,
