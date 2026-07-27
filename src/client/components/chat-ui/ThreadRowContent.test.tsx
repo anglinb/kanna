@@ -140,6 +140,40 @@ describe("ThreadRowContent relevance treatment", () => {
   })
 })
 
+describe("ThreadRowContent draft glyph", () => {
+  test("an unsent draft claims the harness icon's slot", () => {
+    // Which harness a chat runs is the same on every row of a project; "you
+    // left something half-written here" is the rarer, more actionable thing.
+    const html = renderRow({ thread: thread(), hasDraft: true, detailLabel: null })
+
+    expect(html).toContain("lucide-pencil-line")
+  })
+
+  test("wears the brand red — the one glyph on the row that is about you", () => {
+    const html = renderRow({ thread: thread(), hasDraft: true, detailLabel: null })
+
+    expect(html).toContain("text-logo")
+  })
+
+  test("the open chat keeps its pencil — swapping the glyph on click is a flicker", () => {
+    const html = renderRow({ thread: thread(), hasDraft: true, isActive: true, detailLabel: null })
+
+    expect(html).toContain("lucide-pencil-line")
+  })
+
+  test("the status dot still outranks it — that one is about the agent", () => {
+    const html = renderRow({
+      thread: thread({ status: "running" }),
+      showStatus: true,
+      hasDraft: true,
+      detailLabel: null,
+    })
+
+    expect(html).toContain("animate-spin")
+    expect(html).not.toContain("lucide-pencil-line")
+  })
+})
+
 describe("ThreadRowContent detail label", () => {
   test("renders exactly what it is given", () => {
     expect(renderRow({ thread: thread(), detailLabel: "4h" })).toContain("4h")

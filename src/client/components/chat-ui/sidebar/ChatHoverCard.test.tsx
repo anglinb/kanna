@@ -46,8 +46,12 @@ function thread(
   }
 }
 
-function render(overrides: Partial<SidebarChatRow> = {}, label?: SidebarThread["projectLabel"]) {
-  return renderToStaticMarkup(<ChatHoverCardContent thread={thread(overrides, label)} />)
+function render(
+  overrides: Partial<SidebarChatRow> = {},
+  label?: SidebarThread["projectLabel"],
+  draft?: string,
+) {
+  return renderToStaticMarkup(<ChatHoverCardContent thread={thread(overrides, label)} draft={draft} />)
 }
 
 describe("ChatHoverCardContent", () => {
@@ -176,6 +180,40 @@ describe("ChatHoverCardContent", () => {
 
     // No start time means no duration; the landing time still stands alone.
     expect(html).not.toContain("ml-auto shrink-0 pl-2\"><span>")
+  })
+
+  test("an unsent draft ends the card and takes the sent prompt's place", () => {
+    const html = render({}, undefined, "also drop the last user message")
+
+    expect(html).toContain("also drop the last user message")
+    // The prompt is already answered by the reply; the draft is what's next.
+    expect(html).not.toContain("make the sidebar labels shorter")
+    expect(html).toContain("Done — the branch moved into the hover card.")
+    expect(html.indexOf("Done — the branch")).toBeLessThan(html.indexOf("also drop"))
+  })
+
+  test("a draft reads as unsent: pencilled and italic", () => {
+    const html = render({}, undefined, "half a thought")
+
+    expect(html).toContain("lucide-pencil-line")
+    expect(html).toContain("italic")
+    // The glyph is inline, so a wrapped second line runs the full width rather
+    // than indenting to clear it.
+    expect(html).toContain("inline")
+  })
+
+  test("a draft cuts the reply above it to one line", () => {
+    // What you were about to say outranks how the last answer began.
+    expect(render({}, undefined, "half a thought")).toContain("line-clamp-1")
+    expect(render()).toContain("line-clamp-3")
+  })
+
+  test("no draft leaves the sent prompt in place", () => {
+    // `useChatDraft` trims, so whitespace never reaches here as a draft.
+    const html = render({}, undefined, "")
+
+    expect(html).toContain("make the sidebar labels shorter")
+    expect(html).not.toContain("lucide-pencil-line")
   })
 
   test("falls back to the chat title when there is no prompt yet", () => {

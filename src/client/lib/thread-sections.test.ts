@@ -408,6 +408,31 @@ describe("getRelevantThreads", () => {
     const kept = getRelevantThreads(flattenSidebarThreads(data), new Set(["a"]))
     expect(kept.map((t) => t.chatId)).toEqual(["b"])
   })
+
+  test("a chat holding an unsent draft always qualifies", () => {
+    // Nothing else about this chat is remarkable — clean tree, old message.
+    const data = makeData([
+      makeChatRow({ chatId: "drafting", title: "d", lastMessageAt: at(2026, 6, 1) }),
+    ])
+
+    const kept = getRelevantThreads(flattenSidebarThreads(data), undefined, new Map([["drafting", at(2026, 7, 20)]]))
+    expect(kept.map((t) => t.chatId)).toEqual(["drafting"])
+  })
+
+  test("a draft outranks the empty-new-chat rule", () => {
+    // Opened, typed into, never sent — the one chat that must not vanish, and
+    // the only place that sentence exists.
+    const data = makeData([makeChatRow({ chatId: "unsent", title: "u" })])
+
+    const kept = getRelevantThreads(flattenSidebarThreads(data), undefined, new Map([["unsent", at(2026, 7, 20)]]))
+    expect(kept.map((t) => t.chatId)).toEqual(["unsent"])
+  })
+
+  test("a draft on an archived chat stays archived", () => {
+    const data = makeData([], [makeChatRow({ chatId: "old", title: "o", lastMessageAt: at(2026, 7, 15) })])
+
+    expect(getRelevantThreads(flattenSidebarThreads(data), undefined, new Map([["old", at(2026, 7, 20)]]))).toEqual([])
+  })
 })
 
 describe("computeSidebarThreadSections", () => {
@@ -458,6 +483,55 @@ describe("computeSidebarThreadSections", () => {
     expect(sections.review.map((t) => t.chatId)).toEqual(["unread"])
     expect(sections.inProgress.map((t) => t.chatId)).toEqual(["running"])
     expect(sections.relevant.map((t) => t.chatId)).toEqual(["idle-dirty"])
+  })
+
+  test("a drafting chat sorts by when the draft appeared, not when the chat last moved", () => {
+    // The chat itself is the stalest here; the sentence in it is the freshest.
+    const data = makeData([
+      makeChatRow({ chatId: "stale-chat", title: "s", lastMessageAt: at(2026, 6, 1) }),
+      makeChatRow({ chatId: "dirty-fresh", title: "f", uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+    ])
+
+    const sections = computeSidebarThreadSections(
+      flattenSidebarThreads(data),
+      NOW,
+      new Map([["stale-chat", at(2026, 7, 16)]]),
+    )
+
+    expect(sections.relevant.map((t) => t.chatId)).toEqual(["stale-chat", "dirty-fresh"])
+  })
+
+  test("a draft with no recorded start time falls back to chat activity", () => {
+    // Drafts written before the timestamp existed keep their place rather than
+    // sinking to the bottom.
+    const data = makeData([
+      makeChatRow({ chatId: "old-draft", title: "o", lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "dirty", title: "d", uncommittedWork: true, lastMessageAt: at(2026, 7, 10) }),
+    ])
+
+    const sections = computeSidebarThreadSections(
+      flattenSidebarThreads(data),
+      NOW,
+      new Map([["old-draft", 0]]),
+    )
+
+    expect(sections.relevant.map((t) => t.chatId)).toEqual(["old-draft", "dirty"])
+  })
+
+  test("a draft pulls its chat out of the date buckets and into Relevant", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "drafting", title: "d", lastMessageAt: at(2026, 7, 10) }),
+      makeChatRow({ chatId: "quiet", title: "q", lastMessageAt: at(2026, 7, 10) }),
+    ])
+
+    const sections = computeSidebarThreadSections(
+      flattenSidebarThreads(data),
+      NOW,
+      new Map([["drafting", at(2026, 7, 20)]]),
+    )
+
+    expect(sections.relevant.map((t) => t.chatId)).toEqual(["drafting"])
+    expect(sections.buckets.flatMap((bucket) => bucket.threads.map((t) => t.chatId))).toEqual(["quiet"])
   })
 
   test("archived flagged chats stay in Archived", () => {
@@ -516,5 +590,19 @@ describe("mergeRelevantThreads", () => {
 
     const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
     expect(mergeRelevantThreads(sections).map((t) => t.chatId)).toEqual(["both"])
+  })
+
+  test("the merge sorts on the same key the section did — drafts included", () => {
+    // Otherwise a chat you just typed in would lead its section and then be
+    // re-sorted back down by activity the moment Review was folded in.
+    const data = makeData([
+      makeChatRow({ chatId: "unread-new", title: "a", unread: true, lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "drafting", title: "b", lastMessageAt: at(2026, 6, 1) }),
+    ])
+    const draftStartTimes = new Map([["drafting", at(2026, 7, 16)]])
+
+    const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW, draftStartTimes)
+    expect(mergeRelevantThreads(sections, draftStartTimes).map((t) => t.chatId))
+      .toEqual(["drafting", "unread-new"])
   })
 })

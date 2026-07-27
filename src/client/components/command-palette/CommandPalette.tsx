@@ -58,6 +58,7 @@ import {
 } from "../../lib/project-fs"
 import { filterProjects, groupProjectsByRecency } from "../../lib/project-groups"
 import { useRightSidebarStore } from "../../stores/rightSidebarStore"
+import { useChatDraft } from "../../stores/chatInputStore"
 import { useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { PROVIDER_ICONS } from "../chat-ui/ChatPreferenceControls"
@@ -200,6 +201,9 @@ function ThreadItem({
   scope: ThreadDetailScope
   nowMs: number
 }) {
+  // Same treatment as the sidebar: a chat you left mid-sentence swaps its
+  // harness glyph for a pencil.
+  const hasDraft = useChatDraft(thread.chatId).length > 0
   return (
     <CommandItem value={`thread-${thread.chatId}`} onSelect={() => onSelect(thread)}>
       <ThreadRowContent
@@ -209,6 +213,7 @@ function ThreadItem({
         // Every palette row is something you might be about to open, so none of
         // them recede the way an ambient sidebar list does.
         dimIdleTitles={false}
+        hasDraft={hasDraft}
         detailLabel={getThreadDetailLabel(thread, scope, nowMs)}
       />
     </CommandItem>

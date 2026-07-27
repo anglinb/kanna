@@ -8,6 +8,7 @@ import {
   type SidebarThread,
 } from "../../../lib/thread-sections"
 import { getThreadDetailLabel } from "../../../lib/thread-detail-label"
+import { useDraftStartTimes } from "../../../stores/chatInputStore"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
 import {
@@ -146,12 +147,18 @@ function ThreadSectionsImpl({
   onCopyPath,
   onOpenExternalPath,
 }: Props) {
+  // Drafts are browser-local, so they reach the sections as an argument rather
+  // than as a field on the rows the server sent.
+  const draftStartTimes = useDraftStartTimes()
   const sections = useMemo(
-    () => computeSidebarThreadSections(flattenSidebarThreads(data), nowMs),
-    [data, nowMs]
+    () => computeSidebarThreadSections(flattenSidebarThreads(data), nowMs, draftStartTimes),
+    [data, draftStartTimes, nowMs]
   )
   // This tab shows Review inside Relevant rather than as its own header.
-  const relevant = useMemo(() => mergeRelevantThreads(sections), [sections])
+  const relevant = useMemo(
+    () => mergeRelevantThreads(sections, draftStartTimes),
+    [draftStartTimes, sections]
+  )
   const normalizedActiveChatId = activeChatId ? normalizeChatId(activeChatId) : null
   // User toggles override each bucket's default (Today/Yesterday open, rest
   // closed). Keyed by stable bucket key so state survives day rollovers sanely.

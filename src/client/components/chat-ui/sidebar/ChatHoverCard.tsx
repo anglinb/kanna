@@ -1,9 +1,10 @@
 import { type ComponentPropsWithRef, type ReactNode, useEffect, useState } from "react"
-import { GitBranch } from "lucide-react"
+import { GitBranch, PencilLine } from "lucide-react"
 import { PROVIDERS, type SidebarChatRow } from "../../../../shared/types"
 import { formatDuration, formatPromptTimestamp } from "../../messages/ResultMessage"
 import { PROVIDER_ICONS } from "../../provider-icons"
 import { useHasFinePointer } from "../../../lib/pointer"
+import { cn } from "../../../lib/utils"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip"
 
@@ -28,6 +29,18 @@ const PROVIDER_LABELS = new Map(PROVIDERS.map((provider) => [provider.id, provid
 /** Bullet between the footer's facts. */
 function MetaSeparator() {
   return <span aria-hidden className="opacity-60">•</span>
+}
+
+/**
+ * Flattens a multi-line message to one run of text.
+ *
+ * The card clamps to two or three lines, and a prompt that spends its breaks on
+ * a bulleted list gets clamped after its first two bullets — the newlines eat
+ * the budget before the sentence that says what it's about. Collapsed to
+ * spaces, the same clamp shows the same number of *words*.
+ */
+function toSingleLine(text: string): string {
+  return text.replace(/\s*\n+\s*/g, " ").trim()
 }
 
 /**
@@ -98,7 +111,7 @@ function useTurnClock(active: boolean): number {
 }
 
 /** Exported for tests: the card body, without the tooltip machinery around it. */
-export function ChatHoverCardContent({ thread }: { thread: SidebarThread }) {
+export function ChatHoverCardContent({ thread, draft = "" }: { thread: SidebarThread, draft?: string }) {
   const row = thread.row
   const nowMs = useTurnClock(getActiveTurnStartedAt(row) != null)
   const label = thread.projectLabel
@@ -140,16 +153,40 @@ export function ChatHoverCardContent({ thread }: { thread: SidebarThread }) {
           </span>
         ) : null}
       </div>
-      {/* The prompt leads the pair, as in the minimap card: it's the question
-          the reply under it is the answer to. Falls back to the chat's title so
-          a chat with no messages yet still says what it is. Matched margins
-          above and below keep the pair a block between the two meta lines. */}
-      <div className="mt-1.5 line-clamp-2 text-sm font-medium text-popover-foreground">
-        {row.lastUserMessagePreview || thread.title}
+      {/* The exchange, as one block with matched margins above and below so it
+          sits between the two meta lines rather than joining either. */}
+      <div className="mt-1.5 space-y-1">
+        {/* The prompt leads, as in the minimap card: it's the question the reply
+            under it is the answer to. Falls back to the chat's title so a chat
+            with no messages yet still says what it is. A draft displaces it —
+            see below. */}
+        {draft ? null : (
+          <div className="line-clamp-2 text-sm font-medium text-popover-foreground">
+            {toSingleLine(row.lastUserMessagePreview || thread.title)}
+          </div>
+        )}
+        {/* Cut to a single line once a draft is here: what you were about to
+            say outranks how the last answer began, and three lines of reply
+            would push it to the bottom of a card you opened for the draft. */}
+        {reply ? (
+          <div className={cn("text-sm text-muted-foreground", draft ? "line-clamp-1" : "line-clamp-3")}>
+            {toSingleLine(reply)}
+          </div>
+        ) : null}
+        {/* An unsent draft ends the card, in the prompt's own weight but
+            italic and pencilled: it is the next thing said in this chat, not
+            the last. It takes the sent prompt's place rather than sitting
+            alongside it — the prompt is already answered by the reply above,
+            and what you want back is the sentence you walked away from.
+            The glyph is inline rather than a flex sibling, so a wrapped second
+            line runs the full width instead of indenting to clear it. */}
+        {draft ? (
+          <div className="line-clamp-2 text-sm font-medium italic text-popover-foreground">
+            <PencilLine className="mr-1 inline size-3 shrink-0 -translate-y-px" strokeWidth={2.5} />
+            {toSingleLine(draft)}
+          </div>
+        ) : null}
       </div>
-      {reply ? (
-        <div className="mt-1 line-clamp-3 text-sm text-muted-foreground">{reply}</div>
-      ) : null}
       {row.provider || duration || endedAt ? (
         <div className="mt-1.5 flex items-center gap-1 text-[12px] tracking-wide text-muted-foreground">
           {row.provider ? (
@@ -187,9 +224,15 @@ export function ChatHoverCardContent({ thread }: { thread: SidebarThread }) {
  */
 export function ChatHoverCard({
   thread,
+  draft = "",
   children,
   ...triggerProps
-}: { thread: SidebarThread, children: ReactNode } & ComponentPropsWithRef<typeof TooltipTrigger>) {
+}: {
+  thread: SidebarThread
+  /** The chat's unsent draft (`useChatDraft`), read by the row that owns it. */
+  draft?: string
+  children: ReactNode
+} & ComponentPropsWithRef<typeof TooltipTrigger>) {
   const hasFinePointer = useHasFinePointer()
 
   return (
@@ -210,7 +253,7 @@ export function ChatHoverCard({
           collisionPadding={12}
           className="pointer-events-none w-80 rounded-lg border-border bg-popover/95 px-3 py-2 text-xs shadow-xl backdrop-blur-sm"
         >
-          <ChatHoverCardContent thread={thread} />
+          <ChatHoverCardContent thread={thread} draft={draft} />
         </TooltipContent>
       )}
     </Tooltip>

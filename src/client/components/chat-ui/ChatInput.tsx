@@ -395,6 +395,16 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     latestChatIdRef.current = chatId ?? null
   }, [chatId])
 
+  // The composer owns `value` and mirrors it into the store, so a draft cleared
+  // from outside (the sidebar row's "Clear Draft") would otherwise leave the
+  // text sitting here and re-save it on the next keystroke. Only ever empties:
+  // an external *edit* has no claim on what you're typing.
+  const storedDraft = useChatInputStore((state) => (chatId ? state.drafts[chatId] : undefined))
+  useEffect(() => {
+    if (!chatId || storedDraft !== undefined) return
+    setValue((current) => (current === "" ? current : ""))
+  }, [chatId, storedDraft])
+
   useEffect(() => {
     initializeComposerForChat(composerChatId)
   }, [composerChatId, initializeComposerForChat])

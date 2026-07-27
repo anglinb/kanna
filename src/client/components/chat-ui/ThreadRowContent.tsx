@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { Loader2, MessageCircle } from "lucide-react"
+import { Loader2, MessageCircle, PencilLine } from "lucide-react"
 import type { SidebarChatRow } from "../../../shared/types"
 import type { SidebarThread } from "../../lib/thread-sections"
 import { cn } from "../../lib/utils"
@@ -55,6 +55,7 @@ export function ThreadRowContent({
   showPreview = false,
   isActive = false,
   dimIdleTitles = true,
+  hasDraft = false,
   detailLabel,
   hoverActions,
 }: {
@@ -74,6 +75,12 @@ export function ThreadRowContent({
    * row is a live candidate and none of them should read as background.
    */
   dimIdleTitles?: boolean
+  /**
+   * The chat has an unsent draft (`useChatDraft`), which claims the icon slot.
+   * Passed in rather than read here so this stays renderable without a live
+   * store — see the hook's note on zustand's server snapshot.
+   */
+  hasDraft?: boolean
   /**
    * The trailing detail slot — the project in cross-project lists, the chat's
    * age in project-scoped ones. **Required, and deliberately so**: this used to
@@ -108,7 +115,17 @@ export function ThreadRowContent({
   // No status dot → show the chat's harness icon (falls back to a chat bubble
   // when the provider is unknown). Archived chats keep their harness icon,
   // dimmed — the Archived section/subtitle carries the archived signal.
-  const HarnessIcon = thread.row.provider ? PROVIDER_ICONS[thread.row.provider] : null
+  //
+  // An unsent draft takes the slot instead: which harness a chat runs is the
+  // same on every row of a project, while "you left something half-written
+  // here" is the rarest and most actionable thing a row can say. It yields only
+  // to the status dot, which is about what the *agent* needs; the open chat
+  // keeps its pencil, since swapping the glyph as you click through rows is a
+  // flicker in the corner of your eye for no information gained.
+  const showsDraft = hasDraft
+  const HarnessIcon = showsDraft
+    ? PencilLine
+    : thread.row.provider ? PROVIDER_ICONS[thread.row.provider] : null
   // The chat has work sitting in its project's dirty tree, so keep its title at
   // full contrast. Deliberately *not* a colour treatment on the harness icon —
   // that icon says which agent ran the chat, and tinting it (brand red) read as
@@ -116,7 +133,10 @@ export function ThreadRowContent({
   // reads (`SidebarChatRow.uncommittedWork`) so the concept has one word from
   // git probe to pixel.
   const hasUncommittedWork = !thread.archived && Boolean(thread.row.uncommittedWork)
-  const iconClass = cn("h-4 w-4", statusDotClass(thread.archived))
+  // The draft pencil is the one glyph that's about *you*, so it gets the brand
+  // red — the same colour the running spinner uses, and the reason the harness
+  // icons stay muted (a tinted harness icon read as an error state).
+  const iconClass = cn("h-4 w-4", showsDraft ? "text-logo" : statusDotClass(thread.archived))
   // Anything with a status dot or a shimmer is already asking for attention and
   // must never dim; so must the chat you're looking at. What's left — idle,
   // read, and not part of the current diff — recedes, unless the surface has

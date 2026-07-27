@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { Archive, Code, Copy, EyeOff, FolderOpen, Pencil, RotateCcw, Split, SquarePen, Trash2, UserRoundPlus } from "lucide-react"
+import { Archive, Code, Copy, EyeOff, FolderOpen, Pencil, PencilOff, RotateCcw, Split, SquarePen, Trash2, UserRoundPlus } from "lucide-react"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -105,6 +105,7 @@ export function ChatRowMenu({
   onFork,
   onArchive,
   onRestore,
+  onClearDraft,
   onDelete,
   children,
 }: {
@@ -122,6 +123,12 @@ export function ChatRowMenu({
   onFork: () => void
   onArchive: () => void
   onRestore?: () => void
+  /**
+   * Throws away the chat's unsent draft. Absent when there is no draft, which
+   * is most rows — a section that only ever appears when there's something to
+   * clear beats a permanently greyed-out item in every menu.
+   */
+  onClearDraft?: () => void
   onDelete: () => void
   children: ReactNode
 }) {
@@ -131,6 +138,24 @@ export function ChatRowMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {/* Draft leads: its own section, for something only this chat has and
+            only while it has it — so when it's there, it's what you opened the
+            menu for. */}
+        {onClearDraft ? (
+          <>
+            <ContextMenuItem
+              onSelect={(event) => {
+                event.preventDefault()
+                onClearDraft()
+              }}
+            >
+              <PencilOff className="h-3.5 w-3.5" />
+              <span className="text-xs font-medium">Clear Draft</span>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        ) : null}
+
         {archived && onRestore ? (
           <>
             <ContextMenuItem
