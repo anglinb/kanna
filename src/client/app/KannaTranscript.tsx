@@ -679,7 +679,7 @@ export function buildResolvedTranscriptRows(
         id: getTranscriptRenderItemId(item),
         startIndex: item.startIndex,
         messages: item.messages,
-        isLoading: isLoading && item.messages.some((message) => message.kind === "tool" && message.result === undefined),
+        isLoading: isLoading && item.messages.some((message) => message.kind === "tool" && message.resultEntryId === undefined),
         localPath,
       })
       continue
@@ -692,7 +692,7 @@ export function buildResolvedTranscriptRows(
       id: getTranscriptRenderItemId(item),
       message: item.message,
       index: item.index,
-      isLoading: item.message.kind === "tool" && item.message.result === undefined && isLoading,
+      isLoading: item.message.kind === "tool" && item.message.resultEntryId === undefined && isLoading,
       localPath,
       isFirstSystem: renderState.isFirstSystem,
       isModelChange: renderState.isModelChange,

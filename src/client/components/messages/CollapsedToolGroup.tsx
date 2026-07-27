@@ -67,10 +67,11 @@ interface Props {
 export function CollapsedToolGroup({ messages, isLoading, localPath, expanded, onExpandedChange }: Props) {
   const label = useMemo(() => getToolGroupLabel(messages), [messages])
 
-  // Check if any tool in the group is still in progress
+  // In progress = no result entry has arrived yet. Deliberately not "has no
+  // result payload": a finished call may leave its payload on the server.
   const anyInProgress = messages.some(msg => {
     const processed = msg as ProcessedToolCall
-    return processed.result === undefined
+    return processed.resultEntryId === undefined
   })
 
   const showLoadingState = anyInProgress && isLoading

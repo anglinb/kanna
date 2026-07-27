@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { HydratedSkillToolCall } from "../../../shared/types"
-import { ReadResultImages, ToolCallMessage } from "./ToolCallMessage"
+import { ToolCallMessage } from "./ToolCallMessage"
+import { ReadResultImages } from "./ToolCallExpandedContent"
 
 describe("ToolCallMessage", () => {
   test("renders read result image blocks as inline images", () => {
