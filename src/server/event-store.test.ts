@@ -876,6 +876,31 @@ describe("EventStore", () => {
     expect(store.getMessages(forked.id)).toEqual(store.getMessages(source.id))
   })
 
+  test("a fork inherits lastTurnEndedAt, so it derives the same uncommittedWork flag", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const source = await store.createChat(project.id)
+    await store.setChatProvider(source.id, "claude")
+    await store.setSessionToken(source.id, "session-1")
+    await store.appendMessage(source.id, entry("user_prompt", source.createdAt + 1, { content: "edit files" }))
+    await store.recordTurnFinished(source.id)
+    const sourceTurnEndedAt = store.requireChat(source.id).lastTurnEndedAt
+    expect(sourceTurnEndedAt).toBeNumber()
+
+    const forked = await store.forkChat(source.id)
+    expect(forked.lastTurnEndedAt).toBe(sourceTurnEndedAt!)
+    // A fork has no turn events of its own, so the timestamp has to ride on
+    // chat_created to survive a replay of the log.
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.requireChat(forked.id).lastTurnEndedAt).toBe(sourceTurnEndedAt!)
+    // The fork itself hasn't run a turn — only the timestamp is inherited.
+    expect(reloaded.requireChat(forked.id).lastTurnOutcome).toBeNull()
+  })
+
   test("reopening a removed project restores its existing chats", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)

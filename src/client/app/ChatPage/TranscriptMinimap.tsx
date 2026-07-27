@@ -21,15 +21,15 @@ const MIN_GUTTER_PX = 88
 const STRIP_INSET_PX = 15
 
 /**
- * Tick geometry is proportioned off the resting width by the golden ratio:
- * spacing is the minor part, the magnified width the major. Keeping both
- * derived means retuning the strip is a single number.
+ * Tick geometry is proportioned off the resting width, so retuning the strip
+ * is a single number: spacing is the golden minor of it, and a tick under the
+ * cursor grows by the magnification scale.
  */
-const GOLDEN_MAJOR = 1.618
 const GOLDEN_MINOR = 0.618
+const MAGNIFY_SCALE = 2
 const TICK_BASE_WIDTH_PX = 13
 const TICK_PITCH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MINOR
-const TICK_MAX_WIDTH_PX = TICK_BASE_WIDTH_PX * GOLDEN_MAJOR
+const TICK_MAX_WIDTH_PX = TICK_BASE_WIDTH_PX * MAGNIFY_SCALE
 const TICK_BASE_HEIGHT_PX = 2
 const TICK_MAX_HEIGHT_PX = 3
 
@@ -46,9 +46,8 @@ const TICK_MAX_HEIGHT_PX = 3
  * competing highlights would make it ambiguous which tick the card belongs to.
  */
 const TICK_OPACITY_OFF_SCREEN = 0.15
-/** On-screen ticks read this many times brighter than off-screen ones. */
-const TICK_ON_SCREEN_CONTRAST = 5
-const TICK_OPACITY_ON_SCREEN = TICK_OPACITY_OFF_SCREEN * TICK_ON_SCREEN_CONTRAST
+/** Roughly 5.3x the floor — the contrast that carries "you are here". */
+const TICK_OPACITY_ON_SCREEN = 0.8
 const TICK_OPACITY_FOCUSED = 1
 /**
  * How many neighbours either side of the cursor swell. The radius is derived

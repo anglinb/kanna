@@ -493,6 +493,7 @@ export function ChatPage() {
   const addTerminal = useTerminalLayoutStore((store) => store.addTerminal)
   const removeTerminal = useTerminalLayoutStore((store) => store.removeTerminal)
   const toggleVisibility = useTerminalLayoutStore((store) => store.toggleVisibility)
+  const hideTerminals = useTerminalLayoutStore((store) => store.hideTerminals)
   const resetMainSizes = useTerminalLayoutStore((store) => store.resetMainSizes)
   const setMainSizes = useTerminalLayoutStore((store) => store.setMainSizes)
   const setTerminalSizes = useTerminalLayoutStore((store) => store.setTerminalSizes)
@@ -715,9 +716,19 @@ export function ChatPage() {
   }, [state.handleOpenExternal])
 
   const handleRemoveTerminal = useCallback((currentProjectId: string, terminalId: string) => {
+    const paneCount = useTerminalLayoutStore.getState().projects[currentProjectId]?.terminals.length ?? 0
+    if (paneCount <= 1) {
+      // Closing the only pane hides the panel instead of killing the shell:
+      // the pane stays mounted, so reopening returns to the same session and
+      // scrollback with whatever was running still running.
+      hideTerminals(currentProjectId)
+      return
+    }
+
+    // A split pane is unreachable once removed, so closing it does kill it.
     void state.socket.command({ type: "terminal.close", terminalId }).catch(() => {})
     removeTerminal(currentProjectId, terminalId)
-  }, [removeTerminal, state.socket])
+  }, [hideTerminals, removeTerminal, state.socket])
 
   const clearShowScrollTimeout = useCallback(() => {
     if (showScrollTimeoutRef.current !== null) {

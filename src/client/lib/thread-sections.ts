@@ -328,3 +328,22 @@ export function computeSidebarThreadSections(threads: SidebarThread[], nowMs: nu
     .sort((left, right) => right.lastActivityAt - left.lastActivityAt)
   return { inProgress, review, relevant, buckets: computeThreadDateBuckets(rest, nowMs), archived }
 }
+
+/**
+ * Review folded into Relevant as the single group the New Sidebar's Chats tab
+ * renders under "Relevant" — there, a chat waiting on you and a chat sitting on
+ * the current diff are the same "come back to this" pile, and two adjacent
+ * near-identical headers only made you decide which one to scan.
+ *
+ * Sorted NEWEST first — Relevant's order, not Review's oldest-first queue
+ * order. FIFO only pays off when Review is its own drainable section (as it
+ * still is in the command palette, which keeps the sections separate); mixed in
+ * with diff-relevant chats it would just bury the chat you last touched.
+ *
+ * The two inputs are disjoint by construction (computeSidebarThreadSections
+ * excludes review ids from relevant), so this concatenates rather than unions.
+ */
+export function mergeRelevantThreads(sections: SidebarThreadSections): SidebarThread[] {
+  return [...sections.review, ...sections.relevant]
+    .sort((left, right) => right.lastActivityAt - left.lastActivityAt)
+}

@@ -65,6 +65,26 @@ const AT_END_THRESHOLD_RATIO = 0.05
  */
 const RESTORE_SETTLE_FRAMES = 8
 
+/**
+ * Viewport width below which this is a phone-shaped layout.
+ *
+ * Two things key off it, both about spending less per scroll frame on a device
+ * that has less to spend: the overview map has no gutter to live in, so the
+ * geometry it needs is not worth computing, and far fewer rows are kept mounted
+ * around the viewport.
+ */
+const NARROW_VIEWPORT_PX = 640
+
+/**
+ * Rows are kept mounted this far beyond the viewport. Generous on a desktop —
+ * a remounted row renders collapsed while the list still holds its expanded
+ * height, and that mismatch both re-anchors layout and re-triggers
+ * follow-the-bottom. On a phone the extra mounted DOM costs more in paint than
+ * the occasional remount costs in jumpiness.
+ */
+const DRAW_DISTANCE_PX = 1200
+const DRAW_DISTANCE_NARROW_PX = 400
+
 /** Max auto-fetched history pages per chat when the list is too short to scroll. */
 const MAX_HISTORY_AUTO_FILL_PAGES = 4
 
@@ -206,6 +226,12 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   const [listGeometry, setListGeometry] = useState({ start: 0, end: 0, overflows: false })
   /** Scroll pane width, driving whether the minimap has a gutter to live in. */
   const [transcriptWidth, setTranscriptWidth] = useState(0)
+  // Read inside a scroll handler, so it lives in a ref rather than being a
+  // dependency that would rebuild the handler on every resize.
+  const transcriptWidthRef = useRef(0)
+  transcriptWidthRef.current = transcriptWidth
+  const isNarrowViewport = transcriptWidth > 0 && transcriptWidth < NARROW_VIEWPORT_PX
+  const drawDistance = isNarrowViewport ? DRAW_DISTANCE_NARROW_PX : DRAW_DISTANCE_PX
 
   /**
    * Overlay insets, in a ref so the geometry sync stays referentially stable —
@@ -383,6 +409,12 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
    * padding that clears the input dock — a large share of this list's height.
    */
   const syncListGeometry = useCallback(() => {
+    // The map is the only reader, and it has no room to render on a narrow
+    // viewport. Sampling anyway would commit React state on every scroll
+    // event — the most expensive thing this component does per frame — to
+    // feed something nobody can see.
+    if (transcriptWidthRef.current > 0 && transcriptWidthRef.current < NARROW_VIEWPORT_PX) return
+
     const state = listRef.current?.getState?.()
     if (!state) return
 
@@ -741,7 +773,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
           // the size delta both re-anchors layout and re-triggers follow-the-
           // bottom. Keeping more of the transcript mounted makes that rare, at
           // the cost of some retained DOM.
-          drawDistance={1200}
+          drawDistance={drawDistance}
           className="h-full flex-1 overflow-x-hidden overscroll-y-contain px-3 scroll-pt-[72px] [scrollbar-gutter:auto]"
           contentContainerStyle={contentContainerStyle}
           ListHeaderComponent={listHeader}

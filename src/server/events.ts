@@ -89,6 +89,15 @@ export type ChatEvent =
       chatId: string
       projectId: string
       title: string
+      /**
+       * Forks only: the source chat's `lastTurnEndedAt`, carried over so the
+       * fork derives the same `uncommittedWork` flag (see read-models). A fork
+       * has no turn events of its own, so without this the timestamp would be
+       * unset and the fork would drop out of the sidebar's Relevant section
+       * even though it's the same work against the same dirty tree. Optional —
+       * absent on every plain chat_created, including old logs.
+       */
+      lastTurnEndedAt?: number
     }
   | {
       v: 2

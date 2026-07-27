@@ -19,6 +19,8 @@ interface TerminalLayoutState {
   addTerminal: (projectId: string, afterTerminalId?: string) => string
   removeTerminal: (projectId: string, terminalId: string) => void
   toggleVisibility: (projectId: string) => void
+  /** Collapse the panel without touching panes, so their shells keep running. */
+  hideTerminals: (projectId: string) => void
   resetMainSizes: (projectId: string) => void
   setMainSizes: (projectId: string, sizes: number[]) => void
   setTerminalSizes: (projectId: string, sizes: number[]) => void
@@ -137,6 +139,13 @@ export const useTerminalLayoutStore = create<TerminalLayoutState>()(
           projects: withProjectLayout(state.projects, projectId, (layout) => ({
             ...layout,
             isVisible: layout.terminals.length > 0 ? !layout.isVisible : false,
+          })),
+        })),
+      hideTerminals: (projectId) =>
+        set((state) => ({
+          projects: withProjectLayout(state.projects, projectId, (layout) => ({
+            ...layout,
+            isVisible: false,
           })),
         })),
       resetMainSizes: (projectId) =>

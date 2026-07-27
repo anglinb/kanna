@@ -579,6 +579,9 @@ export class EventStore {
           pendingForkSessionToken: null,
           hasMessages: false,
           lastTurnOutcome: null,
+          // Forks carry the source's turn-end timestamp on the create event
+          // (they have no turn events of their own to replay).
+          ...(event.lastTurnEndedAt != null ? { lastTurnEndedAt: event.lastTurnEndedAt } : {}),
         }
         this.state.chatsById.set(chat.id, chat)
         break
@@ -1086,6 +1089,10 @@ export class EventStore {
       chatId,
       projectId: sourceChat.projectId,
       title: getForkedChatTitle(sourceChat.title),
+      // Same project, same tree, same last turn — so the fork derives the same
+      // `uncommittedWork` flag as its source and stays in Relevant instead of
+      // falling into a date bucket the moment it's created.
+      ...(sourceChat.lastTurnEndedAt != null ? { lastTurnEndedAt: sourceChat.lastTurnEndedAt } : {}),
     }
     await this.append(this.chatsLogPath, createEvent)
     await this.setChatProvider(chatId, sourceChat.provider)

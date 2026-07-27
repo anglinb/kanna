@@ -386,8 +386,15 @@ function isResolvedTranscriptRowUnchanged(left: ResolvedTranscriptRow, right: Re
   if (left.kind !== right.kind || left.id !== right.id) return false
 
   if (left.kind === "single" && right.kind === "single") {
-    return left.index === right.index
-      && left.isLoading === right.isLoading
+    // `index` is deliberately not compared. It is the row's position in the
+    // messages array, so prepending a page of older history shifts it for every
+    // row — invalidating rows whose content is identical, forcing a re-render
+    // and re-measure of the whole mounted set in the same commit the list is
+    // trying to anchor through. That is what makes scrolling up jump further
+    // than you scrolled. Nothing reads it except a `data-index` attribute, and
+    // everything it feeds (isFirstSystem, isModelChange, ...) is compared below.
+    return (
+      left.isLoading === right.isLoading
       && left.localPath === right.localPath
       && left.isFirstSystem === right.isFirstSystem
       && left.isModelChange === right.isModelChange
@@ -401,6 +408,7 @@ function isResolvedTranscriptRowUnchanged(left: ResolvedTranscriptRow, right: Re
       && left.isFinalStatus === right.isFinalStatus
       && left.nextPromptTimestamp === right.nextPromptTimestamp
       && sameMessage(left.message, right.message)
+    )
   }
 
   if (left.kind === "tool-group" && right.kind === "tool-group") {
@@ -584,8 +592,7 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
     </div>
   )
 }, (prev, next) => (
-  prev.index === next.index
-  && prev.isLoading === next.isLoading
+  prev.isLoading === next.isLoading
   && prev.localPath === next.localPath
   && prev.isFirstSystem === next.isFirstSystem
   && prev.isModelChange === next.isModelChange
@@ -638,7 +645,6 @@ const TranscriptToolGroup = memo(function TranscriptToolGroup({
   )
 }, (prev, next) => (
   prev.id === next.id
-  && prev.startIndex === next.startIndex
   && prev.isLoading === next.isLoading
   && prev.localPath === next.localPath
   && prev.expanded === next.expanded
@@ -774,16 +780,16 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
   if (prev.row.kind === "tool-group" && next.row.kind === "tool-group") {
     const previousRow = prev.row
     const nextRow = next.row
-    return previousRow.startIndex === nextRow.startIndex
-      && previousRow.isLoading === nextRow.isLoading
+    // `startIndex` omitted for the same reason as `index` on single rows: a
+    // prepend shifts it without changing anything rendered.
+    return previousRow.isLoading === nextRow.isLoading
       && previousRow.localPath === nextRow.localPath
       && previousRow.messages.length === nextRow.messages.length
       && previousRow.messages.every((message, index) => sameMessage(message, nextRow.messages[index]!))
   }
 
   if (prev.row.kind === "single" && next.row.kind === "single") {
-    return prev.row.index === next.row.index
-      && prev.row.isLoading === next.row.isLoading
+    return prev.row.isLoading === next.row.isLoading
       && prev.row.localPath === next.row.localPath
       && prev.row.isFirstSystem === next.row.isFirstSystem
       && prev.row.isModelChange === next.row.isModelChange

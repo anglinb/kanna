@@ -9,6 +9,7 @@ import {
   getRecentThreads,
   getRelevantThreads,
   getReviewThreads,
+  mergeRelevantThreads,
   RECENT_THREADS_LIMIT,
 } from "./thread-sections"
 
@@ -461,5 +462,34 @@ describe("computeSidebarThreadSections", () => {
     const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
     expect(sections.relevant).toEqual([])
     expect(sections.archived.map((t) => t.chatId)).toEqual(["archived"])
+  })
+})
+
+describe("mergeRelevantThreads", () => {
+  test("merges Review into Relevant, newest first", () => {
+    // Review's own order is oldest-first; merged it takes Relevant's ordering,
+    // so the two sets interleave by activity rather than stacking.
+    const data = makeData([
+      makeChatRow({ chatId: "unread-old", title: "a", unread: true, lastMessageAt: at(2026, 7, 9) }),
+      makeChatRow({ chatId: "dirty-mid", title: "b", uncommittedWork: true, lastMessageAt: at(2026, 7, 12) }),
+      makeChatRow({ chatId: "unread-new", title: "c", unread: true, lastMessageAt: at(2026, 7, 15) }),
+      makeChatRow({ chatId: "clean", title: "d", lastMessageAt: at(2026, 7, 14) }),
+    ])
+
+    const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
+    expect(mergeRelevantThreads(sections).map((t) => t.chatId))
+      .toEqual(["unread-new", "dirty-mid", "unread-old"])
+    // In Progress and the date buckets are untouched by the merge.
+    const bucketed = sections.buckets.flatMap((bucket) => bucket.threads.map((t) => t.chatId))
+    expect(bucketed).toEqual(["clean"])
+  })
+
+  test("a chat that is both unread and flagged appears once", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "both", title: "a", unread: true, uncommittedWork: true, lastMessageAt: at(2026, 7, 15) }),
+    ])
+
+    const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
+    expect(mergeRelevantThreads(sections).map((t) => t.chatId)).toEqual(["both"])
   })
 })

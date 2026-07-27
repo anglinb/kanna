@@ -39,6 +39,23 @@ describe("terminalLayoutStore", () => {
     expect(layout.terminals).toHaveLength(0)
   })
 
+  test("hiding keeps the panes so their shells stay attached", () => {
+    useTerminalLayoutStore.getState().addTerminal(PROJECT_ID)
+    const terminalId = useTerminalLayoutStore.getState().projects[PROJECT_ID]?.terminals[0]?.id
+
+    useTerminalLayoutStore.getState().hideTerminals(PROJECT_ID)
+
+    const hidden = useTerminalLayoutStore.getState().projects[PROJECT_ID] ?? getDefaultProjectTerminalLayout()
+    expect(hidden.isVisible).toBe(false)
+    expect(hidden.terminals).toHaveLength(1)
+
+    useTerminalLayoutStore.getState().toggleVisibility(PROJECT_ID)
+
+    const shown = useTerminalLayoutStore.getState().projects[PROJECT_ID] ?? getDefaultProjectTerminalLayout()
+    expect(shown.isVisible).toBe(true)
+    expect(shown.terminals[0]?.id).toBe(terminalId)
+  })
+
   test("resetting main sizes restores the default split without removing terminals", () => {
     useTerminalLayoutStore.getState().addTerminal(PROJECT_ID)
     useTerminalLayoutStore.getState().setMainSizes(PROJECT_ID, [80, 20])

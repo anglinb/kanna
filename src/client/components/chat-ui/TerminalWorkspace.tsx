@@ -25,6 +25,11 @@ interface Props {
   focusRequestVersion?: number
   pendingCommandsByTerminalId?: Record<string, string>
   splitTerminalShortcut?: string[]
+  /**
+   * The embedded chat panel collapses instead of killing the shell when the
+   * only pane is closed — the X is labelled accordingly.
+   */
+  closeHidesLastPane?: boolean
   onAddTerminal: (projectId: string, afterTerminalId?: string) => void
   onRemoveTerminal: (projectId: string, terminalId: string) => void
   onTerminalLayout: (projectId: string, sizes: number[]) => void
@@ -47,6 +52,7 @@ interface TerminalWorkspacePaneProps {
   focusRequestVersion: number
   initialCommand?: string
   splitTerminalShortcut?: string[]
+  closeLabel: string
   onAddTerminal: (projectId: string, afterTerminalId?: string) => void
   onRemoveTerminal: (projectId: string, terminalId: string) => void
   onClearTerminal: (terminalId: string) => void
@@ -71,6 +77,7 @@ const TerminalWorkspacePane = memo(function TerminalWorkspacePane({
   focusRequestVersion,
   initialCommand,
   splitTerminalShortcut,
+  closeLabel,
   onAddTerminal,
   onRemoveTerminal,
   onClearTerminal,
@@ -148,7 +155,7 @@ const TerminalWorkspacePane = memo(function TerminalWorkspacePane({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Archive terminal"
+                aria-label={closeLabel}
                 onClick={handleRemoveTerminal}
               >
                 <X className="size-3.5" />
@@ -187,6 +194,7 @@ function TerminalWorkspaceImpl({
   focusRequestVersion = 0,
   pendingCommandsByTerminalId,
   splitTerminalShortcut,
+  closeHidesLastPane = false,
   onAddTerminal,
   onRemoveTerminal,
   onTerminalLayout,
@@ -216,6 +224,7 @@ function TerminalWorkspaceImpl({
   }, [])
 
   const paneCount = layout.terminals.length
+  const closeLabel = closeHidesLastPane && paneCount === 1 ? "Hide terminal" : "Close terminal"
   const minTerminalWidth = getMinimumTerminalWidth(minColumnWidth)
   const effectiveMinTerminalWidth = viewportWidth > 0 ? Math.min(minTerminalWidth, viewportWidth) : minTerminalWidth
   const requiredWidth = Math.max(1, paneCount) * effectiveMinTerminalWidth
@@ -302,6 +311,7 @@ function TerminalWorkspaceImpl({
                 focusRequestVersion={index === 0 ? focusRequestVersion : 0}
                 initialCommand={pendingCommandsByTerminalId?.[terminalPane.id]}
                 splitTerminalShortcut={splitTerminalShortcut}
+                closeLabel={closeLabel}
                 onAddTerminal={onAddTerminal}
                 onRemoveTerminal={onRemoveTerminal}
                 onClearTerminal={handleClearTerminal}
