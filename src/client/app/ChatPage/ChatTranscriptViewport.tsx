@@ -61,6 +61,20 @@ import { estimateTranscriptRowSize } from "./transcriptRowSize"
  */
 const AT_END_THRESHOLD_PX = 48
 
+/**
+ * How long a pin keeps correcting itself as the transcript settles.
+ *
+ * Rows that have never been on screen stand in at an estimated height, so the
+ * target's position is computed against guesses and the content resizes under
+ * it as those rows actually render. On a cold open of a long chat that goes on
+ * for hundreds of milliseconds — far longer than a frame budget — so the
+ * correction is driven by layout changes and bounded by the clock instead.
+ */
+const PIN_SETTLE_MS = 2000
+
+/** Close enough to the intended offset to stop correcting. */
+const PIN_TOLERANCE_PX = 2
+
 
 
 
@@ -235,6 +249,55 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
    * on every open. Real input events are the one signal those can't fake.
    */
   const hasUserScrolledRef = useRef(false)
+  const pendingPinRef = useRef<{ rowId: string; until: number } | null>(null)
+
+  useEffect(() => {
+    pendingPinRef.current = null
+  }, [activeChatId])
+
+  /**
+   * Put a row at the top of the viewport, re-issuing until it stays there.
+   *
+   * One pass is not enough on a cold open. Rows that have never been on screen
+   * report `contain-intrinsic-size` rather than a real height, so the target's
+   * position is computed against estimates; as the rows above it render, the
+   * content resizes underneath and the target drifts. Measured on a real chat,
+   * a single jump landed 219px short while the content grew from 2,600px to
+   * 8,900px.
+   *
+   * Each pass measures where the row actually ended up and corrects, stopping
+   * as soon as it is within a pixel or two of the intended offset — so a
+   * settled list costs one frame and nothing converges forever.
+   */
+  const pinRowToTop = useCallback((rowId: string) => {
+    if (!scrollToMessage(rowId, { align: "start", scrollMargin: headerOffsetPx })) {
+      scrollToEnd()
+      return
+    }
+    pendingPinRef.current = { rowId, until: Date.now() + PIN_SETTLE_MS }
+  }, [headerOffsetPx, scrollToEnd, scrollToMessage])
+
+  /**
+   * Nudge an in-flight pin back onto its row after the layout moves under it.
+   *
+   * Gives up on a deadline, once the row is where it should be, or the moment
+   * the reader scrolls — a correction that fought a deliberate scroll would be
+   * far worse than one that lands a little short.
+   */
+  const correctPendingPin = useCallback(() => {
+    const pending = pendingPinRef.current
+    if (!pending) return
+    if (hasUserScrolledRef.current || Date.now() > pending.until) {
+      pendingPinRef.current = null
+      return
+    }
+    const viewport = viewportRef.current
+    const row = viewport?.querySelector(`[data-message-id="${CSS.escape(pending.rowId)}"]`)
+    if (!viewport || !row) return
+    const offset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - headerOffsetPx
+    if (Math.abs(offset) <= PIN_TOLERANCE_PX) return
+    scrollToMessage(pending.rowId, { align: "start", scrollMargin: headerOffsetPx })
+  }, [headerOffsetPx, scrollToMessage])
 
   const applyScrollTarget = useCallback((target: TranscriptScrollTarget) => {
     if (target.kind === "end") {
@@ -247,13 +310,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     // auto-follow effect bails on this same commit instead of yanking us to
     // the bottom — child effects flush before parent effects.
     onIsAtEndChange(false)
-    // Rows are real elements, so this lands on the row rather than near it.
-    // `scrollMargin` clears the floating navbar the row would otherwise sit
-    // under.
-    if (!scrollToMessage(target.rowId, { align: "start", scrollMargin: headerOffsetPx })) {
-      scrollToEnd()
-    }
-  }, [headerOffsetPx, onIsAtEndChange, scrollToEnd, scrollToMessage])
+    pinRowToTop(target.rowId)
+  }, [onIsAtEndChange, pinRowToTop])
 
   // Restore once per chat open: wait until rows exist *and* the stored anchor
   // has resolved, otherwise we'd land on the fallback and visibly jump when the
@@ -376,6 +434,16 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     sizeObserver.observe(scrollNode)
     syncSize()
 
+    // The content grows as offscreen rows render for the first time, which is
+    // what pulls a fresh pin off its target. Watching it is how the correction
+    // knows to re-aim.
+    const content = scrollNode.querySelector('[data-slot="message-scroller-content"]')
+    const contentObserver = new ResizeObserver(() => {
+      handleScroll()
+      correctPendingPin()
+    })
+    if (content) contentObserver.observe(content)
+
     scrollNode.addEventListener("scroll", handleScroll, { passive: true })
     for (const eventName of userIntentEvents) {
       scrollNode.addEventListener(eventName, markUserScrolled, { passive: true })
@@ -383,12 +451,13 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
 
     return () => {
       sizeObserver.disconnect()
+      contentObserver.disconnect()
       scrollNode.removeEventListener("scroll", handleScroll)
       for (const eventName of userIntentEvents) {
         scrollNode.removeEventListener(eventName, markUserScrolled)
       }
     }
-  }, [activeChatId, handleScroll])
+  }, [activeChatId, correctPendingPin, handleScroll])
 
   // The button lives outside the scroll node, so it never trips the input
   // listeners — but jumping to the bottom is an explicit read-position choice.
