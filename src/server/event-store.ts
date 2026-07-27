@@ -27,6 +27,13 @@ const STALE_CHAT_AUTO_ARCHIVE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 const STALE_CHAT_DELETE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
 const SIDEBAR_PROJECT_ORDER_FILE = "sidebar-order.json"
 const CHAT_MESSAGE_PREVIEW_MAX_LENGTH = 160
+/**
+ * Ceiling on a chat's remembered touched paths. A long-running chat that
+ * rewrites half a repo shouldn't grow an unbounded array in every snapshot;
+ * once a chat has touched this many distinct files it is going to intersect
+ * whatever is dirty anyway, so the tail adds nothing.
+ */
+const TOUCHED_PATHS_LIMIT = 500
 // How much of each transcript tail is scanned at boot to rebuild chat metadata
 // (lastMessageAt, previews) that only lives in snapshots between compactions.
 const TRANSCRIPT_METADATA_TAIL_BYTES = 256 * 1024
@@ -122,6 +129,7 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_read_state_set":
     case "chat_done_state_set":
     case "chat_read_anchor_set":
+    case "chat_files_touched":
       return 9
     case "chat_deleted":
     case "chat_archived":
@@ -172,6 +180,11 @@ export class EventStore {
    * which fires per streamed token.
    */
   onTurnEnded?: (chatId: string) => void
+  /**
+   * Fired when a turn begins, so file tracking can snapshot the worktree before
+   * the agent touches it. Paired with `onTurnEnded`.
+   */
+  onTurnStarted?: (chatId: string) => void
 
   constructor(dataDir = getDataDir(homedir())) {
     this.dataDir = dataDir
@@ -598,9 +611,24 @@ export class EventStore {
           messageId: event.messageId,
           atEnd: event.atEnd,
           updatedAt: event.timestamp,
+          ...(event.transcriptWidth != null ? { transcriptWidth: event.transcriptWidth } : {}),
+          ...(event.offsetFromMessage != null ? { offsetFromMessage: event.offsetFromMessage } : {}),
         }
         // Intentionally does not bump `updatedAt` — a scroll is not a chat
         // mutation, and bumping it would churn sidebar ordering/signatures.
+        break
+      }
+      case "chat_files_touched": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        const paths = new Set(chat.touchedPaths ?? [])
+        for (const filePath of event.paths) {
+          if (paths.size >= TOUCHED_PATHS_LIMIT) break
+          paths.add(filePath)
+        }
+        chat.touchedPaths = [...paths]
+        // Like the read anchor, this is bookkeeping about a chat rather than a
+        // change to it — bumping `updatedAt` would churn sidebar ordering.
         break
       }
       case "chat_done_state_set": {
@@ -652,6 +680,10 @@ export class EventStore {
         const chat = this.state.chatsById.get(event.chatId)
         if (!chat) break
         chat.updatedAt = event.timestamp
+        chat.lastTurnStartedAt = event.timestamp
+        // Kept from the previous turn when this one didn't name a model, so a
+        // resumed background turn doesn't blank what the chat last ran with.
+        if (event.model) chat.lastModel = event.model
         // A new turn means the user re-engaged, so the chat is no longer "done".
         delete chat.doneAt
         break
@@ -711,7 +743,13 @@ export class EventStore {
       }
     } else if (entry.kind === "assistant_text" && !entry.hidden) {
       const preview = buildChatMessagePreview(entry.text)
-      if (preview) chat.lastAgentMessagePreview = preview
+      if (preview) {
+        chat.lastAgentMessagePreview = preview
+        // Stamped so a reader can tell whether the preview answers the latest
+        // prompt or the one before it. `lastAgentMessageAt` can't: it advances
+        // on tool calls too, so it moves while the text is still stale.
+        chat.lastAgentMessagePreviewAt = entry.createdAt
+      }
     }
     if (isAgentAuthoredEntry(entry)) {
       // Hidden entries count: this is "when did the agent last do something",
@@ -903,12 +941,18 @@ export class EventStore {
       chatId,
       projectId: sourceChat.projectId,
       title: getForkedChatTitle(sourceChat.title),
-      // Same project, same tree, same last turn — so the fork derives the same
-      // `uncommittedWork` flag as its source and stays in Relevant instead of
-      // falling into a date bucket the moment it's created.
+      // A fork inherits the conversation, so it inherits its recency too: with
+      // no turn events of its own it would otherwise read as brand new and sort
+      // by creation time alone.
       ...(sourceChat.lastTurnEndedAt != null ? { lastTurnEndedAt: sourceChat.lastTurnEndedAt } : {}),
     }
     await this.append(this.chatsLogPath, createEvent)
+    // The fork carries the same conversation, so it carries the same claim on
+    // the files that conversation changed — it stays in Relevant alongside its
+    // source rather than starting with an empty touched set.
+    if (sourceChat.touchedPaths?.length) {
+      await this.recordFilesTouched(chatId, sourceChat.touchedPaths)
+    }
     await this.setChatProvider(chatId, sourceChat.provider)
     await this.setPlanMode(chatId, sourceChat.planMode)
     await this.setAutoPlan(chatId, sourceChat.autoPlan)
@@ -934,7 +978,10 @@ export class EventStore {
             chat.lastMessageAt = Math.max(chat.lastMessageAt ?? 0, lastEntryAt)
           }
           if (sourceChat.lastUserMessagePreview) chat.lastUserMessagePreview = sourceChat.lastUserMessagePreview
-          if (sourceChat.lastAgentMessagePreview) chat.lastAgentMessagePreview = sourceChat.lastAgentMessagePreview
+          if (sourceChat.lastAgentMessagePreview) {
+            chat.lastAgentMessagePreview = sourceChat.lastAgentMessagePreview
+            chat.lastAgentMessagePreviewAt = sourceChat.lastAgentMessagePreviewAt
+          }
           // Same transcript, so the same last-agent-activity timestamp a
           // reload would derive from it.
           if (sourceChat.lastAgentMessageAt != null) {
@@ -1220,9 +1267,22 @@ export class EventStore {
    * client as it scrolls, so the no-op guard below matters — it is the only
    * write rate-limit in the store.
    */
-  async setChatReadAnchor(chatId: string, messageId: string, atEnd: boolean) {
+  async setChatReadAnchor(
+    chatId: string,
+    messageId: string,
+    atEnd: boolean,
+    layout?: { transcriptWidth?: number; offsetFromMessage?: number }
+  ) {
     const chat = this.requireChat(chatId)
-    if (chat.readAnchor?.messageId === messageId && chat.readAnchor.atEnd === atEnd) return
+    // Scrolling within one message changes only the offset, so that has to
+    // count as a change or the position would stick to wherever the message
+    // first came into view.
+    if (
+      chat.readAnchor?.messageId === messageId
+      && chat.readAnchor.atEnd === atEnd
+      && chat.readAnchor.offsetFromMessage === layout?.offsetFromMessage
+      && chat.readAnchor.transcriptWidth === layout?.transcriptWidth
+    ) return
     const event: ChatEvent = {
       v: STORE_VERSION,
       type: "chat_read_anchor_set",
@@ -1230,6 +1290,8 @@ export class EventStore {
       chatId,
       messageId,
       atEnd,
+      ...(layout?.transcriptWidth != null ? { transcriptWidth: layout.transcriptWidth } : {}),
+      ...(layout?.offsetFromMessage != null ? { offsetFromMessage: layout.offsetFromMessage } : {}),
     }
     await this.append(this.chatsLogPath, event)
   }
@@ -1250,7 +1312,12 @@ export class EventStore {
     const entries = this.getTranscriptEntries(chatId)
     if (!entries.some((entry) => entry._id === anchor.messageId)) return null
 
-    return { messageId: anchor.messageId, atEnd: anchor.atEnd }
+    return {
+      messageId: anchor.messageId,
+      atEnd: anchor.atEnd,
+      ...(anchor.transcriptWidth != null ? { transcriptWidth: anchor.transcriptWidth } : {}),
+      ...(anchor.offsetFromMessage != null ? { offsetFromMessage: anchor.offsetFromMessage } : {}),
+    }
   }
 
   /**
@@ -1360,15 +1427,38 @@ export class EventStore {
     await this.append(this.queuedMessagesLogPath, event)
   }
 
-  async recordTurnStarted(chatId: string) {
+  /** `model` is what this turn runs with; omitted where the caller has none to name. */
+  async recordTurnStarted(chatId: string, model?: string) {
     this.requireChat(chatId)
     const event: TurnEvent = {
       v: STORE_VERSION,
       type: "turn_started",
       timestamp: Date.now(),
       chatId,
+      ...(model ? { model } : {}),
     }
     await this.append(this.turnsLogPath, event)
+    this.onTurnStarted?.(chatId)
+  }
+
+  /** Records the paths one turn changed; replay unions them into `touchedPaths`. */
+  async recordFilesTouched(chatId: string, paths: string[]) {
+    if (paths.length === 0) return
+    const chat = this.state.chatsById.get(chatId)
+    if (!chat) return
+    // Nothing new to learn — skip the append rather than growing the log with
+    // a repeat of what we already know (the common case for a chat iterating
+    // on the same handful of files, turn after turn).
+    const known = new Set(chat.touchedPaths ?? [])
+    if (paths.every((filePath) => known.has(filePath))) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_files_touched",
+      timestamp: Date.now(),
+      chatId,
+      paths,
+    }
+    await this.append(this.chatsLogPath, event)
   }
 
   async recordTurnFinished(chatId: string) {

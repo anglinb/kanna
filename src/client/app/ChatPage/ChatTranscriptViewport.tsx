@@ -25,7 +25,7 @@ import {
 } from "../KannaTranscript"
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
-import type { ChatReadAnchorState } from "../useChatReadAnchor"
+import type { ChatReadAnchorState, ReadAnchorLayout } from "../useChatReadAnchor"
 import {
   buildRowIndexByMessageId,
   getLatestUserPrompt,
@@ -85,6 +85,38 @@ const PIN_TOLERANCE_PX = 2
  */
 const OVERFLOW_EPSILON_PX = 8
 
+/**
+ * Where the reader sits *within* the top row, plus the column width that makes
+ * that meaningful.
+ *
+ * Measured against the row rather than the scroll container: rows above it may
+ * still be standing in at an estimated height, so an absolute scroll position
+ * means something different on the next open. A distance into the row does not
+ * move when the content above it re-measures.
+ */
+/** The rendered width of the transcript column, which is what wraps text. */
+function measureTranscriptColumnWidth(viewport: HTMLElement | null): number | undefined {
+  const column = viewport?.querySelector("[data-transcript-row-id]")
+  return column ? Math.round(column.getBoundingClientRect().width) : undefined
+}
+
+function measureReadAnchorLayout(
+  viewport: HTMLElement | null,
+  rowId: string,
+  headerOffsetPx: number
+): ReadAnchorLayout | undefined {
+  const row = viewport?.querySelector(`[data-message-id="${CSS.escape(rowId)}"]`)
+  const column = row?.querySelector("[data-transcript-row-id]")
+  if (!viewport || !row || !column) return undefined
+  const offsetFromMessage = viewport.getBoundingClientRect().top + headerOffsetPx - row.getBoundingClientRect().top
+  return {
+    // The column, not the viewport: a wider window past the column's max width
+    // rewraps nothing, so it must not invalidate the offset.
+    transcriptWidth: Math.round(column.getBoundingClientRect().width),
+    offsetFromMessage: Math.round(offsetFromMessage),
+  }
+}
+
 /** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
 const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
 
@@ -129,7 +161,7 @@ interface ChatTranscriptViewportProps {
   /** Server-stored read position; restore waits for this to resolve. */
   readAnchorState?: ChatReadAnchorState
   /** Reports the message at the top of the viewport as the user scrolls. */
-  onReportReadAnchor?: (messageId: string, atEnd: boolean) => void
+  onReportReadAnchor?: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => void
 }
 
 /**
@@ -249,7 +281,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
    * on every open. Real input events are the one signal those can't fake.
    */
   const hasUserScrolledRef = useRef(false)
-  const pendingPinRef = useRef<{ rowId: string; until: number } | null>(null)
+  const pendingPinRef = useRef<{ rowId: string; offsetFromMessage: number; until: number } | null>(null)
 
   useEffect(() => {
     pendingPinRef.current = null
@@ -269,12 +301,12 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
    * as soon as it is within a pixel or two of the intended offset — so a
    * settled list costs one frame and nothing converges forever.
    */
-  const pinRowToTop = useCallback((rowId: string) => {
-    if (!scrollToMessage(rowId, { align: "start", scrollMargin: headerOffsetPx })) {
+  const pinRowToTop = useCallback((rowId: string, offsetFromMessage = 0) => {
+    if (!scrollToMessage(rowId, { align: "start", scrollMargin: headerOffsetPx - offsetFromMessage })) {
       scrollToEnd()
       return
     }
-    pendingPinRef.current = { rowId, until: Date.now() + PIN_SETTLE_MS }
+    pendingPinRef.current = { rowId, offsetFromMessage, until: Date.now() + PIN_SETTLE_MS }
   }, [headerOffsetPx, scrollToEnd, scrollToMessage])
 
   /**
@@ -294,9 +326,10 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     const viewport = viewportRef.current
     const row = viewport?.querySelector(`[data-message-id="${CSS.escape(pending.rowId)}"]`)
     if (!viewport || !row) return
-    const offset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - headerOffsetPx
+    const intended = headerOffsetPx - pending.offsetFromMessage
+    const offset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - intended
     if (Math.abs(offset) <= PIN_TOLERANCE_PX) return
-    scrollToMessage(pending.rowId, { align: "start", scrollMargin: headerOffsetPx })
+    scrollToMessage(pending.rowId, { align: "start", scrollMargin: intended })
   }, [headerOffsetPx, scrollToMessage])
 
   const applyScrollTarget = useCallback((target: TranscriptScrollTarget) => {
@@ -310,7 +343,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     // auto-follow effect bails on this same commit instead of yanking us to
     // the bottom — child effects flush before parent effects.
     onIsAtEndChange(false)
-    pinRowToTop(target.rowId)
+    pinRowToTop(target.rowId, target.offsetFromMessage)
   }, [onIsAtEndChange, pinRowToTop])
 
   // Restore once per chat open: wait until rows exist *and* the stored anchor
@@ -332,7 +365,12 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     restoredChatIdRef.current = activeChatId
     hasUserScrolledRef.current = false
     latestPromptRef.current = getLatestUserPrompt(resolvedRows)
-    applyScrollTarget(resolveRestoreTarget(resolvedRows, readAnchorState.anchor, rowIndexByMessageId))
+    applyScrollTarget(resolveRestoreTarget(
+      resolvedRows,
+      readAnchorState.anchor,
+      rowIndexByMessageId,
+      measureTranscriptColumnWidth(viewportRef.current),
+    ))
   }, [activeChatId, applyScrollTarget, readAnchorState, resolvedRows, rowIndexByMessageId])
 
   // Sending jumps to the bottom, where the new prompt and the reply that
@@ -399,8 +437,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     // Optimistic ids are client-local and will not resolve on another device.
     if (!messageId || isOptimisticMessageId(messageId)) return
 
-    onReportReadAnchor(messageId, isAtEnd)
-  }, [onReportReadAnchor, visibleRowRange])
+    onReportReadAnchor(messageId, isAtEnd, measureReadAnchorLayout(viewportRef.current, row.id, headerOffsetPx))
+  }, [headerOffsetPx, onReportReadAnchor, visibleRowRange])
 
   const handleScroll = useCallback(() => {
     const scrollNode = viewportRef.current

@@ -867,7 +867,15 @@ export interface SidebarChatRow {
   doneAt?: number
   localPath: string
   provider: AgentProvider | null
+  /**
+   * Model id the chat's most recent turn ran with. Absent on chats that have
+   * never run a turn, and on turns recorded before the field existed — the
+   * hover card names the harness alone in that case.
+   */
+  model?: string
   lastMessageAt?: number
+  /** When the most recent turn started; with `lastTurnEndedAt`, how long it took. */
+  lastTurnStartedAt?: number
   /** When the last turn ended (agent response received). Drives Review/In Progress ordering. */
   lastTurnEndedAt?: number
   /**
@@ -882,6 +890,12 @@ export interface SidebarChatRow {
   lastUserMessagePreview?: string
   /** One-line preview of the latest agent text message. */
   lastAgentMessagePreview?: string
+  /**
+   * When that preview was written. Distinct from `lastAgentMessageAt`, which
+   * tool calls advance too: this dates the *words*, so a reader can tell a
+   * reply to the latest prompt from one carried over from the turn before.
+   */
+  lastAgentMessagePreviewAt?: number
   /** Tool kind the chat is waiting on when status is waiting_for_user (e.g. "ask_user_question"). */
   pendingToolKind?: string
   /**
@@ -1929,6 +1943,13 @@ export interface ChatSnapshot {
 export interface ResolvedChatReadAnchor {
   messageId: string
   atEnd: boolean
+  /**
+   * Transcript column width when recorded. `offsetFromMessage` only applies at
+   * the same width, since a narrower column rewraps the message underneath it.
+   */
+  transcriptWidth?: number
+  /** Distance below the anchored message's top, in pixels. */
+  offsetFromMessage?: number
 }
 
 export interface PendingToolSnapshot {

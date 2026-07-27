@@ -105,8 +105,13 @@ export function shouldPinForNewPrompt(
 
 export type TranscriptScrollTarget =
   | { kind: "end" }
-  /** `rowId` is a `ResolvedTranscriptRow.id` — what the scroller addresses rows by. */
-  | { kind: "pin"; rowId: string }
+  /**
+   * `rowId` is a `ResolvedTranscriptRow.id` — what the scroller addresses rows
+   * by. `offsetFromMessage` refines the landing to where inside the row the
+   * reader actually was, and is only present when the column is the same width
+   * it was recorded at.
+   */
+  | { kind: "pin"; rowId: string; offsetFromMessage?: number }
 
 /**
  * Decide where a freshly opened chat should land.
@@ -119,6 +124,7 @@ export function resolveRestoreTarget(
   rows: ResolvedTranscriptRow[],
   anchor: ResolvedChatReadAnchor | null,
   rowIndexByMessageId: Map<string, number>,
+  transcriptWidth?: number,
 ): TranscriptScrollTarget {
   if (rows.length === 0) return { kind: "end" }
   if (anchor?.atEnd) return { kind: "end" }
@@ -127,7 +133,18 @@ export function resolveRestoreTarget(
     const index = rowIndexByMessageId.get(anchor.messageId)
     // Absent when the anchored message is gone from the transcript.
     const rowId = index === undefined ? undefined : rows[index]?.id
-    if (rowId !== undefined) return { kind: "pin", rowId }
+    if (rowId !== undefined) {
+      // The offset says how far into the message the reader was, which only
+      // holds if the message wraps the same way it did then. At a different
+      // column width the message is a different shape, so the best we can
+      // honestly do is put its top back at the top.
+      const sameWidth = anchor.transcriptWidth !== undefined
+        && transcriptWidth !== undefined
+        && Math.abs(anchor.transcriptWidth - transcriptWidth) < 1
+      return sameWidth && anchor.offsetFromMessage !== undefined
+        ? { kind: "pin", rowId, offsetFromMessage: anchor.offsetFromMessage }
+        : { kind: "pin", rowId }
+    }
   }
 
   const latestPromptIndex = findLatestUserPromptRowIndex(rows)

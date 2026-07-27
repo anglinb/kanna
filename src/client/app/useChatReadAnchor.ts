@@ -9,6 +9,16 @@ import type { KannaSocket } from "./socket"
  */
 const READ_ANCHOR_WRITE_INTERVAL_MS = 1500
 
+/**
+ * Where in the message the reader was, and the column width that makes it
+ * meaningful. Restoring uses the offset only at a matching width, since a
+ * narrower column rewraps the message and moves everything inside it.
+ */
+export interface ReadAnchorLayout {
+  transcriptWidth: number
+  offsetFromMessage: number
+}
+
 export interface ChatReadAnchorState {
   /**
    * False until the chat's first snapshot lands. Consumers must wait for this
@@ -25,7 +35,7 @@ export interface ChatReadAnchorSync {
    * Report the message currently at the top of the viewport. Safe to call on
    * every scroll event — writes are throttled and deduped.
    */
-  reportReadAnchor: (messageId: string, atEnd: boolean) => void
+  reportReadAnchor: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => void
 }
 
 /**
@@ -65,7 +75,12 @@ export function useChatReadAnchor(
     [activeChatId, chatReady, latchedRef.current.anchor]
   )
 
-  const pendingRef = useRef<{ chatId: string; messageId: string; atEnd: boolean } | null>(null)
+  const pendingRef = useRef<{
+    chatId: string
+    messageId: string
+    atEnd: boolean
+    layout?: ReadAnchorLayout
+  } | null>(null)
   const timerRef = useRef<number | null>(null)
   const lastWriteAtRef = useRef(0)
   const lastWrittenKeyRef = useRef<string | null>(null)
@@ -82,7 +97,12 @@ export function useChatReadAnchor(
     // While parked at the bottom the top-visible message churns with every
     // streamed chunk, but restore only needs to know "was at the end" — so all
     // of those collapse to a single write instead of one every interval.
-    const key = pending.atEnd ? `${pending.chatId}:atEnd` : `${pending.chatId}:${pending.messageId}`
+    // Scrolling within one long message changes only the offset, so that has to
+    // be part of the key or the position would stick where the message first
+    // came into view.
+    const key = pending.atEnd
+      ? `${pending.chatId}:atEnd`
+      : `${pending.chatId}:${pending.messageId}:${pending.layout?.offsetFromMessage ?? ""}`
     if (key === lastWrittenKeyRef.current) return
     lastWrittenKeyRef.current = key
     lastWriteAtRef.current = Date.now()
@@ -92,15 +112,16 @@ export function useChatReadAnchor(
       chatId: pending.chatId,
       messageId: pending.messageId,
       atEnd: pending.atEnd,
+      ...(pending.layout ?? {}),
     }).catch(() => {
       // Every pending command rejects with "Disconnected" on socket close even
       // though the envelope may still be delivered. Never surface this.
     })
   }, [socket])
 
-  const reportReadAnchor = useCallback((messageId: string, atEnd: boolean) => {
+  const reportReadAnchor = useCallback((messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => {
     if (!activeChatId) return
-    pendingRef.current = { chatId: activeChatId, messageId, atEnd }
+    pendingRef.current = { chatId: activeChatId, messageId, atEnd, layout }
     // Already scheduled — the newer position just replaces the pending one.
     if (timerRef.current !== null) return
     const delay = Math.max(0, READ_ANCHOR_WRITE_INTERVAL_MS - (Date.now() - lastWriteAtRef.current))

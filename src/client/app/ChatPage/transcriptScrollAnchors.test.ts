@@ -204,3 +204,41 @@ describe("resolveRestoreTarget", () => {
     expect(resolveRestoreTarget([], null, new Map())).toEqual({ kind: "end" })
   })
 })
+
+describe("resolveRestoreTarget with a recorded layout", () => {
+  const rows = [promptRow("m1", "first"), textRow("a1", "a long answer"), promptRow("m2", "second")]
+  const map = buildRowIndexByMessageId(rows)
+  const anchor = { messageId: "a1", atEnd: false, transcriptWidth: 800, offsetFromMessage: 1224 }
+
+  test("restores the exact position within the message at the same width", () => {
+    expect(resolveRestoreTarget(rows, anchor, map, 800))
+      .toEqual({ kind: "pin", rowId: rows[1]!.id, offsetFromMessage: 1224 })
+  })
+
+  test("drops the offset at a different width, since the message rewraps", () => {
+    // A narrower column makes the message a different shape, so a distance into
+    // it means nothing — putting its top back at the top is the honest answer.
+    expect(resolveRestoreTarget(rows, anchor, map, 640))
+      .toEqual({ kind: "pin", rowId: rows[1]!.id })
+  })
+
+  test("drops the offset when the current width is unknown", () => {
+    expect(resolveRestoreTarget(rows, anchor, map, undefined))
+      .toEqual({ kind: "pin", rowId: rows[1]!.id })
+  })
+
+  test("pins without an offset for anchors recorded before layout was stored", () => {
+    expect(resolveRestoreTarget(rows, { messageId: "a1", atEnd: false }, map, 800))
+      .toEqual({ kind: "pin", rowId: rows[1]!.id })
+  })
+
+  test("still follows the stream for an atEnd anchor regardless of layout", () => {
+    expect(resolveRestoreTarget(rows, { ...anchor, atEnd: true }, map, 800))
+      .toEqual({ kind: "end" })
+  })
+
+  test("falls back to the latest prompt when the anchored message is gone, offset and all", () => {
+    expect(resolveRestoreTarget(rows, { ...anchor, messageId: "gone" }, map, 800))
+      .toEqual({ kind: "pin", rowId: rows[2]!.id })
+  })
+})

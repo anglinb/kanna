@@ -169,7 +169,15 @@ export type ClientCommand =
    * scrolling. Deliberately ack-only: the anchor is not part of any snapshot,
    * so a scroll never triggers a sidebar or chat re-push to other sockets.
    */
-  | { type: "chat.setReadAnchor"; chatId: string; messageId: string; atEnd: boolean }
+  | {
+    type: "chat.setReadAnchor"
+    chatId: string
+    messageId: string
+    atEnd: boolean
+    /** Transcript column width and the position's distance into the message. */
+    transcriptWidth?: number
+    offsetFromMessage?: number
+  }
   /** Read back the stored anchor when opening a chat. Result: ResolvedChatReadAnchor | null. */
   | { type: "chat.getReadAnchor"; chatId: string }
   /**

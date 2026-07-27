@@ -1222,7 +1222,10 @@ export function createWsRouter({
           // No broadcast on purpose. The anchor is not part of any snapshot,
           // so scrolling stays free of fan-out, and a device sitting on an
           // open chat never gets its viewport yanked by another device.
-          await store.setChatReadAnchor(command.chatId, command.messageId, command.atEnd)
+          await store.setChatReadAnchor(command.chatId, command.messageId, command.atEnd, {
+            transcriptWidth: command.transcriptWidth,
+            offsetFromMessage: command.offsetFromMessage,
+          })
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }

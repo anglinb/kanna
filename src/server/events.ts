@@ -9,6 +9,24 @@ export interface ChatReadAnchor {
   messageId: string
   atEnd: boolean
   updatedAt: number
+  /**
+   * Width of the transcript column when this was recorded.
+   *
+   * `offsetFromMessage` is only meaningful at the same width — a narrower
+   * column rewraps text, so the same scroll position sits at a different
+   * distance into the message. Absent on anchors written before this existed.
+   */
+  transcriptWidth?: number
+  /**
+   * How far below the anchored message's own top the reader was, in pixels.
+   *
+   * Deliberately relative rather than an absolute scroll position: rows that
+   * have never been on screen stand in at an estimated height, so the absolute
+   * coordinate space shifts as they render and an absolute offset restores to
+   * the wrong place. A distance from the message survives that, and carries the
+   * within-message position that pinning the message alone would lose.
+   */
+  offsetFromMessage?: number
 }
 
 export interface ChatRecord {
@@ -37,6 +55,19 @@ export interface ChatRecord {
   pendingForkSessionToken?: string | null
   hasMessages?: boolean
   lastMessageAt?: number
+  /**
+   * When the most recent turn *started*. With `lastTurnEndedAt` this is how
+   * long the last turn took; while a turn is running it's how long it has been
+   * going. Absent on chats whose turns all predate the field.
+   */
+  lastTurnStartedAt?: number
+  /**
+   * Model id the most recent turn ran with (e.g. "opus", "gpt-5.3-codex").
+   * Recorded per turn rather than per chat because the model is picked at send
+   * time and can differ turn to turn — this is the one that actually ran, not
+   * whatever the composer happens to be set to now.
+   */
+  lastModel?: string
   /** When the last turn ended (finished/failed/cancelled) — i.e. when the last agent response was received. */
   lastTurnEndedAt?: number
   /**
@@ -47,7 +78,21 @@ export interface ChatRecord {
   lastAgentMessageAt?: number
   lastUserMessagePreview?: string
   lastAgentMessagePreview?: string
+  /**
+   * When `lastAgentMessagePreview`'s entry was written — i.e. how old the
+   * agent's last *words* are, as opposed to `lastAgentMessageAt`, which any
+   * tool call advances. Compared against `lastMessageAt` to tell a reply to the
+   * current prompt from one left over from the previous turn.
+   */
+  lastAgentMessagePreviewAt?: number
   lastTurnOutcome: "success" | "failed" | "cancelled" | null
+  /**
+   * Repo-root-relative paths this chat has changed, unioned across its turns
+   * and measured by diffing worktree snapshots at each turn boundary (see
+   * `TurnFileTracker`). Intersected with the currently-dirty paths to decide
+   * whether a chat is relevant to your uncommitted work.
+   */
+  touchedPaths?: string[]
 }
 
 export interface StoreState {
@@ -97,11 +142,10 @@ export type ChatEvent =
       title: string
       /**
        * Forks only: the source chat's `lastTurnEndedAt`, carried over so the
-       * fork derives the same `uncommittedWork` flag (see read-models). A fork
-       * has no turn events of its own, so without this the timestamp would be
-       * unset and the fork would drop out of the sidebar's Relevant section
-       * even though it's the same work against the same dirty tree. Optional —
-       * absent on every plain chat_created, including old logs.
+       * fork inherits the conversation's recency in the sidebar. A fork has no
+       * turn events of its own, so without this it would sort by creation time
+       * as though the copied conversation never happened. Optional — absent on
+       * every plain chat_created, including old logs.
        */
       lastTurnEndedAt?: number
     }
@@ -172,6 +216,17 @@ export type ChatEvent =
       chatId: string
       messageId: string
       atEnd: boolean
+      /** See `ChatReadAnchor`. Optional — absent on pre-existing log lines. */
+      transcriptWidth?: number
+      offsetFromMessage?: number
+    }
+  | {
+      v: 2
+      type: "chat_files_touched"
+      timestamp: number
+      chatId: string
+      /** Paths one turn changed; replay unions them into `ChatRecord.touchedPaths`. */
+      paths: string[]
     }
 
 export type MessageEvent = {
@@ -204,6 +259,8 @@ export type TurnEvent =
       type: "turn_started"
       timestamp: number
       chatId: string
+      /** Model this turn runs with. Optional — absent on every pre-existing log line. */
+      model?: string
     }
   | {
       v: 2
