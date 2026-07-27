@@ -165,7 +165,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   onReportReadAnchor,
 }: ChatTranscriptViewportProps) {
   const { scrollToEnd, scrollToMessage } = useMessageScroller()
-  const { currentAnchorId, visibleMessageIds } = useMessageScrollerVisibility()
+  const { visibleMessageIds } = useMessageScrollerVisibility()
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
@@ -189,7 +189,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   }, [listRef, scrollToEnd])
 
   const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
-  const rowsById = useMemo(() => new Map(resolvedRows.map((row) => [row.id, row])), [resolvedRows])
   const rowIndexByRowId = useMemo(
     () => new Map(resolvedRows.map((row, index) => [row.id, index])),
     [resolvedRows]
@@ -307,21 +306,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
    * a coordinate space that already accounts for the sticky header — so it is
    * exactly "the message at the top of the screen".
    */
-  const reportTopVisibleMessage = useCallback((isAtEnd: boolean) => {
-    if (!onReportReadAnchor) return
-    // Never let a programmatic scroll move the stored position.
-    if (!hasUserScrolledRef.current) return
-
-    const row = currentAnchorId === null ? undefined : rowsById.get(currentAnchorId)
-    if (!row) return
-
-    const messageId = getRowAnchorMessageId(row)
-    // Optimistic ids are client-local and will not resolve on another device.
-    if (!messageId || isOptimisticMessageId(messageId)) return
-
-    onReportReadAnchor(messageId, isAtEnd)
-  }, [currentAnchorId, onReportReadAnchor, rowsById])
-
   /**
    * Which rows are on screen, as the scroller observes them.
    *
@@ -340,6 +324,23 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     }
     return Number.isFinite(start) ? { start, end } : null
   }, [rowIndexByRowId, visibleMessageIds])
+
+  const reportTopVisibleMessage = useCallback((isAtEnd: boolean) => {
+    if (!onReportReadAnchor) return
+    // Never let a programmatic scroll move the stored position.
+    if (!hasUserScrolledRef.current) return
+
+    // The topmost row actually on screen — not the scroller's own anchor, which
+    // marks turn starts and so is far coarser than a read position wants.
+    const row = visibleRowRange === null ? undefined : resolvedRowsRef.current[visibleRowRange.start]
+    if (!row) return
+
+    const messageId = getRowAnchorMessageId(row)
+    // Optimistic ids are client-local and will not resolve on another device.
+    if (!messageId || isOptimisticMessageId(messageId)) return
+
+    onReportReadAnchor(messageId, isAtEnd)
+  }, [onReportReadAnchor, visibleRowRange])
 
   const handleScroll = useCallback(() => {
     const scrollNode = viewportRef.current
