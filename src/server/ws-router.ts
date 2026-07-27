@@ -506,6 +506,11 @@ export function createWsRouter({
     if (topic.type !== "chat") return
     const span = topic.cachedSpan
     if (!span || span.end <= 0 || span.start < 0 || span.start > span.end) return
+    // A client can hold a cache for a chat this machine has since pruned.
+    // Reading it would throw, and this runs outside the command try/catch on a
+    // handler nobody awaits — so an unhandled rejection rather than the empty
+    // snapshot the client is meant to get.
+    if (!store.getChat(topic.chatId)) return
     // Populates the transcript cache as a side effect, which is what makes the
     // boundary entry visible to `getEntryIdAt`.
     store.getClientTranscript(topic.chatId)

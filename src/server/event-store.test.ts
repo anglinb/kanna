@@ -1049,3 +1049,31 @@ describe("on-demand tool payloads", () => {
     expect(store.getEntriesById(chat.id, [])).toEqual([])
   })
 })
+
+describe("stale empty chat pruning", () => {
+  test("keeps a cached chat that actually has messages", async () => {
+    // The prune sweep only deletes chats it believes are empty. `hasMessages`
+    // can be stale — it is metadata, repaired by peeking at the transcript —
+    // so a chat with entries must survive, transcript and all.
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "prune")
+    const chat = await store.createChat(project.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 1, { content: "hello" }))
+
+    // Warm the LRU, then mimic the metadata having been lost.
+    store.getClientTranscript(chat.id)
+    const record = store.getChat(chat.id)!
+    record.hasMessages = false
+    record.createdAt = Date.now() - 60 * 60 * 1000
+
+    const pruned = await store.pruneStaleEmptyChats({ activeChatIds: new Set(), protectedChatIds: new Set() })
+
+    expect(pruned).not.toContain(chat.id)
+    expect(store.getChat(chat.id)).not.toBeNull()
+    expect(store.getMessages(chat.id)).toHaveLength(1)
+    // And the repair happened rather than merely being skipped.
+    expect(store.getChat(chat.id)?.hasMessages).toBe(true)
+  })
+})

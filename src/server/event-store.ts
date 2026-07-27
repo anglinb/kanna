@@ -164,15 +164,7 @@ export class EventStore {
   // Small LRU of hot transcripts. One slot used to thrash badly: any read of
   // another chat (board view, prune sweep) evicted the actively streaming
   // chat, forcing a synchronous full-file re-read on its next event.
-  //
-  // An entry may hold only a *suffix* of the transcript — rendering a chat
-  // needs the last few hundred entries, not all of them, and parsing a 24MB
-  // file to serve 0.3MB was the bulk of a cold chat open. `startIndex` is the
-  // absolute index of `entries[0]`, so history cursors stay absolute and
-  // appends can extend a suffix in place.
   private readonly transcriptCache = new Map<string, TranscriptEntry[]>()
-  /** Entry count per transcript, keyed by the file size it was measured at. */
-  private readonly transcriptEntryCounts = new Map<string, { size: number; count: number }>()
   private static readonly TRANSCRIPT_CACHE_LIMIT = 8
   /**
    * Fired after a turn reaches a terminal state — the same three events that
@@ -332,7 +324,6 @@ export class EventStore {
     this.sidebarProjectOrder = []
     this.legacySidebarProjectOrder = []
     this.transcriptCache.clear()
-    this.transcriptEntryCounts.clear()
   }
 
   private clearLegacyTranscriptState() {
@@ -1064,7 +1055,7 @@ export class EventStore {
       if (chat.hasMessages) continue
       // Peek without inserting into the transcript cache — the prune sweep
       // must not evict actively streaming chats.
-      const entries = this.transcriptCache.get(chat.id)?.entries
+      const entries = this.transcriptCache.get(chat.id)
         ?? this.legacyMessagesByChatId.get(chat.id)
         ?? this.loadTranscriptFromDisk(chat.id)
       if (entries.length > 0) {
@@ -1083,7 +1074,6 @@ export class EventStore {
       const transcriptPath = this.transcriptPath(chat.id)
       await rm(transcriptPath, { force: true })
       this.transcriptCache.delete(chat.id)
-      this.transcriptEntryCounts.delete(chat.id)
 
       prunedChatIds.push(chat.id)
     }
@@ -1189,7 +1179,6 @@ export class EventStore {
       const transcriptPath = this.transcriptPath(chat.id)
       await rm(transcriptPath, { force: true })
       this.transcriptCache.delete(chat.id)
-      this.transcriptEntryCounts.delete(chat.id)
 
       deletedChatIds.push(chat.id)
     }
@@ -1679,7 +1668,6 @@ export class EventStore {
     this.clearLegacyTranscriptState()
     await this.compact()
     this.transcriptCache.clear()
-    this.transcriptEntryCounts.clear()
     onProgress?.(`${LOG_PREFIX} transcript migration complete`)
     return true
   }
