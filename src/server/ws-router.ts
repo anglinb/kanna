@@ -31,8 +31,6 @@ import type {
   UsageLimitsSnapshot,
 } from "../shared/types"
 
-const DEFAULT_CHAT_RECENT_LIMIT = 200
-
 
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
@@ -413,15 +411,16 @@ export function createWsRouter({
           agent.getActiveStatuses(),
           agent.getDrainingChatIds(),
           topic.chatId,
-          (chatId) => store.getRecentChatHistory(chatId, topic.recentLimit ?? DEFAULT_CHAT_RECENT_LIMIT)
+          (chatId) => store.getRecentChatHistory(chatId, topic.recentLimit)
         ),
       },
     }
   }
 
   function getChatSnapshotJson(chatId: string, recentLimit: number | undefined, cache?: SnapshotComputationCache) {
-    const limit = recentLimit ?? DEFAULT_CHAT_RECENT_LIMIT
-    const key = `${chatId}:${limit}`
+    // An absent limit means "size the window to reach the read anchor" — a
+    // distinct cache key from any explicit limit.
+    const key = `${chatId}:${recentLimit ?? "auto"}`
     const existing = cache?.chat?.get(key)
     if (existing !== undefined) {
       return existing
@@ -431,7 +430,7 @@ export function createWsRouter({
       agent.getActiveStatuses(),
       agent.getDrainingChatIds(),
       chatId,
-      (id) => store.getRecentChatHistory(id, limit)
+      (id) => store.getRecentChatHistory(id, recentLimit)
     )
     const snapshotJson = JSON.stringify({ type: "chat", data })
     if (cache) {
@@ -1146,6 +1145,11 @@ export function createWsRouter({
         }
         case "chat.getReadAnchor": {
           const result = store.getChatReadAnchor(command.chatId)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "chat.getEntryDebugRaw": {
+          const result = store.getEntryDebugRaw(command.chatId, command.entryId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }

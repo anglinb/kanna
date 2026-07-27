@@ -1419,6 +1419,16 @@ export interface ToolResultEntry extends TranscriptEntryBase {
   toolId: string
   content: unknown
   isError?: boolean
+  /**
+   * `tool_use_result` lifted out of the provider's raw payload, present only
+   * for the tool kinds that need it (`ask_user_question`, `exit_plan_mode`).
+   *
+   * Derived server-side when a page is built so the client never receives
+   * `debugRaw` — which is the whole raw provider message and duplicates
+   * `content`, accounting for ~66% of a typical chat snapshot. Not persisted;
+   * `debugRaw` remains on disk and is fetched on demand by the raw JSON view.
+   */
+  structuredResult?: unknown
 }
 
 export interface UserPromptEntry extends TranscriptEntryBase {
@@ -1737,6 +1747,17 @@ export interface HydratedToolCallBase<TKind extends string, TInput, TResult> {
   result?: TResult
   rawResult?: unknown
   isError?: boolean
+  /**
+   * `_id` of the `tool_result` entry this row's result was hydrated from, or
+   * undefined while the call is still pending.
+   *
+   * Transcript entries are append-only and immutable, so this plus the row's
+   * own `id` (the `tool_call` entry) pins `input`/`result`/`rawResult` exactly.
+   * Equality checks compare these ids instead of deep-comparing the payloads —
+   * the results carry megabytes of tool output and the comparison runs per row
+   * on every snapshot push.
+   */
+  resultEntryId?: string
   timestamp: string
 }
 
@@ -1840,12 +1861,34 @@ export interface ChatHistorySnapshot {
   recentLimit: number
 }
 
+/** Default number of recent entries in a chat snapshot. */
+export const CHAT_RECENT_LIMIT_DEFAULT = 200
+
+/**
+ * Ceiling on auto-widening the window to reach a read anchor. Past this the
+ * payload gets unreasonable and the client restores to the latest user message
+ * instead.
+ */
+export const CHAT_RECENT_LIMIT_MAX = 2000
+
+/** Extra entries kept beyond a read anchor so there is context above it. */
+export const CHAT_READ_ANCHOR_PADDING = 50
+
 export interface ChatSnapshot {
   runtime: ChatRuntime
   queuedMessages: QueuedChatMessage[]
   messages: TranscriptEntry[]
   history: ChatHistorySnapshot
   availableProviders: ProviderCatalogEntry[]
+  /**
+   * The stored read position, resolved against this snapshot's window.
+   *
+   * Carried inline so opening a chat is a single round trip: the server sizes
+   * the window to cover the anchor rather than the client probing for it and
+   * then re-subscribing at a wider limit (which fetched the transcript twice).
+   * Null when nothing is stored or the anchor is out of reach.
+   */
+  readAnchor: ResolvedChatReadAnchor | null
 }
 
 export interface ChatHistoryPage {

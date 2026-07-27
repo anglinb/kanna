@@ -1,4 +1,4 @@
-import { useState, useMemo, type ReactNode } from "react"
+import { useEffect, useState, useMemo, type ReactNode } from "react"
 import { ArrowRightLeft, ChevronRight, RotateCw, Slash, UserRound } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import type { ProcessedSystemMessage } from "./types"
@@ -7,6 +7,7 @@ import { PROVIDER_ICONS } from "../chat-ui/ChatPreferenceControls"
 import { MetaRow, MetaLabel, MetaText, MetaPill, ExpandableRow, VerticalLineContainer, toolIcons, defaultToolIcon, getToolIcon } from "./shared"
 import { toTitleCase } from "../../lib/formatters"
 import { cn } from "../../lib/utils"
+import { useTranscriptRenderOptions } from "./render-context"
 
 export interface SessionHandoff {
   fromProvider: AgentProvider
@@ -171,8 +172,38 @@ function McpServerSection({ servers }: { servers: McpServerWithTools[] }) {
   )
 }
 
-function RawMessageSection({ rawJson }: { rawJson: string }) {
+/**
+ * `rawJson` is used when the host already has the payload inline (export
+ * bundles); otherwise it is fetched on first expand, since live snapshots omit
+ * `debugRaw`.
+ */
+function RawMessageSection({ rawJson, entryId }: { rawJson?: string; entryId: string }) {
+  const { loadEntryDebugRaw } = useTranscriptRenderOptions()
   const [open, setOpen] = useState(false)
+  const [loaded, setLoaded] = useState<string | null>(null)
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle")
+
+  useEffect(() => {
+    if (!open || rawJson !== undefined || loaded !== null || state !== "idle") return
+    if (!loadEntryDebugRaw) return
+    let cancelled = false
+    setState("loading")
+    void loadEntryDebugRaw(entryId)
+      .then((value) => {
+        if (cancelled) return
+        setLoaded(value ?? "")
+        setState("idle")
+      })
+      .catch(() => {
+        if (!cancelled) setState("error")
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, rawJson, loaded, state, loadEntryDebugRaw, entryId])
+
+  const body = rawJson ?? loaded
+
   return (
     <div className="flex flex-col gap-1.5">
       <button onClick={() => setOpen(!open)} className="flex items-center gap-1 cursor-pointer group/section hover:opacity-60 transition-opacity">
@@ -181,7 +212,9 @@ function RawMessageSection({ rawJson }: { rawJson: string }) {
       </button>
       {open && (
         <pre className="ml-5 text-xs whitespace-pre-wrap break-all border border-border rounded-md p-3 overflow-x-auto max-h-96 overflow-y-auto">
-          {rawJson}
+          {state === "loading" && body === null ? "Loading…" : null}
+          {state === "error" ? "Failed to load raw message." : null}
+          {state !== "error" ? body : null}
         </pre>
       )}
     </div>
@@ -191,6 +224,7 @@ function RawMessageSection({ rawJson }: { rawJson: string }) {
 export function SystemMessage({ message, rawJson, modelChanged, handoff, restored }: Props) {
   const iconProvider = handoff?.toProvider ?? message.provider
   const ProviderIcon = PROVIDER_ICONS[iconProvider]
+  const { loadEntryDebugRaw } = useTranscriptRenderOptions()
   const { coreTools, mcpServersWithTools } = useMemo(() => {
     const mcpToolsByServer = new Map<string, string[]>()
     const core: string[] = []
@@ -232,7 +266,11 @@ export function SystemMessage({ message, rawJson, modelChanged, handoff, restore
               <PillSection title="Agents" items={message.agents} icon={UserRound} />
               <PillSection title="Commands" items={message.slashCommands} icon={Slash} />
               <McpServerSection servers={mcpServersWithTools} />
-              {rawJson && <RawMessageSection rawJson={rawJson} />}
+              {/* Inline payload (export bundles) or a loader (live snapshots,
+                  which omit debugRaw); nothing to show without either. */}
+              {(rawJson !== undefined || loadEntryDebugRaw) && (
+                <RawMessageSection rawJson={rawJson} entryId={message.id} />
+              )}
             </div>
           </VerticalLineContainer>
         }

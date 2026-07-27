@@ -28,7 +28,15 @@ function hydrateToolCall(entry: Extract<TranscriptEntry, { kind: "tool_call" }>)
   } as HydratedToolCall
 }
 
-function getStructuredToolResultFromDebug(entry: Extract<TranscriptEntry, { kind: "tool_result" }>): unknown {
+/**
+ * The structured result for the two tool kinds that need it.
+ *
+ * `structuredResult` is lifted server-side out of `debugRaw`. The `debugRaw`
+ * fallback covers entries served by an older server that still shipped the raw
+ * payload inline.
+ */
+function getStructuredToolResult(entry: Extract<TranscriptEntry, { kind: "tool_result" }>): unknown {
+  if (entry.structuredResult !== undefined) return entry.structuredResult
   if (!entry.debugRaw) return undefined
 
   try {
@@ -94,12 +102,13 @@ export function processTranscriptMessages(entries: TranscriptEntry[]): HydratedT
             pendingCall.normalized.toolKind === "ask_user_question" ||
             pendingCall.normalized.toolKind === "exit_plan_mode"
           )
-            ? getStructuredToolResultFromDebug(entry) ?? entry.content
+            ? getStructuredToolResult(entry) ?? entry.content
             : entry.content
 
           pendingCall.hydrated.result = hydrateToolResult(pendingCall.normalized, rawResult) as never
           pendingCall.hydrated.rawResult = rawResult
           pendingCall.hydrated.isError = entry.isError
+          pendingCall.hydrated.resultEntryId = entry._id
         }
         break
       }

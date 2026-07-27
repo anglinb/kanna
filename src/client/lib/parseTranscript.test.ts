@@ -185,8 +185,13 @@ describe("processTranscriptMessages", () => {
   // system_init and tool_result entries (agent.ts), but transcripts written
   // before that trim stamp it on every entry. Both must hydrate identically.
   test("hydrates trimmed-format and legacy fully-stamped transcripts identically", () => {
+    // `resultEntryId` points at the tool_result entry, whose `_id` is
+    // generated per fixture, so it varies between the two shapes by design.
     const stripIds = (messages: ReturnType<typeof processTranscriptMessages>) =>
-      messages.map(({ id, timestamp, ...rest }) => rest)
+      messages.map(({ id, timestamp, ...rest }) => {
+        const { resultEntryId, ...withoutResultEntryId } = rest as typeof rest & { resultEntryId?: string }
+        return withoutResultEntryId
+      })
 
     const baseEntries: Array<Omit<TranscriptEntry, "_id" | "createdAt">> = [
       {

@@ -31,6 +31,7 @@ import { getNextMeasuredInputHeight, getTranscriptPaddingBottom } from "../useKa
 import { ChatInputDock } from "./ChatInputDock"
 import { DefaultModelsDialog } from "../../components/DefaultModelsDialog"
 import { ChatTranscriptViewport } from "./ChatTranscriptViewport"
+import { TranscriptRenderOptionsProvider } from "../../components/messages/render-context"
 import { TerminalWorkspaceShell } from "./TerminalWorkspaceShell"
 import { useChatPageSidebarActions, EMPTY_DIFF_SNAPSHOT } from "./useChatPageSidebarActions"
 import {
@@ -775,6 +776,22 @@ export function ChatPage() {
     [state.socket, state.activeChatId, projectId]
   )
 
+  // Snapshots omit `debugRaw` (it duplicates `content` and dominated the
+  // payload), so the raw JSON view pulls one entry's payload when expanded.
+  const loadEntryDebugRaw = useCallback(
+    async (entryId: string) => {
+      if (!state.activeChatId) return null
+      return await state.socket.command<string | null>({
+        type: "chat.getEntryDebugRaw",
+        chatId: state.activeChatId,
+        entryId,
+      })
+    },
+    [state.socket, state.activeChatId]
+  )
+
+  const transcriptRenderOptions = useMemo(() => ({ loadEntryDebugRaw }), [loadEntryDebugRaw])
+
   useEffect(() => {
     return () => clearShowScrollTimeout()
   }, [clearShowScrollTimeout])
@@ -958,6 +975,7 @@ export function ChatPage() {
           hasGitRepo={state.chatDiffSnapshot?.status !== "no_repo"}
           gitStatus={state.chatDiffSnapshot?.status}
         />
+        <TranscriptRenderOptionsProvider value={transcriptRenderOptions}>
         <ChatTranscriptViewport
           activeChatId={state.activeChatId}
           listRef={transcriptListRef}
@@ -995,6 +1013,7 @@ export function ChatPage() {
           emptyStateProjectPath={state.navbarLocalPath}
           onOpenProjectExternal={handleOpenExternal}
         />
+        </TranscriptRenderOptionsProvider>
       </CardContent>
 
       <ChatInputDock

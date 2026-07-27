@@ -238,3 +238,47 @@ export function createEmptyState(): StoreState {
 export function cloneTranscriptEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
   return entries.map((entry) => ({ ...entry }))
 }
+
+/** Tool kinds whose rendered result comes from `tool_use_result`, not `content`. */
+const STRUCTURED_RESULT_TOOL_KINDS = new Set(["ask_user_question", "exit_plan_mode"])
+
+/**
+ * Clone a page of entries for the wire, dropping `debugRaw`.
+ *
+ * `debugRaw` is the provider's whole raw message and duplicates `content`; it
+ * measured at ~66% of a typical chat snapshot, and the snapshot is re-sent on
+ * every streamed delta. The client reads it in only two places, both handled
+ * here or on demand:
+ *
+ * - `ask_user_question` / `exit_plan_mode` need `tool_use_result`, so it is
+ *   lifted into `structuredResult` (a few hundred bytes) for those two kinds.
+ * - The raw JSON debug view fetches the original via `chat.getEntryDebugRaw`.
+ *
+ * A tool_result whose tool_call falls outside this page is left alone: the
+ * client only attaches results to calls it saw in the same pass, so that row
+ * never renders as a tool row anyway.
+ */
+export function cloneTranscriptEntriesForClient(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const structuredToolIds = new Set<string>()
+  for (const entry of entries) {
+    if (entry.kind === "tool_call" && STRUCTURED_RESULT_TOOL_KINDS.has(entry.tool.toolKind)) {
+      structuredToolIds.add(entry.tool.toolId)
+    }
+  }
+
+  return entries.map((entry) => {
+    const { debugRaw, ...rest } = entry
+    if (debugRaw === undefined) return rest as TranscriptEntry
+    if (rest.kind !== "tool_result" || !structuredToolIds.has(rest.toolId)) {
+      return rest as TranscriptEntry
+    }
+    try {
+      const parsed = JSON.parse(debugRaw) as { tool_use_result?: unknown }
+      if (parsed.tool_use_result === undefined) return rest as TranscriptEntry
+      return { ...rest, structuredResult: parsed.tool_use_result } as TranscriptEntry
+    } catch {
+      // Corrupt debugRaw is not worth failing a page render over.
+      return rest as TranscriptEntry
+    }
+  })
+}

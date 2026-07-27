@@ -159,6 +159,12 @@ export type ClientCommand =
   | { type: "chat.setReadAnchor"; chatId: string; messageId: string; atEnd: boolean }
   /** Read back the stored anchor when opening a chat. Result: ResolvedChatReadAnchor | null. */
   | { type: "chat.getReadAnchor"; chatId: string }
+  /**
+   * Fetch one entry's raw provider payload. Snapshots omit `debugRaw` because
+   * it duplicates `content` and dominates the transcript payload, so the raw
+   * JSON debug view pulls it on demand when opened.
+   */
+  | { type: "chat.getEntryDebugRaw"; chatId: string; entryId: string }
   | {
       type: "chat.send"
       chatId?: string

@@ -339,9 +339,12 @@ function sameMessage(left: HydratedTranscriptMessage, right: HydratedTranscriptM
         && left.toolName === right.toolName
         && left.toolId === right.toolId
         && left.isError === right.isError
-        && JSON.stringify(left.input) === JSON.stringify(right.input)
-        && JSON.stringify(left.result) === JSON.stringify(right.result)
-        && JSON.stringify(left.rawResult) === JSON.stringify(right.rawResult)
+        // `left.id` (compared above) pins the tool_call entry and therefore
+        // `input`; `resultEntryId` pins the tool_result entry and therefore
+        // `result`/`rawResult`. Both entries are immutable once written, so
+        // this is exact — and O(1) rather than stringifying every tool result
+        // in the window on each snapshot push.
+        && left.resultEntryId === right.resultEntryId
     case "result":
       return right.kind === "result"
         && left.success === right.success

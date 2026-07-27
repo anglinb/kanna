@@ -329,14 +329,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleValidateLlmProvider,
   } = useAppSettingsSync({ socket, connectionStatus, setCommandError })
 
-  // Declared before the chat subscription so a widened window (an anchor that
-  // predates the default recent page) is available when the subscription runs.
-  const {
-    anchorState: readAnchorState,
-    recentLimit: chatRecentLimit,
-    reportReadAnchor,
-  } = useChatReadAnchor(socket, activeChatId)
-
   useEffect(() => {
     if (!activeChatId) {
       setChatSnapshot(null)
@@ -346,7 +338,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
     setChatSnapshot(null)
     setChatReady(false)
-    const unsubscribe = socket.subscribe<ChatSnapshot | null>({ type: "chat", chatId: activeChatId, recentLimit: chatRecentLimit }, (snapshot) => {
+    // No `recentLimit`: the server sizes the window to reach the stored read
+    // anchor and returns it inline. Passing one here would re-subscribe (and
+    // re-send the whole transcript) once the anchor resolved.
+    const unsubscribe = socket.subscribe<ChatSnapshot | null>({ type: "chat", chatId: activeChatId }, (snapshot) => {
       setChatSnapshot((current) => (sameChatSnapshotCore(current, snapshot) ? current : snapshot))
       setHistoryCursor(snapshot?.history.olderCursor ?? null)
       setHasOlderHistory(snapshot?.history.hasOlder ?? false)
@@ -354,7 +349,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
       setCommandError(null)
     })
     return unsubscribe
-  }, [activeChatId, chatRecentLimit, socket])
+  }, [activeChatId, socket])
 
   useEffect(() => {
     if (selectedProjectId) return
@@ -427,6 +422,14 @@ export function useKannaState(activeChatId: string | null): KannaState {
     () => getActiveChatSnapshot(chatSnapshot, activeChatId),
     [activeChatId, chatSnapshot]
   )
+
+  // Reads the anchor off the snapshot (the server resolves it against the
+  // window it chose) and owns the throttled write-back.
+  const {
+    anchorState: readAnchorState,
+    reportReadAnchor,
+  } = useChatReadAnchor(socket, activeChatId, activeChatSnapshot?.readAnchor, chatReady)
+
   const activeProjectId = useMemo(
     () => activeChatSnapshot?.runtime.projectId
       ?? getProjectIdForChat(sidebarProjectGroups, activeChatId)
