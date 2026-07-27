@@ -26,6 +26,7 @@ import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
 import { deriveChatSnapshot, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
 import type {
+  ChatSnapshot,
   LlmProviderSnapshot,
   LlmProviderValidationResult,
   UsageLimitsSnapshot,
@@ -35,6 +36,13 @@ import type {
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
   snapshotSignatures: Map<string, string>
+  /**
+   * Absolute transcript span last sent per chat subscription, so the next push
+   * can carry only the entries past it. Reset whenever the subscription is
+   * (re)created, which is also what makes reconnect safe: a fresh id has no
+   * span and therefore gets a full window.
+   */
+  chatEntrySpans?: Map<string, { start: number; end: number }>
   protectedDraftChatIds?: Set<string>
 }
 
@@ -90,8 +98,15 @@ interface SnapshotComputationCache {
     data: ReturnType<typeof deriveSidebarData>
     signature: string
   }
-  /** Serialized chat snapshots keyed by `chatId:recentLimit`, shared across sockets in one broadcast. */
-  chat?: Map<string, string>
+  /**
+   * Derived chat snapshots keyed by `chatId:recentLimit`, shared across sockets
+   * in one broadcast.
+   *
+   * The derive is shared but the serialization is not: each socket is at its
+   * own point in the transcript, so the body it needs differs. Deriving once
+   * is the expensive half; serializing an incremental body is cheap.
+   */
+  chat?: Map<string, ChatSnapshot | null>
 }
 
 function send(ws: ServerWebSocket<ClientState>, message: ServerEnvelope) {
@@ -106,6 +121,14 @@ function send(ws: ServerWebSocket<ClientState>, message: ServerEnvelope) {
  */
 function sendSerializedSnapshot(ws: ServerWebSocket<ClientState>, id: string, snapshotJson: string) {
   ws.send(`{"v":${PROTOCOL_VERSION},"type":"snapshot","id":${JSON.stringify(id)},"snapshot":${snapshotJson}}`)
+}
+
+function ensureChatEntrySpans(ws: ServerWebSocket<ClientState>) {
+  if (!ws.data.chatEntrySpans) {
+    ws.data.chatEntrySpans = new Map()
+  }
+
+  return ws.data.chatEntrySpans
 }
 
 function ensureSnapshotSignatures(ws: ServerWebSocket<ClientState>) {
@@ -221,7 +244,7 @@ export function createWsRouter({
     if (topic.type === "provider-auth") {
       return Boolean(filter.includeProviderAuth)
     }
-    if (topic.type === "chat") {
+    if (topic.type === "chat" || topic.type === "chat-turns") {
       return filter.chatIds?.has(topic.chatId) ?? false
     }
     if (topic.type === "project-git") {
@@ -400,6 +423,24 @@ export function createWsRouter({
       }
     }
 
+    // Its own topic rather than a field on the chat snapshot: that snapshot is
+    // re-derived and re-serialized on every streamed delta, while the turn
+    // index only moves when a turn starts or ends. On this topic the generic
+    // signature dedupe collapses the rest into no-ops.
+    if (topic.type === "chat-turns") {
+      return {
+        v: PROTOCOL_VERSION,
+        type: "snapshot",
+        id,
+        snapshot: {
+          type: "chat-turns",
+          data: store.getChat(topic.chatId)
+            ? { chatId: topic.chatId, turns: store.getChatTurnIndex(topic.chatId) }
+            : null,
+        },
+      }
+    }
+
     return {
       v: PROTOCOL_VERSION,
       type: "snapshot",
@@ -417,7 +458,7 @@ export function createWsRouter({
     }
   }
 
-  function getChatSnapshotJson(chatId: string, recentLimit: number | undefined, cache?: SnapshotComputationCache) {
+  function getChatSnapshotData(chatId: string, recentLimit: number | undefined, cache?: SnapshotComputationCache) {
     // An absent limit means "size the window to reach the read anchor" — a
     // distinct cache key from any explicit limit.
     const key = `${chatId}:${recentLimit ?? "auto"}`
@@ -432,11 +473,33 @@ export function createWsRouter({
       chatId,
       (id) => store.getRecentChatHistory(id, recentLimit)
     )
-    const snapshotJson = JSON.stringify({ type: "chat", data })
     if (cache) {
-      (cache.chat ??= new Map()).set(key, snapshotJson)
+      (cache.chat ??= new Map()).set(key, data)
     }
-    return snapshotJson
+    return data
+  }
+
+  /**
+   * Narrow a chat snapshot to the entries a socket has not seen.
+   *
+   * Only contiguous forward movement qualifies. If the window slid backwards
+   * (a widened read-anchor window) or forwards past the socket's position (a
+   * missed push), the client would end up with a hole it cannot detect, so the
+   * full window is sent instead.
+   */
+  function toSocketChatSnapshot(data: ChatSnapshot | null, previous: { start: number; end: number } | undefined) {
+    if (!data || !previous) return data
+    const end = data.startIndex + data.messages.length
+    const isContiguous = data.startIndex >= previous.start
+      && data.startIndex <= previous.end
+      && previous.end <= end
+    if (!isContiguous) return data
+    return {
+      ...data,
+      messages: data.messages.slice(previous.end - data.startIndex),
+      startIndex: previous.end,
+      incremental: true,
+    }
   }
 
   async function pushSnapshots(
@@ -465,11 +528,20 @@ export function createWsRouter({
         continue
       }
       if (topic.type === "chat") {
-        const snapshotJson = getChatSnapshotJson(topic.chatId, topic.recentLimit, options?.cache)
+        const data = getChatSnapshotData(topic.chatId, topic.recentLimit, options?.cache)
+        const spans = ensureChatEntrySpans(ws)
+        const snapshotJson = JSON.stringify({ type: "chat", data: toSocketChatSnapshot(data, spans.get(id)) })
         if (snapshotSignatures.get(id) === snapshotJson) {
           continue
         }
         snapshotSignatures.set(id, snapshotJson)
+        // Record the full span, not the slice that went out — it is what this
+        // socket now holds, and what the next push measures against.
+        if (data) {
+          spans.set(id, { start: data.startIndex, end: data.startIndex + data.messages.length })
+        } else {
+          spans.delete(id)
+        }
         sendSerializedSnapshot(ws, id, snapshotJson)
         continue
       }
@@ -1456,6 +1528,8 @@ export function createWsRouter({
         const snapshotSignatures = ensureSnapshotSignatures(ws)
         ws.data.subscriptions.set(parsed.id, parsed.topic)
         snapshotSignatures.delete(parsed.id)
+        // A (re)subscribe starts from nothing, so the next push sends a full window.
+        ws.data.chatEntrySpans?.delete(parsed.id)
         if (parsed.topic.type === "local-projects") {
           void refreshDiscovery().then(() => {
             if (ws.data.subscriptions.has(parsed.id)) {
@@ -1482,6 +1556,8 @@ export function createWsRouter({
         const snapshotSignatures = ensureSnapshotSignatures(ws)
         ws.data.subscriptions.delete(parsed.id)
         snapshotSignatures.delete(parsed.id)
+        // A (re)subscribe starts from nothing, so the next push sends a full window.
+        ws.data.chatEntrySpans?.delete(parsed.id)
         send(ws, { v: PROTOCOL_VERSION, type: "ack", id: parsed.id })
         return
       }

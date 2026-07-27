@@ -1,3 +1,4 @@
+import type { ChatTurnSummary } from "../../../shared/types"
 import type { ResolvedTranscriptRow } from "../KannaTranscript"
 
 /**
@@ -9,10 +10,13 @@ import type { ResolvedTranscriptRow } from "../KannaTranscript"
 export interface TranscriptTurn {
   /** Message id of the user prompt that opens the turn. */
   id: string
-  /** Row index of the user prompt, used as the scroll target. */
-  rowIndex: number
-  /** Last row belonging to this turn, inclusive. */
-  endRowIndex: number
+  /**
+   * Row index of the user prompt, or null when the turn is outside the loaded
+   * window — the map covers the whole transcript, the row list does not.
+   */
+  rowIndex: number | null
+  /** Last row belonging to this turn, inclusive. Null alongside `rowIndex`. */
+  endRowIndex: number | null
   /** The user's question. */
   prompt: string
   /** The turn's final assistant message, if it has produced one yet. */
@@ -107,7 +111,8 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
   }
 
   const last = turns[turns.length - 1]
-  if (last) last.endRowIndex = Math.max(last.rowIndex, rows.length - 1)
+  // Always a number here: every turn this function creates carries a row span.
+  if (last) last.endRowIndex = Math.max(last.rowIndex ?? 0, rows.length - 1)
 
   return turns
 }
@@ -120,7 +125,53 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
  * the whole viewport with neither of its edges inside it.
  */
 export function isTurnInView(turn: TranscriptTurn, visibleStart: number, visibleEnd: number): boolean {
+  // A turn outside the loaded window cannot be on screen by definition.
+  if (turn.rowIndex === null || turn.endRowIndex === null) return false
   return turn.rowIndex <= visibleEnd && turn.endRowIndex >= visibleStart
+}
+
+/**
+ * Overlay the loaded rows onto the server's whole-transcript index.
+ *
+ * The index decides which turns exist and in what order — it sees the entire
+ * chat, while the client holds only a recent window. Loaded turns supersede
+ * their summary where they overlap, because they carry row spans (so the tick
+ * can light up and be scrolled to) and untruncated text.
+ */
+export function mergeTurnIndex(
+  indexedTurns: ChatTurnSummary[],
+  loadedTurns: TranscriptTurn[],
+): TranscriptTurn[] {
+  if (indexedTurns.length === 0) return loadedTurns
+
+  const loadedById = new Map(loadedTurns.map((turn) => [turn.id, turn]))
+  const merged = indexedTurns.map((summary) => loadedById.get(summary.id) ?? {
+    id: summary.id,
+    rowIndex: null,
+    endRowIndex: null,
+    prompt: summary.prompt,
+    response: summary.response,
+    error: summary.error,
+    timestamp: new Date(summary.createdAt).toISOString(),
+    durationMs: summary.durationMs,
+  })
+
+  // An optimistic prompt exists only on the client until the server echoes it,
+  // so the newest turn is routinely absent from the index. Take only the tail
+  // past the last turn the index knows about — anything earlier that it does
+  // not know is older than the index reaches, and appending it here would put
+  // it out of order.
+  const indexedIds = new Set(indexedTurns.map((summary) => summary.id))
+  let lastKnown = -1
+  loadedTurns.forEach((turn, position) => {
+    if (indexedIds.has(turn.id)) lastKnown = position
+  })
+  for (let position = lastKnown + 1; position < loadedTurns.length; position += 1) {
+    const turn = loadedTurns[position]
+    if (turn) merged.push(turn)
+  }
+
+  return merged
 }
 
 /** Row geometry, as read from the virtualized list. */

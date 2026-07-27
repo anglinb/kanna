@@ -20,6 +20,7 @@ import {
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
 import type { ChatReadAnchorState } from "../useChatReadAnchor"
+import type { ChatTurnSummary } from "../../../shared/types"
 import {
   buildRowIndexByMessageId,
   getLatestUserPrompt,
@@ -31,7 +32,7 @@ import {
   type TranscriptScrollTarget,
 } from "./transcriptScrollAnchors"
 import { TranscriptMinimap } from "./TranscriptMinimap"
-import { buildTranscriptTurns, getVisibleRowRange, type TranscriptTurn } from "./transcriptTurns"
+import { buildTranscriptTurns, getVisibleRowRange, mergeTurnIndex, type TranscriptTurn } from "./transcriptTurns"
 import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
@@ -42,6 +43,12 @@ import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../..
 
 /** Max auto-fetched history pages per chat when the list is too short to scroll. */
 const MAX_HISTORY_AUTO_FILL_PAGES = 4
+
+/** Cap on older-history pages fetched to reach a turn clicked in the minimap. */
+const MAX_HISTORY_SEEK_PAGES = 20
+
+/** Stable empty default so the export viewer does not re-merge every render. */
+const EMPTY_TURN_INDEX: ChatTurnSummary[] = []
 
 /**
  * LegendList state changes that can move which rows are on screen.
@@ -75,6 +82,8 @@ interface ChatTranscriptViewportProps {
   isDraining: boolean
   commandError: string | null
   loadOlderHistory: () => Promise<void>
+  /** Whole-transcript turn summaries; the map covers more than the loaded rows. */
+  chatTurnIndex?: ChatTurnSummary[]
   onStopDraining: () => void
   onSteerQueuedMessage: (queuedMessageId: string) => Promise<void>
   onRemoveQueuedMessage: (queuedMessageId: string) => Promise<void>
@@ -117,6 +126,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   isDraining,
   commandError,
   loadOlderHistory,
+  chatTurnIndex = EMPTY_TURN_INDEX,
   onStopDraining,
   onSteerQueuedMessage,
   onRemoveQueuedMessage,
@@ -158,7 +168,11 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   }, [activeChatId])
 
   const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
-  const turns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
+  const loadedTurns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
+  const turns = useMemo(
+    () => mergeTurnIndex(chatTurnIndex, loadedTurns),
+    [chatTurnIndex, loadedTurns],
+  )
 
   /**
    * Rendered row window plus whether the list can scroll at all — together they
@@ -459,12 +473,40 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     scrollToBottom()
   }, [scrollToBottom])
 
+  // Read through refs so the retry loop below sees state from the render that
+  // each history page produced, not the one it started in.
+  const rowIndexByMessageIdRef = useRef(rowIndexByMessageId)
+  rowIndexByMessageIdRef.current = rowIndexByMessageId
+  const loadOlderHistoryRef = useRef(loadOlderHistory)
+  loadOlderHistoryRef.current = loadOlderHistory
+  const hasOlderHistoryRef = useRef(hasOlderHistory)
+  hasOlderHistoryRef.current = hasOlderHistory
+
   // Same reasoning as the scroll-to-bottom button: the minimap sits outside the
   // scroll node, so it never trips the input listeners, but jumping to a turn is
   // as deliberate a read-position choice as scrolling there by hand.
-  const handleSelectTurn = useCallback((turn: TranscriptTurn) => {
+  const handleSelectTurn = useCallback(async (turn: TranscriptTurn) => {
     hasUserScrolledRef.current = true
-    applyScrollTarget({ kind: "pin", index: turn.rowIndex })
+
+    if (turn.rowIndex !== null) {
+      applyScrollTarget({ kind: "pin", index: turn.rowIndex })
+      return
+    }
+
+    // The map covers the whole transcript, so a tick can point at a turn that
+    // has not been paged in. Fetch older pages until its row exists, then jump.
+    for (let attempt = 0; attempt < MAX_HISTORY_SEEK_PAGES; attempt += 1) {
+      const index = rowIndexByMessageIdRef.current.get(turn.id)
+      if (index !== undefined) {
+        applyScrollTarget({ kind: "pin", index })
+        return
+      }
+      if (!hasOlderHistoryRef.current) return
+      await loadOlderHistoryRef.current()
+      // Yield past the microtask queue so React commits the new page and the
+      // refs above point at the widened row list before the next look.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
   }, [applyScrollTarget])
 
   const handleStartReached = useCallback(() => {

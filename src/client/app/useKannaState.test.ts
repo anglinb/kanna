@@ -294,6 +294,7 @@ describe("getActiveChatSnapshot", () => {
       },
       availableProviders: [],
       readAnchor: null,
+      startIndex: 0,
     }
 
     expect(getActiveChatSnapshot(snapshot, "chat-1")).toEqual(snapshot)
@@ -322,6 +323,7 @@ describe("getActiveChatSnapshot", () => {
       },
       availableProviders: [],
       readAnchor: null,
+      startIndex: 0,
     }
 
     expect(getActiveChatSnapshot(snapshot, "chat-new")).toBeNull()

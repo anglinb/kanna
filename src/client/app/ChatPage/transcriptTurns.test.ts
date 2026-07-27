@@ -6,6 +6,7 @@ import {
   getMinimapCapacity,
   getTranscriptGutterWidth,
   isTurnInView,
+  mergeTurnIndex,
   getVisibleRowRange,
   selectVisibleTurns,
   type TranscriptTurn,
@@ -267,6 +268,73 @@ describe("isTurnInView", () => {
   test("includes turns touching the window edges", () => {
     expect(isTurnInView(turn(0, 40), 40, 50)).toBe(true)
     expect(isTurnInView(turn(50, 80), 40, 50)).toBe(true)
+  })
+})
+
+describe("mergeTurnIndex", () => {
+  const summary = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    prompt: `${id} question`,
+    response: `${id} answer`,
+    error: null,
+    createdAt: 1_700_000_000_000,
+    durationMs: null,
+    ...overrides,
+  })
+
+  test("keeps turns the client has not loaded, with no row span", () => {
+    const merged = mergeTurnIndex([summary("p1"), summary("p2")], [])
+
+    expect(merged.map((turn) => turn.id)).toEqual(["p1", "p2"])
+    expect(merged[0]).toMatchObject({ rowIndex: null, endRowIndex: null, prompt: "p1 question" })
+  })
+
+  test("a turn outside the loaded window is never in view", () => {
+    const [unloaded] = mergeTurnIndex([summary("p1")], [])
+    expect(isTurnInView(unloaded!, 0, 999)).toBe(false)
+  })
+
+  test("loaded turns supersede their summary, bringing row spans", () => {
+    const loaded = buildTranscriptTurns([prompt("p2", "full question"), assistant("a1", "full answer")])
+    const merged = mergeTurnIndex([summary("p1"), summary("p2")], loaded)
+
+    expect(merged).toHaveLength(2)
+    expect(merged[0]).toMatchObject({ id: "p1", rowIndex: null })
+    expect(merged[1]).toMatchObject({ id: "p2", rowIndex: 0, endRowIndex: 1, prompt: "full question" })
+  })
+
+  test("converts the summary timestamp to an ISO string", () => {
+    const [turn] = mergeTurnIndex([summary("p1", { createdAt: 1_700_000_000_500 })], [])
+    expect(turn?.timestamp).toBe(new Date(1_700_000_000_500).toISOString())
+  })
+
+  test("carries a failed turn's error through", () => {
+    const [turn] = mergeTurnIndex([summary("p1", { error: "boom", response: null })], [])
+    expect(turn).toMatchObject({ error: "boom", response: null })
+  })
+
+  // An optimistic prompt exists only on the client until the server echoes it.
+  test("appends loaded turns newer than anything the index knows", () => {
+    const loaded = buildTranscriptTurns([
+      prompt("p2", "known"),
+      prompt("optimistic:new", "just sent"),
+    ])
+    const merged = mergeTurnIndex([summary("p1"), summary("p2")], loaded)
+
+    expect(merged.map((turn) => turn.id)).toEqual(["p1", "p2", "optimistic:new"])
+  })
+
+  test("does not append loaded turns older than the index reaches", () => {
+    // p0 predates the index window; appending it would put it out of order.
+    const loaded = buildTranscriptTurns([prompt("p0", "ancient"), prompt("p2", "known")])
+    const merged = mergeTurnIndex([summary("p2")], loaded)
+
+    expect(merged.map((turn) => turn.id)).toEqual(["p2"])
+  })
+
+  test("falls back to the loaded turns when the index is empty", () => {
+    const loaded = buildTranscriptTurns([prompt("p1", "q")])
+    expect(mergeTurnIndex([], loaded)).toBe(loaded)
   })
 })
 

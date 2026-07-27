@@ -8,6 +8,7 @@ import type {
   ChatDiffSnapshot,
   ChatHistoryPage,
   ChatSnapshot,
+  ChatTurnIndexSnapshot,
   DiffCommitMode,
   KeybindingsSnapshot,
   LlmProviderSnapshot,
@@ -54,6 +55,7 @@ export type SubscriptionTopic =
   | { type: "usage-limits" }
   | { type: "provider-auth" }
   | { type: "chat"; chatId: string; recentLimit?: number }
+  | { type: "chat-turns"; chatId: string }
   | { type: "project-git"; projectId: string }
   | { type: "terminal"; terminalId: string }
 
@@ -267,6 +269,7 @@ export type ServerSnapshot =
   | { type: "provider-auth"; data: ProviderAuthSnapshot }
   | { type: "llm-provider"; data: LlmProviderSnapshot }
   | { type: "chat"; data: ChatSnapshot | null }
+  | { type: "chat-turns"; data: ChatTurnIndexSnapshot | null }
   | { type: "project-git"; data: ChatDiffSnapshot | null }
   | { type: "terminal"; data: TerminalSnapshot | null }
 

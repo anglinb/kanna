@@ -7,7 +7,7 @@ import { useRightSidebarStore } from "../stores/rightSidebarStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
 import { getEditorPresetLabel, useTerminalPreferencesStore } from "../stores/terminalPreferencesStore"
 import { useChatInputStore } from "../stores/chatInputStore"
-import type { ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData } from "../../shared/types"
+import type { ChatSnapshot, ChatTurnIndexSnapshot, ChatTurnSummary, LocalProjectsSnapshot, SidebarChatRow, SidebarData } from "../../shared/types"
 import type { AskUserQuestionItem } from "../components/messages/types"
 import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
@@ -30,6 +30,7 @@ import {
   type StartChatIntent,
 } from "./kannaStateHelpers"
 import {
+  applyIncrementalChatSnapshot,
   mergeTranscriptEntries,
   sameChatSnapshotCore,
   sameDiffs,
@@ -137,6 +138,8 @@ export interface KannaState {
   localProjects: LocalProjectsSnapshot | null
   updateSnapshot: UpdateSnapshot | null
   chatSnapshot: ChatSnapshot | null
+  /** Turn summaries for the whole transcript, not just the loaded window. */
+  chatTurnIndex: ChatTurnSummary[]
   /** Server-stored read position for the active chat; drives restore on open. */
   readAnchorState: ChatReadAnchorState
   /** Report the message at the top of the viewport (throttled write). */
@@ -236,6 +239,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const [optimisticSidebarProjectOrder, setOptimisticSidebarProjectOrder] = useState<string[] | null>(null)
   const [localProjects, setLocalProjects] = useState<LocalProjectsSnapshot | null>(null)
   const [chatSnapshot, setChatSnapshot] = useState<ChatSnapshot | null>(null)
+  const [chatTurnIndex, setChatTurnIndex] = useState<ChatTurnSummary[]>([])
   const [olderHistoryEntries, setOlderHistoryEntries] = useState<TranscriptEntry[]>([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
   const [historyCursor, setHistoryCursor] = useState<string | null>(null)
@@ -342,12 +346,39 @@ export function useKannaState(activeChatId: string | null): KannaState {
     // anchor and returns it inline. Passing one here would re-subscribe (and
     // re-send the whole transcript) once the anchor resolved.
     const unsubscribe = socket.subscribe<ChatSnapshot | null>({ type: "chat", chatId: activeChatId }, (snapshot) => {
-      setChatSnapshot((current) => (sameChatSnapshotCore(current, snapshot) ? current : snapshot))
+      setChatSnapshot((current) => {
+        // Incremental bodies carry only the entries added since the last push,
+        // so they splice onto the window rather than replacing it.
+        const next = applyIncrementalChatSnapshot(current, snapshot)
+        if (next === null && snapshot?.incremental) {
+          // Unplaceable body — keep what is on screen rather than render a
+          // transcript with a hole; the next full push repairs it.
+          return current
+        }
+        return sameChatSnapshotCore(current, next) ? current : next
+      })
       setHistoryCursor(snapshot?.history.olderCursor ?? null)
       setHasOlderHistory(snapshot?.history.hasOlder ?? false)
       setChatReady(true)
       setCommandError(null)
     })
+    return unsubscribe
+  }, [activeChatId, socket])
+
+  // Separate from the chat snapshot on purpose: the index covers the whole
+  // transcript, not just the loaded window, so the overview map stays complete
+  // on a cold open where only the last page of messages has arrived.
+  useEffect(() => {
+    if (!activeChatId) {
+      setChatTurnIndex([])
+      return
+    }
+
+    setChatTurnIndex([])
+    const unsubscribe = socket.subscribe<ChatTurnIndexSnapshot | null>(
+      { type: "chat-turns", chatId: activeChatId },
+      (snapshot) => setChatTurnIndex(snapshot?.turns ?? []),
+    )
     return unsubscribe
   }, [activeChatId, socket])
 
@@ -844,6 +875,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     localProjects,
     updateSnapshot,
     chatSnapshot,
+    chatTurnIndex,
     readAnchorState,
     reportReadAnchor,
     chatDiffSnapshot,

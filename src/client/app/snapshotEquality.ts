@@ -147,6 +147,37 @@ export function sameChatSnapshotCore(left: ChatSnapshot | null, right: ChatSnaps
     && sameProviders(left.availableProviders, right.availableProviders)
 }
 
+/**
+ * Fold an incremental chat snapshot into the one already held.
+ *
+ * The server sends only the entries past what this socket last received, so
+ * the body has to be spliced back onto the window at its absolute index. A
+ * snapshot that is not incremental replaces outright.
+ *
+ * Returns null when the incoming body cannot be placed contiguously — the
+ * server's cursor should make that unreachable, but a caller that gets null
+ * must not render a transcript with a hole in it.
+ */
+export function applyIncrementalChatSnapshot(
+  current: ChatSnapshot | null,
+  incoming: ChatSnapshot | null
+): ChatSnapshot | null {
+  if (!incoming?.incremental) return incoming
+  if (!current) return null
+
+  const offset = incoming.startIndex - current.startIndex
+  if (offset < 0 || offset > current.messages.length) return null
+
+  const messages = current.messages.slice(0, offset)
+  messages.push(...incoming.messages)
+  return {
+    ...incoming,
+    messages,
+    startIndex: current.startIndex,
+    incremental: false,
+  }
+}
+
 export function mergeTranscriptEntries(olderHistoryEntries: TranscriptEntry[], recentEntries: TranscriptEntry[]) {
   const deduped = new Map<string, TranscriptEntry>()
   for (const entry of olderHistoryEntries) {

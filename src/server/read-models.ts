@@ -267,7 +267,7 @@ export function deriveChatSnapshot(
   activeStatuses: Map<string, KannaStatus>,
   drainingChatIds: Set<string>,
   chatId: string,
-  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "history" | "readAnchor">
+  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "history" | "readAnchor">
 ): ChatSnapshot | null {
   const chat = state.chatsById.get(chatId)
   if (!chat || chat.deletedAt) return null
@@ -296,6 +296,7 @@ export function deriveChatSnapshot(
       attachments: [...entry.attachments],
     })),
     messages: transcript.messages,
+    startIndex: transcript.startIndex,
     history: transcript.history,
     availableProviders: [...SERVER_PROVIDERS],
     readAnchor: transcript.readAnchor,

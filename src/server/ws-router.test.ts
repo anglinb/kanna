@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import type { AppSettingsSnapshot, KeybindingsSnapshot, LlmProviderSnapshot, UpdateSnapshot } from "../shared/types"
-import { PROTOCOL_VERSION } from "../shared/types"
+import { CHAT_RECENT_LIMIT_DEFAULT, PROTOCOL_VERSION } from "../shared/types"
 import { createEmptyState } from "./events"
 import {
   assertSafeSkillId,
@@ -2147,7 +2147,12 @@ describe("ws-router", () => {
         state,
         getChat: (chatId: string) => state.chatsById.get(chatId) ?? null,
         getProject: (projectId: string) => state.projectsById.get(projectId) ?? null,
-        getRecentChatHistory: () => ({ entries: [], hasOlder: false, olderCursor: null }),
+        getRecentChatHistory: () => ({
+          messages: [],
+          startIndex: 0,
+          history: { hasOlder: false, olderCursor: null, recentLimit: CHAT_RECENT_LIMIT_DEFAULT },
+          readAnchor: null,
+        }),
       }),
       diffStore: createFakeDiffStore({
         getProjectSnapshot: () => ({ status: "ready" as const, files: [], defaultBranchName: "main", originRepoSlug: "acme/repo", aheadCount: 0, behindCount: 0, lastFetchedAt: undefined }),

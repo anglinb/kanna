@@ -3,7 +3,7 @@ import { closeSync, existsSync, fstatSync, openSync, readSync, readFileSync as r
 import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
-import type { AgentProvider, ChatHistoryPage, ChatHistorySnapshot, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
+import type { AgentProvider, ChatHistoryPage, ChatHistorySnapshot, ChatTurnSummary, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import {
   CHAT_READ_ANCHOR_PADDING,
   CHAT_RECENT_LIMIT_DEFAULT,
@@ -22,6 +22,7 @@ import {
   cloneTranscriptEntriesForClient,
   createEmptyState,
 } from "./events"
+import { appendTurnEntry, buildTurnIndexFromBuffer } from "./chat-turn-index"
 import { resolveLocalPath } from "./paths"
 
 const COMPACTION_THRESHOLD_BYTES = 2 * 1024 * 1024
@@ -209,9 +210,13 @@ export class EventStore {
   // absolute index of `entries[0]`, so history cursors stay absolute and
   // appends can extend a suffix in place.
   private readonly transcriptCache = new Map<string, CachedTranscript>()
+  /** Turn summaries per chat, built lazily and extended by `appendMessage`. */
+  private readonly turnIndexes = new Map<string, ChatTurnSummary[]>()
   /** Entry count per transcript, keyed by the file size it was measured at. */
   private readonly transcriptEntryCounts = new Map<string, { size: number; count: number }>()
   private static readonly TRANSCRIPT_CACHE_LIMIT = 8
+  /** Turn indexes are ~26KB each; more slots than transcripts, far cheaper. */
+  private static readonly TURN_INDEX_CACHE_LIMIT = 32
   /**
    * Fired after a turn reaches a terminal state — the same three events that
    * set `lastTurnEndedAt`. Deliberately distinct from `Agent.onStateChange`,
@@ -366,6 +371,7 @@ export class EventStore {
     this.legacySidebarProjectOrder = []
     this.transcriptCache.clear()
     this.transcriptEntryCounts.clear()
+    this.turnIndexes.clear()
   }
 
   private clearLegacyTranscriptState() {
@@ -901,6 +907,52 @@ export class EventStore {
     }
   }
 
+  /**
+   * Turn index for a chat, built on first request and extended on append.
+   *
+   * The cold build streams the file and keeps only summaries — deliberately
+   * not via `getTranscriptEntries`, which would cache the full entry list and
+   * evict the hot tail window that streaming reads depend on. Summaries are
+   * small enough to hold for every open chat; entries are not.
+   */
+  getChatTurnIndex(chatId: string): ChatTurnSummary[] {
+    const cached = this.turnIndexes.get(chatId)
+    if (cached) {
+      // Refresh LRU recency.
+      this.turnIndexes.delete(chatId)
+      this.turnIndexes.set(chatId, cached)
+      return cached
+    }
+
+    const turns: ChatTurnSummary[] = []
+    const transcriptPath = this.transcriptPath(chatId)
+    const legacyEntries = this.legacyMessagesByChatId.get(chatId)
+
+    if (legacyEntries) {
+      for (const entry of legacyEntries) appendTurnEntry(turns, entry)
+    } else if (existsSync(transcriptPath)) {
+      turns.push(...buildTurnIndexFromBuffer(readFileSyncImmediate(transcriptPath)))
+    }
+
+    this.setCachedTurnIndex(chatId, turns)
+    return turns
+  }
+
+  /**
+   * Bounded like the transcript cache: an index is small, but one per chat
+   * over a long session is unbounded growth for maps nobody is looking at.
+   * Evicting only costs the next open a rebuild.
+   */
+  private setCachedTurnIndex(chatId: string, turns: ChatTurnSummary[]) {
+    this.turnIndexes.delete(chatId)
+    while (this.turnIndexes.size >= EventStore.TURN_INDEX_CACHE_LIMIT) {
+      const oldest = this.turnIndexes.keys().next().value
+      if (oldest === undefined) break
+      this.turnIndexes.delete(oldest)
+    }
+    this.turnIndexes.set(chatId, turns)
+  }
+
   private loadTranscriptFromDisk(chatId: string) {
     const transcriptPath = this.transcriptPath(chatId)
     if (!existsSync(transcriptPath)) {
@@ -1160,6 +1212,7 @@ export class EventStore {
       await rm(transcriptPath, { force: true })
       this.transcriptCache.delete(chat.id)
       this.transcriptEntryCounts.delete(chat.id)
+      this.turnIndexes.delete(chat.id)
 
       prunedChatIds.push(chat.id)
     }
@@ -1266,6 +1319,7 @@ export class EventStore {
       await rm(transcriptPath, { force: true })
       this.transcriptCache.delete(chat.id)
       this.transcriptEntryCounts.delete(chat.id)
+      this.turnIndexes.delete(chat.id)
 
       deletedChatIds.push(chat.id)
     }
@@ -1407,6 +1461,11 @@ export class EventStore {
       // Extends a cached suffix as happily as a complete list — `startIndex`
       // is unaffected by appending at the end.
       this.transcriptCache.get(chatId)?.entries.push(JSON.parse(payload) as TranscriptEntry)
+      // Extend the turn index only if it has been built. An absent index is
+      // not stale — it gets built on demand, and this entry is on disk by
+      // then, so building it here would just be work nobody asked for.
+      const turns = this.turnIndexes.get(chatId)
+      if (turns) appendTurnEntry(turns, entry)
     })
     return this.writeChain
   }
@@ -1581,7 +1640,7 @@ export class EventStore {
 
   getRecentMessagesPage(chatId: string, limit: number): ChatHistoryPage {
     if (limit <= 0) {
-      return { messages: [], hasOlder: false, olderCursor: null }
+      return { messages: [], hasOlder: false, olderCursor: null, startIndex: 0 }
     }
 
     const window = this.getRecentEntryWindow(chatId, limit)
@@ -1592,6 +1651,7 @@ export class EventStore {
       messages: cloneTranscriptEntriesForClient(slice),
       hasOlder: startIndex > 0,
       olderCursor: startIndex > 0 ? encodeHistoryCursor(startIndex) : null,
+      startIndex,
     }
   }
 
@@ -1628,7 +1688,7 @@ export class EventStore {
 
   getMessagesPageBefore(chatId: string, beforeCursor: string, limit: number): ChatHistoryPage {
     if (limit <= 0) {
-      return { messages: [], hasOlder: false, olderCursor: null }
+      return { messages: [], hasOlder: false, olderCursor: null, startIndex: 0 }
     }
 
     const beforeIndex = decodeCursor(beforeCursor)
@@ -1638,6 +1698,7 @@ export class EventStore {
       messages: page.entries,
       hasOlder: page.hasOlder,
       olderCursor: page.olderCursor,
+      startIndex: beforeIndex - page.entries.length,
     }
   }
 
@@ -1669,6 +1730,7 @@ export class EventStore {
     const page = this.getRecentMessagesPage(chatId, limit)
     return {
       messages: page.messages,
+      startIndex: page.startIndex,
       history: getHistorySnapshot({
         entries: page.messages,
         hasOlder: page.hasOlder,
@@ -1797,6 +1859,7 @@ export class EventStore {
     await this.compact()
     this.transcriptCache.clear()
     this.transcriptEntryCounts.clear()
+    this.turnIndexes.clear()
     onProgress?.(`${LOG_PREFIX} transcript migration complete`)
     return true
   }

@@ -247,6 +247,7 @@ describe("read models", () => {
           recentLimit: 200,
         },
         readAnchor: null,
+        startIndex: 0,
       })
     )
     expect(chat?.runtime.provider).toBe("claude")

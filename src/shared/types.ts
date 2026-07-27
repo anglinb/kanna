@@ -1862,6 +1862,39 @@ export interface ChatHistorySnapshot {
 }
 
 /** Default number of recent entries in a chat snapshot. */
+/**
+ * One turn, summarised for the transcript overview map.
+ *
+ * Deliberately tiny and text-truncated: this is an index over the whole
+ * transcript, and the client only ever renders a couple of clamped lines of it.
+ */
+export interface ChatTurnSummary {
+  /** Entry id of the user prompt that opens the turn — the scroll target. */
+  id: string
+  prompt: string
+  /** The turn's final assistant message, if it produced one. */
+  response: string | null
+  /** Failure text, when the turn ended in an error. */
+  error: string | null
+  createdAt: number
+  /** Wall time the turn took, or null while it is still running. */
+  durationMs: number | null
+}
+
+/** Longest text kept per field in a turn summary. */
+export const CHAT_TURN_SUMMARY_TEXT_LIMIT = 160
+
+/**
+ * Most recent turns indexed per chat. The map only ever shows a few dozen
+ * ticks, so indexing further back would be payload with no reader.
+ */
+export const CHAT_TURN_INDEX_LIMIT = 80
+
+export interface ChatTurnIndexSnapshot {
+  chatId: string
+  turns: ChatTurnSummary[]
+}
+
 export const CHAT_RECENT_LIMIT_DEFAULT = 200
 
 /**
@@ -1878,6 +1911,19 @@ export interface ChatSnapshot {
   runtime: ChatRuntime
   queuedMessages: QueuedChatMessage[]
   messages: TranscriptEntry[]
+  /** Absolute index of `messages[0]`; see `ChatHistoryPage.startIndex`. */
+  startIndex: number
+  /**
+   * When true, `messages` extends what the client already holds rather than
+   * replacing it — the entries before `startIndex` were sent earlier and are
+   * unchanged.
+   *
+   * The transcript is the only part of this snapshot that grows without bound,
+   * and it grows only at the end, so re-sending the whole window on every
+   * streamed entry was the dominant cost on the socket. Everything else here
+   * is small and still ships whole.
+   */
+  incremental?: boolean
   history: ChatHistorySnapshot
   availableProviders: ProviderCatalogEntry[]
   /**
@@ -1895,6 +1941,15 @@ export interface ChatHistoryPage {
   messages: TranscriptEntry[]
   hasOlder: boolean
   olderCursor: string | null
+  /**
+   * Absolute index of `messages[0]` in the transcript.
+   *
+   * A transcript is append-only, so an entry's line index is a stable
+   * monotonic sequence for the life of the chat. It is what history cursors
+   * already encode, and what lets a subscription resume by sending only the
+   * entries past what a client holds instead of the whole window.
+   */
+  startIndex: number
 }
 
 /**
