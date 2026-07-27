@@ -277,13 +277,22 @@ export function buildTranscriptRenderItems(
   return result
 }
 
+/**
+ * Row identity, keyed on the first message either way.
+ *
+ * A lone tool call becomes a group the moment a second one arrives, and the
+ * group keeps growing after that. Distinguishing the two shapes in the key
+ * would retire a key and mint a new one mid-turn, which costs the virtualized
+ * list the row's measured height and remounts its subtree — visible as a jump
+ * on essentially every multi-tool turn. Keying on the first message means the
+ * row keeps its identity as it absorbs later calls.
+ */
 function getTranscriptRenderItemId(item: TranscriptRenderItem) {
   if (item.type === "single") {
     return item.message.id
   }
 
-  const firstId = item.messages[0]?.id ?? item.startIndex
-  return `tool-group:${firstId}`
+  return String(item.messages[0]?.id ?? item.startIndex)
 }
 
 function sameStringArray(left: string[] | undefined, right: string[] | undefined) {

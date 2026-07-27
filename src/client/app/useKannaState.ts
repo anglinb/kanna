@@ -36,6 +36,12 @@ import {
   sameDiffs,
   shouldPreserveExistingProjectDiffs,
 } from "./snapshotEquality"
+import {
+  cachedWindowToMessages,
+  createTranscriptCacheWriter,
+  readCachedWindow,
+  toCachedSpan,
+} from "./chatTranscriptCache"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { KannaSocket, type SocketStatus } from "./socket"
 import { useAppSettingsSync } from "./useAppSettingsSync"
@@ -239,6 +245,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const [optimisticSidebarProjectOrder, setOptimisticSidebarProjectOrder] = useState<string[] | null>(null)
   const [localProjects, setLocalProjects] = useState<LocalProjectsSnapshot | null>(null)
   const [chatSnapshot, setChatSnapshot] = useState<ChatSnapshot | null>(null)
+  const transcriptCacheWriter = useMemo(() => createTranscriptCacheWriter(), [])
   const [chatTurnIndex, setChatTurnIndex] = useState<ChatTurnSummary[]>([])
   const [olderHistoryEntries, setOlderHistoryEntries] = useState<TranscriptEntry[]>([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
@@ -342,28 +349,59 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
     setChatSnapshot(null)
     setChatReady(false)
-    // No `recentLimit`: the server sizes the window to reach the stored read
-    // anchor and returns it inline. Passing one here would re-subscribe (and
-    // re-send the whole transcript) once the anchor resolved.
-    const unsubscribe = socket.subscribe<ChatSnapshot | null>({ type: "chat", chatId: activeChatId }, (snapshot) => {
+
+    let cancelled = false
+    let unsubscribe: (() => void) | null = null
+    // Base for the first incremental push: the server resumes from the cached
+    // span, so its first body starts where this window ends rather than
+    // repeating it.
+    let base: { messages: TranscriptEntry[]; startIndex: number } | null = null
+
+    function handleSnapshot(snapshot: ChatSnapshot | null) {
       setChatSnapshot((current) => {
         // Incremental bodies carry only the entries added since the last push,
         // so they splice onto the window rather than replacing it.
-        const next = applyIncrementalChatSnapshot(current, snapshot)
+        const next = applyIncrementalChatSnapshot(current ?? base, snapshot)
         if (next === null && snapshot?.incremental) {
           // Unplaceable body — keep what is on screen rather than render a
           // transcript with a hole; the next full push repairs it.
           return current
         }
+        // The cache only ever seeds the first push; after that the live
+        // snapshot is the base.
+        base = null
         return sameChatSnapshotCore(current, next) ? current : next
       })
       setHistoryCursor(snapshot?.history.olderCursor ?? null)
       setHasOlderHistory(snapshot?.history.hasOlder ?? false)
       setChatReady(true)
       setCommandError(null)
+    }
+
+    // The cache read is a few milliseconds and only gates the subscription, not
+    // the render; a miss subscribes with no span and gets a full window.
+    void readCachedWindow(activeChatId).then((cached) => {
+      if (cancelled) return
+      const span = toCachedSpan(cached)
+      if (cached && span) base = cachedWindowToMessages(cached)
+      // No `recentLimit`: the server sizes the window to reach the stored read
+      // anchor and returns it inline. Passing one here would re-subscribe (and
+      // re-send the whole transcript) once the anchor resolved.
+      unsubscribe = socket.subscribe<ChatSnapshot | null>(
+        { type: "chat", chatId: activeChatId, ...(span ? { cachedSpan: span } : {}) },
+        handleSnapshot
+      )
     })
-    return unsubscribe
-  }, [activeChatId, socket])
+
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+      // A chat closed mid-turn never reaches a settled write, so take what is
+      // pending rather than lose the window.
+      transcriptCacheWriter.flush()
+    }
+  }, [activeChatId, socket, transcriptCacheWriter])
+
 
   // Separate from the chat snapshot on purpose: the index covers the whole
   // transcript, not just the loaded window, so the overview map stays complete
@@ -540,6 +578,14 @@ export function useKannaState(activeChatId: string | null): KannaState {
   )
   const availableProviders = activeChatSnapshot?.availableProviders ?? fallbackProviders
   const isProcessing = isProcessingStatus(effectiveRuntimeStatus ?? undefined)
+
+  // Written after a turn settles, not during: the window changes many times a
+  // second while streaming and the server is the source of truth throughout.
+  useEffect(() => {
+    if (!activeChatId || !chatSnapshot) return
+    transcriptCacheWriter.schedule(activeChatId, chatSnapshot, isProcessing)
+  }, [activeChatId, chatSnapshot, isProcessing, transcriptCacheWriter])
+
   const canCancel = canCancelStatus(effectiveRuntimeStatus ?? undefined)
   const isDraining = runtime?.isDraining ?? false
   const fallbackLocalProjectPath = localProjects?.projects[0]?.localPath ?? null

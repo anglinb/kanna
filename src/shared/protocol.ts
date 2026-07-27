@@ -54,7 +54,22 @@ export type SubscriptionTopic =
   | { type: "app-settings" }
   | { type: "usage-limits" }
   | { type: "provider-auth" }
-  | { type: "chat"; chatId: string; recentLimit?: number }
+  | {
+    type: "chat"
+    chatId: string
+    recentLimit?: number
+    /**
+     * The absolute transcript span the client already holds from its local
+     * cache, so the first push can be incremental instead of a full window.
+     * Omitted when the client has nothing cached.
+     *
+     * `endEntryId` is the `_id` of the entry at `end - 1`. The server only
+     * honours the span when that entry still matches, which keeps a cache
+     * belonging to a different machine — or one written before a transcript
+     * was rewritten — from being spliced onto unrelated history.
+     */
+    cachedSpan?: { start: number; end: number; endEntryId: string }
+  }
   | { type: "chat-turns"; chatId: string }
   | { type: "project-git"; projectId: string }
   | { type: "terminal"; terminalId: string }

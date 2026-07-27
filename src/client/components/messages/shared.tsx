@@ -3,6 +3,7 @@ import {
   cloneElement,
   createContext,
   isValidElement,
+  memo,
   useContext,
   useState,
   type ComponentPropsWithoutRef,
@@ -393,10 +394,16 @@ const transcriptMarkdownComponents = createMarkdownComponents()
 // Markdown renderer for transcript content, with the components object and
 // plugin array hoisted to module scope so streaming rerenders reuse the same
 // component types instead of remounting the rendered tree.
-export function TranscriptMarkdown({ text }: { text: string }) {
+/**
+ * Memoized on `text` alone: parsing markdown is the most expensive thing the
+ * transcript does per row, and the viewport re-renders on every scroll event.
+ * Without this, scrolling a long chat re-parses every visible message per
+ * frame, and a streaming answer re-parses its whole body on every token.
+ */
+export const TranscriptMarkdown = memo(function TranscriptMarkdown({ text }: { text: string }) {
   return (
     <Markdown remarkPlugins={REMARK_PLUGINS} components={transcriptMarkdownComponents}>
       {text}
     </Markdown>
   )
-}
+})

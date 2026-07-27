@@ -40,6 +40,30 @@ import {
   EMPTY_STATE_TEXT,
 } from "./utils"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
+import { estimateTranscriptRowSize } from "./transcriptRowSize"
+
+/**
+ * How close to the bottom counts as "at the end", as a fraction of viewport
+ * height.
+ *
+ * Deliberately one number shared by two consumers: the list uses it to decide
+ * whether to keep following new content, and the viewport uses it to decide
+ * whether the reader is following. When those disagreed — the list treating a
+ * tenth of the viewport as "at the end" while the viewport insisted on 4px —
+ * scrolling up slightly put them in opposite states, so the list kept pulling
+ * back to the bottom while the UI showed a scroll-to-bottom button.
+ */
+const AT_END_THRESHOLD_RATIO = 0.05
+
+/**
+ * Frames a restore may re-issue its scroll for before giving up.
+ *
+ * Each pass pulls more real row measurements into range, which moves where the
+ * anchor actually is; the loop exits as soon as the offset stops changing, so
+ * this is a ceiling for pathological lists rather than a frame count anyone
+ * normally pays.
+ */
+const RESTORE_SETTLE_FRAMES = 8
 
 /** Max auto-fetched history pages per chat when the list is too short to scroll. */
 const MAX_HISTORY_AUTO_FILL_PAGES = 4
@@ -213,6 +237,9 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
    */
   const hasUserScrolledRef = useRef(false)
   const scrollFramesRef = useRef<number[]>([])
+  // `syncListGeometry` is defined below this callback; the ref keeps the
+  // restore loop able to reach it without reordering the file.
+  const syncListGeometryRef = useRef<() => void>(() => {})
 
   const cancelPendingScrollFrames = useCallback(() => {
     for (const frameId of scrollFramesRef.current) {
@@ -246,13 +273,33 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
       })
     }
 
-    scrollFramesRef.current.push(window.requestAnimationFrame(() => {
+    /**
+     * Re-issue until the anchor row actually sits at the top and stays there.
+     *
+     * `scrollToIndex` computes its offset from the sizes the list knows, and on
+     * a cold open most rows above the target have only an estimate. Each pass
+     * brings more real measurements into range, which moves the correct offset
+     * — so a fixed number of frames lands near the target rather than on it,
+     * and the row the reader left at the top is not the row they come back to.
+     *
+     * Stops as soon as the scroll offset repeats (settled) or the budget runs
+     * out, so a list that never converges cannot spin.
+     */
+    const settleToTarget = (attemptsLeft: number, previousOffset: number) => {
       scrollToTarget()
-      // Rows are virtualized against an estimated height, so the first pass
-      // lands approximately; re-issue once real measurements have landed.
       scrollFramesRef.current.push(window.requestAnimationFrame(() => {
-        scrollToTarget()
+        const offset = listRef.current?.getState?.()?.scroll ?? previousOffset
+        // The minimap reads the visible range from this; without a sync here it
+        // keeps whatever it had before the restore, which on a fresh load is
+        // "nothing in view".
+        syncListGeometryRef.current()
+        if (attemptsLeft <= 0 || Math.abs(offset - previousOffset) < 1) return
+        settleToTarget(attemptsLeft - 1, offset)
       }))
+    }
+
+    scrollFramesRef.current.push(window.requestAnimationFrame(() => {
+      settleToTarget(RESTORE_SETTLE_FRAMES, Number.NaN)
     }))
   }, [cancelPendingScrollFrames, headerOffsetPx, listRef, onIsAtEndChange])
 
@@ -262,7 +309,15 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   // has resolved, otherwise we'd land on the fallback and visibly jump when the
   // anchor arrives a moment later.
   useEffect(() => {
-    if (!activeChatId) return
+    if (!activeChatId) {
+      // Leaving the chat surface arms the next open to restore again. Without
+      // this the ref still names the chat just left, so returning to that same
+      // chat short-circuits below — no restore, and no geometry sync to light
+      // up the map. Navigating to a *different* chat happened to work, which
+      // is why this only showed up on away-and-back.
+      restoredChatIdRef.current = null
+      return
+    }
     if (restoredChatIdRef.current === activeChatId) return
     if (resolvedRows.length === 0 || !readAnchorState.resolved) return
 
@@ -374,19 +429,35 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
    */
   useEffect(() => {
     let unsubscribes: Array<() => void> = []
+    const frames: number[] = []
+
+    // Sampled over several frames, not once. A single rAF after mount lands
+    // before the list has laid out, so the range stays at its initial value
+    // and the map reads as "nothing on screen" until something else moves the
+    // list. That is the whole story when a chat is reopened without a restore
+    // — the scroll position is already correct, so nothing else ever fires.
+    const settleGeometry = (attemptsLeft: number) => {
+      frames.push(window.requestAnimationFrame(() => {
+        syncListGeometry()
+        if (attemptsLeft > 0) settleGeometry(attemptsLeft - 1)
+      }))
+    }
 
     const frameId = window.requestAnimationFrame(() => {
       const state = listRef.current?.getState?.()
       if (!state?.listen) return
       unsubscribes = LIST_LAYOUT_EVENTS.map((event) => state.listen(event, syncListGeometry))
-      syncListGeometry()
+      settleGeometry(RESTORE_SETTLE_FRAMES)
     })
 
     return () => {
       window.cancelAnimationFrame(frameId)
+      for (const frame of frames) window.cancelAnimationFrame(frame)
       for (const unsubscribe of unsubscribes) unsubscribe()
     }
   }, [activeChatId, listRef, syncListGeometry])
+
+  syncListGeometryRef.current = syncListGeometry
 
   const handleScroll = useCallback((event?: unknown) => {
     syncListGeometry()
@@ -402,7 +473,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
 
     if (currentTarget instanceof HTMLElement) {
       const distanceFromEnd = currentTarget.scrollHeight - currentTarget.clientHeight - currentTarget.scrollTop
-      const isAtEnd = distanceFromEnd <= 4
+      const isAtEnd = distanceFromEnd <= currentTarget.clientHeight * AT_END_THRESHOLD_RATIO
       onIsAtEndChange(isAtEnd)
       reportTopVisibleMessage(isAtEnd)
       return
@@ -583,6 +654,15 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     </div>
   ), [handleToolGroupExpandedChange, onAskUserQuestionSubmit, onExitPlanModeConfirm, toolGroupExpanded])
 
+  // Stable identity: the viewport commits a render on every scroll event (the
+  // visible row range changes constantly), and a fresh style object hands the
+  // list a "content container changed" signal each time, which relays out the
+  // header and footer and can itself re-trigger follow-the-bottom.
+  const contentContainerStyle = useMemo(
+    () => ({ paddingBottom: transcriptPaddingBottom + 10 }),
+    [transcriptPaddingBottom]
+  )
+
   const listHeader = (
     <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }}>
       {isHistoryLoading ? (
@@ -641,18 +721,29 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
           extraData={toolGroupExpanded}
           keyExtractor={keyExtractor}
           renderItem={renderItem}
-          estimatedItemSize={96}
+          // Per row, not one number for all of them: a collapsed tool header
+          // and a long answer differ by more than an order of magnitude, and
+          // the estimate is what unmeasured rows — including every row
+          // `scrollToIndex` jumps over — are assumed to be.
+          getEstimatedItemSize={getEstimatedItemSize}
+          estimatedItemSize={48}
           // No initialScrollAtEnd: the prop is captured at mount, and opening a
           // chat now restores to a stored anchor rather than the bottom. The
           // restore effect above drives the initial position instead.
           maintainScrollAtEnd
-          maintainScrollAtEndThreshold={0.1}
+          maintainScrollAtEndThreshold={AT_END_THRESHOLD_RATIO}
           maintainVisibleContentPosition
           onScroll={handleScroll}
           onStartReached={handleStartReached}
           onStartReachedThreshold={0.1}
+          // Rows unmount as soon as they leave this band, and a remounted row
+          // renders collapsed while the list still holds its expanded height —
+          // the size delta both re-anchors layout and re-triggers follow-the-
+          // bottom. Keeping more of the transcript mounted makes that rare, at
+          // the cost of some retained DOM.
+          drawDistance={1200}
           className="h-full flex-1 overflow-x-hidden overscroll-y-contain px-3 scroll-pt-[72px] [scrollbar-gutter:auto]"
-          contentContainerStyle={{ paddingBottom: transcriptPaddingBottom + 10 }}
+          contentContainerStyle={contentContainerStyle}
           ListHeaderComponent={listHeader}
           ListFooterComponent={listFooter}
         />
@@ -827,4 +918,8 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
 
 function keyExtractor(item: ResolvedTranscriptRow) {
   return item.id
+}
+
+function getEstimatedItemSize(item: ResolvedTranscriptRow) {
+  return estimateTranscriptRowSize(item)
 }

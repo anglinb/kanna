@@ -110,18 +110,22 @@ export function useChatReadAnchor(
     }, delay)
   }, [activeChatId, flush])
 
-  // Drop anything still queued for the outgoing chat, and reset the dedupe key
+  // Write anything still queued for the outgoing chat, and reset the dedupe key
   // so the new chat's first sample always writes.
+  //
+  // Leaving used to discard the pending sample instead. Writes are throttled to
+  // `READ_ANCHOR_WRITE_INTERVAL_MS`, so the position a reader stops at is
+  // almost always still pending when they navigate away — which is exactly the
+  // position worth keeping. Dropping it meant returning to wherever they
+  // happened to be a second and a half earlier, or to a much older sample if
+  // they never paused that long. The pending entry carries its own `chatId`, so
+  // flushing here writes it against the chat it was sampled from.
   useEffect(() => {
     return () => {
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current)
-        timerRef.current = null
-      }
-      pendingRef.current = null
+      flush()
       lastWrittenKeyRef.current = null
     }
-  }, [activeChatId])
+  }, [activeChatId, flush])
 
   // Backgrounding a tab is the common way a session ends. `visibilitychange`
   // fires reliably here, unlike pagehide/beforeunload where the socket may

@@ -502,6 +502,31 @@ export function createWsRouter({
     }
   }
 
+  /**
+   * Adopt a client's cached transcript position so its first push is
+   * incremental.
+   *
+   * Honoured only when the entry at the boundary still matches what this
+   * machine has — a cache from another machine, or from before a transcript
+   * was rewritten, would otherwise be spliced onto unrelated history. Any
+   * doubt (unverifiable index, mismatched id) falls through to a full window,
+   * which is always correct and only costs bytes.
+   */
+  function seedChatEntrySpanFromClient(
+    ws: ServerWebSocket<ClientState>,
+    subscriptionId: string,
+    topic: SubscriptionTopic
+  ) {
+    if (topic.type !== "chat") return
+    const span = topic.cachedSpan
+    if (!span || span.end <= 0 || span.start < 0 || span.start > span.end) return
+    // Populates the window cache as a side effect, which is what makes the
+    // boundary entry visible to `getEntryIdAt`.
+    store.getRecentChatHistory(topic.chatId, topic.recentLimit)
+    if (store.getEntryIdAt(topic.chatId, span.end - 1) !== span.endEntryId) return
+    ensureChatEntrySpans(ws).set(subscriptionId, { start: span.start, end: span.end })
+  }
+
   async function pushSnapshots(
     ws: ServerWebSocket<ClientState>,
     options?: { skipPrune?: boolean; filter?: SnapshotBroadcastFilter; cache?: SnapshotComputationCache }
@@ -1530,6 +1555,7 @@ export function createWsRouter({
         snapshotSignatures.delete(parsed.id)
         // A (re)subscribe starts from nothing, so the next push sends a full window.
         ws.data.chatEntrySpans?.delete(parsed.id)
+        seedChatEntrySpanFromClient(ws, parsed.id, parsed.topic)
         if (parsed.topic.type === "local-projects") {
           void refreshDiscovery().then(() => {
             if (ws.data.subscriptions.has(parsed.id)) {

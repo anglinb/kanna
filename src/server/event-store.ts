@@ -1436,6 +1436,24 @@ export class EventStore {
   }
 
   /**
+   * `_id` of the entry at an absolute index, or null when the index is out of
+   * range or sits before the loaded window.
+   *
+   * Deliberately refuses to widen the window to answer: this exists to check a
+   * client's cached position, and a cache that reaches further back than the
+   * server is holding is not worth a full transcript read to validate — the
+   * caller just sends a full window instead.
+   */
+  getEntryIdAt(chatId: string, index: number): string | null {
+    if (index < 0) return null
+    const cached = this.transcriptCache.get(chatId)
+    if (!cached) return null
+    const offset = index - cached.startIndex
+    if (offset < 0 || offset >= cached.entries.length) return null
+    return cached.entries[offset]?._id ?? null
+  }
+
+  /**
    * The raw provider payload for one entry, or null if the entry is gone or
    * never carried one. Snapshots strip `debugRaw`; this backs the raw JSON
    * debug view, which is opened rarely enough that a full transcript read is

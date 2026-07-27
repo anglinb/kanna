@@ -18,7 +18,7 @@ const TRANSCRIPT_COLUMN_PADDING_PX = 24
 const MIN_GUTTER_PX = 88
 
 /** Inset from the left edge of the chat pane. */
-const STRIP_LEFT_PX = 15
+const STRIP_INSET_PX = 15
 
 /**
  * Tick geometry is proportioned off the resting width by the golden ratio:
@@ -278,7 +278,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
                   pointerY === null && "transition-[width,height,opacity] duration-200 ease-out",
                 )}
                 style={{
-                  left: STRIP_LEFT_PX,
+                  left: STRIP_INSET_PX,
                   width: TICK_BASE_WIDTH_PX + (TICK_MAX_WIDTH_PX - TICK_BASE_WIDTH_PX) * falloff,
                   height: TICK_BASE_HEIGHT_PX + (TICK_MAX_HEIGHT_PX - TICK_BASE_HEIGHT_PX) * falloff,
                   opacity,
@@ -295,7 +295,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
           aria-hidden
           className="pointer-events-none absolute animate-fade-in rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-xl backdrop-blur-sm transition-[top] duration-150 ease-out"
           style={{
-            left: STRIP_LEFT_PX + TICK_MAX_WIDTH_PX + CARD_GAP_PX,
+            left: STRIP_INSET_PX + TICK_MAX_WIDTH_PX + CARD_GAP_PX,
             top: cardCenterY,
             width: CARD_WIDTH_PX,
             transform: "translateY(-50%)",

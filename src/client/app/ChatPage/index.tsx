@@ -885,33 +885,12 @@ export function ChatPage() {
     return () => window.removeEventListener("keydown", handleEscape)
   }, [handleCloseRightSidebar, isMobileRightSidebarOverlay, showRightSidebar])
 
-  useEffect(() => {
-    if (!isAtEndRef.current) {
-      return
-    }
-
-    let secondFrame: number | null = null
-    const firstFrame = window.requestAnimationFrame(() => {
-      void transcriptListRef.current?.scrollToEnd?.({ animated: false })
-      secondFrame = window.requestAnimationFrame(() => {
-        void transcriptListRef.current?.scrollToEnd?.({ animated: false })
-      })
-    })
-
-    return () => {
-      window.cancelAnimationFrame(firstFrame)
-      if (secondFrame !== null) {
-        window.cancelAnimationFrame(secondFrame)
-      }
-    }
-  }, [
-    state.commandError,
-    state.isDraining,
-    state.isProcessing,
-    state.messages.length,
-    state.queuedMessages.length,
-    state.runtimeStatus,
-  ])
+  // Following the stream is the list's job, via `maintainScrollAtEnd`. This
+  // used to also force two `scrollToEnd`s per frame on message/status churn,
+  // which meant three actors could move the scroll position in the same frame
+  // — the list on item layout, this effect on state change, and the restore
+  // pass on open. They disagreed about what counted as "at the end", so the
+  // losing ones fought the winner and the result read as jitter.
 
   useLayoutEffect(() => {
     if (!showRightSidebar || isMobileRightSidebarOverlay || layoutWidth <= 0 || isRightSidebarAnimating.current) {

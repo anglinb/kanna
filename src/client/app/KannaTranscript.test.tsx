@@ -583,8 +583,30 @@ Please check the latest error first.`,
     expect(updatedRows).toHaveLength(1)
     expect(initialRows[0]?.kind).toBe("tool-group")
     expect(updatedRows[0]?.kind).toBe("tool-group")
-    expect(initialRows[0]?.id).toBe("tool-group:tool-1")
-    expect(updatedRows[0]?.id).toBe("tool-group:tool-1")
+    expect(initialRows[0]?.id).toBe("tool-1")
+    expect(updatedRows[0]?.id).toBe("tool-1")
+  })
+
+  test("a lone tool keeps its row id when a second call turns it into a group", () => {
+    // The single→group transition happens on nearly every multi-tool turn. If
+    // it changed the row id, the virtualized list would retire the measured
+    // height and remount the subtree mid-stream, which reads as a scroll jump.
+    const latestToolIds = { AskUserQuestion: null, ExitPlanMode: null, TodoWrite: null }
+    const single = buildResolvedTranscriptRows([createToolMessage("tool-1")], {
+      isLoading: true,
+      latestToolIds,
+    })
+    const grouped = buildResolvedTranscriptRows([
+      createToolMessage("tool-1"),
+      createToolMessage("tool-2"),
+    ], {
+      isLoading: true,
+      latestToolIds,
+    })
+
+    expect(single[0]?.kind).toBe("single")
+    expect(grouped[0]?.kind).toBe("tool-group")
+    expect(single[0]?.id).toBe(grouped[0]?.id)
   })
 
   test("groups collapsible tools across hidden context window updates", () => {

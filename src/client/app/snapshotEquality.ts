@@ -159,7 +159,7 @@ export function sameChatSnapshotCore(left: ChatSnapshot | null, right: ChatSnaps
  * must not render a transcript with a hole in it.
  */
 export function applyIncrementalChatSnapshot(
-  current: ChatSnapshot | null,
+  current: Pick<ChatSnapshot, "messages" | "startIndex"> | null,
   incoming: ChatSnapshot | null
 ): ChatSnapshot | null {
   if (!incoming?.incremental) return incoming
