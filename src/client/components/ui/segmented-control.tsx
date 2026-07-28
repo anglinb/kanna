@@ -52,7 +52,10 @@ export function SegmentedControl<T extends string>({
     }
     const containerRect = container.getBoundingClientRect()
     const rect = active.getBoundingClientRect()
-    setIndicator({ left: rect.left - containerRect.left, width: rect.width })
+    // `left` on the absolute indicator resolves against the container's padding
+    // box, but these rects are border-box — subtract the left border width so
+    // the indicator doesn't sit one border-width to the right at every position.
+    setIndicator({ left: rect.left - containerRect.left - container.clientLeft, width: rect.width })
     hasIndicator.current = true
   }, [value, options, size])
 
