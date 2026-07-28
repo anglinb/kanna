@@ -621,6 +621,11 @@ describe("DiffStore", () => {
     expect(extractGitHubRepoSlug("ssh://git@github.com/acme/repo.git")).toBe("acme/repo")
     expect(extractGitHubRepoSlug("https://github.com/acme/repo.git")).toBe("acme/repo")
     expect(extractGitHubRepoSlug("https://gitlab.com/acme/repo.git")).toBeNull()
+    // Credentialed remotes, as written by `gh auth setup-git` and CI checkouts.
+    expect(extractGitHubRepoSlug("https://gho_token@github.com/acme/repo.git")).toBe("acme/repo")
+    expect(extractGitHubRepoSlug("https://user:pass@github.com/acme/repo.git")).toBe("acme/repo")
+    // A credentialed remote still has to be github.com, not merely mention it.
+    expect(extractGitHubRepoSlug("https://github.com@evil.example/acme/repo.git")).toBeNull()
   })
 
   test("refreshSnapshot includes recent branch history with tags and github URLs", async () => {

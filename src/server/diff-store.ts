@@ -538,7 +538,10 @@ export function extractGitHubRepoSlug(remoteUrl: string | null | undefined) {
     return `${sshProtocolMatch.groups.owner}/${sshProtocolMatch.groups.repo}`
   }
 
-  const httpsMatch = /^https?:\/\/github\.com\/(?<owner>[^/]+)\/(?<repo>[^/]+?)(?:\.git)?$/u.exec(remoteUrl)
+  // Credentials in the remote are common — `gh auth setup-git` and CI checkouts
+  // both write `https://<token>@github.com/owner/repo`. The userinfo is part of
+  // the transport, not the address, so it must not stop us naming the repo.
+  const httpsMatch = /^https?:\/\/(?:[^/@]+@)?github\.com\/(?<owner>[^/]+)\/(?<repo>[^/]+?)(?:\.git)?$/u.exec(remoteUrl)
   if (httpsMatch?.groups?.owner && httpsMatch.groups.repo) {
     return `${httpsMatch.groups.owner}/${httpsMatch.groups.repo}`
   }
