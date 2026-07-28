@@ -23,6 +23,7 @@ import {
   Loader2,
   Lock,
   LockOpen,
+  Moon,
   Paperclip,
   Plus,
   Settings2,
@@ -31,6 +32,7 @@ import {
   SquareMenu,
   SquarePen,
   SquareTerminal,
+  Sun,
   Terminal,
 } from "lucide-react"
 import type { ChatMode, ClaudeContextWindow, FsListResult, GitHubRecentReposResult } from "../../../shared/types"
@@ -38,6 +40,7 @@ import { DEFAULT_NEW_PROJECTS_DIRECTORY } from "../../../shared/types"
 import { REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
 import type { KannaState } from "../../app/useKannaState"
 import { useComposer } from "../../hooks/useComposer"
+import { useTheme } from "../../hooks/useTheme"
 import { CHAT_MODE_LABELS } from "../../lib/composer"
 import type { ProjectRequest } from "../../app/kannaStateHelpers"
 import { actionMatchesEvent, getBindingsForAction } from "../../lib/keybindings"
@@ -289,6 +292,11 @@ export function CommandPalette({ state }: { state: KannaState }) {
 
   const editorPreset = useTerminalPreferencesStore((store) => store.editorPreset)
   const editorCommandTemplate = useTerminalPreferencesStore((store) => store.editorCommandTemplate)
+
+  // The palette only ever flips between the two concrete themes, so it keys off
+  // the *resolved* theme — on "system" it offers whichever one you aren't
+  // currently looking at, and picking it pins that choice.
+  const { resolvedTheme, setTheme } = useTheme()
 
   // Canonical composer semantics shared with ChatInput: provider is locked
   // once the chat's session has started, models come from the provider
@@ -618,6 +626,19 @@ export function CommandPalette({ state }: { state: KannaState }) {
       keywords: ["limits", "rate limit", "quota", "credits", "plan", "utilization", "claude", "codex"],
       icon: <Gauge className={ICON_CLASS} />,
       run: () => pushPage({ page: "usage" }),
+    })
+
+    const nextTheme = resolvedTheme === "dark" ? "light" : "dark"
+    list.push({
+      id: `set-theme-${nextTheme}`,
+      title: nextTheme === "dark" ? "Dark Mode" : "Light Mode",
+      keywords: ["theme", "appearance", "color scheme", "dark mode", "light mode", nextTheme],
+      icon: nextTheme === "dark" ? <Moon className={ICON_CLASS} /> : <Sun className={ICON_CLASS} />,
+      run: () => {
+        close()
+        setTheme(nextTheme)
+        void state.handleWriteAppSettings({ theme: nextTheme })
+      },
     })
 
     const recentChatsInSidebarOn = state.appSettings?.newSidebarEnabled !== false
@@ -960,7 +981,9 @@ export function CommandPalette({ state }: { state: KannaState }) {
     openGitPanel,
     projectId,
     pushPage,
+    resolvedTheme,
     rightPanel,
+    setTheme,
     state.activeChatId,
     state.appSettings?.newSidebarEnabled,
     state.availableProviders,
