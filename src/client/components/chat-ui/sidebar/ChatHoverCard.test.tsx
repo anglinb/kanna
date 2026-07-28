@@ -164,34 +164,23 @@ describe("ChatHoverCardContent", () => {
     expect(html).toContain("Done — the branch moved into the hover card.")
   })
 
-  test("times a live turn from its start, not from the last message", () => {
-    const html = render({
-      status: "running",
-      lastTurnStartedAt: NOW - 65_000,
-      lastMessageAt: NOW - 5_000,
-    })
-
-    expect(html).toContain("1m 5s")
+  test("sizes the whole chat rather than timing its last turn", () => {
+    // How far a conversation has gone is what a row can't show and what you'd
+    // want before opening it; the last turn's duration says nothing about that,
+    // and the minimap already reports it per turn.
+    expect(render({ turnCount: 24 })).toContain("24 turns")
+    expect(render({ turnCount: 1 })).toContain("1 turn")
   })
 
-  test("a finished turn reports how long it ran, in the transcript's format", () => {
-    const html = render({
-      lastTurnStartedAt: NOW - 5 * 60_000,
-      lastTurnEndedAt: NOW - 3 * 60_000,
-    })
-
-    expect(html).toContain("2m")
-  })
-
-  test("anchors duration and landing time together at the right edge", () => {
+  test("anchors the turn count and landing time together at the right edge", () => {
     const endedAt = NOW - 60_000
     const time = new Date(endedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-    const html = render({ lastTurnStartedAt: NOW - 2 * 60_000, lastTurnEndedAt: endedAt })
+    const html = render({ turnCount: 8, lastTurnEndedAt: endedAt })
 
     const anchored = html.slice(html.indexOf("ml-auto"))
-    expect(anchored).toContain("1m")
+    expect(anchored).toContain("8 turns")
     expect(anchored).toContain(time)
-    expect(anchored.indexOf("1m")).toBeLessThan(anchored.indexOf(time))
+    expect(anchored.indexOf("8 turns")).toBeLessThan(anchored.indexOf(time))
   })
 
   test("a live turn shows no end time — the only one on hand is the previous turn's", () => {
@@ -199,16 +188,17 @@ describe("ChatHoverCardContent", () => {
     const time = new Date(endedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
     const html = render({
       status: "running",
+      turnCount: 3,
       lastTurnEndedAt: endedAt,
       lastTurnStartedAt: NOW - 60_000,
     })
 
-    expect(html).toContain("1m")
+    expect(html).toContain("3 turns")
     expect(html).not.toContain(time)
   })
 
   test("names the harness with its glyph, and nothing between them", () => {
-    const html = render({ provider: "codex", lastTurnStartedAt: NOW - 60_000, lastTurnEndedAt: NOW })
+    const html = render({ provider: "codex", turnCount: 2, lastTurnEndedAt: NOW })
 
     expect(html).toContain("viewBox=\"0 0 158.7128 157.296\"")
     expect(html).toContain("Codex")
@@ -227,13 +217,14 @@ describe("ChatHoverCardContent", () => {
     expect(html).not.toContain("•")
   })
 
-  test("a chat that has never run a turn simply has no duration", () => {
-    // Old chats predate turn-start recording; they lose the chip rather than
-    // showing a duration measured from something that isn't the turn.
-    const html = render({ lastTurnEndedAt: NOW - 1000 })
+  test("a chat whose turns predate the counter says nothing rather than zero", () => {
+    // The landing time still stands alone; only the count is dropped.
+    const endedAt = NOW - 1000
+    const time = new Date(endedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    const html = render({ turnCount: undefined, lastTurnEndedAt: endedAt })
 
-    // No start time means no duration; the landing time still stands alone.
-    expect(html).not.toContain("ml-auto shrink-0 pl-2\"><span>")
+    expect(html).not.toContain("0 turns")
+    expect(html).toContain(time)
   })
 
   test("an unsent draft ends the card and takes the sent prompt's place", () => {

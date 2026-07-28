@@ -71,6 +71,23 @@ export interface ChatRecord {
   /** When the last turn ended (finished/failed/cancelled) — i.e. when the last agent response was received. */
   lastTurnEndedAt?: number
   /**
+   * How many turns this chat has run, counted from `turn_started`.
+   *
+   * A running total rather than something derived on demand: the sidebar
+   * snapshot is built from `StoreState` alone and never opens a transcript, and
+   * counting prompts per chat per broadcast would mean reading every one.
+   *
+   * Safe to accumulate here precisely because these are *store* events —
+   * compaction writes the total into the snapshot and truncates the log, so
+   * replay only re-applies what came after it. The same counter kept in
+   * `applyMessageMetadata` would double-count, since boot re-runs that over
+   * each transcript's tail on top of an already-loaded snapshot.
+   *
+   * Absent on chats whose turns all predate the field — the card says nothing
+   * rather than claiming zero.
+   */
+  turnCount?: number
+  /**
    * When the agent last wrote to the transcript (assistant text, tool call, or
    * tool result). Advances mid-turn, unlike `lastTurnEndedAt` — the timestamp
    * a chat waiting on a plan or a permission prompt sorts by.

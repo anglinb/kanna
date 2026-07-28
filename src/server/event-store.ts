@@ -686,6 +686,7 @@ export class EventStore {
         if (!chat) break
         chat.updatedAt = event.timestamp
         chat.lastTurnStartedAt = event.timestamp
+        chat.turnCount = (chat.turnCount ?? 0) + 1
         // Kept from the previous turn when this one didn't name a model, so a
         // resumed background turn doesn't blank what the chat last ran with.
         if (event.model) chat.lastModel = event.model
@@ -982,6 +983,10 @@ export class EventStore {
           if (lastEntryAt != null) {
             chat.lastMessageAt = Math.max(chat.lastMessageAt ?? 0, lastEntryAt)
           }
+          // The fork's conversation *is* the source's, so it inherits its turns
+          // too — a fork of a twenty-turn chat has twenty turns behind it, and
+          // starting the count from zero would read as a fresh chat.
+          if (sourceChat.turnCount) chat.turnCount = sourceChat.turnCount
           if (sourceChat.lastUserMessagePreview) chat.lastUserMessagePreview = sourceChat.lastUserMessagePreview
           if (sourceChat.lastAgentMessagePreview) {
             chat.lastAgentMessagePreview = sourceChat.lastAgentMessagePreview

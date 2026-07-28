@@ -974,6 +974,52 @@ describe("EventStore", () => {
     expect(reloadedChat?.lastAgentMessagePreview).toBe("Done, the fix is in auth.ts")
   })
 
+  test("counts turns, and survives the replay that would double-count them", async () => {
+    // The hazard this guards: the count accumulates, so it lives on the *store*
+    // event rather than in `applyMessageMetadata`, which boot re-runs over each
+    // transcript tail on top of an already-loaded snapshot. Put it there and a
+    // restart inflates every chat.
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    expect(store.getChat(chat.id)?.turnCount).toBeUndefined()
+
+    await store.recordTurnStarted(chat.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 1_000, { content: "first" }))
+    await store.recordTurnStarted(chat.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 2_000, { content: "second" }))
+
+    expect(store.getChat(chat.id)?.turnCount).toBe(2)
+
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+
+    expect(reloaded.getChat(chat.id)?.turnCount).toBe(2)
+  })
+
+  test("a fork inherits the turns behind the conversation it copied", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const source = await store.createChat(project.id)
+    await store.setChatProvider(source.id, "claude")
+    await store.setSessionToken(source.id, "session-1")
+    await store.recordTurnStarted(source.id)
+    await store.appendMessage(source.id, entry("user_prompt", 1_000, { content: "first" }))
+    await store.recordTurnStarted(source.id)
+
+    const fork = await store.forkChat(source.id)
+
+    // Starting from zero would read as a fresh chat, which a fork of a
+    // two-turn conversation is not.
+    expect(store.getChat(fork.id)?.turnCount).toBe(2)
+  })
+
   test("strips markdown while the message still has lines to strip it by", async () => {
     // Headings, list markers and quotes are anchored to the start of a line,
     // and this is the last place the lines exist — the preview is one string

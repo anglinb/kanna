@@ -153,11 +153,17 @@ export function ChatNavbar({
   return (
     <CardHeader
       className={cn(
-        "absolute top-0 left-0 right-0 z-10 md:pt-[9px] max-md:px-2 md:pl-1 md:pr-2 border-border/0 flex items-center justify-center",
-        "bg-gradient-to-b from-background lg:from-background/0"
+        "absolute top-0 left-0 right-0 z-10 md:pt-[9px] max-md:px-2 md:pl-1 md:pr-2 border-border/0 flex items-center justify-center"
       )}
     >
-      <div className="absolute top-0 left-0 right-0 z-0 h-[100px] bg-gradient-to-b from-background via-background/50 to-background/10 md:to-background/0 pointer-events-none block"></div>
+      {/* Both washes stop at the transcript's scrollbar gutter instead of
+          running to the card edge, so the scrollbar isn't dimmed by them — a
+          native scrollbar paints under any later positioned sibling and no
+          z-index can lift it. The header keeps its full width so the controls
+          in it stay where they were; only the backgrounds move inward, and
+          they cover nothing but bare background out there anyway. */}
+      <div className="absolute inset-y-0 left-0 right-[var(--transcript-scrollbar-w,0px)] z-0 bg-gradient-to-b from-background lg:from-background/0 pointer-events-none"></div>
+      <div className="absolute top-0 left-0 right-[var(--transcript-scrollbar-w,0px)] z-0 h-[100px] bg-gradient-to-b from-background via-background/50 to-background/10 md:to-background/0 pointer-events-none block"></div>
       <div className="relative flex items-center gap-2 w-full">
         <div className={`md:h-[30px] flex items-center gap-0 flex-shrink-0 border border-border/0 rounded-[9px] ${sidebarCollapsed ? 'px-1.5  border-border' : ''} md:px-[2px]`}>
           <Button

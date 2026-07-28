@@ -420,7 +420,15 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
               </TurnCardMessage>
             ) : null}
           </div>
-          <TurnCardTimingRow duration={cardDuration} timestamp={cardTimestamp} />
+          <TurnCardTimingRow
+            detail={cardDuration}
+            timestamp={cardTimestamp}
+            // What the sidebar's card spends this slot on the harness for: the
+            // one fact about the turn that the two lines above it don't carry.
+            // A prompt and a closing sentence look the same whether the agent
+            // answered in one breath or ran forty tools to get there.
+            leading={activeTurn.agentMessageCount > 0 ? formatAgentMessageCount(activeTurn.agentMessageCount) : null}
+          />
         </div>
       ) : null}
     </div>
@@ -429,6 +437,11 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
+}
+
+/** "1 message" / "12 messages" — the agent's own text and tool calls. */
+function formatAgentMessageCount(count: number) {
+  return `${count} message${count === 1 ? "" : "s"}`
 }
 
 /**

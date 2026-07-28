@@ -879,6 +879,12 @@ export interface SidebarChatRow {
   /** When the last turn ended (agent response received). Drives Review/In Progress ordering. */
   lastTurnEndedAt?: number
   /**
+   * How many turns the chat has run in total — the size of the conversation,
+   * as against `lastTurn*`, which describe only the most recent one. Absent on
+   * chats whose turns all predate the counter.
+   */
+  turnCount?: number
+  /**
    * When the agent last produced something — assistant text, a tool call, or a
    * tool result. Unlike `lastTurnEndedAt` this advances *during* a turn, so a
    * chat parked mid-turn (plan mode / a permission prompt, which end no turn)

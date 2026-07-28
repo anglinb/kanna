@@ -1036,6 +1036,7 @@ export function ChatPage() {
           socket={state.socket}
           emptyStateProjectPath={state.navbarLocalPath}
           onOpenProjectExternal={handleOpenExternal}
+          scrollbarGutterHostRef={chatCardRef}
         />
         </ToolPayloadProvider>
         </TranscriptRenderOptionsProvider>

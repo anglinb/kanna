@@ -1,9 +1,9 @@
-import { type ComponentPropsWithRef, type ReactNode, useCallback, useEffect, useState } from "react"
+import { type ComponentPropsWithRef, type ReactNode, useCallback, useState } from "react"
 import { TurnCardMessage, TurnCardMetaRow, TurnCardTimingRow } from "../../ui/turn-card"
 import { GitBranch, PencilLine } from "lucide-react"
 import { getRepoUrlLabel } from "../../../../shared/git-url"
 import { PROVIDERS, type SidebarChatRow } from "../../../../shared/types"
-import { formatDuration, formatPromptTimestamp } from "../../messages/ResultMessage"
+import { formatPromptTimestamp } from "../../messages/ResultMessage"
 import { PROVIDER_ICONS } from "../../provider-icons"
 import { toMessagePreview } from "../../../../shared/message-preview"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
@@ -68,38 +68,20 @@ function getCurrentTurnReply(row: SidebarChatRow): string | null {
 }
 
 /**
- * How long the turn ran — elapsed so far while it's live, total once it has
- * landed. The bare duration, in the transcript's own format: sat beside the
- * clock time it's unambiguous, and "Worked for" spent a third of a narrow line
- * saying what the number already says.
+ * How much conversation is in this chat — "1 turn", "24 turns".
  *
- * Null when the chat has never run a turn, or ran them all before turn starts
- * were recorded — the line drops the duration rather than showing one measured
- * from something that isn't the turn.
+ * The size of the whole thing, not the length of its last turn: the two
+ * messages above this line are already the latest turn, and a chat you're
+ * deciding whether to open is better described by how far it has gone than by
+ * how long its most recent run took (which the minimap reports per turn
+ * anyway, where it's about a turn you can actually see).
+ *
+ * Null on chats whose turns all predate the counter — the line drops the fact
+ * rather than claiming a chat with history has run none.
  */
-function formatTurnDuration(row: SidebarChatRow, nowMs: number): string | null {
-  const activeSince = getActiveTurnStartedAt(row)
-  if (activeSince != null) return formatDuration(Math.max(0, nowMs - activeSince))
-  if (row.lastTurnStartedAt == null || row.lastTurnEndedAt == null) return null
-  return formatDuration(Math.max(0, row.lastTurnEndedAt - row.lastTurnStartedAt))
-}
-
-/**
- * Wall clock for the live duration, ticking only while a turn is actually
- * running. The sidebar's own `nowMs` moves once every 30s — right for "3h ago"
- * on a row, useless for a seconds counter someone is watching.
- */
-function useTurnClock(active: boolean): number {
-  const [nowMs, setNowMs] = useState(() => Date.now())
-
-  useEffect(() => {
-    if (!active) return
-    setNowMs(Date.now())
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [active])
-
-  return nowMs
+function formatTurnCount(row: SidebarChatRow): string | null {
+  if (!row.turnCount) return null
+  return `${row.turnCount} turn${row.turnCount === 1 ? "" : "s"}`
 }
 
 /** Exported for tests: the card body, without the hover-card machinery around it. */
@@ -123,10 +105,9 @@ export function ChatHoverCardContent({
   onSetupGit?: () => void
 }) {
   const row = thread.row
-  const nowMs = useTurnClock(getActiveTurnStartedAt(row) != null)
   const label = thread.projectLabel
   const HarnessIcon = row.provider ? PROVIDER_ICONS[row.provider] : null
-  const duration = formatTurnDuration(row, nowMs)
+  const turns = formatTurnCount(row)
   const reply = getCurrentTurnReply(row)
   // When the turn landed, in the transcript's own format — "3:42 PM" today,
   // "Mon 3:42 PM" this week, the full date beyond that. Suppressed while a turn
@@ -252,11 +233,13 @@ export function ChatHoverCardContent({
           </TurnCardMessage>
         ) : null}
       </div>
-      {/* The harness joins the duration on the left — both say *how* the turn
-          ran — leaving the right edge to when it landed. A live turn has no
-          landing time yet, so it shows the elapsed count alone. */}
+      {/* The harness on the left, the chat's size and when it last landed on
+          the right. Turns rather than the last turn's duration, which the
+          minimap already reports per turn and which said nothing about the
+          chat: how much conversation is in here is the thing a sidebar row
+          can't show and you'd want before opening it. */}
       <TurnCardTimingRow
-        duration={duration}
+        detail={turns}
         timestamp={endedAt}
         leading={row.provider ? (
           // Glyph and name are one fact, so nothing separates them.

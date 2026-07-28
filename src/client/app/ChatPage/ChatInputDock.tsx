@@ -47,26 +47,35 @@ export const ChatInputDock = memo(function ChatInputDock({
 }: ChatInputDockProps) {
   return (
     <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
-      <div className="bg-gradient-to-t from-background via-background to-background/10 md:to-background/0 pointer-events-auto" ref={inputRef}>
-        <ChatInput
-          ref={chatInputRef}
-          inputElementRef={chatInputElementRef}
-          onLayoutChange={onLayoutChange}
-          key={activeChatId ?? "new-chat"}
-          onSubmit={onSubmit}
-          onCancel={onCancel}
-          disabled={!hasSelectedProject}
-          canCancel={canCancel}
-          chatId={activeChatId}
-          projectId={projectId}
-          projectPath={projectPath}
-          activeProvider={activeProvider}
-          availableProviders={availableProviders}
-          contextWindowSnapshot={contextWindowSnapshot}
-          previousPrompt={previousPrompt}
-          onEditModels={onEditModels}
-          onListSkills={onListSkills}
-        />
+      <div className="relative pointer-events-auto" ref={inputRef}>
+        {/* The wash is its own layer, ending at the transcript's scrollbar
+            gutter so it stops dimming the scrollbar (which paints below any
+            later positioned sibling and can't be raised with z-index). It has
+            to be a layer rather than a background on this wrapper: the wrapper
+            stays full width so the composer inside it remains centred on the
+            card, not on the card minus the gutter. */}
+        <div className="absolute inset-y-0 left-0 right-[var(--transcript-scrollbar-w,0px)] bg-gradient-to-t from-background via-background to-background/10 md:to-background/0 pointer-events-none" />
+        <div className="relative">
+          <ChatInput
+            ref={chatInputRef}
+            inputElementRef={chatInputElementRef}
+            onLayoutChange={onLayoutChange}
+            key={activeChatId ?? "new-chat"}
+            onSubmit={onSubmit}
+            onCancel={onCancel}
+            disabled={!hasSelectedProject}
+            canCancel={canCancel}
+            chatId={activeChatId}
+            projectId={projectId}
+            projectPath={projectPath}
+            activeProvider={activeProvider}
+            availableProviders={availableProviders}
+            contextWindowSnapshot={contextWindowSnapshot}
+            previousPrompt={previousPrompt}
+            onEditModels={onEditModels}
+            onListSkills={onListSkills}
+          />
+        </div>
       </div>
     </div>
   )

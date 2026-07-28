@@ -31,6 +31,17 @@ export interface TranscriptTurn {
   /** The turn's final assistant message, if it has produced one yet. */
   response: string | null
   /**
+   * How much the agent did here: every message it sent, counting its text and
+   * its tool calls alike.
+   *
+   * Tool *results* are not the agent's, so they don't count — and client-side
+   * they aren't separate messages anyway, having been folded into the call they
+   * answer. Empty assistant text doesn't count either: a streaming turn emits
+   * blank entries before its first token, and counting those would tick the
+   * number up while nothing had been said.
+   */
+  agentMessageCount: number
+  /**
    * Failure text, when the turn ended in an error result.
    *
    * A failed turn usually emits no assistant text at all — the provider dies
@@ -74,7 +85,16 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]
-    if (row?.kind !== "single") continue
+    if (!row) continue
+
+    // Grouped tool calls are the only thing the loop cares about that isn't a
+    // single row: a run of them collapses into one row, but it is still that
+    // many things the agent did.
+    if (row.kind === "tool-group") {
+      const current = turns[turns.length - 1]
+      if (current) current.agentMessageCount += row.messages.length
+      continue
+    }
 
     if (row.message.kind === "user_prompt") {
       const previous = turns[turns.length - 1]
@@ -86,6 +106,7 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
         replyRowId: null,
         prompt: asText(row.message.content),
         response: null,
+        agentMessageCount: 0,
         error: null,
         timestamp: asTimestamp(row.message.timestamp),
         durationMs: null,
@@ -107,7 +128,15 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
       if (text) {
         current.response = text
         current.replyRowId = row.id
+        current.agentMessageCount += 1
       }
+      continue
+    }
+
+    // A tool call that didn't get swept into a group — one on its own, or the
+    // one still running at the end of a live turn.
+    if (row.message.kind === "tool") {
+      current.agentMessageCount += 1
       continue
     }
 

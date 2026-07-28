@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Code,
   Info,
@@ -9,6 +9,7 @@ import {
 import { useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom"
 import { getKeybindingsFilePathDisplay, SDK_CLIENT_APP } from "../../shared/branding"
 import { SettingsHeaderButton } from "../components/ui/settings-header-button"
+import { useScrollbarGutterVar } from "../hooks/useScrollbarGutterVar"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { cn } from "../lib/utils"
 import { ChangelogSection, useChangelog } from "./settings/ChangelogSection"
@@ -138,6 +139,13 @@ export function SettingsPage() {
     }
   }, [])
 
+  // The status footer overlays the section scroller, so it ends at that
+  // scroller's gutter rather than dimming the scrollbar through its backdrop
+  // blur. See useScrollbarGutterVar for why z-index can't do this.
+  const pageRef = useRef<HTMLDivElement>(null)
+  const sectionScrollRef = useRef<HTMLDivElement>(null)
+  useScrollbarGutterVar(sectionScrollRef, pageRef, "--settings-scrollbar-w")
+
   const selectedSection = sidebarItems.find((item) => item.id === selectedPage) ?? sidebarItems[0]
   const selectedSectionSubtitle =
     selectedPage === "keybindings"
@@ -156,7 +164,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="relative flex h-full flex-1 min-w-0 bg-background">
+    <div ref={pageRef} className="relative flex h-full flex-1 min-w-0 bg-background">
       <div className="flex min-w-0 flex-1">
         <aside className={`hidden w-[200px] shrink-0 md:block ${showFooter ? "pb-[89px]" : ""}`}>
           <div className="flex flex-col gap-1 px-4 py-6">
@@ -198,7 +206,7 @@ export function SettingsPage() {
           </div>
         </aside>
 
-        <div className="min-w-0 flex-1 overflow-y-auto">
+        <div ref={sectionScrollRef} className="min-w-0 flex-1 overflow-y-auto">
           <div className="border-b border-border py-2 md:hidden h-[63px] pl-1 md:h-auto">
             <div className="overflow-x-auto pr-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <div className="flex min-w-max items-center gap-2">
@@ -332,7 +340,7 @@ export function SettingsPage() {
       </div>
 
       {showFooter ? (
-        <div className="absolute bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="absolute bottom-0 left-0 right-[var(--settings-scrollbar-w,0px)] border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <div className="px-6 py-[14.25px]">
             <div className="grid gap-3 text-xs text-muted-foreground grid-cols-2 lg:grid-cols-4">
               <div>

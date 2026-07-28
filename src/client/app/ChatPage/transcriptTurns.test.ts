@@ -22,15 +22,19 @@ function singleRow(id: string, message: Record<string, unknown>): ResolvedTransc
   } as unknown as ResolvedTranscriptRow
 }
 
-function toolGroupRow(id: string): ResolvedTranscriptRow {
+function toolGroupRow(id: string, memberCount = 1): ResolvedTranscriptRow {
   return {
     kind: "tool-group",
     id: `tool-group:${id}`,
     startIndex: 0,
     isLoading: false,
-    messages: [{ id, kind: "unknown", json: "{}", timestamp: "2026-07-26T00:00:00.000Z" }],
+    messages: Array.from({ length: memberCount }, (_, index) => (
+      { id: `${id}-${index}`, kind: "tool", timestamp: TIMESTAMP }
+    )),
   } as unknown as ResolvedTranscriptRow
 }
+
+const tool = (id: string) => singleRow(id, { kind: "tool" })
 
 const prompt = (id: string, content: string) => singleRow(id, { kind: "user_prompt", content })
 const assistant = (id: string, text: string) => singleRow(id, { kind: "assistant_text", text })
@@ -51,8 +55,8 @@ describe("buildTranscriptTurns", () => {
     ])
 
     expect(turns).toEqual([
-      { id: "p1", rowIndex: 0, endRowIndex: 2, replyRowId: "a1", prompt: "first question", response: "first answer", error: null, timestamp: TIMESTAMP, durationMs: null },
-      { id: "p2", rowIndex: 3, endRowIndex: 4, replyRowId: "a2", prompt: "second question", response: "second answer", error: null, timestamp: TIMESTAMP, durationMs: null },
+      { id: "p1", rowIndex: 0, endRowIndex: 2, replyRowId: "a1", prompt: "first question", response: "first answer", agentMessageCount: 2, error: null, timestamp: TIMESTAMP, durationMs: null },
+      { id: "p2", rowIndex: 3, endRowIndex: 4, replyRowId: "a2", prompt: "second question", response: "second answer", agentMessageCount: 1, error: null, timestamp: TIMESTAMP, durationMs: null },
     ])
   })
 
@@ -289,9 +293,50 @@ describe("buildTranscriptTurns — errored turns", () => {
   })
 })
 
+describe("agentMessageCount", () => {
+  test("counts the agent's text and its tool calls, grouped or not", () => {
+    // A prompt and a closing sentence look the same whether the agent answered
+    // in one breath or ran a dozen tools to get there; this is the number that
+    // says which happened.
+    const turns = buildTranscriptTurns([
+      prompt("p1", "go"),
+      tool("standalone"),
+      toolGroupRow("run", 4),
+      assistant("a1", "done"),
+      okResult("r1"),
+    ])
+
+    expect(turns[0]?.agentMessageCount).toBe(6)
+  })
+
+  test("does not count the prompt, the result, or text that hasn't arrived", () => {
+    // Blank assistant entries lead a streaming turn; counting them would tick
+    // the number up while nothing had been said.
+    const turns = buildTranscriptTurns([
+      prompt("p1", "go"),
+      assistant("a1", "   "),
+      okResult("r1"),
+    ])
+
+    expect(turns[0]?.agentMessageCount).toBe(0)
+  })
+
+  test("attributes each turn's work to that turn", () => {
+    const turns = buildTranscriptTurns([
+      prompt("p1", "first"),
+      toolGroupRow("run", 3),
+      assistant("a1", "first answer"),
+      prompt("p2", "second"),
+      assistant("a2", "second answer"),
+    ])
+
+    expect(turns.map((turn) => turn.agentMessageCount)).toEqual([4, 1])
+  })
+})
+
 describe("isTurnInView", () => {
   const turn = (rowIndex: number, endRowIndex: number) =>
-    ({ id: "t", rowIndex, endRowIndex, replyRowId: null, prompt: "", response: null, error: null, timestamp: null, durationMs: null }) satisfies TranscriptTurn
+    ({ id: "t", rowIndex, endRowIndex, replyRowId: null, prompt: "", response: null, agentMessageCount: 0, error: null, timestamp: null, durationMs: null }) satisfies TranscriptTurn
 
   test("counts a turn that merely overlaps the window", () => {
     // Turn spans the whole viewport with neither edge inside it.
@@ -330,7 +375,7 @@ describe("getMinimapCapacity", () => {
 
 describe("selectVisibleTurns", () => {
   const turns = Array.from({ length: 5 }, (_, index) => (
-    { id: `t${index}`, rowIndex: index, endRowIndex: index, replyRowId: null, prompt: "", response: null, error: null, timestamp: null, durationMs: null }
+    { id: `t${index}`, rowIndex: index, endRowIndex: index, replyRowId: null, prompt: "", response: null, agentMessageCount: 0, error: null, timestamp: null, durationMs: null }
   ))
 
   test("keeps the most recent turns when over capacity", () => {

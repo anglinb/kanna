@@ -16,6 +16,7 @@ import { ProcessingMessage } from "../../components/messages/ProcessingMessage"
 import { ContextMenu, ContextMenuTrigger } from "../../components/ui/context-menu"
 import { OpenExternalContextMenuContent, openContextMenuFromButton } from "../../components/open-external-menu"
 import { TRANSCRIPT_PADDING_BOTTOM_OFFSET } from "../kannaStateHelpers"
+import { useScrollbarGutterVar } from "../../hooks/useScrollbarGutterVar"
 import { cn } from "../../lib/utils"
 import type { ChatJumpRole } from "../../lib/chat-navigation"
 import { formatPathWithTilde, shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
@@ -227,6 +228,13 @@ interface ChatTranscriptViewportProps {
   jumpRequest?: TranscriptJumpRequest | null
   /** Fired once a jump request has been spent, so the sender can clear it. */
   onJumpRequestHandled?: (requestId: string) => void
+  /**
+   * Where to publish `--transcript-scrollbar-w`. The chrome that overlays the
+   * transcript — navbar wash, composer gradient — lives outside this component
+   * but inside this element, and ends at the gutter so it stops dimming the
+   * scrollbar. Unset (the export viewer) simply means nobody is asking.
+   */
+  scrollbarGutterHostRef?: React.RefObject<HTMLElement | null>
 }
 
 /**
@@ -277,10 +285,12 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   onReportReadAnchor,
   jumpRequest = null,
   onJumpRequestHandled,
+  scrollbarGutterHostRef,
 }: ChatTranscriptViewportProps) {
   const { scrollToEnd, scrollToMessage } = useMessageScroller()
   const { visibleMessageIds } = useMessageScrollerVisibility()
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  useScrollbarGutterVar(viewportRef, scrollbarGutterHostRef, "--transcript-scrollbar-w")
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
   const [localLinkMenuTarget, setLocalLinkMenuTarget] = useState<OpenLocalLinkTarget | null>(null)

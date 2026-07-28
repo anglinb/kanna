@@ -89,39 +89,46 @@ export function TurnCardMessage({
 }
 
 /**
- * The footer: how long the turn ran on the left, when it happened on the right.
+ * The footer: how much and when, anchored right; what and by whom on the left.
  *
- * Split to the two edges rather than run together, because down a stack of
- * cards these are read as columns — a duration you compare against the one
- * above it, a time you scan for — and a pair of values sharing one end of the
- * line makes both of them something you hunt along the row for instead.
+ * `detail` and `timestamp` share the right edge with a bullet between them
+ * because they read as one fact — "two minutes, an hour ago", "eight turns,
+ * yesterday". Split to opposite ends they read as two unrelated columns, and
+ * the left one floats mid-row with nothing to anchor it.
  *
- * `leading` is whatever else the card knows and the other doesn't (the
- * sidebar's harness), which joins the duration on the left since both describe
- * *how* the turn ran rather than when.
+ * Each card fills the two slots with what it knows the other doesn't. The
+ * minimap describes one turn: its message count on the left, how long that turn
+ * ran on the right. The sidebar describes a whole chat: the harness on the left,
+ * how many turns it has run on the right. Same shape, same reading — scale is
+ * the only thing that differs.
  *
- * Renders nothing at all when it has nothing to say, so a card with no timing
- * doesn't carry an empty line.
+ * Renders nothing at all when it has nothing to say, so a card with no footer
+ * facts doesn't carry an empty line.
  */
 export function TurnCardTimingRow({
-  duration,
+  detail,
   timestamp,
   leading,
 }: {
-  duration?: string | null
+  /** The measure that pairs with the time — a duration, or a turn count. */
+  detail?: string | null
   timestamp?: string | null
   leading?: ReactNode
 }) {
-  if (!duration && !timestamp && !leading) return null
+  if (!detail && !timestamp && !leading) return null
 
   return (
     <TurnCardMetaRow className="mt-1">
-      {leading ? <span className="flex min-w-0 shrink-0 items-center gap-1">{leading}</span> : null}
-      {leading && duration ? <TurnCardMetaSeparator /> : null}
-      {duration ? <span className="shrink-0">{duration}</span> : null}
-      {/* `ml-auto` on the timestamp alone, so it holds the right edge whether or
-          not anything is sitting on the left. */}
-      {timestamp ? <span className="ml-auto shrink-0 pl-2">{timestamp}</span> : null}
+      {leading ? <span className="flex min-w-0 items-center gap-1">{leading}</span> : null}
+      {/* `ml-auto` on the group, so the pair holds the right edge together
+          whether or not anything is sitting on the left. */}
+      {detail || timestamp ? (
+        <span className="ml-auto flex shrink-0 items-center gap-1 pl-2">
+          {detail ? <span>{detail}</span> : null}
+          {detail && timestamp ? <TurnCardMetaSeparator /> : null}
+          {timestamp ? <span>{timestamp}</span> : null}
+        </span>
+      ) : null}
     </TurnCardMetaRow>
   )
 }
