@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
+  CHAT_MIN_SIZE_PERCENT,
+  getEffectiveTerminalMainSizes,
   getTerminalPanelDefaultSizes,
+  MAX_TERMINAL_MAIN_SIZES,
   getRightSidebarSizePercent,
   getRightSidebarSizePx,
   getIgnoreFolderEntryFromDiffPath,
@@ -55,6 +58,29 @@ describe("shouldUseMobileRightSidebarOverlay", () => {
   test("keeps the desktop split layout at and above the breakpoint", () => {
     expect(shouldUseMobileRightSidebarOverlay(768)).toBe(false)
     expect(shouldUseMobileRightSidebarOverlay(1280)).toBe(false)
+  })
+})
+
+describe("getEffectiveTerminalMainSizes", () => {
+  test("pins the terminal to its ceiling on mobile", () => {
+    expect(getEffectiveTerminalMainSizes([68, 32], true)).toEqual([25, 75])
+  })
+
+  test("hands back the persisted split untouched on desktop", () => {
+    const stored: [number, number] = [68, 32]
+    expect(getEffectiveTerminalMainSizes(stored, false)).toBe(stored)
+  })
+
+  // Anything taller and the panel group would clamp it back down on the first
+  // layout pass, so the pinned height has to be exactly what the chat pane allows.
+  test("never asks for more height than the chat pane's minimum leaves", () => {
+    const [chatSize, terminalSize] = getEffectiveTerminalMainSizes([68, 32], true)
+    expect(chatSize).toBe(CHAT_MIN_SIZE_PERCENT)
+    expect(chatSize + terminalSize).toBe(100)
+  })
+
+  test("collapses to a hidden terminal even while clamped", () => {
+    expect(getTerminalPanelDefaultSizes(false, MAX_TERMINAL_MAIN_SIZES)).toEqual([100, 0])
   })
 })
 

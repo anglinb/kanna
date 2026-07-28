@@ -24,6 +24,7 @@ export function ThreadRow({
   detailLabel,
   dimIdleTitles = true,
   onSelect,
+  onSelectMessage,
   onCreateChat,
   onRenameChat,
   onShareChat,
@@ -50,6 +51,13 @@ export function ThreadRow({
    */
   dimIdleTitles?: boolean
   onSelect: (chatId: string) => void
+  /**
+   * Opens the chat scrolled to one message — what the hover card's prompt and
+   * reply do when clicked. Optional: without it the card's previews are inert
+   * text and a click anywhere on it just opens the chat (the archived list,
+   * which has no transcript to land in, passes nothing).
+   */
+  onSelectMessage?: (chatId: string, messageId: string) => void
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
   onShareChat: (chatId: string) => void
@@ -113,6 +121,7 @@ export function ThreadRow({
       canFork={thread.row.canFork}
       archived={archived}
       editorLabel={editorLabel}
+      repoUrl={thread.projectLabel.repoUrl}
       onNewChat={() => onCreateChat(thread.projectId)}
       onRestore={archived ? () => onRestoreChat(thread.row.chatId) : undefined}
       onRename={() => onRenameChat(thread.row)}
@@ -127,7 +136,12 @@ export function ThreadRow({
     >
       {/* Sidebar rows only: the palette renders `ThreadRowContent` directly and
           gets no card — it's already a detail view you opened on purpose. */}
-      <ChatHoverCard thread={thread} draft={draft}>
+      <ChatHoverCard
+        thread={thread}
+        draft={draft}
+        onSelectMessage={onSelectMessage}
+        onSelectChat={onSelect}
+      >
         <div
           // The marker the sidebar's scroll-to-active querySelector looks for.
           // When the Chats tab renders above the project groups, its copy is

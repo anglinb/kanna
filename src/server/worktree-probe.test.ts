@@ -328,6 +328,37 @@ describe("WorktreeProbe integration", () => {
     expect(probe.getRepoLabels().get("project-1")?.repoOwner).toBe("acme")
   })
 
+  test("resolves the origin to a browsable page, host and all", async () => {
+    // The client never sees the remote URL, and the host is the part it can't
+    // reconstruct from `owner/repo` — so "Open on GitHub" is only correct
+    // because this ran.
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await probe.refreshForChat("chat-1")
+    expect(probe.getRepoLabels().get("project-1")?.repoUrl).toBeUndefined()
+
+    await run(["git", "remote", "add", "origin", "git@github.com:acme/widgets.git"], repoRoot)
+    await probe.refreshForChat("chat-1")
+
+    expect(probe.getRepoLabels().get("project-1")?.repoUrl).toBe("https://github.com/acme/widgets")
+  })
+
+  test("leaves a local-path remote without a page, rather than inventing one", async () => {
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await run(["git", "remote", "add", "origin", "/srv/git/widgets.git"], repoRoot)
+    await probe.refreshForChat("chat-1")
+
+    const label = probe.getRepoLabels().get("project-1")
+    expect(label?.repoUrl).toBeUndefined()
+    // And the rest of the label is undisturbed by the remote it couldn't use.
+    expect(label?.repoName).toBe(path.basename(repoRoot))
+  })
+
   test("the tick labels projects with no finished turn, without running git status", async () => {
     const repoRoot = await createRepo()
     // No lastTurnEndedAt: this project can never show the dot, but its label is

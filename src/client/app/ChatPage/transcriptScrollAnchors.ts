@@ -107,11 +107,47 @@ export type TranscriptScrollTarget =
   | { kind: "end" }
   /**
    * `rowId` is a `ResolvedTranscriptRow.id` — what the scroller addresses rows
-   * by. `offsetFromMessage` refines the landing to where inside the row the
-   * reader actually was, and is only present when the column is the same width
-   * it was recorded at.
+   * by.
+   *
+   * `offsetFromMessage` moves the landing point relative to the row's top,
+   * measured downward. Positive puts the reader back where they were *inside* a
+   * message (a restored anchor, and only when the column is the same width it
+   * was recorded at). Negative leaves a gap above it, which is what an explicit
+   * jump wants — see `JUMP_LEAD_IN_RATIO`.
    */
   | { kind: "pin"; rowId: string; offsetFromMessage?: number }
+
+/**
+ * A request to land on one named message, made from outside the transcript —
+ * today, clicking a message in the sidebar's chat hover card.
+ *
+ * Carries a `requestId` because the message alone can't say "again": clicking
+ * the same preview twice, or clicking back to a chat you already jumped into,
+ * has to move the viewport a second time. The id is what the viewport marks as
+ * spent, so a request survives exactly one landing.
+ */
+export interface TranscriptJumpRequest {
+  messageId: string
+  requestId: string
+}
+
+/**
+ * Where a jump request should land, or null when the message isn't in the
+ * loaded transcript.
+ *
+ * Resolves through the row index rather than using the message id directly:
+ * the scroller addresses *rows*, and a message swept into a tool group is
+ * reachable only by its group's id.
+ */
+export function resolveJumpTarget(
+  rows: ResolvedTranscriptRow[],
+  rowIndexByMessageId: Map<string, number>,
+  messageId: string,
+): TranscriptScrollTarget | null {
+  const index = rowIndexByMessageId.get(messageId)
+  const rowId = index === undefined ? undefined : rows[index]?.id
+  return rowId === undefined ? null : { kind: "pin", rowId }
+}
 
 /**
  * Decide where a freshly opened chat should land.

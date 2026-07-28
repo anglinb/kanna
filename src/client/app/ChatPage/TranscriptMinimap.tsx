@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatDuration, formatPromptTimestamp } from "../../components/messages/ResultMessage"
+import { toMessagePreview } from "../../../shared/message-preview"
 import {
   getMagnifyFalloff,
   getMinimapCapacity,
@@ -268,7 +269,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
               key={turn.id}
               type="button"
               onClick={() => onSelectTurn(turn)}
-              aria-label={`Jump to: ${turn.prompt.slice(0, 80)}`}
+              aria-label={`Jump to: ${toMessagePreview(turn.prompt).slice(0, 80)}`}
               className="absolute left-0 flex cursor-pointer items-center bg-transparent p-0"
               style={{
                 top: centerY,
@@ -318,16 +319,21 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
             transform: "translateY(-50%)",
           }}
         >
+          {/* Same treatment as the sidebar's chat card: the clamp is two or
+              three lines, and raw markdown spends them on syntax. */}
           <div className="line-clamp-2 text-sm font-medium text-popover-foreground">
-            {focusedTurn.prompt || "Empty message"}
+            {toMessagePreview(focusedTurn.prompt) || "Empty message"}
           </div>
           {focusedTurn.error ? (
+            // Not put through the preview pass: a failure is a diagnostic the
+            // provider wrote, not authored markdown, and its punctuation is
+            // more likely to be part of the message than markup.
             <div className="mt-1 line-clamp-3 text-sm text-destructive">
               {focusedTurn.error}
             </div>
           ) : focusedTurn.response ? (
             <div className="mt-1 line-clamp-3 text-sm text-muted-foreground">
-              {focusedTurn.response}
+              {toMessagePreview(focusedTurn.response)}
             </div>
           ) : null}
           {/* Same treatment as the turn-boundary dividers in the transcript,

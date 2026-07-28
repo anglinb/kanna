@@ -25,6 +25,7 @@ import type {
   SelectedBranch,
   UpstreamStatus,
 } from "../shared/types"
+import { buildKannaCommitAttribution } from "./attribution"
 import { generateCommitMessageDetailed } from "./generate-commit-message"
 import { getGhAuthInfo } from "./github"
 import { resolveCommandPath } from "./process-utils"
@@ -2372,6 +2373,14 @@ export class DiffStore {
     const commitArgs = ["commit", "--only", "-m", summary]
     if (description) {
       commitArgs.push("-m", description)
+    }
+    // Kanna's own attribution, as its own -m paragraph (git joins them with a
+    // blank line, which is exactly the placement git wants for a trailer
+    // block). Each part is skipped if the author already typed it, so it never
+    // doubles up.
+    const attribution = buildKannaCommitAttribution([summary, description].filter(Boolean).join("\n\n"))
+    if (attribution) {
+      commitArgs.push("-m", attribution)
     }
     commitArgs.push("--pathspec-from-file=-", "--pathspec-file-nul")
 

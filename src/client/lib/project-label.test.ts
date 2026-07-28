@@ -98,4 +98,37 @@ describe("getProjectSidebarLabel", () => {
     // still has to say which branch you're on.
     expect(label).toEqual({ name: "Work", currentBranch: "feat/x", text: "Work" })
   })
+
+  test("the forge link survives a rename, like the branch and unlike the repo path", () => {
+    // Renaming a project doesn't move the code. Dropping the link here would
+    // take "Open on GitHub" away from exactly the projects someone cared
+    // enough about to name.
+    const label = getProjectSidebarLabel({
+      title: "Work",
+      sidebarTitle: "Work",
+      repoName: "kanna",
+      repoOwner: "jakemor",
+      repoUrl: "https://github.com/jakemor/kanna",
+    })
+
+    expect(label.repoUrl).toBe("https://github.com/jakemor/kanna")
+    expect(label.repoPath).toBeUndefined()
+  })
+
+  test("carries the forge link through the ordinary repo label", () => {
+    expect(getProjectSidebarLabel({
+      title: "kanna",
+      repoName: "kanna",
+      repoOwner: "jakemor",
+      branchName: "feat/x",
+      repoUrl: "https://github.com/jakemor/kanna",
+    }).repoUrl).toBe("https://github.com/jakemor/kanna")
+  })
+
+  test("a project with no origin has no link to offer", () => {
+    expect(getProjectSidebarLabel({
+      title: "scratch",
+      repoName: "scratch",
+    }).repoUrl).toBeUndefined()
+  })
 })

@@ -109,6 +109,8 @@ interface Props {
   /** Anchor for the date buckets; bucketing runs in the browser so it always follows the user's local timezone. */
   nowMs: number
   onSelectChat: (chatId: string) => void
+  /** Opens a chat landing on one message — the hover card's clickable previews. */
+  onSelectChatMessage: (chatId: string, messageId: string) => void
   onOpenArchivedChat: (chatId: string) => void
   onRestoreChat: (chatId: string) => void
   onCreateChat: (projectId: string) => void
@@ -136,6 +138,7 @@ function ThreadSectionsImpl({
   editorLabel,
   nowMs,
   onSelectChat,
+  onSelectChatMessage,
   onOpenArchivedChat,
   onRestoreChat,
   onCreateChat,
@@ -193,6 +196,7 @@ function ThreadSectionsImpl({
       detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
       dimIdleTitles={false}
       onSelect={onSelectChat}
+      onSelectMessage={onSelectChatMessage}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
       onShareChat={onShareChat}

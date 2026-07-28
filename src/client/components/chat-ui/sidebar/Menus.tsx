@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
-import { Archive, Code, Copy, EyeOff, FolderOpen, Pencil, PencilOff, RotateCcw, Split, SquarePen, Trash2, UserRoundPlus } from "lucide-react"
+import { Archive, Code, Copy, EyeOff, FolderOpen, Github, Pencil, PencilOff, RotateCcw, Split, SquarePen, Trash2, UserRoundPlus } from "lucide-react"
+import { getRepoUrlLabel } from "../../../../shared/git-url"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -8,8 +9,37 @@ import {
   ContextMenuTrigger,
 } from "../../ui/context-menu"
 
+/**
+ * "Open on GitHub" (or GitLab, or whatever host the remote names), sitting with
+ * the other Open-in items.
+ *
+ * Renders nothing without a URL — a project with no `origin`, or one whose
+ * remote is a bare path, has no page to open, and a permanently disabled row in
+ * every menu would cost more than it explains.
+ *
+ * Opens in *this* browser rather than through `system.openExternal`: that
+ * command opens things on the machine the project lives on, which is the wrong
+ * screen the moment that machine isn't the one you're sitting at.
+ */
+export function OpenRepoMenuItem({ repoUrl }: { repoUrl?: string }) {
+  if (!repoUrl) return null
+
+  return (
+    <ContextMenuItem
+      onSelect={(event) => {
+        event.preventDefault()
+        window.open(repoUrl, "_blank", "noopener,noreferrer")
+      }}
+    >
+      <Github className="h-3.5 w-3.5" />
+      <span className="text-xs font-medium">Open on {getRepoUrlLabel(repoUrl)}</span>
+    </ContextMenuItem>
+  )
+}
+
 export function ProjectSectionMenu({
   editorLabel,
+  repoUrl,
   onRename,
   onCopyPath,
   onShowArchived,
@@ -19,6 +49,8 @@ export function ProjectSectionMenu({
   children,
 }: {
   editorLabel: string
+  /** The project's forge page; absent when it has no browsable origin. */
+  repoUrl?: string
   onRename: () => void
   onCopyPath: () => void
   onShowArchived: () => void
@@ -78,6 +110,7 @@ export function ProjectSectionMenu({
           <Code className="h-3.5 w-3.5" />
           <span className="text-xs font-medium">Open in {editorLabel}</span>
         </ContextMenuItem>
+        <OpenRepoMenuItem repoUrl={repoUrl} />
         <ContextMenuItem
           onSelect={(event) => {
             event.stopPropagation()
@@ -96,6 +129,7 @@ export function ChatRowMenu({
   canFork,
   archived,
   editorLabel,
+  repoUrl,
   onNewChat,
   onRename,
   onShare,
@@ -113,6 +147,8 @@ export function ChatRowMenu({
   /** Archived chats swap the Archive item for a leading Restore item. */
   archived?: boolean
   editorLabel: string
+  /** The project's forge page; absent when it has no browsable origin. */
+  repoUrl?: string
   /** Starts a fresh chat in this chat's project. */
   onNewChat: () => void
   onRename: () => void
@@ -241,6 +277,7 @@ export function ChatRowMenu({
           <Code className="h-3.5 w-3.5" />
           <span className="text-xs font-medium">Open in {editorLabel}</span>
         </ContextMenuItem>
+        <OpenRepoMenuItem repoUrl={repoUrl} />
 
         <ContextMenuSeparator />
 

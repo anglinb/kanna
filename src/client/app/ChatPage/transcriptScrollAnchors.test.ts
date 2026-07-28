@@ -6,6 +6,7 @@ import {
   getLatestUserPrompt,
   getRowAnchorMessageId,
   isOptimisticMessageId,
+  resolveJumpTarget,
   resolveRestoreTarget,
   shouldPinForNewPrompt,
 } from "./transcriptScrollAnchors"
@@ -76,6 +77,26 @@ describe("isOptimisticMessageId", () => {
   test("recognises the optimistic prefix", () => {
     expect(isOptimisticMessageId("optimistic:abc")).toBe(true)
     expect(isOptimisticMessageId("abc")).toBe(false)
+  })
+})
+
+describe("resolveJumpTarget", () => {
+  const rows = [promptRow("m1", "hi"), toolGroupRow(["t1", "t2"]), textRow("a1", "done")]
+  const map = buildRowIndexByMessageId(rows)
+
+  test("pins the row rendering the message", () => {
+    expect(resolveJumpTarget(rows, map, "a1")).toEqual({ kind: "pin", rowId: rows[2]!.id })
+  })
+
+  test("pins a grouped message by its group, which is what the scroller can address", () => {
+    // The card names an entry; the viewport can only scroll to rows. A tool
+    // result swept into a group has no row of its own.
+    expect(resolveJumpTarget(rows, map, "t2")).toEqual({ kind: "pin", rowId: "tool-group:t1" })
+  })
+
+  test("gives up on a message the loaded transcript doesn't have", () => {
+    // The caller falls back to the stored read position rather than guessing.
+    expect(resolveJumpTarget(rows, map, "gone")).toBeNull()
   })
 })
 

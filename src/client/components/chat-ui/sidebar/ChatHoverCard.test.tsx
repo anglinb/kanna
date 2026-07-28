@@ -50,8 +50,21 @@ function render(
   overrides: Partial<SidebarChatRow> = {},
   label?: SidebarThread["projectLabel"],
   draft?: string,
+  onSelectMessage?: (messageId: string) => void,
 ) {
-  return renderToStaticMarkup(<ChatHoverCardContent thread={thread(overrides, label)} draft={draft} />)
+  return renderToStaticMarkup(
+    <ChatHoverCardContent
+      thread={thread(overrides, label)}
+      draft={draft}
+      onSelectMessage={onSelectMessage}
+    />
+  )
+}
+
+/** The ids the server sends alongside the previews, naming their entries. */
+const WITH_TARGETS: Partial<SidebarChatRow> = {
+  lastUserMessagePreviewId: "entry-prompt",
+  lastAgentMessagePreviewId: "entry-reply",
 }
 
 describe("ChatHoverCardContent", () => {
@@ -63,6 +76,14 @@ describe("ChatHoverCardContent", () => {
     expect(html).toContain("Done — the branch moved into the hover card.")
     // The project heads the card; the exchange follows it.
     expect(html.indexOf("jakemor/kanna")).toBeLessThan(html.indexOf("make the sidebar"))
+  })
+
+  test("leads the header with the branch and anchors the repo right", () => {
+    // Down a list of chats the branch is what differs; the repo is the same
+    // one over and over. The varying fact reads down the left edge.
+    const html = render()
+
+    expect(html.indexOf("feat/hover-card")).toBeLessThan(html.indexOf("jakemor/kanna"))
   })
 
   test("names the branch on the project line, `main` included", () => {
@@ -214,6 +235,93 @@ describe("ChatHoverCardContent", () => {
 
     expect(html).toContain("make the sidebar labels shorter")
     expect(html).not.toContain("lucide-pencil-line")
+  })
+
+  test("both messages are targets once we know which entries they are", () => {
+    const html = render(WITH_TARGETS, undefined, undefined, () => undefined)
+
+    expect(html).toContain("Jump to this prompt")
+    expect(html).toContain("Jump to this reply")
+    expect(html).toContain("<button")
+  })
+
+  test("stays plain text on a card with nowhere to send you", () => {
+    // Archived rows and the palette pass no handler — the card is a read-only
+    // peek there, and a hover fill on text that does nothing would lie.
+    expect(render(WITH_TARGETS)).not.toContain("<button")
+  })
+
+  test("previews written before the ids existed are still text, not dead buttons", () => {
+    const html = render({}, undefined, undefined, () => undefined)
+
+    expect(html).toContain("make the sidebar labels shorter")
+    expect(html).not.toContain("<button")
+  })
+
+  test("a reply carried over from the previous turn is neither shown nor clickable", () => {
+    // The prompt is newer than the reply, so the answer on hand isn't to it —
+    // and the id we hold points at the earlier turn's words.
+    const html = render(
+      { ...WITH_TARGETS, lastMessageAt: NOW, lastAgentMessagePreviewAt: NOW - 60_000 },
+      undefined,
+      undefined,
+      () => undefined,
+    )
+
+    expect(html).not.toContain("Done — the branch moved into the hover card.")
+    expect(html).not.toContain("Jump to this reply")
+    expect(html).toContain("Jump to this prompt")
+  })
+
+  test("a draft leaves only the reply to click, since it replaced the prompt", () => {
+    const html = render(WITH_TARGETS, undefined, "half a thought", () => undefined)
+
+    expect(html).not.toContain("Jump to this prompt")
+    expect(html).toContain("Jump to this reply")
+  })
+
+  test("a draft opens the chat rather than aiming at a message", () => {
+    // It was never sent, so there is no entry to land on — the composer is
+    // already holding it.
+    const html = renderToStaticMarkup(
+      <ChatHoverCardContent
+        thread={thread(WITH_TARGETS)}
+        draft="half a thought"
+        onSelectChat={() => undefined}
+      />
+    )
+
+    expect(html).toContain("Open this chat")
+    expect(html).toContain("half a thought")
+  })
+
+  test("the repo name is the link to the repo, named after its host", () => {
+    const html = renderToStaticMarkup(
+      <ChatHoverCardContent
+        thread={thread({}, {
+          name: "kanna",
+          repoPath: "jakemor/kanna",
+          hasOwner: true,
+          repoUrl: "https://github.com/jakemor/kanna",
+          text: "kanna",
+        })}
+        onOpenRepo={() => undefined}
+      />
+    )
+
+    expect(html).toContain("Open on GitHub")
+    expect(html).toContain("jakemor/kanna")
+  })
+
+  test("a project with no forge page keeps a plain repo line", () => {
+    // No origin, or a remote that resolves to no page — nothing should suggest
+    // a click that goes nowhere.
+    const html = renderToStaticMarkup(
+      <ChatHoverCardContent thread={thread()} onOpenRepo={() => undefined} />
+    )
+
+    expect(html).not.toContain("Open on")
+    expect(html).toContain("jakemor/kanna")
   })
 
   test("falls back to the chat title when there is no prompt yet", () => {

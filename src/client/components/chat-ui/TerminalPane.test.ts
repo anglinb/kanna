@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { getMacOptionInputSequence, getTerminalOptions, TERMINAL_THEMES } from "./TerminalPane"
+import { getMacOptionInputSequence, getTerminalOptions, resolveSurfaceBackground, TERMINAL_THEMES } from "./TerminalPane"
 
 describe("getTerminalOptions", () => {
   test("treats Option as Meta on macOS", () => {
@@ -33,6 +33,57 @@ describe("terminal themes", () => {
       expect(theme.background).not.toBe("transparent")
       expect(theme.background).toMatch(/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(\.0+)?\s*\)$/)
     }
+  })
+
+  // The WebGL RectangleRenderer forces alpha 1 on the per-cell background rects
+  // it draws, and it draws one for any cell carrying a background-word flag —
+  // DIM included. Pure black RGB there paints a black box behind dim text.
+  test("do not fall back to black RGB, which the WebGL renderer paints behind dim runs", () => {
+    for (const theme of TERMINAL_THEMES) {
+      expect(theme.background).not.toMatch(/^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/)
+    }
+  })
+})
+
+describe("resolveSurfaceBackground", () => {
+  function fakeElement(backgroundColor: string, parentElement: Element | null = null) {
+    return { backgroundColor, parentElement } as unknown as Element
+  }
+
+  function withComputedStyle<T>(run: () => T): T {
+    const previous = globalThis.getComputedStyle
+    // @ts-expect-error — stubbing the global for the walk
+    globalThis.getComputedStyle = (node: { backgroundColor: string }) => ({ backgroundColor: node.backgroundColor })
+    try {
+      return run()
+    } finally {
+      // @ts-expect-error — restoring the global
+      globalThis.getComputedStyle = previous
+    }
+  }
+
+  test("keeps alpha at zero so the viewport rectangle stays invisible", () => {
+    withComputedStyle(() => {
+      expect(resolveSurfaceBackground(fakeElement("rgb(32, 33, 34)"))).toBe("rgba(32, 33, 34, 0)")
+    })
+  })
+
+  test("walks past transparent ancestors to the first painted surface", () => {
+    withComputedStyle(() => {
+      const surface = fakeElement("rgb(255, 255, 255)")
+      const pane = fakeElement("rgba(0, 0, 0, 0)", surface)
+      const container = fakeElement("rgba(0, 0, 0, 0)", pane)
+
+      expect(resolveSurfaceBackground(container)).toBe("rgba(255, 255, 255, 0)")
+    })
+  })
+
+  test("returns null when nothing paints a background, leaving the theme fallback in place", () => {
+    withComputedStyle(() => {
+      expect(resolveSurfaceBackground(fakeElement("rgba(0, 0, 0, 0)"))).toBeNull()
+      expect(resolveSurfaceBackground(fakeElement("oklch(0.2 0 0)"))).toBeNull()
+      expect(resolveSurfaceBackground(null)).toBeNull()
+    })
   })
 })
 

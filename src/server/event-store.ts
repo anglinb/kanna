@@ -3,6 +3,7 @@ import { existsSync, readFileSync as readFileSyncImmediate } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
+import { toMessagePreview } from "../shared/message-preview"
 import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
@@ -37,12 +38,25 @@ const TOUCHED_PATHS_LIMIT = 500
 // How much of each transcript tail is scanned at boot to rebuild chat metadata
 // (lastMessageAt, previews) that only lives in snapshots between compactions.
 const TRANSCRIPT_METADATA_TAIL_BYTES = 256 * 1024
+/**
+ * A message reduced to the one line the sidebar's hover card shows.
+ *
+ * The markdown has to come off *here*, not where it's rendered: half of what
+ * `toMessagePreview` strips — headings, list markers, quotes, rules — is
+ * anchored to the start of a line, and this is the last place the lines still
+ * exist. A preview that has already been flattened to one string carries its
+ * `##` and `- ` into the middle of the text, where no line-start rule can see
+ * them and no client-side pass can recover.
+ *
+ * Stripping before the truncation also means the 160 characters are spent on
+ * words rather than syntax.
+ */
 function buildChatMessagePreview(text: string) {
-  const collapsed = text.replace(/\s+/g, " ").trim()
-  if (!collapsed) return undefined
-  return collapsed.length > CHAT_MESSAGE_PREVIEW_MAX_LENGTH
-    ? `${collapsed.slice(0, CHAT_MESSAGE_PREVIEW_MAX_LENGTH)}…`
-    : collapsed
+  const preview = toMessagePreview(text)
+  if (!preview) return undefined
+  return preview.length > CHAT_MESSAGE_PREVIEW_MAX_LENGTH
+    ? `${preview.slice(0, CHAT_MESSAGE_PREVIEW_MAX_LENGTH)}…`
+    : preview
 }
 
 /**
@@ -730,12 +744,19 @@ export class EventStore {
       chat.lastMessageAt = entry.createdAt
       if (!entry.hidden) {
         const preview = buildChatMessagePreview(entry.content)
-        if (preview) chat.lastUserMessagePreview = preview
+        if (preview) {
+          chat.lastUserMessagePreview = preview
+          // Kept in lockstep with the text: the id is what the hover card jumps
+          // to, so a preview paired with the *previous* entry's id would land
+          // you on a message other than the one you clicked.
+          chat.lastUserMessagePreviewId = entry._id
+        }
       }
     } else if (entry.kind === "assistant_text" && !entry.hidden) {
       const preview = buildChatMessagePreview(entry.text)
       if (preview) {
         chat.lastAgentMessagePreview = preview
+        chat.lastAgentMessagePreviewId = entry._id
         // Stamped so a reader can tell whether the preview answers the latest
         // prompt or the one before it. `lastAgentMessageAt` can't: it advances
         // on tool calls too, so it moves while the text is still stale.
@@ -968,9 +989,16 @@ export class EventStore {
           if (lastEntryAt != null) {
             chat.lastMessageAt = Math.max(chat.lastMessageAt ?? 0, lastEntryAt)
           }
-          if (sourceChat.lastUserMessagePreview) chat.lastUserMessagePreview = sourceChat.lastUserMessagePreview
+          // The entry ids come along because the fork's entries *are* the
+          // source's (cloned shallowly, `_id` and all), so they resolve in the
+          // copy exactly as they did in the original.
+          if (sourceChat.lastUserMessagePreview) {
+            chat.lastUserMessagePreview = sourceChat.lastUserMessagePreview
+            chat.lastUserMessagePreviewId = sourceChat.lastUserMessagePreviewId
+          }
           if (sourceChat.lastAgentMessagePreview) {
             chat.lastAgentMessagePreview = sourceChat.lastAgentMessagePreview
+            chat.lastAgentMessagePreviewId = sourceChat.lastAgentMessagePreviewId
             chat.lastAgentMessagePreviewAt = sourceChat.lastAgentMessagePreviewAt
           }
           // Same transcript, so the same last-agent-activity timestamp a

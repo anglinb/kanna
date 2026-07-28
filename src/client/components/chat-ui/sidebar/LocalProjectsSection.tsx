@@ -370,6 +370,7 @@ const SortableProjectGroup = memo(function SortableProjectGroup({
       {hasProjectMenu ? (
         <ProjectSectionMenu
           editorLabel={editorLabel}
+          repoUrl={group.repoUrl}
           onRename={() => onRenameProject?.(groupKey, group.sidebarTitle, group.realTitle || getPathBasename(localPath))}
           onCopyPath={() => onCopyPath?.(localPath)}
           onShowArchived={() => onShowArchivedProject?.(groupKey)}

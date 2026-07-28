@@ -17,6 +17,7 @@ import { getDataRootDir } from "../shared/branding"
 import { normalizeToolCall } from "../shared/tools"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { AsyncQueue } from "./async-queue"
+import { KANNA_ATTRIBUTION_INSTRUCTIONS } from "./attribution"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
 import { timestamped } from "./transcript"
 
@@ -420,6 +421,7 @@ export class PiAgentManager {
       settingsManager,
       noExtensions: true,
       noThemes: true,
+      appendSystemPrompt: [KANNA_ATTRIBUTION_INSTRUCTIONS],
     })
     await resourceLoader.reload()
 

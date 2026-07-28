@@ -888,8 +888,17 @@ export interface SidebarChatRow {
   lastAgentMessageAt?: number
   /** One-line preview of the latest user prompt. */
   lastUserMessagePreview?: string
+  /**
+   * `TranscriptEntry._id` of the entry that preview was taken from, so the
+   * hover card's prompt can be clicked to land on it. Absent on chats whose
+   * last prompt predates the field — the click falls back to opening the chat
+   * at wherever it was left.
+   */
+  lastUserMessagePreviewId?: string
   /** One-line preview of the latest agent text message. */
   lastAgentMessagePreview?: string
+  /** `TranscriptEntry._id` behind that preview. Same fallback as above. */
+  lastAgentMessagePreviewId?: string
   /**
    * When that preview was written. Distinct from `lastAgentMessageAt`, which
    * tool calls advance too: this dates the *words*, so a reader can tell a
@@ -930,6 +939,14 @@ export interface SidebarProjectGroup {
    * degrades to the bare `repoName`, never to an error.
    */
   repoOwner?: string
+  /**
+   * The `origin` remote as a browsable https page (`https://host/owner/repo`),
+   * absent when there's no origin or it doesn't resolve to one. Carries the
+   * *host*, which is the part `repoOwner` throws away and the client can't
+   * reconstruct — this is what "Open on GitHub" opens, and what tells a GitLab
+   * repo apart from a GitHub one.
+   */
+  repoUrl?: string
   localPath: string
   chats: SidebarChatRow[]
   previewChats: SidebarChatRow[]

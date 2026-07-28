@@ -35,6 +35,7 @@ import {
   scanCodexSkills,
   scanCursorSkills,
 } from "./harness-skills"
+import { KANNA_ATTRIBUTION_INSTRUCTIONS, buildKannaAttributionSystemMessage } from "./attribution"
 import {
   applyClaudeSdkModels,
   applyCursorModels,
@@ -726,6 +727,9 @@ async function startClaudeSession(args: {
       canUseTool,
       tools: claudeToolset(args.autoPlan),
       settingSources: ["user", "project", "local"],
+      // Append-only: the claude_code preset stays intact, Kanna's git
+      // attribution rides on the end of it (see attribution.ts).
+      systemPrompt: { type: "preset", preset: "claude_code", append: KANNA_ATTRIBUTION_INSTRUCTIONS },
       // fastMode must go through the flag-settings layer: the CLI only allows
       // fast mode in Agent SDK sessions when flagSettings.fastMode is true,
       // and an explicit false keeps a user-level settings.json from silently
@@ -1380,6 +1384,9 @@ export class AgentCoordinator {
           cursorContent = appendSystemMessageBlock(cursorContent, buildSkillSystemMessage(match.path))
         }
       }
+      // Cursor builds its system prompt server-side and exposes no append hook,
+      // so its share of the git attribution rides the user-text path instead.
+      cursorContent = appendSystemMessageBlock(cursorContent, buildKannaAttributionSystemMessage())
       // Cursor cannot fork (see canForkChat), so a turn always resumes its own session.
       turn = await this.cursorManager.startTurn({
         cwd: project.localPath,

@@ -68,6 +68,51 @@ describe("getOpenAppItems", () => {
     ])
   })
 
+  test("puts the forge last, named after its host", () => {
+    // Everything above it opens the code on disk; this one opens a web page,
+    // so it ends the list rather than sitting among the apps.
+    const items = getOpenAppItems({
+      editorPreset: "cursor",
+      isMac: true,
+      includeFinder: true,
+      repoUrl: "https://github.com/acme/widgets",
+    })
+
+    expect(items.at(-1)).toEqual({ value: "repo", label: "GitHub" })
+  })
+
+  test("names a self-hosted forge by host rather than calling it GitHub", () => {
+    expect(getOpenAppItems({
+      editorPreset: "cursor",
+      isMac: true,
+      repoUrl: "https://git.internal/acme/widgets",
+    }).at(-1)?.label).toBe("git.internal")
+  })
+
+  test("offers nothing for a project with no origin", () => {
+    // No disabled row: a project outside a repo simply has nowhere to go.
+    expect(getOpenAppItems({ editorPreset: "cursor", isMac: true })
+      .some((item) => item.value === "repo")).toBe(false)
+  })
+
+  test("the navbar menu ends with the forge too", () => {
+    expect(getOpenAppItems({
+      editorPreset: "cursor",
+      isMac: true,
+      includeFinder: true,
+      includeTerminal: true,
+      repoUrl: "https://github.com/acme/widgets",
+      menuKind: "navbar",
+    }).map((item) => item.value)).toEqual([
+      "editor:cursor",
+      "finder",
+      "terminal",
+      "editor:xcode",
+      "editor:windsurf",
+      "repo",
+    ])
+  })
+
   test("orders the navbar menu with Finder and Terminal after the default editor", () => {
     expect(getOpenAppItems({
       editorPreset: "cursor",

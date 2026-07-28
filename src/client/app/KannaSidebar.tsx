@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog"
+import { buildChatJumpLocationState } from "../lib/chat-navigation"
 import { formatSidebarAgeLabel } from "../lib/formatters"
 import { getSidebarChatTimestamp } from "../lib/sidebarChats"
 import { getThreadDetailLabel } from "../lib/thread-detail-label"
@@ -233,6 +234,14 @@ function KannaSidebarImpl({
     onClose()
   }, [navigate, onClose])
 
+  // Same navigation with a landing spot attached. Always navigates, even to the
+  // chat already open: the pathname wouldn't change, but the request id does,
+  // which is what moves the viewport a second time.
+  const selectChatMessage = useCallback((chatId: string, messageId: string) => {
+    navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(messageId) })
+    onClose()
+  }, [navigate, onClose])
+
   const renderChatRow = useCallback((chat: SidebarChatRow) => {
     const thread = threadByChatId.get(chat.chatId)
     if (!thread) return null
@@ -254,6 +263,7 @@ function KannaSidebarImpl({
           </Kbd>
         ) : getThreadDetailLabel(thread, "project-scoped", nowMs)}
         onSelect={selectChat}
+        onSelectMessage={selectChatMessage}
         onCreateChat={onCreateChat}
         onRenameChat={onRenameChat}
         onShareChat={onShareChat}
@@ -265,7 +275,7 @@ function KannaSidebarImpl({
         onDeleteChat={onDeleteChat}
       />
     )
-  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onRestoreChat, onShareChat, resolvedKeybindings, selectChat, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
+  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onRestoreChat, onShareChat, resolvedKeybindings, selectChat, selectChatMessage, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -697,6 +707,7 @@ function KannaSidebarImpl({
                 editorLabel={editorLabel}
                 nowMs={nowMs}
                 onSelectChat={selectChat}
+                onSelectChatMessage={selectChatMessage}
                 onOpenArchivedChat={onOpenArchivedChat}
                 onRestoreChat={onRestoreChat}
                 onCreateChat={onCreateChat}

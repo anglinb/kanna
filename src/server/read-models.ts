@@ -155,7 +155,9 @@ export function deriveSidebarData(
           ...(chat.lastTurnEndedAt != null ? { lastTurnEndedAt: chat.lastTurnEndedAt } : {}),
           ...(chat.lastAgentMessageAt != null ? { lastAgentMessageAt: chat.lastAgentMessageAt } : {}),
           ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
+          ...(chat.lastUserMessagePreviewId ? { lastUserMessagePreviewId: chat.lastUserMessagePreviewId } : {}),
           ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
+          ...(chat.lastAgentMessagePreviewId ? { lastAgentMessagePreviewId: chat.lastAgentMessagePreviewId } : {}),
           ...(chat.lastAgentMessagePreviewAt != null
             ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
             : {}),
@@ -181,6 +183,7 @@ export function deriveSidebarData(
       ...(repoLabel ? { repoName: repoLabel.repoName } : {}),
       ...(repoLabel?.branchName ? { branchName: repoLabel.branchName } : {}),
       ...(repoLabel?.repoOwner ? { repoOwner: repoLabel.repoOwner } : {}),
+      ...(repoLabel?.repoUrl ? { repoUrl: repoLabel.repoUrl } : {}),
       localPath: project.localPath,
       chats,
       previewChats,

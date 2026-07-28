@@ -972,6 +972,53 @@ describe("EventStore", () => {
     expect(reloadedChat?.lastMessageAt).toBe(1_000)
     expect(reloadedChat?.lastUserMessagePreview).toBe("Fix the login bug")
     expect(reloadedChat?.lastAgentMessagePreview).toBe("Done, the fix is in auth.ts")
+
+    // The ids behind those previews come back too, and still name the entries
+    // they were taken from — the hover card's jump targets are only as durable
+    // as this.
+    const messages = reloaded.getMessages(chat.id)
+    expect(reloadedChat?.lastUserMessagePreviewId).toBe(messages[0]!._id)
+    expect(reloadedChat?.lastAgentMessagePreviewId).toBe(messages[1]!._id)
+  })
+
+  test("strips markdown while the message still has lines to strip it by", async () => {
+    // Headings, list markers and quotes are anchored to the start of a line,
+    // and this is the last place the lines exist — the preview is one string
+    // by the time the client sees it. Getting this wrong shows up as `##` and
+    // `- ` stranded mid-sentence in the sidebar's hover card.
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 1_000, {
+      content: "## Plan\n\n- rewrite the **router**\n- drop `parseTranscript`\n\n> and ship it",
+    }))
+
+    expect(store.getChat(chat.id)?.lastUserMessagePreview)
+      .toBe("Plan rewrite the router drop parseTranscript and ship it")
+  })
+
+  test("pairs each preview with the entry it was taken from, not the latest one", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 1_000, { content: "first ask" }))
+    await store.appendMessage(chat.id, entry("assistant_text", 2_000, { text: "first answer" }))
+    await store.appendMessage(chat.id, entry("user_prompt", 3_000, { content: "second ask" }))
+
+    const messages = store.getMessages(chat.id)
+    const updated = store.getChat(chat.id)
+
+    // The prompt id advanced with its text; the reply id stayed on the answer
+    // still being shown, which belongs to the turn before.
+    expect(updated?.lastUserMessagePreview).toBe("second ask")
+    expect(updated?.lastUserMessagePreviewId).toBe(messages[2]!._id)
+    expect(updated?.lastAgentMessagePreviewId).toBe(messages[1]!._id)
   })
 
   test("marks chats done until a new turn starts, surviving reads and reloads", async () => {

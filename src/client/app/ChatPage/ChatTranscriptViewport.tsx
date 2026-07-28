@@ -31,9 +31,11 @@ import {
   getLatestUserPrompt,
   getRowAnchorMessageId,
   isOptimisticMessageId,
+  resolveJumpTarget,
   resolveRestoreTarget,
   shouldPinForNewPrompt,
   type LatestUserPrompt,
+  type TranscriptJumpRequest,
   type TranscriptScrollTarget,
 } from "./transcriptScrollAnchors"
 import { TranscriptMinimap } from "./TranscriptMinimap"
@@ -74,6 +76,33 @@ const PIN_SETTLE_MS = 2000
 
 /** Close enough to the intended offset to stop correcting. */
 const PIN_TOLERANCE_PX = 2
+
+/**
+ * How far down the visible transcript a jumped-to message lands, as a fraction
+ * of the height between the navbar and the composer.
+ *
+ * Flush under the chrome is right for *restoring* a read position — you were
+ * reading down from there, and every pixel above it is spent. It's wrong for
+ * arriving somewhere you asked for by name: a message pinned to the very top
+ * reads as the start of the transcript, with nothing behind it to say what it
+ * answers or follows. A fifth of a screen of lead-in is enough context to place
+ * it without spending the screen you came to read.
+ */
+const JUMP_LEAD_IN_RATIO = 0.2
+
+/**
+ * That fraction in pixels, measured off the live viewport rather than assumed —
+ * the composer grows with its draft, so the space actually being read is not a
+ * constant.
+ */
+function measureJumpLeadIn(
+  viewport: HTMLElement | null,
+  insets: { top: number, bottom: number }
+): number {
+  if (!viewport) return 0
+  const visible = viewport.clientHeight - insets.top - insets.bottom
+  return visible <= 0 ? 0 : Math.round(visible * JUMP_LEAD_IN_RATIO)
+}
 
 
 
@@ -162,6 +191,15 @@ interface ChatTranscriptViewportProps {
   readAnchorState?: ChatReadAnchorState
   /** Reports the message at the top of the viewport as the user scrolls. */
   onReportReadAnchor?: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => void
+  /**
+   * A message to land on instead of the stored read position — set when the
+   * chat was opened by clicking a specific message in the sidebar hover card.
+   * Outranks the anchor on the open it arrives with, and moves an already-open
+   * chat on its own.
+   */
+  jumpRequest?: TranscriptJumpRequest | null
+  /** Fired once a jump request has been spent, so the sender can clear it. */
+  onJumpRequestHandled?: (requestId: string) => void
 }
 
 /**
@@ -210,6 +248,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   headerOffsetPx = CHAT_NAVBAR_OFFSET_PX,
   readAnchorState = DEFAULT_READ_ANCHOR_STATE,
   onReportReadAnchor,
+  jumpRequest = null,
+  onJumpRequestHandled,
 }: ChatTranscriptViewportProps) {
   const { scrollToEnd, scrollToMessage } = useMessageScroller()
   const { visibleMessageIds } = useMessageScrollerVisibility()
@@ -346,6 +386,29 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     pinRowToTop(target.rowId, target.offsetFromMessage)
   }, [onIsAtEndChange, pinRowToTop])
 
+  /** Jump requests already spent, so each one lands exactly once. */
+  const handledJumpRequestIdRef = useRef<string | null>(null)
+
+  /**
+   * Take the pending jump, if there is one and its message is loaded.
+   *
+   * Marks the request spent either way: a message id that isn't in the
+   * transcript is not going to appear by being retried on the next render, and
+   * an un-spent request would re-fire on every row change for the rest of the
+   * chat's life. The caller falls back to its normal target.
+   */
+  const consumeJumpTarget = useCallback((): TranscriptScrollTarget | null => {
+    if (!jumpRequest || handledJumpRequestIdRef.current === jumpRequest.requestId) return null
+    handledJumpRequestIdRef.current = jumpRequest.requestId
+    onJumpRequestHandled?.(jumpRequest.requestId)
+    const target = resolveJumpTarget(resolvedRows, rowIndexByMessageId, jumpRequest.messageId)
+    if (target?.kind !== "pin") return target
+    // Negative, because `offsetFromMessage` measures how far *into* the message
+    // the landing point is: past its top for a restored read position, above it
+    // for the breathing room a jump wants.
+    return { ...target, offsetFromMessage: -measureJumpLeadIn(viewportRef.current, viewportInsetsRef.current) }
+  }, [jumpRequest, onJumpRequestHandled, resolvedRows, rowIndexByMessageId])
+
   // Restore once per chat open: wait until rows exist *and* the stored anchor
   // has resolved, otherwise we'd land on the fallback and visibly jump when the
   // anchor arrives a moment later.
@@ -365,13 +428,32 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     restoredChatIdRef.current = activeChatId
     hasUserScrolledRef.current = false
     latestPromptRef.current = getLatestUserPrompt(resolvedRows)
-    applyScrollTarget(resolveRestoreTarget(
+    // A jump outranks the stored position — you asked for this message by
+    // name. Resolved here rather than in a second effect so the open scrolls
+    // once: two pins in the same commit would land on the anchor first and
+    // visibly slide off it. `hasUserScrolledRef` stays false so the pin's
+    // settle loop still corrects as rows measure in; the read anchor catches
+    // up from wherever the jump leaves us.
+    applyScrollTarget(consumeJumpTarget() ?? resolveRestoreTarget(
       resolvedRows,
       readAnchorState.anchor,
       rowIndexByMessageId,
       measureTranscriptColumnWidth(viewportRef.current),
     ))
-  }, [activeChatId, applyScrollTarget, readAnchorState, resolvedRows, rowIndexByMessageId])
+  }, [activeChatId, applyScrollTarget, consumeJumpTarget, readAnchorState, resolvedRows, rowIndexByMessageId])
+
+  // A jump into the chat that is *already* open — the restore effect above has
+  // already run for it, so nothing else would move the viewport. Deliberate in
+  // the same sense as clicking a minimap tick, so it counts as the reader
+  // choosing a position.
+  useEffect(() => {
+    if (!activeChatId || restoredChatIdRef.current !== activeChatId) return
+    if (resolvedRows.length === 0) return
+    const target = consumeJumpTarget()
+    if (!target) return
+    hasUserScrolledRef.current = true
+    applyScrollTarget(target)
+  }, [activeChatId, applyScrollTarget, consumeJumpTarget, resolvedRows])
 
   // Sending jumps to the bottom, where the new prompt and the reply that
   // follows it are. Streaming output never trips this because it leaves the

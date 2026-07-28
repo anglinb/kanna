@@ -48,6 +48,14 @@ export interface ProjectSidebarLabel {
    */
   hasOwner?: boolean
   /**
+   * The repo's page on its forge, when `origin` resolves to one. Like
+   * `currentBranch` and unlike `repoPath`, this survives a rename: naming a
+   * project something else doesn't move the code, and dropping the link would
+   * make "Open on GitHub" vanish for exactly the projects a user cared enough
+   * about to name.
+   */
+  repoUrl?: string
+  /**
    * Flat `repo/branch` form. Kept for text-only consumers — command-palette
    * search scoring, which matches what a row *says* including its branch.
    */
@@ -72,15 +80,17 @@ export interface ProjectSidebarLabel {
  * this must never render an empty string while it waits.
  */
 export function getProjectSidebarLabel(
-  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner">
+  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner" | "repoUrl">
 ): ProjectSidebarLabel {
-  // The checkout is a fact about the folder, so it survives a rename even
-  // though the *name* doesn't.
+  // The checkout and the remote are facts about the folder, so they survive a
+  // rename even though the *name* doesn't.
   const currentBranch = group.branchName ? { currentBranch: group.branchName } : {}
+  const repoUrl = group.repoUrl ? { repoUrl: group.repoUrl } : {}
+  const facts = { ...currentBranch, ...repoUrl }
   if (group.sidebarTitle) {
-    return { name: group.sidebarTitle, ...currentBranch, text: group.sidebarTitle }
+    return { name: group.sidebarTitle, ...facts, text: group.sidebarTitle }
   }
-  if (!group.repoName) return { name: group.title, ...currentBranch, text: group.title }
+  if (!group.repoName) return { name: group.title, ...facts, text: group.title }
 
   const repoPath = group.repoOwner ? `${group.repoOwner}/${group.repoName}` : group.repoName
   const hasOwner = Boolean(group.repoOwner)
@@ -88,12 +98,12 @@ export function getProjectSidebarLabel(
   // folder name, so that lands in the same place as being on `main`.
   const branchName = group.branchName
   if (!branchName || UNREMARKABLE_BRANCHES.has(branchName)) {
-    return { name: group.repoName, ...currentBranch, repoPath, hasOwner, text: group.repoName }
+    return { name: group.repoName, ...facts, repoPath, hasOwner, text: group.repoName }
   }
   return {
     name: group.repoName,
     branchName,
-    ...currentBranch,
+    ...facts,
     repoPath,
     hasOwner,
     text: `${group.repoName}/${branchName}`,
@@ -102,7 +112,7 @@ export function getProjectSidebarLabel(
 
 /** The flat `repo/branch` string — see `ProjectSidebarLabel.text`. */
 export function formatProjectSidebarLabel(
-  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner">
+  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner" | "repoUrl">
 ): string {
   return getProjectSidebarLabel(group).text
 }

@@ -35,6 +35,7 @@ import { ToolPayloadProvider } from "../../components/messages/tool-payload-cont
 import { createToolPayloadStore } from "./toolPayloadStore"
 import { TerminalWorkspaceShell } from "./TerminalWorkspaceShell"
 import { useChatPageSidebarActions, EMPTY_DIFF_SNAPSHOT } from "./useChatPageSidebarActions"
+import { useTranscriptJumpRequest } from "./useTranscriptJumpRequest"
 import {
   EMPTY_STATE_TEXT,
   EMPTY_STATE_TYPING_INTERVAL_MS,
@@ -178,12 +179,26 @@ function useTranscriptPaddingBottom() {
   }
 }
 
-const MOBILE_RIGHT_SIDEBAR_BREAKPOINT_PX = 768
+const MOBILE_BREAKPOINT_PX = 768
 const RIGHT_SIDEBAR_MIN_WORKSPACE_SIZE_PERCENT = 20
 const RIGHT_SIDEBAR_MAX_SIZE_PERCENT = 100 - RIGHT_SIDEBAR_MIN_WORKSPACE_SIZE_PERCENT
 
+/** The chat pane never shrinks past this, so it also fixes the terminal's ceiling. */
+export const CHAT_MIN_SIZE_PERCENT = 25
+export const MAX_TERMINAL_MAIN_SIZES: [number, number] = [CHAT_MIN_SIZE_PERCENT, 100 - CHAT_MIN_SIZE_PERCENT]
+
 export function shouldUseMobileRightSidebarOverlay(viewportWidth: number) {
-  return viewportWidth > 0 && viewportWidth < MOBILE_RIGHT_SIDEBAR_BREAKPOINT_PX
+  return viewportWidth > 0 && viewportWidth < MOBILE_BREAKPOINT_PX
+}
+
+/**
+ * Mobile pins the terminal to its ceiling: a 32%-tall pane on a phone is a few
+ * usable rows, and the drag handle is too fine a target to fix that with. The
+ * clamp is derived rather than written back to the store so the project keeps
+ * whatever split it was given on a desktop.
+ */
+export function getEffectiveTerminalMainSizes(mainSizes: [number, number], clampToMax: boolean): [number, number] {
+  return clampToMax ? MAX_TERMINAL_MAIN_SIZES : mainSizes
 }
 
 export function getRightSidebarSizePercent(sizePx: number, layoutWidth: number) {
@@ -204,7 +219,7 @@ export function getRightSidebarSizePx(sizePercent: number, layoutWidth: number) 
   return Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, layoutWidth * (sizePercent / 100))
 }
 
-function useMobileRightSidebarOverlayEnabled() {
+function useIsMobileViewport() {
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === "undefined" ? 0 : window.innerWidth))
 
   useEffect(() => {
@@ -258,6 +273,7 @@ interface ChatWorkspaceProps {
   projectId: string
   shouldRenderTerminalLayout: boolean
   showTerminalPane: boolean
+  clampTerminalToMaxHeight: boolean
   terminalLayout: ReturnType<typeof useTerminalLayoutStore.getState>["projects"][string]
   mainPanelGroupRef: RefObject<GroupImperativeHandle | null>
   terminalPanelRef: RefObject<HTMLDivElement | null>
@@ -388,6 +404,7 @@ function ChatWorkspace({
   projectId,
   shouldRenderTerminalLayout,
   showTerminalPane,
+  clampTerminalToMaxHeight,
   terminalLayout,
   mainPanelGroupRef,
   terminalPanelRef,
@@ -421,13 +438,15 @@ function ChatWorkspace({
       className="flex-1 min-h-0"
       onLayoutChanged={onLayoutChanged}
     >
-      <ResizablePanel id="chat" defaultSize={`${terminalPanelDefaultSizes[0]}%`} minSize="25%" className="min-h-0">
+      <ResizablePanel id="chat" defaultSize={`${terminalPanelDefaultSizes[0]}%`} minSize={`${CHAT_MIN_SIZE_PERCENT}%`} className="min-h-0">
         {chatCard}
       </ResizablePanel>
       <ResizableHandle
-        withHandle
+        // Nothing to drag to when the terminal is pinned at its ceiling; the
+        // pane's own close button is the way out on mobile.
+        withHandle={!clampTerminalToMaxHeight}
         orientation="vertical"
-        disabled={!showTerminalPane}
+        disabled={!showTerminalPane || clampTerminalToMaxHeight}
         className={cn(!showTerminalPane && "pointer-events-none opacity-0")}
       />
       <ResizablePanel
@@ -487,7 +506,7 @@ export function ChatPage() {
   const showEmptyState = state.messages.length === 0 && state.runtime?.title === "New Chat"
   const projectId = state.activeProjectId
   const projectTerminalLayout = useTerminalLayoutStore((store) => (projectId ? store.projects[projectId] : undefined))
-  const terminalLayout = projectTerminalLayout ?? DEFAULT_PROJECT_TERMINAL_LAYOUT
+  const storedTerminalLayout = projectTerminalLayout ?? DEFAULT_PROJECT_TERMINAL_LAYOUT
   const projectRightSidebarVisibility = useRightSidebarStore((store) => (projectId ? store.projects[projectId] : undefined))
   const rightSidebarVisibility = projectRightSidebarVisibility ?? DEFAULT_RIGHT_SIDEBAR_VISIBILITY_STATE
   const globalRightSidebarSize = useRightSidebarStore((store) => store.size)
@@ -517,6 +536,11 @@ export function ChatPage() {
     return derivedSnapshot
   }, [state.chatSnapshot?.messages])
 
+  const isMobileViewport = useIsMobileViewport()
+  const terminalLayout = useMemo(() => {
+    const mainSizes = getEffectiveTerminalMainSizes(storedTerminalLayout.mainSizes, isMobileViewport)
+    return mainSizes === storedTerminalLayout.mainSizes ? storedTerminalLayout : { ...storedTerminalLayout, mainSizes }
+  }, [isMobileViewport, storedTerminalLayout])
   const hasTerminals = terminalLayout.terminals.length > 0
   const showTerminalPane = Boolean(projectId && terminalLayout.isVisible && hasTerminals)
   const shouldRenderTerminalLayout = Boolean(projectId && hasTerminals)
@@ -524,8 +548,7 @@ export function ChatPage() {
   const showRightSidebar = Boolean(projectId && activeRightPanel !== "hidden")
   const showGitPanel = Boolean(projectId && activeRightPanel === "git")
   const shouldRenderRightSidebarLayout = Boolean(projectId)
-  const isMobileRightSidebarOverlay = useMobileRightSidebarOverlayEnabled()
-  const shouldRenderDesktopRightSidebarLayout = shouldRenderRightSidebarLayout && !isMobileRightSidebarOverlay
+  const shouldRenderDesktopRightSidebarLayout = shouldRenderRightSidebarLayout && !isMobileViewport
   const layoutWidth = useLayoutWidth(layoutRootRef)
   const effectiveRightSidebarSize = getRightSidebarSizePercent(
     globalRightSidebarSize ?? DEFAULT_RIGHT_SIDEBAR_SIZE,
@@ -596,6 +619,20 @@ export function ChatPage() {
 
   const { typedEmptyStateText, isEmptyStateTypingComplete } = useEmptyStateTyping(showEmptyState, state.activeChatId)
 
+  // Read off the sidebar snapshot rather than the git one: the sidebar carries
+  // a resolved forge URL for every project, while `project-git` only knows a
+  // GitHub slug and only for the project currently subscribed.
+  const activeProjectRepoUrl = useMemo(
+    () => state.sidebarData.projectGroups.find((group) => group.groupKey === projectId)?.repoUrl,
+    [projectId, state.sidebarData.projectGroups]
+  )
+
+  // "Open this chat at this message", carried in router state by the sidebar's
+  // hover card. Held here rather than read in the viewport so the viewport
+  // stays a pure consumer of props and the export viewer, which has no router,
+  // simply never passes one.
+  const { jumpRequest, onJumpRequestHandled } = useTranscriptJumpRequest()
+
   useStickyChatFocus({
     rootRef: chatCardRef,
     fallbackRef: chatInputElementRef,
@@ -636,6 +673,13 @@ export function ChatPage() {
       return
     }
 
+    // Mobile pins the pane to its ceiling, so any layout event here is the clamp
+    // settling rather than the user resizing — persisting it would overwrite the
+    // split this project was given on a desktop.
+    if (isMobileViewport) {
+      return
+    }
+
     const chatSize = layout.chat
     const terminalSize = layout.terminal
     if (!Number.isFinite(chatSize) || !Number.isFinite(terminalSize)) {
@@ -650,7 +694,7 @@ export function ChatPage() {
     }
 
     setMainSizes(projectId, [chatSize, terminalSize])
-  }, [isTerminalAnimating, projectId, resetMainSizes, setMainSizes, showTerminalPane, toggleVisibility])
+  }, [isMobileViewport, isTerminalAnimating, projectId, resetMainSizes, setMainSizes, showTerminalPane, toggleVisibility])
 
   const handleCloseRightSidebar = useCallback(() => {
     if (!projectId) return
@@ -863,17 +907,17 @@ export function ChatPage() {
   // it sees those the moment they change the scroll box.
 
   useEffect(() => {
-    if (!showRightSidebar || !isMobileRightSidebarOverlay) return
+    if (!showRightSidebar || !isMobileViewport) return
 
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = "hidden"
     return () => {
       document.body.style.overflow = previousOverflow
     }
-  }, [isMobileRightSidebarOverlay, showRightSidebar])
+  }, [isMobileViewport, showRightSidebar])
 
   useEffect(() => {
-    if (!showRightSidebar || !isMobileRightSidebarOverlay) return
+    if (!showRightSidebar || !isMobileViewport) return
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return
@@ -883,7 +927,7 @@ export function ChatPage() {
 
     window.addEventListener("keydown", handleEscape)
     return () => window.removeEventListener("keydown", handleEscape)
-  }, [handleCloseRightSidebar, isMobileRightSidebarOverlay, showRightSidebar])
+  }, [handleCloseRightSidebar, isMobileViewport, showRightSidebar])
 
   // Following the stream is the list's job, via `maintainScrollAtEnd`. This
   // used to also force two `scrollToEnd`s per frame on message/status churn,
@@ -893,7 +937,7 @@ export function ChatPage() {
   // losing ones fought the winner and the result read as jitter.
 
   useLayoutEffect(() => {
-    if (!showRightSidebar || isMobileRightSidebarOverlay || layoutWidth <= 0 || isRightSidebarAnimating.current) {
+    if (!showRightSidebar || isMobileViewport || layoutWidth <= 0 || isRightSidebarAnimating.current) {
       return
     }
 
@@ -914,7 +958,7 @@ export function ChatPage() {
     layoutWidth,
     rightSidebarPanelGroupRef,
     showRightSidebar,
-    isMobileRightSidebarOverlay,
+    isMobileViewport,
   ])
 
   const chatCard = (
@@ -951,6 +995,7 @@ export function ChatPage() {
           terminalShortcut={resolvedKeybindings.bindings.toggleEmbeddedTerminal}
           rightSidebarShortcut={resolvedKeybindings.bindings.toggleRightSidebar}
           branchName={state.chatDiffSnapshot?.branchName}
+          repoUrl={activeProjectRepoUrl}
           hasGitRepo={state.chatDiffSnapshot?.status !== "no_repo"}
           gitStatus={state.chatDiffSnapshot?.status}
         />
@@ -981,6 +1026,8 @@ export function ChatPage() {
           onIsAtEndChange={onIsAtEndChange}
           readAnchorState={state.readAnchorState}
           onReportReadAnchor={state.reportReadAnchor}
+          jumpRequest={jumpRequest}
+          onJumpRequestHandled={onJumpRequestHandled}
           scrollToBottom={scrollToTranscriptEnd}
           typedEmptyStateText={typedEmptyStateText}
           isEmptyStateTypingComplete={isEmptyStateTypingComplete}
@@ -1031,6 +1078,7 @@ export function ChatPage() {
       projectId={projectId}
       shouldRenderTerminalLayout={shouldRenderTerminalLayout}
       showTerminalPane={showTerminalPane}
+      clampTerminalToMaxHeight={isMobileViewport}
       terminalLayout={terminalLayout}
       mainPanelGroupRef={mainPanelGroupRef}
       terminalPanelRef={terminalPanelRef}
@@ -1185,7 +1233,7 @@ export function ChatPage() {
       ) : (
         workspace
       )}
-      {isMobileRightSidebarOverlay ? (
+      {isMobileViewport ? (
         <MobileSidebarPane
           projectId={projectId}
           showRightSidebar={showRightSidebar}

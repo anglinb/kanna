@@ -102,6 +102,8 @@ interface Props {
   terminalShortcut?: string[]
   rightSidebarShortcut?: string[]
   branchName?: string
+  /** The project's forge page, for the "Open in…" menu's last entry. */
+  repoUrl?: string
   hasGitRepo?: boolean
   gitStatus?: "unknown" | "ready" | "no_repo"
 }
@@ -130,6 +132,7 @@ export function ChatNavbar({
   terminalShortcut,
   rightSidebarShortcut,
   branchName,
+  repoUrl,
   hasGitRepo = true,
   gitStatus = "unknown",
 }: Props) {
@@ -216,6 +219,7 @@ export function ChatNavbar({
                   editorCommandTemplate={editorCommandTemplate}
                   finderShortcut={finderShortcut}
                   editorShortcut={editorShortcut}
+                  repoUrl={repoUrl}
                   onOpenExternal={onOpenExternal}
                 />
               </div>

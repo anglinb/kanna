@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises"
 import path from "node:path"
+import { buildRepoBrowseUrl } from "../shared/git-url"
 import type { StoreState } from "./events"
 import {
   probeWorkingTree,
@@ -66,6 +67,14 @@ export interface ProjectRepoLabel {
   branchName?: string
   /** Owner segment of the `origin` remote; absent when there is no origin. */
   repoOwner?: string
+  /**
+   * Where `origin` lives as a browsable https page, when it resolves to one.
+   * Derived here rather than client-side because the client never sees the
+   * remote URL, and the *host* is the part that can't be guessed from
+   * `owner/repo` — assuming github.com would send half the world's repos to a
+   * 404.
+   */
+  repoUrl?: string
 }
 
 function probesEqual(left: WorkingTreeProbe | undefined, right: WorkingTreeProbe) {
@@ -147,10 +156,16 @@ async function resolveCommonDir(gitDir: string) {
   return trimmed ? path.resolve(gitDir, trimmed) : gitDir
 }
 
-async function readOriginOwner(gitDir: string) {
+/** One config read, both readings of `origin` — the owner and the browse URL. */
+async function readOrigin(gitDir: string): Promise<{ repoOwner?: string, repoUrl?: string }> {
   const configPath = path.join(await resolveCommonDir(gitDir), "config")
   const config = await readFile(configPath, "utf8").catch(() => null)
-  return config === null ? undefined : extractRemoteOwner(extractOriginUrl(config))
+  if (config === null) return {}
+  const originUrl = extractOriginUrl(config)
+  return {
+    repoOwner: extractRemoteOwner(originUrl),
+    repoUrl: buildRepoBrowseUrl(originUrl)?.url,
+  }
 }
 
 export class WorktreeProbe {
@@ -332,14 +347,15 @@ export class WorktreeProbe {
   }
 
   private async readRepoLabel(location: WorkingTreeLocation): Promise<ProjectRepoLabel> {
-    const [branchName, repoOwner] = await Promise.all([
+    const [branchName, origin] = await Promise.all([
       readHeadBranch(location.gitDir),
-      readOriginOwner(location.gitDir),
+      readOrigin(location.gitDir),
     ])
     return {
       repoName: path.basename(location.repoRoot),
       ...(branchName ? { branchName } : {}),
-      ...(repoOwner ? { repoOwner } : {}),
+      ...(origin.repoOwner ? { repoOwner: origin.repoOwner } : {}),
+      ...(origin.repoUrl ? { repoUrl: origin.repoUrl } : {}),
     }
   }
 
@@ -356,6 +372,7 @@ export class WorktreeProbe {
       previous?.repoName === label.repoName
       && previous.branchName === label.branchName
       && previous.repoOwner === label.repoOwner
+      && previous.repoUrl === label.repoUrl
     ) return
     this.repoLabels.set(projectId, label)
     this.notifyChanged()

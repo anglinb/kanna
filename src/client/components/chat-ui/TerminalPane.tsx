@@ -26,11 +26,10 @@ interface Props {
 
 const TERMINAL_THEME_LIGHT: ITheme = {
   foreground: "#0f172a",
-  // Not the CSS keyword: xterm's css.toColor() cannot parse "transparent" and
-  // silently falls back to opaque black. The DOM renderer hides that (index.css
-  // forces the element backgrounds clear) but the WebGL renderer paints the
-  // theme colour into its canvas. A zero-alpha rgba parses and stays see-through.
-  background: "rgba(0, 0, 0, 0)",
+  // Zero alpha, and the RGB channels matter — see resolveSurfaceBackground().
+  // This is only the fallback for when the surface colour can't be read off the
+  // DOM; keep it in step with --background in index.css.
+  background: "rgba(255, 255, 255, 0)",
   cursor: "#000000",
   cursorAccent: "#ffffff",
   selectionBackground: "rgba(221,228,236,0.55)",
@@ -55,11 +54,10 @@ const TERMINAL_THEME_LIGHT: ITheme = {
 
 const TERMINAL_THEME_DARK: ITheme = {
   foreground: "#f8fafc",
-  // Not the CSS keyword: xterm's css.toColor() cannot parse "transparent" and
-  // silently falls back to opaque black. The DOM renderer hides that (index.css
-  // forces the element backgrounds clear) but the WebGL renderer paints the
-  // theme colour into its canvas. A zero-alpha rgba parses and stays see-through.
-  background: "rgba(0, 0, 0, 0)",
+  // Zero alpha, and the RGB channels matter — see resolveSurfaceBackground().
+  // This is only the fallback for when the surface colour can't be read off the
+  // DOM; keep it in step with --background in index.css (223 4% 13%).
+  background: "rgba(32, 33, 34, 0)",
   cursor: "#ffffff",
   cursorAccent: "#000000",
   selectionBackground: "rgba(248,250,252,0.28)",
@@ -84,6 +82,41 @@ const TERMINAL_THEME_DARK: ITheme = {
 
 /** Exported so tests can assert both themes stay xterm-parseable. */
 export const TERMINAL_THEMES: ITheme[] = [TERMINAL_THEME_LIGHT, TERMINAL_THEME_DARK]
+
+/** Computed `background-color` is always `rgb(...)`/`rgba(...)`; anything else we skip. */
+const COMPUTED_RGB = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/
+
+/**
+ * The theme background feeds two different rectangles in xterm's WebGL renderer:
+ *
+ * - the full-viewport rect, drawn with the colour's real alpha — zero keeps the
+ *   pane see-through so index.css's transparent backgrounds show through;
+ * - one rect per run of cells whose *background attribute word* is non-zero,
+ *   drawn with alpha forced to 1 (RectangleRenderer `$a = 1`). DIM, ITALIC and
+ *   OVERLINE live in that word, so dim text gets a rect even though its
+ *   background is the default one — with black RGB that reads as a black box
+ *   behind every dim run (Vite's "ready in", "press h + enter to show help", …).
+ *
+ * Both read the same colour, so keep alpha at 0 and point RGB at the surface the
+ * pane actually sits on: the viewport rect stays invisible and the forced-opaque
+ * per-cell rects blend into the background. The DOM renderer draws neither.
+ */
+export function resolveSurfaceBackground(element: Element | null): string | null {
+  let node: Element | null = element
+  while (node) {
+    const match = globalThis.getComputedStyle?.(node).backgroundColor?.match(COMPUTED_RGB)
+    if (match && (match[4] === undefined || parseFloat(match[4]) > 0)) {
+      return `rgba(${match[1]}, ${match[2]}, ${match[3]}, 0)`
+    }
+    node = node.parentElement
+  }
+  return null
+}
+
+function withSurfaceBackground(theme: ITheme, element: Element | null): ITheme {
+  const background = resolveSurfaceBackground(element)
+  return background ? { ...theme, background } : theme
+}
 
 function getTerminalSize(terminal: Terminal) {
   return {
@@ -323,7 +356,7 @@ export function TerminalPane({
   }, [initialCommand])
 
   useEffect(() => {
-    const terminal = new Terminal(getTerminalOptions(scrollback, terminalTheme))
+    const terminal = new Terminal(getTerminalOptions(scrollback, withSurfaceBackground(terminalTheme, containerRef.current)))
     const serializeAddon = new SerializeAddon()
     terminal.loadAddon(serializeAddon)
     terminal.loadAddon(new WebLinksAddon())
@@ -431,7 +464,7 @@ export function TerminalPane({
   useEffect(() => {
     const terminal = terminalRef.current
     if (!terminal) return
-    terminal.options.theme = terminalTheme
+    terminal.options.theme = withSurfaceBackground(terminalTheme, containerRef.current)
     refreshTerminal(terminal)
   }, [terminalTheme])
 

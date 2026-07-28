@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, Github } from "lucide-react"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../shared/protocol"
+import { getRepoUrlLabel } from "../../shared/git-url"
 import { getDefaultEditorCommandTemplate } from "../stores/terminalPreferencesStore"
 import { DefaultAppIcon, EDITOR_OPTIONS, EditorIcon, FinderIcon, FolderFallbackIcon, PreviewIcon, TerminalIcon } from "./editor-icons"
 import { HotkeyTooltip, HotkeyTooltipContent, HotkeyTooltipTrigger } from "./ui/tooltip"
@@ -9,7 +10,13 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from ".
 import { ContextMenuContent, ContextMenuItem } from "./ui/context-menu"
 import { OPEN_EXTERNAL_SELECT_STORAGE_KEY as OPEN_SELECT_STORAGE_KEY } from "../lib/storageKeys"
 
-export type OpenAppValue = "finder" | "terminal" | "preview" | "default" | `editor:${EditorPreset}`
+/**
+ * `"repo"` is the odd one out: every other destination is an app on the machine
+ * the project lives on, opened by the server. The repo's forge is a web page,
+ * opened by *this* browser — which is the right end of the wire, since on a
+ * remote machine the server has no browser you're looking at.
+ */
+export type OpenAppValue = "finder" | "terminal" | "preview" | "default" | "repo" | `editor:${EditorPreset}`
 
 const OPEN_APP_MENU_ITEM_CLASS_NAME = "py-2 pl-2 pr-8"
 const OPEN_APP_CONTEXT_MENU_ITEM_CLASS_NAME = "rounded-md text-sm font-normal focus:bg-accent focus:text-accent-foreground hover:bg-accent hover:text-accent-foreground"
@@ -55,17 +62,21 @@ export function getEditorSettings(preset: EditorPreset, customTemplate?: string)
   }
 }
 
-export function getOpenAppLabel(value: OpenAppValue, isMac: boolean) {
+export function getOpenAppLabel(value: OpenAppValue, isMac: boolean, repoUrl?: string) {
   if (value === "finder") return isMac ? "Finder" : "Folder"
   if (value === "terminal") return "Terminal"
   if (value === "preview") return "Preview"
   if (value === "default") return "Default App"
+  if (value === "repo") return getRepoUrlLabel(repoUrl)
   const preset = value.replace("editor:", "") as EditorPreset
   if (preset === "vscode") return "VS Code"
   return EDITOR_OPTIONS.find((option) => option.value === preset)?.label ?? "Editor"
 }
 
 export function OpenAppIcon({ value, isMac, className }: { value: OpenAppValue; isMac: boolean; className?: string }) {
+  if (value === "repo") {
+    return <Github className={className} />
+  }
   if (value === "finder") {
     return isMac ? <FinderIcon className={className} /> : <FolderFallbackIcon className={className} />
   }
@@ -83,6 +94,9 @@ export function OpenAppIcon({ value, isMac, className }: { value: OpenAppValue; 
 
 function normalizeOpenAppValue(value: string | null, fallback: OpenAppValue): OpenAppValue {
   if (value === "finder" || value === "terminal" || value === "preview" || value === "default") return value
+  // Not `repo`: the last-used destination is remembered across projects, and a
+  // project with no origin would offer a button that does nothing.
+  if (value === "repo") return fallback
   if (value?.startsWith("editor:")) {
     const preset = value.slice("editor:".length)
     if (preset === "vscode" || EDITOR_OPTIONS.some((option) => option.value === preset)) {
@@ -99,6 +113,7 @@ export function getOpenAppItems({
   includeTerminal = false,
   includePreview = false,
   includeDefault = false,
+  repoUrl,
   menuKind = "context",
 }: {
   editorPreset: EditorPreset
@@ -107,6 +122,12 @@ export function getOpenAppItems({
   includeTerminal?: boolean
   includePreview?: boolean
   includeDefault?: boolean
+  /**
+   * The project's forge page. Its presence *is* the include flag — there is no
+   * "show it disabled" state worth having, and a project with no origin simply
+   * has nowhere to go.
+   */
+  repoUrl?: string
   menuKind?: "context" | "navbar"
 }): Array<{ value: OpenAppValue; label: string }> {
   const editorItems: Array<{ value: OpenAppValue; label: string }> = [
@@ -120,12 +141,17 @@ export function getOpenAppItems({
     ...editorItems.filter((item) => item.value === defaultEditorValue),
     ...editorItems.filter((item) => item.value !== defaultEditorValue),
   ]
+  // Last in both orders. Every other entry opens the code on disk; the forge is
+  // a different kind of destination, so it sits at the end rather than
+  // interleaved with the apps.
+  const repoItems = repoUrl ? [{ value: "repo" as OpenAppValue, label: getRepoUrlLabel(repoUrl) }] : []
   if (menuKind === "navbar") {
     return [
       ...sortedEditorItems.filter((item) => item.value === defaultEditorValue),
       ...(includeFinder ? [{ value: "finder" as OpenAppValue, label: isMac ? "Finder" : "Folder" }] : []),
       ...(includeTerminal ? [{ value: "terminal" as OpenAppValue, label: "Terminal" }] : []),
       ...sortedEditorItems.filter((item) => item.value !== defaultEditorValue),
+      ...repoItems,
     ]
   }
   return [
@@ -134,14 +160,24 @@ export function getOpenAppItems({
     ...(includeFinder ? [{ value: "finder" as OpenAppValue, label: isMac ? "Finder" : "Folder" }] : []),
     ...(includeTerminal ? [{ value: "terminal" as OpenAppValue, label: "Terminal" }] : []),
     ...(includeDefault ? [{ value: "default" as OpenAppValue, label: "Default App" }] : []),
+    ...repoItems,
   ]
 }
 
 export function openAppValue(args: {
   value: OpenAppValue
   editorCommandTemplate?: string
+  /** Required for `"repo"`; the item is only offered when a URL exists. */
+  repoUrl?: string
   onOpenExternal: (action: OpenExternalAction, editor?: EditorOpenSettings) => void
 }) {
+  if (args.value === "repo") {
+    // Straight to this browser rather than through `system.openExternal`: that
+    // command opens things on the *machine running the agent*, which for a web
+    // page is the wrong screen whenever that machine isn't this one.
+    if (args.repoUrl) window.open(args.repoUrl, "_blank", "noopener,noreferrer")
+    return
+  }
   if (args.value === "finder") {
     args.onOpenExternal("open_finder")
     return
@@ -168,6 +204,7 @@ export function OpenExternalSelect({
   editorCommandTemplate,
   finderShortcut,
   editorShortcut,
+  repoUrl,
   onOpenExternal,
 }: {
   isMac: boolean
@@ -175,6 +212,8 @@ export function OpenExternalSelect({
   editorCommandTemplate?: string
   finderShortcut?: string[]
   editorShortcut?: string[]
+  /** The project's forge page; omit and no repo item is offered. */
+  repoUrl?: string
   onOpenExternal: (action: OpenExternalAction, editor?: EditorOpenSettings) => void
 }) {
   const fallbackValue = `editor:${editorPreset}` as OpenAppValue
@@ -189,13 +228,19 @@ export function OpenExternalSelect({
     isMac,
     includeFinder: true,
     includeTerminal: true,
+    repoUrl,
     menuKind: "navbar",
-  }), [editorPreset, isMac])
+  }), [editorPreset, isMac, repoUrl])
 
   function handleOpenValue(value: OpenAppValue) {
-    setLastValue(value)
-    window.localStorage.setItem(OPEN_SELECT_STORAGE_KEY, value)
-    openAppValue({ value, editorCommandTemplate, onOpenExternal })
+    // The forge isn't remembered as the split button's default — see
+    // `normalizeOpenAppValue`. Switching projects would leave the button
+    // pointing at a repo the current project doesn't have.
+    if (value !== "repo") {
+      setLastValue(value)
+      window.localStorage.setItem(OPEN_SELECT_STORAGE_KEY, value)
+    }
+    openAppValue({ value, editorCommandTemplate, repoUrl, onOpenExternal })
   }
 
   return (
@@ -248,6 +293,7 @@ export function OpenExternalContextMenuContent({
   includeTerminal = false,
   includePreview = false,
   includeDefault = false,
+  repoUrl,
   onOpenExternal,
 }: {
   isMac: boolean
@@ -257,6 +303,8 @@ export function OpenExternalContextMenuContent({
   includeTerminal?: boolean
   includePreview?: boolean
   includeDefault?: boolean
+  /** The project's forge page; omit and no repo item is offered. */
+  repoUrl?: string
   onOpenExternal: (action: OpenExternalAction, editor?: EditorOpenSettings) => void
 }) {
   const items = getOpenAppItems({
@@ -266,6 +314,7 @@ export function OpenExternalContextMenuContent({
     includeTerminal,
     includePreview,
     includeDefault,
+    repoUrl,
   })
 
   return (
@@ -276,7 +325,7 @@ export function OpenExternalContextMenuContent({
           className={`${OPEN_APP_MENU_ITEM_CLASS_NAME} ${OPEN_APP_CONTEXT_MENU_ITEM_CLASS_NAME}`}
           onSelect={(event) => {
             event.preventDefault()
-            openAppValue({ value: item.value, editorCommandTemplate, onOpenExternal })
+            openAppValue({ value: item.value, editorCommandTemplate, repoUrl, onOpenExternal })
           }}
         >
           <OpenAppMenuItemContent value={item.value} label={item.label} isMac={isMac} />
