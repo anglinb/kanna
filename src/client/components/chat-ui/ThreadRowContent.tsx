@@ -136,7 +136,11 @@ export function ThreadRowContent({
   // The draft pencil is the one glyph that's about *you*, so it gets the brand
   // red — the same colour the running spinner uses, and the reason the harness
   // icons stay muted (a tinted harness icon read as an error state).
-  const iconClass = cn("h-4 w-4", showsDraft ? "text-logo" : statusDotClass(thread.archived))
+  // `shrink-0` is load-bearing, not decoration: an <svg> is a flex item like any
+  // other, so with a long title and a long trailing label the icon is what gives
+  // — the pencil squashes to a sliver instead of the text truncating. The status
+  // glyphs above carry the same guard.
+  const iconClass = cn("h-4 w-4 shrink-0", showsDraft ? "text-logo" : statusDotClass(thread.archived))
   // Anything with a status dot or a shimmer is already asking for attention and
   // must never dim; so must the chat you're looking at. What's left — idle,
   // read, and not part of the current diff — recedes, unless the surface has

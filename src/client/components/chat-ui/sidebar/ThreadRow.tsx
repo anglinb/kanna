@@ -83,7 +83,7 @@ export function ThreadRow({
     <Button
       variant="ghost"
       size="icon"
-      className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
+      className="h-6 w-6 shrink-0 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
       onClick={(event) => {
         event.stopPropagation()
         onRestoreChat(thread.row.chatId)
@@ -98,7 +98,7 @@ export function ThreadRow({
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
+          className="h-6 w-6 shrink-0 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
           onClick={(event) => {
             event.stopPropagation()
             onForkChat(thread.row)
@@ -111,7 +111,7 @@ export function ThreadRow({
       <Button
         variant="ghost"
         size="icon"
-        className="h-6 w-6 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
+        className="h-6 w-6 shrink-0 cursor-pointer rounded-sm hover:!bg-transparent !border-0"
         onClick={(event) => {
           event.stopPropagation()
           onArchiveChat(thread.row)
