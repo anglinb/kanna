@@ -54,6 +54,24 @@ interface ProjectProbeEntry {
   location: WorkingTreeLocation | null
   /** Combined mtime of the git dir's `index` and `HEAD`; "" when unreadable. */
   stamp: string
+  /**
+   * Mtime of `HEAD` as of the last repo-label read; "" when unreadable.
+   *
+   * Gated separately from `stamp` because the two go stale on different events
+   * and `stamp` is banked at a moment that would strand the label:
+   *
+   * - `git status` rewrites the index as a side effect (its stat cache), so
+   *   `applyProbe` re-reads `stamp` *after* probing to keep a probe from
+   *   re-triggering itself. Anyone who supplies a probe from outside
+   *   (`recordExternalProbe`) banks a stamp for a label read that never
+   *   happened — a checkout followed by a git-panel refresh would then leave
+   *   the sidebar naming the old branch until the next unrelated commit.
+   * - `git status` never touches HEAD, so this half is stable at idle and can
+   *   safely be banked from *before* the label read: if HEAD moves while we're
+   *   reading it, the cost is one redundant re-read next tick rather than a
+   *   label frozen at the wrong branch forever.
+   */
+  labelStamp: string
 }
 
 /** Identity of the repo a project sits in, for the sidebar's `repo/branch` label. */
@@ -246,6 +264,8 @@ export class WorktreeProbe {
         await this.applyProbe(projectId, { dirty: false, paths: [] })
         return
       }
+      // Banked before the read, never after — see `labelStamp`.
+      entry.labelStamp = (await this.readStamp(entry.location.gitDir)).head
       this.applyRepoLabel(projectId, await this.readRepoLabel(entry.location))
       await this.applyProbe(projectId, await probeWorkingTree(entry.location.repoRoot))
     })
@@ -273,18 +293,20 @@ export class WorktreeProbe {
           }
 
           const stamp = await this.readStamp(entry.location.gitDir)
-          // An unreadable stamp falls through to a full probe rather than being
-          // skipped — better one wasted `git status` than a silently stuck dot.
-          const changed = stamp === "" || stamp !== entry.stamp
-          // A checkout rewrites HEAD, so `changed` covers every branch switch.
-          if (changed || !this.repoLabels.has(projectId)) {
+          // A checkout rewrites HEAD, so this covers every branch switch.
+          if (stamp.head === "" || stamp.head !== entry.labelStamp || !this.repoLabels.has(projectId)) {
+            // Banked before the read, never after — see `labelStamp`.
+            entry.labelStamp = stamp.head
             this.applyRepoLabel(projectId, await this.readRepoLabel(entry.location))
           }
 
+          // An unreadable stamp falls through to a full probe rather than being
+          // skipped — better one wasted `git status` than a silently stuck dot.
+          const changed = stamp.combined === "" || stamp.combined !== entry.stamp
           if (!changed || !dirtyCandidates.has(projectId)) {
             // Label-only projects never reach `applyProbe`, so bank the stamp
             // here or every tick would re-read a HEAD that hasn't moved.
-            entry.stamp = stamp
+            entry.stamp = stamp.combined
             return
           }
 
@@ -328,6 +350,7 @@ export class WorktreeProbe {
     const entry: ProjectProbeEntry = {
       location: await resolveWorkingTreeLocation(localPath),
       stamp: existing?.stamp ?? "",
+      labelStamp: existing?.labelStamp ?? "",
     }
     this.entries.set(projectId, entry)
     // Notified separately from the repo label: a folder that has never been a
@@ -416,18 +439,29 @@ export class WorktreeProbe {
     }
 
     // Re-read *after* probing so a probe can never trigger itself next tick.
+    // Deliberately leaves `labelStamp` alone: this runs for probes computed
+    // elsewhere too, and banking HEAD here would tell the tick a label had been
+    // read that never was.
     const entry = this.entries.get(projectId)
     if (entry?.location) {
-      entry.stamp = await this.readStamp(entry.location.gitDir)
+      entry.stamp = (await this.readStamp(entry.location.gitDir)).combined
     }
   }
 
-  private async readStamp(gitDir: string) {
+  /**
+   * Both readings of the git dir's mtimes in one pair of stats: `combined`
+   * gates the dirty probe, `head` gates the repo label. See `labelStamp` for
+   * why the label can't ride on the combined one. `""` means unreadable, which
+   * every caller treats as "assume changed".
+   */
+  private async readStamp(gitDir: string): Promise<{ combined: string, head: string }> {
     const [index, head] = await Promise.all([
       stat(path.join(gitDir, "index")).then((info) => info.mtimeMs).catch(() => null),
       stat(path.join(gitDir, "HEAD")).then((info) => info.mtimeMs).catch(() => null),
     ])
-    if (index === null && head === null) return ""
-    return `${index ?? ""}:${head ?? ""}`
+    return {
+      combined: index === null && head === null ? "" : `${index ?? ""}:${head ?? ""}`,
+      head: head === null ? "" : String(head),
+    }
   }
 }

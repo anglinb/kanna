@@ -387,6 +387,29 @@ describe("WorktreeProbe integration", () => {
     expect(probe.getRepoLabels().get("project-1")?.branchName).toBe("feature/side-quest")
   })
 
+  test("a probe supplied from outside doesn't freeze the branch label", async () => {
+    // The git panel's refresh hands us a scan for free (`recordExternalProbe`),
+    // which banks a fresh stamp so the tick doesn't redo the same scan. That
+    // stamp must not also count as a *label* read: a checkout followed by a
+    // panel refresh would otherwise leave the sidebar naming the old branch
+    // until some unrelated commit moved the index — while the git panel, which
+    // reads the branch itself, showed the new one.
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    await tick(probe)
+    expect(probe.getRepoLabels().get("project-1")?.branchName).toBe("main")
+
+    await run(["git", "checkout", "-b", "feature/side-quest"], repoRoot)
+    probe.recordExternalProbe("project-1", { dirty: false, paths: [] })
+    // Fire-and-forget by design; let its stamp write land before the tick.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await tick(probe)
+
+    expect(probe.getRepoLabels().get("project-1")?.branchName).toBe("feature/side-quest")
+  })
+
   test("a detached HEAD keeps the repo name and drops the branch", async () => {
     const repoRoot = await createRepo()
     const state = createState(repoRoot, { lastTurnEndedAt: 1 })
