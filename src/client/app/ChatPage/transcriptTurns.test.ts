@@ -51,9 +51,51 @@ describe("buildTranscriptTurns", () => {
     ])
 
     expect(turns).toEqual([
-      { id: "p1", rowIndex: 0, endRowIndex: 2, prompt: "first question", response: "first answer", error: null, timestamp: TIMESTAMP, durationMs: null },
-      { id: "p2", rowIndex: 3, endRowIndex: 4, prompt: "second question", response: "second answer", error: null, timestamp: TIMESTAMP, durationMs: null },
+      { id: "p1", rowIndex: 0, endRowIndex: 2, replyRowId: "a1", prompt: "first question", response: "first answer", error: null, timestamp: TIMESTAMP, durationMs: null },
+      { id: "p2", rowIndex: 3, endRowIndex: 4, replyRowId: "a2", prompt: "second question", response: "second answer", error: null, timestamp: TIMESTAMP, durationMs: null },
     ])
+  })
+
+  // The jump pins its target to the top of the viewport, so the reply target
+  // has to be the message the preview came from — anything later would push
+  // that text off the top of the screen.
+  test("points the reply at the message the response was taken from", () => {
+    const turns = buildTranscriptTurns([
+      prompt("p1", "q"),
+      assistant("a1", "thinking out loud"),
+      assistant("a2", "final word"),
+      toolGroupRow("t1"),
+      okResult("r1"),
+    ])
+
+    expect(turns[0]).toMatchObject({ response: "final word", replyRowId: "a2" })
+  })
+
+  test("a turn with nothing back yet has no reply to aim at", () => {
+    const turns = buildTranscriptTurns([prompt("p1", "q"), toolGroupRow("t1")])
+
+    expect(turns[0]?.replyRowId).toBeNull()
+  })
+
+  test("an error takes the reply target with it, onto the result row", () => {
+    // The card shows the failure in the reply's slot, so the click follows it.
+    const turns = buildTranscriptTurns([
+      prompt("p1", "q"),
+      assistant("a1", "starting on it"),
+      errorResult("r1", "provider crashed"),
+    ])
+
+    expect(turns[0]).toMatchObject({ error: "provider crashed", replyRowId: "r1" })
+  })
+
+  test("a cancelled turn keeps aiming at the text it managed to produce", () => {
+    const turns = buildTranscriptTurns([
+      prompt("p1", "q"),
+      assistant("a1", "partial work"),
+      cancelledResult("r1"),
+    ])
+
+    expect(turns[0]?.replyRowId).toBe("a1")
   })
 
   test("keeps the turn's last assistant message, not its first", () => {
@@ -249,7 +291,7 @@ describe("buildTranscriptTurns — errored turns", () => {
 
 describe("isTurnInView", () => {
   const turn = (rowIndex: number, endRowIndex: number) =>
-    ({ id: "t", rowIndex, endRowIndex, prompt: "", response: null, error: null, timestamp: null, durationMs: null }) satisfies TranscriptTurn
+    ({ id: "t", rowIndex, endRowIndex, replyRowId: null, prompt: "", response: null, error: null, timestamp: null, durationMs: null }) satisfies TranscriptTurn
 
   test("counts a turn that merely overlaps the window", () => {
     // Turn spans the whole viewport with neither edge inside it.
@@ -288,7 +330,7 @@ describe("getMinimapCapacity", () => {
 
 describe("selectVisibleTurns", () => {
   const turns = Array.from({ length: 5 }, (_, index) => (
-    { id: `t${index}`, rowIndex: index, endRowIndex: index, prompt: "", response: null, error: null, timestamp: null, durationMs: null }
+    { id: `t${index}`, rowIndex: index, endRowIndex: index, replyRowId: null, prompt: "", response: null, error: null, timestamp: null, durationMs: null }
   ))
 
   test("keeps the most recent turns when over capacity", () => {

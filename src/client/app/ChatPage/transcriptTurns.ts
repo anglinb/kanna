@@ -13,6 +13,19 @@ export interface TranscriptTurn {
   rowIndex: number
   /** Last row belonging to this turn, inclusive. */
   endRowIndex: number
+  /**
+   * The row that produced the reply shown for this turn — the scroll target
+   * when you aim at the answer.
+   *
+   * The message the preview was taken from, not the turn's last row: a jump
+   * pins its target to the top of the viewport, so anything else puts the very
+   * text you clicked off the top of the screen. Tracks the card's own
+   * precedence, so `error` displacing `response` moves this with it.
+   *
+   * Null on a turn with nothing to show yet, which is also a turn whose card
+   * renders no reply to click.
+   */
+  replyRowId: string | null
   /** The user's question. */
   prompt: string
   /** The turn's final assistant message, if it has produced one yet. */
@@ -70,6 +83,7 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
         id: row.message.id,
         rowIndex: index,
         endRowIndex: index,
+        replyRowId: null,
         prompt: asText(row.message.content),
         response: null,
         error: null,
@@ -88,7 +102,12 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
     // first token, and those would wipe a summary we already have.
     if (row.message.kind === "assistant_text") {
       const text = asText(row.message.text)
-      if (text) current.response = text
+      // The row moves with the text it holds, so the reply the card shows and
+      // the message a click lands on are always the same message.
+      if (text) {
+        current.response = text
+        current.replyRowId = row.id
+      }
       continue
     }
 
@@ -102,6 +121,9 @@ export function buildTranscriptTurns(rows: ResolvedTranscriptRow[]): TranscriptT
       // keeps whatever text it managed to produce.
       if (!row.message.success && !row.message.cancelled) {
         current.error = asText(row.message.result) || "Turn failed"
+        // The error displaces the response in the card, so it takes the click
+        // with it — onto the result row, which is where the failure is written.
+        current.replyRowId = row.id
       }
     }
   }

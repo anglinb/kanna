@@ -59,6 +59,20 @@
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
     --logo: oklch(71.2% 0.194 13.428);
+    /*
+     * Highlighter amber for the jump flash — the colour a marked passage has on
+     * paper, which is what this is. Carries its own alpha because it always
+     * lies over something: a message background, or the transcript's.
+     *
+     * Deliberately not a palette token: every other colour here means a role
+     * (destructive, muted, accent), and this one means "look here" and nothing
+     * else. One value for both themes — at this weight it reads on either.
+     */
+    --jump-flash: rgb(255 186 99 / 0.25);
+    /* The same amber on the border, carried a little harder: a 1px line shows
+       less of a wash than an area does, so matching alphas would read as a
+       fill with a weak edge rather than one lit box. */
+    --jump-flash-border: rgb(255 186 99 / 0.4);
   }
 
   .dark {
@@ -411,6 +425,85 @@
 
     to {
       opacity: 1;
+    }
+  }
+
+  /*
+   * A message you jumped to, lit briefly so the eye lands where the scroll did.
+   *
+   * A jump moves the transcript under you without you having scrolled, so the
+   * message arrives with nothing drawing attention to it — the flash is that
+   * cue. Symmetric, and shaped in three beats: 0.618s rising, a full second
+   * held at peak, 0.618s falling. The hold is what the earlier spike-and-fade
+   * versions were missing — a flash that starts leaving the instant it arrives
+   * is gone before the eye has finished travelling to it. The rise and fall are
+   * the golden minor of that second, the same proportion the minimap's tick
+   * geometry is cut to.
+   *
+   * Carried on an inset shadow, which is the one way to wash this box that both
+   * animates and layers. The three obvious alternatives each fail on one of
+   * those: `background-color` would replace the user bubble's `bg-muted` and
+   * blink it transparent; `background-image` layers correctly but is a
+   * *discrete* animation type, so browsers flip it at the midpoint instead of
+   * interpolating and it reads as a blink, not a fade; and a child element with
+   * animated opacity steals the `:first-child` margin reset inside the bubble's
+   * `prose` container and resizes it mid-flash.
+   *
+   * An inner shadow paints over whatever background is already there and under
+   * the text — where a highlighter goes — clipped to the padding box, so it
+   * takes the element's own radius. Offsets, blur and spread are held constant
+   * across the keyframes so the only thing being interpolated is the colour.
+   *
+   * The border rides along at a stronger tint, which the inner shadow can't
+   * reach on its own: it stops at the padding edge, so an outlined box would
+   * otherwise keep a cold grey ring around a warm fill. Only the user bubble
+   * has a border to light — everything else the flash lands on has no border
+   * width, so this is inert there and needs no rule of its own. Returning to
+   * `hsl(var(--border))` at both ends is what makes the animation hand the
+   * border back to the stylesheet without a step.
+   */
+  .kanna-jump-flash {
+    animation: kanna-jump-flash 2236ms ease-in-out;
+  }
+
+  @keyframes kanna-jump-flash {
+    0% {
+      box-shadow: inset 0 0 0 100vmax transparent;
+      border-color: hsl(var(--border));
+    }
+
+    27.64% {
+      box-shadow: inset 0 0 0 100vmax var(--jump-flash);
+      border-color: var(--jump-flash-border);
+    }
+
+    72.36% {
+      box-shadow: inset 0 0 0 100vmax var(--jump-flash);
+      border-color: var(--jump-flash-border);
+    }
+
+    100% {
+      box-shadow: inset 0 0 0 100vmax transparent;
+      border-color: hsl(var(--border));
+    }
+  }
+
+  /* Same cue without the spike — it still says "here", it just doesn't flash. */
+  @media (prefers-reduced-motion: reduce) {
+    .kanna-jump-flash {
+      animation-name: kanna-jump-flash-reduced;
+    }
+  }
+
+  @keyframes kanna-jump-flash-reduced {
+    from {
+      box-shadow: inset 0 0 0 100vmax var(--jump-flash);
+      border-color: var(--jump-flash-border);
+    }
+
+    to {
+      box-shadow: inset 0 0 0 100vmax transparent;
+      border-color: hsl(var(--border));
     }
   }
 

@@ -6,11 +6,20 @@ import { classifyAttachmentPreview } from "./attachmentPreview"
 import { AttachmentFileCard, AttachmentImageCard } from "./AttachmentCard"
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal"
 import { useTranscriptRenderOptions } from "./render-context"
+import { cn } from "../../lib/utils"
 
 interface Props {
   content: string
   attachments?: ChatAttachment[]
   steered?: boolean
+  /**
+   * Light the bubble — a jump just landed on this message.
+   *
+   * The bubble rather than the row box the rest of the transcript lights: a
+   * user prompt is a shape on one side of the column, not a full-width block,
+   * so washing its container would light mostly empty space beside it.
+   */
+  flash?: boolean
 }
 
 /**
@@ -32,7 +41,7 @@ function parseSystemMessage(content: string) {
   }
 }
 
-export function UserMessage({ content, attachments = [], steered = false }: Props) {
+export function UserMessage({ content, attachments = [], steered = false, flash = false }: Props) {
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null)
   const renderOptions = useTranscriptRenderOptions()
   const parsedContent = useMemo(() => parseSystemMessage(content), [content])
@@ -101,7 +110,14 @@ export function UserMessage({ content, attachments = [], steered = false }: Prop
                 <CornerUpLeft className="h-4 w-4" />
               </span>
             ) : null}
-            <div className="min-w-0 flex-1 rounded-[20px] border border-border bg-muted px-3.5 py-1.5 text-primary prose prose-sm prose-invert [&_p]:whitespace-pre-line">
+            {/* The flash is a class on the bubble, not a layer inside it: this
+                is a `prose` container, and an extra child displaces the
+                `:first-child` margin reset onto itself, which grew the bubble
+                by a paragraph's top margin for the length of the flash. */}
+            <div className={cn(
+              "min-w-0 flex-1 rounded-[20px] border border-border bg-muted px-3.5 py-1.5 text-primary prose prose-sm prose-invert [&_p]:whitespace-pre-line",
+              flash && "kanna-jump-flash",
+            )}>
               <TranscriptMarkdown text={parsedContent.body} />
             </div>
           </div>

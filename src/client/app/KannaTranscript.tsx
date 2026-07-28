@@ -454,6 +454,8 @@ export function useStableResolvedRows(rows: ResolvedTranscriptRow[]) {
 
 interface TranscriptSingleRowProps {
   message: HydratedTranscriptMessage
+  /** A jump just landed here. Only the user bubble lights itself; see below. */
+  flash?: boolean
   index: number
   isLoading: boolean
   localPath?: string
@@ -478,6 +480,7 @@ interface TranscriptSingleRowProps {
 
 const TranscriptSingleRow = memo(function TranscriptSingleRow({
   message,
+  flash,
   index,
   isLoading,
   localPath,
@@ -498,7 +501,7 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
   let rendered: React.ReactNode = null
 
   if (message.kind === "user_prompt") {
-    rendered = <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} />
+    rendered = <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} flash={flash} />
   } else {
     switch (message.kind) {
       case "unknown":
@@ -589,7 +592,11 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
     </div>
   )
 }, (prev, next) => (
-  prev.isLoading === next.isLoading
+  // `flash` first: it is the only prop that changes without the message
+  // changing, so leaving it out of the comparison silently swallows the jump
+  // highlight — the row simply never re-renders to show it.
+  prev.flash === next.flash
+  && prev.isLoading === next.isLoading
   && prev.localPath === next.localPath
   && prev.isFirstSystem === next.isFirstSystem
   && prev.isModelChange === next.isModelChange
@@ -712,6 +719,14 @@ export function buildResolvedTranscriptRows(
 
 interface KannaTranscriptRowProps {
   row: ResolvedTranscriptRow
+  /**
+   * A jump just landed on this row, and the row is one that lights itself.
+   *
+   * Only ever true for a user prompt — every other row is lit by the box the
+   * viewport wraps it in, which is the whole width of the column and so needs
+   * nothing from the row itself. See `rowLightsItself` there.
+   */
+  flash?: boolean
   toolGroupExpanded?: boolean
   onToolGroupExpandedChange: (groupId: string, next: boolean) => void
   onAskUserQuestionSubmit: (
@@ -724,6 +739,7 @@ interface KannaTranscriptRowProps {
 
 export const KannaTranscriptRow = memo(function KannaTranscriptRow({
   row,
+  flash,
   toolGroupExpanded,
   onToolGroupExpandedChange,
   onAskUserQuestionSubmit,
@@ -746,6 +762,7 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
   return (
     <TranscriptSingleRow
       message={row.message}
+      flash={flash}
       index={row.index}
       isLoading={row.isLoading}
       localPath={row.localPath}
@@ -765,6 +782,9 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
     />
   )
 }, (prev, next) => {
+  // See the single-row comparator: `flash` changes on its own, so it has to be
+  // compared or the highlight never reaches the row.
+  if (prev.flash !== next.flash) return false
   if (prev.toolGroupExpanded !== next.toolGroupExpanded) return false
   if (prev.onToolGroupExpandedChange !== next.onToolGroupExpandedChange) return false
   if (prev.onAskUserQuestionSubmit !== next.onAskUserQuestionSubmit) return false

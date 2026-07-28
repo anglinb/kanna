@@ -17,11 +17,13 @@ import { ContextMenu, ContextMenuTrigger } from "../../components/ui/context-men
 import { OpenExternalContextMenuContent, openContextMenuFromButton } from "../../components/open-external-menu"
 import { TRANSCRIPT_PADDING_BOTTOM_OFFSET } from "../kannaStateHelpers"
 import { cn } from "../../lib/utils"
+import type { ChatJumpRole } from "../../lib/chat-navigation"
 import { formatPathWithTilde, shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
 import {
   buildResolvedTranscriptRows,
   KannaTranscriptRow,
   useStableResolvedRows,
+  type ResolvedTranscriptRow,
 } from "../KannaTranscript"
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
@@ -102,6 +104,31 @@ function measureJumpLeadIn(
   if (!viewport) return 0
   const visible = viewport.clientHeight - insets.top - insets.bottom
   return visible <= 0 ? 0 : Math.round(visible * JUMP_LEAD_IN_RATIO)
+}
+
+/** Length of `.kanna-jump-flash`, which owns the actual timing. */
+const JUMP_FLASH_DURATION_MS = 2236
+
+/**
+ * Grace before the class comes off, so the flash is never cut short.
+ *
+ * The animation starts a frame after the timer does, and a busy commit can
+ * stretch that — ending the highlight early would clip the fade to a hard edge,
+ * which is exactly what the slow release exists to avoid.
+ */
+const JUMP_FLASH_CLEANUP_SLACK_MS = 120
+
+/**
+ * Whether a row lights its own shape rather than the box around it.
+ *
+ * Only user prompts do. A prompt is a bubble hugging one side of the column, so
+ * lighting the row box would wash the empty half of the line beside it and
+ * point at a rectangle rather than at the message. Everything else — agent
+ * text, tool groups, results — already fills the column, so the row box *is*
+ * the message's shape and lighting it needs nothing from the row.
+ */
+function rowLightsItself(row: ResolvedTranscriptRow): boolean {
+  return row.kind === "single" && row.message.kind === "user_prompt"
 }
 
 
@@ -369,6 +396,19 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     const intended = headerOffsetPx - pending.offsetFromMessage
     const offset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - intended
     if (Math.abs(offset) <= PIN_TOLERANCE_PX) return
+    // Landed as close as the content allows. Without the scroller's trailing
+    // spacer there is no invented room past the last message, so a row near
+    // either end simply cannot reach the intended offset — and a correction
+    // that cannot converge would re-issue on every layout change for the whole
+    // settle window, chasing a position that does not exist.
+    const maxScrollTop = viewport.scrollHeight - viewport.clientHeight
+    const atLimit = offset > 0
+      ? viewport.scrollTop >= maxScrollTop - PIN_TOLERANCE_PX
+      : viewport.scrollTop <= PIN_TOLERANCE_PX
+    if (atLimit) {
+      pendingPinRef.current = null
+      return
+    }
     scrollToMessage(pending.rowId, { align: "start", scrollMargin: intended })
   }, [headerOffsetPx, scrollToMessage])
 
@@ -386,6 +426,63 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     pinRowToTop(target.rowId, target.offsetFromMessage)
   }, [onIsAtEndChange, pinRowToTop])
 
+  /**
+   * The row a jump last landed on, lit briefly so the eye finds it.
+   *
+   * Cleared on a timer rather than on animation end: the class has to come off
+   * for the animation to be replayable at all, and an `animationend` that never
+   * fires (the row scrolled out of the DOM mid-flash) would strand it.
+   */
+  const [flashRowId, setFlashRowId] = useState<string | null>(null)
+  const flashTimerRef = useRef<number | null>(null)
+  const flashFrameRef = useRef<number | null>(null)
+
+  const flashRow = useCallback((rowId: string) => {
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashFrameRef.current !== null) window.cancelAnimationFrame(flashFrameRef.current)
+    // Dropped for a frame before being set, so jumping to the row you are
+    // already lit on replays the flash. Re-applying a class that is already
+    // there restarts nothing, and the second click would look ignored.
+    setFlashRowId(null)
+    flashFrameRef.current = window.requestAnimationFrame(() => {
+      flashFrameRef.current = null
+      setFlashRowId(rowId)
+    })
+    flashTimerRef.current = window.setTimeout(() => {
+      flashTimerRef.current = null
+      setFlashRowId(null)
+    }, JUMP_FLASH_DURATION_MS + JUMP_FLASH_CLEANUP_SLACK_MS)
+  }, [])
+
+  useEffect(() => () => {
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashFrameRef.current !== null) window.cancelAnimationFrame(flashFrameRef.current)
+  }, [])
+
+  /**
+   * Everything a jump does to a row: where it lands, and lighting it up.
+   *
+   * The one path every jump takes, wherever it was asked for — the sidebar's
+   * hover card, and the minimap's ticks and card. They are the same act, so
+   * they have to land the same way, and a jump that flashed from one surface
+   * but not another (or landed a fifth of a screen off) reads as a bug.
+   *
+   * Deliberately not on the restore path: arriving back where you left off is
+   * not somewhere you asked to go, and a flash on every chat open would be
+   * noise rather than a cue.
+   */
+  const prepareJumpToRow = useCallback((rowId: string): TranscriptScrollTarget => {
+    flashRow(rowId)
+    return {
+      kind: "pin",
+      rowId,
+      // Negative, because `offsetFromMessage` measures how far *into* the
+      // message the landing point is: past its top for a restored read
+      // position, above it for the breathing room a jump wants.
+      offsetFromMessage: -measureJumpLeadIn(viewportRef.current, viewportInsetsRef.current),
+    }
+  }, [flashRow])
+
   /** Jump requests already spent, so each one lands exactly once. */
   const handledJumpRequestIdRef = useRef<string | null>(null)
 
@@ -402,12 +499,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     handledJumpRequestIdRef.current = jumpRequest.requestId
     onJumpRequestHandled?.(jumpRequest.requestId)
     const target = resolveJumpTarget(resolvedRows, jumpRequest.role)
-    if (target?.kind !== "pin") return target
-    // Negative, because `offsetFromMessage` measures how far *into* the message
-    // the landing point is: past its top for a restored read position, above it
-    // for the breathing room a jump wants.
-    return { ...target, offsetFromMessage: -measureJumpLeadIn(viewportRef.current, viewportInsetsRef.current) }
-  }, [jumpRequest, onJumpRequestHandled, resolvedRows])
+    return target?.kind === "pin" ? prepareJumpToRow(target.rowId) : target
+  }, [jumpRequest, onJumpRequestHandled, prepareJumpToRow, resolvedRows])
 
   // Restore once per chat open: wait until rows exist *and* the stored anchor
   // has resolved, otherwise we'd land on the fallback and visibly jump when the
@@ -593,10 +686,13 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   // Same reasoning as the scroll-to-bottom button: the minimap sits outside the
   // scroll node, so it never trips the input listeners, but jumping to a turn is
   // as deliberate a read-position choice as scrolling there by hand.
-  const handleSelectTurn = useCallback((turn: TranscriptTurn) => {
+  const handleSelectTurn = useCallback((turn: TranscriptTurn, role: ChatJumpRole) => {
     hasUserScrolledRef.current = true
-    applyScrollTarget({ kind: "pin", rowId: turn.id })
-  }, [applyScrollTarget])
+    // The same two ends the sidebar's card offers, resolved per turn rather
+    // than per chat — and landing the same way: on the same message, with the
+    // same lead-in above it.
+    applyScrollTarget(prepareJumpToRow((role === "reply" ? turn.replyRowId : null) ?? turn.id))
+  }, [applyScrollTarget, prepareJumpToRow])
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
     if (target.trigger !== "contextmenu") {
@@ -683,9 +779,25 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
                   // until it has laid the row out once.
                   style={{ containIntrinsicSize: `auto ${estimateTranscriptRowSize(row)}px` }}
                 >
-                  <div className="mx-auto w-full max-w-[800px] pb-5" data-transcript-row-id={row.id}>
+                  {/* The row's own padding is what gives the jump highlight its
+                      breathing room, so it has to be uniform and it has to be
+                      *inside* the box: the scroller item is paint-contained
+                      (`content-visibility: auto`), which clips anything hanging
+                      outside it — which is what a negative margin would do.
+                      The gap between messages used to be 20px of bottom padding
+                      and is now 8 of padding either side plus 4 of margin, so
+                      the rhythm is unchanged. `max-w` grew by the padding to
+                      keep the text column itself at 800px. */}
+                  <div
+                    className={cn(
+                      "mx-auto mb-1 w-full max-w-[816px] rounded-xl p-2",
+                      flashRowId === row.id && !rowLightsItself(row) && "kanna-jump-flash",
+                    )}
+                    data-transcript-row-id={row.id}
+                  >
                     <KannaTranscriptRow
                       row={row}
+                      flash={flashRowId === row.id && rowLightsItself(row)}
                       toolGroupExpanded={row.kind === "tool-group" ? (toolGroupExpanded[row.id] ?? false) : undefined}
                       onToolGroupExpandedChange={handleToolGroupExpandedChange}
                       onAskUserQuestionSubmit={onAskUserQuestionSubmit}

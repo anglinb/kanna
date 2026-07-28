@@ -66,6 +66,26 @@ function MessageScrollerContent({
     <MessageScrollerPrimitive.Content
       data-slot="message-scroller-content"
       className={cn("flex h-max min-h-full flex-col", className)}
+      // The registry's trailing spacer, held at zero height.
+      //
+      // The primitive grows it on every `scrollToElement` by exactly the
+      // shortfall between the scroll position asked for and the furthest the
+      // content can actually scroll — buying the range to park a near-final
+      // message at the top of the viewport. The cost is a stretch of empty
+      // transcript below the last message that reads as overscroll, and that
+      // outlives the jump: it is only recomputed on the next programmatic
+      // scroll, so it sits there through everything the reader does by hand.
+      //
+      // Not worth what it buys. A jump near the end of a chat now scrolls as
+      // far as the content allows and the message lands wherever that leaves
+      // it, which is what every other transcript does — and the jump flash
+      // already says which message it was, so nothing depends on the message
+      // being at a fixed height on screen.
+      //
+      // `display: none` rather than a zero height because the primitive writes
+      // `height` inline and would win any contest over that property. It sets
+      // `hidden` too, but only ever toggles it off, so the class is what holds.
+      spacerClassName="hidden"
       {...props}
     />
   )

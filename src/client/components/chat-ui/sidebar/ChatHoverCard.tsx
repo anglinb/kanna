@@ -1,4 +1,5 @@
 import { type ComponentPropsWithRef, type ReactNode, useCallback, useEffect, useState } from "react"
+import { TurnCardMessage, TurnCardMetaRow, TurnCardTimingRow } from "../../ui/turn-card"
 import { GitBranch, PencilLine } from "lucide-react"
 import { getRepoUrlLabel } from "../../../../shared/git-url"
 import { PROVIDERS, type SidebarChatRow } from "../../../../shared/types"
@@ -33,25 +34,6 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "../../ui/hover-ca
 
 /** Harness names, from the catalog the provider picker reads. */
 const PROVIDER_LABELS = new Map(PROVIDERS.map((provider) => [provider.id, provider.label]))
-
-/** Bullet between the footer's facts. */
-function MetaSeparator() {
-  return <span aria-hidden className="opacity-60">•</span>
-}
-
-/**
- * The horizontal inset every row of the card carries, paired with a card whose
- * own padding is the other half.
- *
- * Split that way because one row — the message blocks — has a hover fill, and a
- * fill that stops where the text starts reads as a box bolted onto the line
- * rather than a band you can hit. Paying for it with negative margins on a
- * `w-full` element does not work: the width resolves against the parent's
- * content box and the margins then push both edges outward, so the fill
- * overhangs the card. Giving the padding to the rows and taking it off the
- * card puts every line at the same optical inset with nothing overhanging.
- */
-const CARD_ROW_INSET = "px-1.5 py-0.5"
 
 /**
  * A turn that has started and not yet ended. Read off timestamps rather than
@@ -120,49 +102,6 @@ function useTurnClock(active: boolean): number {
   return nowMs
 }
 
-/**
- * One of the card's message blocks, clickable when the surface it sits on can
- * navigate at all.
- *
- * Falls back to plain text rather than a disabled button where it cannot — the
- * archived list, which has no chat to open in place. Nothing should suggest a
- * click that will not happen.
- */
-function CardMessage({
-  children,
-  className,
-  onSelect,
-  label,
-}: {
-  children: ReactNode
-  className: string
-  onSelect?: () => void
-  label: string
-}) {
-  // Identical box metrics either way, so a message sits in exactly the same
-  // place whether or not it happens to be clickable.
-  if (!onSelect) return <div className={cn(className, CARD_ROW_INSET)}>{children}</div>
-
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onSelect}
-      // Deliberately no display utility here: `line-clamp-*` works by setting
-      // `display: -webkit-box`, so adding `block` would race it in the
-      // stylesheet and could unclamp the text.
-      className={cn(
-        className,
-        CARD_ROW_INSET,
-        "w-full cursor-pointer rounded text-left transition-colors",
-        "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
 /** Exported for tests: the card body, without the hover-card machinery around it. */
 export function ChatHoverCardContent({
   thread,
@@ -208,7 +147,7 @@ export function ChatHoverCardContent({
           differs — the repo is usually the same one over and over — so the
           varying fact reads down the left edge and the constant one anchors
           right, the same shape as the footer's harness and time. */}
-      <div className={cn("flex items-center gap-1 text-[12px] tracking-wide text-muted-foreground", CARD_ROW_INSET)}>
+      <TurnCardMetaRow>
         {/* Named even when it's `main`: the card has the room, and a branch you
             have to infer from the *absence* of a glyph is a worse answer than
             the word. Absent only on a detached HEAD, where the repo simply
@@ -263,7 +202,7 @@ export function ChatHoverCardContent({
             <span className="truncate">{label.repoPath ?? label.name}</span>
           )}
         </span>
-      </div>
+      </TurnCardMetaRow>
       {/* The exchange, as one block with matched margins above and below so it
           sits between the two meta lines rather than joining either. */}
       <div className="mt-1 space-y-1">
@@ -272,25 +211,25 @@ export function ChatHoverCardContent({
             with no messages yet still says what it is. A draft displaces it —
             see below. */}
         {draft ? null : (
-          <CardMessage
+          <TurnCardMessage
             className="line-clamp-2 text-sm font-medium text-popover-foreground"
             label="Jump to this prompt"
             onSelect={canJump ? () => onSelectMessage?.("prompt") : undefined}
           >
             {toMessagePreview(row.lastUserMessagePreview || thread.title)}
-          </CardMessage>
+          </TurnCardMessage>
         )}
         {/* Cut to a single line once a draft is here: what you were about to
             say outranks how the last answer began, and three lines of reply
             would push it to the bottom of a card you opened for the draft. */}
         {reply ? (
-          <CardMessage
+          <TurnCardMessage
             className={cn("text-sm text-muted-foreground", draft ? "line-clamp-1" : "line-clamp-3")}
             label="Jump to this reply"
             onSelect={canJump ? () => onSelectMessage?.("reply") : undefined}
           >
             {toMessagePreview(reply)}
-          </CardMessage>
+          </TurnCardMessage>
         ) : null}
         {/* An unsent draft ends the card, in the prompt's own weight but
             italic and pencilled: it is the next thing said in this chat, not
@@ -303,36 +242,30 @@ export function ChatHoverCardContent({
           // Unlike the two messages, a draft has no entry to land on — it was
           // never sent. So it just opens the chat, where the composer is
           // already holding it.
-          <CardMessage
+          <TurnCardMessage
             className="line-clamp-2 text-sm font-medium italic text-popover-foreground"
             label="Open this chat"
             onSelect={onSelectChat}
           >
             <PencilLine className="mr-1 inline size-3 shrink-0 -translate-y-px" strokeWidth={2.5} />
             {toMessagePreview(draft)}
-          </CardMessage>
+          </TurnCardMessage>
         ) : null}
       </div>
-      {row.provider || duration || endedAt ? (
-        <div className={cn("mt-1 flex items-center gap-1 text-[12px] tracking-wide text-muted-foreground", CARD_ROW_INSET)}>
-          {row.provider ? (
-            // Glyph and name are one fact, so nothing separates them.
-            <span className="flex min-w-0 shrink-0 items-center gap-1">
-              {HarnessIcon ? <HarnessIcon className="size-3 shrink-0" /> : null}
-              <span className="truncate">{PROVIDER_LABELS.get(row.provider) ?? row.provider}</span>
-            </span>
-          ) : null}
-          {/* How long it ran and when it landed, anchored to the right edge
-              rather than trailing the harness — a column you read down the list
-              instead of a value you hunt along the line. A live turn has no
-              landing time yet, so it shows the elapsed count alone. */}
-          <span className="ml-auto flex shrink-0 items-center gap-1 pl-2">
-            {duration ? <span>{duration}</span> : null}
-            {duration && endedAt ? <MetaSeparator /> : null}
-            {endedAt ? <span>{endedAt}</span> : null}
-          </span>
-        </div>
-      ) : null}
+      {/* The harness joins the duration on the left — both say *how* the turn
+          ran — leaving the right edge to when it landed. A live turn has no
+          landing time yet, so it shows the elapsed count alone. */}
+      <TurnCardTimingRow
+        duration={duration}
+        timestamp={endedAt}
+        leading={row.provider ? (
+          // Glyph and name are one fact, so nothing separates them.
+          <>
+            {HarnessIcon ? <HarnessIcon className="size-3 shrink-0" /> : null}
+            <span className="truncate">{PROVIDER_LABELS.get(row.provider) ?? row.provider}</span>
+          </>
+        ) : null}
+      />
     </>
   )
 }
