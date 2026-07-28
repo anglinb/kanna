@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { SidebarChatRow } from "../../../../shared/types"
+import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { ChatHoverCardContent } from "./ChatHoverCard"
 
@@ -50,7 +51,7 @@ function render(
   overrides: Partial<SidebarChatRow> = {},
   label?: SidebarThread["projectLabel"],
   draft?: string,
-  onSelectMessage?: (messageId: string) => void,
+  onSelectMessage?: (role: ChatJumpRole) => void,
 ) {
   return renderToStaticMarkup(
     <ChatHoverCardContent
@@ -61,11 +62,7 @@ function render(
   )
 }
 
-/** The ids the server sends alongside the previews, naming their entries. */
-const WITH_TARGETS: Partial<SidebarChatRow> = {
-  lastUserMessagePreviewId: "entry-prompt",
-  lastAgentMessagePreviewId: "entry-reply",
-}
+const JUMPS = () => undefined
 
 describe("ChatHoverCardContent", () => {
   test("carries what the row could not: the project, the prompt, the reply", () => {
@@ -110,6 +107,42 @@ describe("ChatHoverCardContent", () => {
     })
 
     expect(detached).not.toContain("lucide-git-branch")
+  })
+
+  test("offers Setup Git in the branch's slot when the project isn't a repo", () => {
+    const html = renderToStaticMarkup(
+      <ChatHoverCardContent
+        thread={thread({}, { name: "scratch", hasGitRepo: false, text: "scratch" })}
+        onSetupGit={JUMPS}
+      />
+    )
+
+    expect(html).toContain("Setup Git")
+    // Where the branch would have been — ahead of the project name opposite it.
+    expect(html.indexOf("Setup Git")).toBeLessThan(html.indexOf("scratch"))
+  })
+
+  test("says nothing about git until the server has actually looked", () => {
+    // An unresolved project reads the same as one with no repo if you go by
+    // the missing branch alone, and every repo in the sidebar is unresolved
+    // for the first probe pass after boot.
+    const html = renderToStaticMarkup(
+      <ChatHoverCardContent
+        thread={thread({}, { name: "scratch", text: "scratch" })}
+        onSetupGit={JUMPS}
+      />
+    )
+
+    expect(html).not.toContain("Setup Git")
+  })
+
+  test("a repo keeps its branch — Setup Git never displaces one", () => {
+    const html = renderToStaticMarkup(
+      <ChatHoverCardContent thread={thread()} onSetupGit={JUMPS} />
+    )
+
+    expect(html).toContain("feat/hover-card")
+    expect(html).not.toContain("Setup Git")
   })
 
   test("drops a reply the current prompt hasn't earned", () => {
@@ -237,8 +270,10 @@ describe("ChatHoverCardContent", () => {
     expect(html).not.toContain("lucide-pencil-line")
   })
 
-  test("both messages are targets once we know which entries they are", () => {
-    const html = render(WITH_TARGETS, undefined, undefined, () => undefined)
+  test("both messages are targets wherever the card can navigate", () => {
+    // No per-chat condition: the card shows a chat's latest prompt and latest
+    // reply by definition, and the transcript resolves those itself.
+    const html = render({}, undefined, undefined, JUMPS)
 
     expect(html).toContain("Jump to this prompt")
     expect(html).toContain("Jump to this reply")
@@ -246,26 +281,18 @@ describe("ChatHoverCardContent", () => {
   })
 
   test("stays plain text on a card with nowhere to send you", () => {
-    // Archived rows and the palette pass no handler — the card is a read-only
-    // peek there, and a hover fill on text that does nothing would lie.
-    expect(render(WITH_TARGETS)).not.toContain("<button")
-  })
-
-  test("previews written before the ids existed are still text, not dead buttons", () => {
-    const html = render({}, undefined, undefined, () => undefined)
-
-    expect(html).toContain("make the sidebar labels shorter")
-    expect(html).not.toContain("<button")
+    // Archived rows pass no handler — the card is a read-only peek there, and
+    // a hover fill on text that does nothing would lie.
+    expect(render()).not.toContain("<button")
   })
 
   test("a reply carried over from the previous turn is neither shown nor clickable", () => {
-    // The prompt is newer than the reply, so the answer on hand isn't to it —
-    // and the id we hold points at the earlier turn's words.
+    // The prompt is newer than the reply, so the answer on hand isn't to it.
     const html = render(
-      { ...WITH_TARGETS, lastMessageAt: NOW, lastAgentMessagePreviewAt: NOW - 60_000 },
+      { lastMessageAt: NOW, lastAgentMessagePreviewAt: NOW - 60_000 },
       undefined,
       undefined,
-      () => undefined,
+      JUMPS,
     )
 
     expect(html).not.toContain("Done — the branch moved into the hover card.")
@@ -274,18 +301,18 @@ describe("ChatHoverCardContent", () => {
   })
 
   test("a draft leaves only the reply to click, since it replaced the prompt", () => {
-    const html = render(WITH_TARGETS, undefined, "half a thought", () => undefined)
+    const html = render({}, undefined, "half a thought", JUMPS)
 
     expect(html).not.toContain("Jump to this prompt")
     expect(html).toContain("Jump to this reply")
   })
 
   test("a draft opens the chat rather than aiming at a message", () => {
-    // It was never sent, so there is no entry to land on — the composer is
+    // It was never sent, so there is no message to land on — the composer is
     // already holding it.
     const html = renderToStaticMarkup(
       <ChatHoverCardContent
-        thread={thread(WITH_TARGETS)}
+        thread={thread()}
         draft="half a thought"
         onSelectChat={() => undefined}
       />

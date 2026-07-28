@@ -421,6 +421,37 @@ describe("WorktreeProbe integration", () => {
     await probe.refreshForChat("chat-1")
 
     expect(probe.getRepoLabels().get("project-1")).toBeUndefined()
+    // A missing label alone can't say this — it also covers every project the
+    // probe hasn't reached yet — so the answer is tracked separately.
+    expect(probe.getProjectsWithoutRepo().has("project-1")).toBe(true)
+  })
+
+  test("nothing is claimed about a project the probe has not looked at", async () => {
+    const repoRoot = await createRepo()
+    const state = createState(repoRoot, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    expect(probe.getProjectsWithoutRepo().has("project-1")).toBe(false)
+
+    await probe.refreshForChat("chat-1")
+
+    expect(probe.getProjectsWithoutRepo().has("project-1")).toBe(false)
+  })
+
+  test("learning a folder is not a repo is itself a broadcast", async () => {
+    // There is no label to drop, so the repo-label path stays quiet — but the
+    // sidebar has just learned it can offer to initialize the folder.
+    const plainDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-plain-"))
+    tempDirs.push(plainDir)
+    const state = createState(plainDir, { lastTurnEndedAt: 1 })
+    let changes = 0
+    const probe = new WorktreeProbe(() => state, () => {
+      changes += 1
+    })
+
+    await probe.refreshForChat("chat-1")
+
+    expect(changes).toBe(1)
   })
 
   test("one refresh is one broadcast even when label and dirty state both change", async () => {
@@ -452,6 +483,28 @@ describe("WorktreeProbe integration", () => {
 
     expect(sidebar.projectGroups[0]?.repoName).toBe(path.basename(repoRoot))
     expect(sidebar.projectGroups[0]?.branchName).toBe("main")
+    expect(sidebar.projectGroups[0]?.hasGitRepo).toBe(true)
+  })
+
+  test("the sidebar snapshot states a folder is not a repo, but only once probed", async () => {
+    const plainDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-plain-"))
+    tempDirs.push(plainDir)
+    const state = createState(plainDir, { lastTurnEndedAt: 1 })
+    const probe = new WorktreeProbe(() => state, () => {})
+
+    const unprobed = deriveSidebarData(state, new Map(), {
+      repoLabels: probe.getRepoLabels(),
+      projectsWithoutRepo: probe.getProjectsWithoutRepo(),
+    })
+    expect(unprobed.projectGroups[0]?.hasGitRepo).toBeUndefined()
+
+    await probe.refreshForChat("chat-1")
+
+    const probed = deriveSidebarData(state, new Map(), {
+      repoLabels: probe.getRepoLabels(),
+      projectsWithoutRepo: probe.getProjectsWithoutRepo(),
+    })
+    expect(probed.projectGroups[0]?.hasGitRepo).toBe(false)
   })
 })
 

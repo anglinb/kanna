@@ -1,4 +1,5 @@
 import type { ResolvedChatReadAnchor } from "../../../shared/types"
+import type { ChatJumpRole } from "../../lib/chat-navigation"
 import type { ResolvedTranscriptRow } from "../KannaTranscript"
 import { getUserPromptSignature } from "../kannaStateHelpers"
 
@@ -117,35 +118,51 @@ export type TranscriptScrollTarget =
    */
   | { kind: "pin"; rowId: string; offsetFromMessage?: number }
 
+/** Index of the row rendering the most recent assistant message, or null. */
+export function findLatestAssistantTextRowIndex(rows: ResolvedTranscriptRow[]): number | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (row?.kind === "single" && row.message.kind === "assistant_text") {
+      return index
+    }
+  }
+  return null
+}
+
 /**
- * A request to land on one named message, made from outside the transcript —
- * today, clicking a message in the sidebar's chat hover card.
+ * A request to land on one end of the last exchange, made from outside the
+ * transcript — today, clicking a message in the sidebar's chat hover card.
  *
- * Carries a `requestId` because the message alone can't say "again": clicking
- * the same preview twice, or clicking back to a chat you already jumped into,
+ * Carries a `requestId` because the role alone can't say "again": clicking the
+ * same preview twice, or clicking back into a chat you already jumped into,
  * has to move the viewport a second time. The id is what the viewport marks as
  * spent, so a request survives exactly one landing.
  */
 export interface TranscriptJumpRequest {
-  messageId: string
+  role: ChatJumpRole
   requestId: string
 }
 
 /**
- * Where a jump request should land, or null when the message isn't in the
- * loaded transcript.
+ * Where a jump request should land, or null when the transcript has no such
+ * message.
  *
- * Resolves through the row index rather than using the message id directly:
- * the scroller addresses *rows*, and a message swept into a tool group is
- * reachable only by its group's id.
+ * The sidebar names a role and this resolves it, for the same reason the
+ * minimap slices its own turns out of these rows: the transcript is the only
+ * thing that knows which message is which. A card built from a snapshot string
+ * would have to be told, and would then be wrong the moment the chat moved on.
+ *
+ * Returns a *row*, not a message: the scroller addresses rows, and a message
+ * swept into a tool group is reachable only by its group's id.
  */
 export function resolveJumpTarget(
   rows: ResolvedTranscriptRow[],
-  rowIndexByMessageId: Map<string, number>,
-  messageId: string,
+  role: ChatJumpRole,
 ): TranscriptScrollTarget | null {
-  const index = rowIndexByMessageId.get(messageId)
-  const rowId = index === undefined ? undefined : rows[index]?.id
+  const index = role === "prompt"
+    ? findLatestUserPromptRowIndex(rows)
+    : findLatestAssistantTextRowIndex(rows)
+  const rowId = index === null ? undefined : rows[index]?.id
   return rowId === undefined ? null : { kind: "pin", rowId }
 }
 

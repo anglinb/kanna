@@ -287,6 +287,9 @@ function KannaLayout() {
   const handleSidebarOpenExternalPath = useCallback((action: "open_finder" | "open_editor", localPath: string) => {
     void state.handleOpenExternalPath(action, localPath)
   }, [state.handleOpenExternalPath])
+  const handleSidebarSetupGit = useCallback((chatId: string) => {
+    void state.handleSetupGit(chatId)
+  }, [state.handleSetupGit])
   const handleSidebarHideProject = useCallback((projectId: string) => {
     void state.handleHideProject(projectId)
   }, [state.handleHideProject])
@@ -321,6 +324,7 @@ function KannaLayout() {
       onDeleteChat={handleSidebarDeleteChat}
       onCopyPath={handleSidebarCopyPath}
       onOpenExternalPath={handleSidebarOpenExternalPath}
+      onSetupGit={handleSidebarSetupGit}
       onRenameProject={handleSidebarRenameProject}
       onHideProject={handleSidebarHideProject}
       onReorderProjectGroups={handleSidebarReorderProjectGroups}
@@ -342,6 +346,7 @@ function KannaLayout() {
     handleSidebarRenameChat,
     handleSidebarShareChat,
     handleSidebarReorderProjectGroups,
+    handleSidebarSetupGit,
     handleSidebarHideProject,
     showMobileOpenButton,
     state.activeChatId,

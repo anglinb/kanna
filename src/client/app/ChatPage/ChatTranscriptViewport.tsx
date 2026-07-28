@@ -401,13 +401,13 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     if (!jumpRequest || handledJumpRequestIdRef.current === jumpRequest.requestId) return null
     handledJumpRequestIdRef.current = jumpRequest.requestId
     onJumpRequestHandled?.(jumpRequest.requestId)
-    const target = resolveJumpTarget(resolvedRows, rowIndexByMessageId, jumpRequest.messageId)
+    const target = resolveJumpTarget(resolvedRows, jumpRequest.role)
     if (target?.kind !== "pin") return target
     // Negative, because `offsetFromMessage` measures how far *into* the message
     // the landing point is: past its top for a restored read position, above it
     // for the breathing room a jump wants.
     return { ...target, offsetFromMessage: -measureJumpLeadIn(viewportRef.current, viewportInsetsRef.current) }
-  }, [jumpRequest, onJumpRequestHandled, resolvedRows, rowIndexByMessageId])
+  }, [jumpRequest, onJumpRequestHandled, resolvedRows])
 
   // Restore once per chat open: wait until rows exist *and* the stored anchor
   // has resolved, otherwise we'd land on the fallback and visibly jump when the

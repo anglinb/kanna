@@ -972,13 +972,6 @@ describe("EventStore", () => {
     expect(reloadedChat?.lastMessageAt).toBe(1_000)
     expect(reloadedChat?.lastUserMessagePreview).toBe("Fix the login bug")
     expect(reloadedChat?.lastAgentMessagePreview).toBe("Done, the fix is in auth.ts")
-
-    // The ids behind those previews come back too, and still name the entries
-    // they were taken from — the hover card's jump targets are only as durable
-    // as this.
-    const messages = reloaded.getMessages(chat.id)
-    expect(reloadedChat?.lastUserMessagePreviewId).toBe(messages[0]!._id)
-    expect(reloadedChat?.lastAgentMessagePreviewId).toBe(messages[1]!._id)
   })
 
   test("strips markdown while the message still has lines to strip it by", async () => {
@@ -1000,7 +993,7 @@ describe("EventStore", () => {
       .toBe("Plan rewrite the router drop parseTranscript and ship it")
   })
 
-  test("pairs each preview with the entry it was taken from, not the latest one", async () => {
+  test("advances each preview independently, so a new prompt keeps the old reply", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)
     await store.initialize()
@@ -1011,14 +1004,13 @@ describe("EventStore", () => {
     await store.appendMessage(chat.id, entry("assistant_text", 2_000, { text: "first answer" }))
     await store.appendMessage(chat.id, entry("user_prompt", 3_000, { content: "second ask" }))
 
-    const messages = store.getMessages(chat.id)
     const updated = store.getChat(chat.id)
 
-    // The prompt id advanced with its text; the reply id stayed on the answer
-    // still being shown, which belongs to the turn before.
+    // The card uses the timestamps to notice the reply belongs to the previous
+    // turn and hides it; the store's job is only to keep them apart.
     expect(updated?.lastUserMessagePreview).toBe("second ask")
-    expect(updated?.lastUserMessagePreviewId).toBe(messages[2]!._id)
-    expect(updated?.lastAgentMessagePreviewId).toBe(messages[1]!._id)
+    expect(updated?.lastAgentMessagePreview).toBe("first answer")
+    expect(updated?.lastAgentMessagePreviewAt).toBe(2_000)
   })
 
   test("marks chats done until a new turn starts, surviving reads and reloads", async () => {

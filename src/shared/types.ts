@@ -888,17 +888,8 @@ export interface SidebarChatRow {
   lastAgentMessageAt?: number
   /** One-line preview of the latest user prompt. */
   lastUserMessagePreview?: string
-  /**
-   * `TranscriptEntry._id` of the entry that preview was taken from, so the
-   * hover card's prompt can be clicked to land on it. Absent on chats whose
-   * last prompt predates the field — the click falls back to opening the chat
-   * at wherever it was left.
-   */
-  lastUserMessagePreviewId?: string
   /** One-line preview of the latest agent text message. */
   lastAgentMessagePreview?: string
-  /** `TranscriptEntry._id` behind that preview. Same fallback as above. */
-  lastAgentMessagePreviewId?: string
   /**
    * When that preview was written. Distinct from `lastAgentMessageAt`, which
    * tool calls advance too: this dates the *words*, so a reader can tell a
@@ -930,6 +921,13 @@ export interface SidebarProjectGroup {
    * label; best-effort, so treat "absent" as "not known yet", not "not a repo".
    */
   repoName?: string
+  /**
+   * Whether the project is in a git repo at all, once we've looked. Absent
+   * means "not looked yet" — the thing `repoName` alone can't distinguish, and
+   * the reason this exists: only a definite `false` should offer to `git init`
+   * the folder.
+   */
+  hasGitRepo?: boolean
   /** Current branch of `repoName`'s repo; absent on a detached HEAD. */
   branchName?: string
   /**

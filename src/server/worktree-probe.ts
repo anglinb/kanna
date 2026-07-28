@@ -173,6 +173,15 @@ export class WorktreeProbe {
   private readonly probes = new Map<string, WorkingTreeProbe>()
   /** Absent for projects that aren't in a repo (or haven't been resolved yet). */
   private readonly repoLabels = new Map<string, ProjectRepoLabel>()
+  /**
+   * Projects a resolution pass has looked at and found *not* to be in a repo.
+   *
+   * A missing repo label can't say this on its own — it also covers every
+   * project we haven't reached yet — and the difference matters to anything
+   * that would offer to `git init` a folder: doing it off "no label" would
+   * flash the offer at every repo in the sidebar for the first pass after boot.
+   */
+  private readonly noRepoProjects = new Set<string>()
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
   private batchDepth = 0
@@ -191,6 +200,11 @@ export class WorktreeProbe {
   /** Synchronous snapshot for the sidebar builder. */
   getRepoLabels(): ReadonlyMap<string, ProjectRepoLabel> {
     return this.repoLabels
+  }
+
+  /** Synchronous snapshot for the sidebar builder — see `noRepoProjects`. */
+  getProjectsWithoutRepo(): ReadonlySet<string> {
+    return this.noRepoProjects
   }
 
   start() {
@@ -316,6 +330,14 @@ export class WorktreeProbe {
       stamp: existing?.stamp ?? "",
     }
     this.entries.set(projectId, entry)
+    // Notified separately from the repo label: a folder that has never been a
+    // repo has no label to drop, so `applyRepoLabel(null)` sees nothing change
+    // and stays quiet — but the sidebar has just learned something about it.
+    if (this.noRepoProjects.has(projectId) !== !entry.location) {
+      if (entry.location) this.noRepoProjects.delete(projectId)
+      else this.noRepoProjects.add(projectId)
+      this.notifyChanged()
+    }
     return entry
   }
 

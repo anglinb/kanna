@@ -77,15 +77,7 @@ export interface ChatRecord {
    */
   lastAgentMessageAt?: number
   lastUserMessagePreview?: string
-  /**
-   * `TranscriptEntry._id` of the entry each preview was built from. Recorded
-   * beside the text because that's the one place the entry is in hand — the
-   * sidebar snapshot is derived from `StoreState` alone and never reads a
-   * transcript. Lets the sidebar hover card jump to the message it shows.
-   */
-  lastUserMessagePreviewId?: string
   lastAgentMessagePreview?: string
-  lastAgentMessagePreviewId?: string
   /**
    * When `lastAgentMessagePreview`'s entry was written — i.e. how old the
    * agent's last *words* are, as opposed to `lastAgentMessageAt`, which any

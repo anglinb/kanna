@@ -11,20 +11,32 @@
  * already in produces the same pathname, so the message id alone can't say
  * "again". The chat page spends the id and clears the state.
  */
+/**
+ * Which end of the last exchange to land on.
+ *
+ * A role rather than a message id, because the sidebar doesn't know message
+ * ids and doesn't need to: the card shows a chat's *latest* prompt and its
+ * *latest* reply by construction, and the transcript already identifies both —
+ * the minimap slices turns out of the same rows. Naming the role lets the side
+ * that has the transcript answer the question, instead of the side that has
+ * only a preview string carrying an id along for it.
+ */
+export type ChatJumpRole = "prompt" | "reply"
+
 export interface ChatJumpLocationState {
-  jumpToMessageId: string
+  jumpToRole: ChatJumpRole
   jumpRequestId: string
 }
 
-export function buildChatJumpLocationState(messageId: string): ChatJumpLocationState {
-  return { jumpToMessageId: messageId, jumpRequestId: crypto.randomUUID() }
+export function buildChatJumpLocationState(role: ChatJumpRole): ChatJumpLocationState {
+  return { jumpToRole: role, jumpRequestId: crypto.randomUUID() }
 }
 
 /** Reads the jump out of an opaque `useLocation().state`, or null if absent. */
 export function readChatJumpLocationState(state: unknown): ChatJumpLocationState | null {
   if (!state || typeof state !== "object") return null
-  const { jumpToMessageId, jumpRequestId } = state as Partial<ChatJumpLocationState>
-  if (typeof jumpToMessageId !== "string" || typeof jumpRequestId !== "string") return null
-  if (!jumpToMessageId || !jumpRequestId) return null
-  return { jumpToMessageId, jumpRequestId }
+  const { jumpToRole, jumpRequestId } = state as Partial<ChatJumpLocationState>
+  if (jumpToRole !== "prompt" && jumpToRole !== "reply") return null
+  if (typeof jumpRequestId !== "string" || !jumpRequestId) return null
+  return { jumpToRole, jumpRequestId }
 }

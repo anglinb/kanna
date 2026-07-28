@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { Archive, RotateCcw, Split } from "lucide-react"
+import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
@@ -25,6 +26,7 @@ export function ThreadRow({
   dimIdleTitles = true,
   onSelect,
   onSelectMessage,
+  onSetupGit,
   onCreateChat,
   onRenameChat,
   onShareChat,
@@ -52,12 +54,17 @@ export function ThreadRow({
   dimIdleTitles?: boolean
   onSelect: (chatId: string) => void
   /**
-   * Opens the chat scrolled to one message — what the hover card's prompt and
-   * reply do when clicked. Optional: without it the card's previews are inert
-   * text and a click anywhere on it just opens the chat (the archived list,
-   * which has no transcript to land in, passes nothing).
+   * Opens the chat at one end of its last exchange — what the hover card's
+   * prompt and reply do when clicked. Optional: without it those previews are
+   * inert text (the archived list passes nothing).
    */
-  onSelectMessage?: (chatId: string, messageId: string) => void
+  onSelectMessage?: (chatId: string, role: ChatJumpRole) => void
+  /**
+   * Prompts to `git init` the chat's project — offered by the hover card when
+   * the project turns out not to be a repo. Optional on the same terms as
+   * `onSelectMessage`: the archived list passes nothing.
+   */
+  onSetupGit?: (chatId: string) => void
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
   onShareChat: (chatId: string) => void
@@ -141,6 +148,7 @@ export function ThreadRow({
         draft={draft}
         onSelectMessage={onSelectMessage}
         onSelectChat={onSelect}
+        onSetupGit={onSetupGit}
       >
         <div
           // The marker the sidebar's scroll-to-active querySelector looks for.

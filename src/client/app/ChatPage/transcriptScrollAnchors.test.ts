@@ -82,21 +82,30 @@ describe("isOptimisticMessageId", () => {
 
 describe("resolveJumpTarget", () => {
   const rows = [promptRow("m1", "hi"), toolGroupRow(["t1", "t2"]), textRow("a1", "done")]
-  const map = buildRowIndexByMessageId(rows)
 
-  test("pins the row rendering the message", () => {
-    expect(resolveJumpTarget(rows, map, "a1")).toEqual({ kind: "pin", rowId: rows[2]!.id })
+  test("resolves each role against the transcript, not against an id it was handed", () => {
+    // The sidebar names a role because it only has preview strings; the rows
+    // are the only thing that knows which message is which.
+    expect(resolveJumpTarget(rows, "prompt")).toEqual({ kind: "pin", rowId: rows[0]!.id })
+    expect(resolveJumpTarget(rows, "reply")).toEqual({ kind: "pin", rowId: rows[2]!.id })
   })
 
-  test("pins a grouped message by its group, which is what the scroller can address", () => {
-    // The card names an entry; the viewport can only scroll to rows. A tool
-    // result swept into a group has no row of its own.
-    expect(resolveJumpTarget(rows, map, "t2")).toEqual({ kind: "pin", rowId: "tool-group:t1" })
+  test("takes the latest of each, not the first", () => {
+    const longer = [
+      promptRow("m1", "hi"),
+      textRow("a1", "first answer"),
+      promptRow("m2", "again"),
+      textRow("a2", "second answer"),
+    ]
+
+    expect(resolveJumpTarget(longer, "prompt")).toEqual({ kind: "pin", rowId: longer[2]!.id })
+    expect(resolveJumpTarget(longer, "reply")).toEqual({ kind: "pin", rowId: longer[3]!.id })
   })
 
-  test("gives up on a message the loaded transcript doesn't have", () => {
+  test("gives up when the transcript has no such message", () => {
     // The caller falls back to the stored read position rather than guessing.
-    expect(resolveJumpTarget(rows, map, "gone")).toBeNull()
+    expect(resolveJumpTarget([promptRow("m1", "hi")], "reply")).toBeNull()
+    expect(resolveJumpTarget([], "prompt")).toBeNull()
   })
 })
 

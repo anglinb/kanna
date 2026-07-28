@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from "react"
 import { Archive, ChevronRight, MoreHorizontal } from "lucide-react"
+import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { SidebarChatRow, SidebarData } from "../../../../shared/types"
 import {
   computeSidebarThreadSections,
@@ -109,8 +110,10 @@ interface Props {
   /** Anchor for the date buckets; bucketing runs in the browser so it always follows the user's local timezone. */
   nowMs: number
   onSelectChat: (chatId: string) => void
-  /** Opens a chat landing on one message — the hover card's clickable previews. */
-  onSelectChatMessage: (chatId: string, messageId: string) => void
+  /** Opens a chat at one end of its last exchange — the card's clickable previews. */
+  onSelectChatMessage: (chatId: string, role: ChatJumpRole) => void
+  /** Prompts to `git init` a chat's project — the card's "Setup Git". */
+  onSetupGit: (chatId: string) => void
   onOpenArchivedChat: (chatId: string) => void
   onRestoreChat: (chatId: string) => void
   onCreateChat: (projectId: string) => void
@@ -139,6 +142,7 @@ function ThreadSectionsImpl({
   nowMs,
   onSelectChat,
   onSelectChatMessage,
+  onSetupGit,
   onOpenArchivedChat,
   onRestoreChat,
   onCreateChat,
@@ -197,6 +201,7 @@ function ThreadSectionsImpl({
       dimIdleTitles={false}
       onSelect={onSelectChat}
       onSelectMessage={onSelectChatMessage}
+      onSetupGit={onSetupGit}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
       onShareChat={onShareChat}

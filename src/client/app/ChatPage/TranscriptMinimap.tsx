@@ -189,15 +189,16 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
   }, [capacity, hasRoom, transcriptOverflows])
 
   /**
-   * Whether the strip earns its place. A single tick maps nothing — there is
-   * nowhere else to jump to — so it would be pure decoration.
+   * Whether the strip earns its place. Scrollable content is the test, not the
+   * turn count: one turn long enough to scroll through still has a top to jump
+   * back to, and its tick still tracks where in it you are.
    *
    * Note this only gates the strip's *contents*: the wrapper below always
    * renders, because it is what the ResizeObserver measures, and remounting it
    * whenever a resize crosses the threshold would cost a frame of stale height
    * every time the strip reappears.
    */
-  const isVisible = hasFinePointer && hasRoom && transcriptOverflows && ticks.length > 1
+  const isVisible = hasFinePointer && hasRoom && transcriptOverflows && ticks.length > 0
 
   const stripHeight = ticks.length * TICK_PITCH_PX
   const stripTop = Math.max(0, (wrapperHeight - stripHeight) / 2)

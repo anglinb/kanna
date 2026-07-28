@@ -55,7 +55,7 @@ export interface ClientState {
 interface CreateWsRouterArgs {
   store: EventStore
   diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch">
-  worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels">
+  worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels" | "getProjectsWithoutRepo">
   agent: AgentCoordinator
   terminals: TerminalManager
   keybindings: KeybindingsManager
@@ -281,6 +281,7 @@ export function createWsRouter({
       pendingToolKinds,
       workingTrees: worktreeProbe.getStates(),
       repoLabels: worktreeProbe.getRepoLabels(),
+      projectsWithoutRepo: worktreeProbe.getProjectsWithoutRepo(),
     })
 
     const sidebar = {

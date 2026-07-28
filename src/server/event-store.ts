@@ -744,19 +744,12 @@ export class EventStore {
       chat.lastMessageAt = entry.createdAt
       if (!entry.hidden) {
         const preview = buildChatMessagePreview(entry.content)
-        if (preview) {
-          chat.lastUserMessagePreview = preview
-          // Kept in lockstep with the text: the id is what the hover card jumps
-          // to, so a preview paired with the *previous* entry's id would land
-          // you on a message other than the one you clicked.
-          chat.lastUserMessagePreviewId = entry._id
-        }
+        if (preview) chat.lastUserMessagePreview = preview
       }
     } else if (entry.kind === "assistant_text" && !entry.hidden) {
       const preview = buildChatMessagePreview(entry.text)
       if (preview) {
         chat.lastAgentMessagePreview = preview
-        chat.lastAgentMessagePreviewId = entry._id
         // Stamped so a reader can tell whether the preview answers the latest
         // prompt or the one before it. `lastAgentMessageAt` can't: it advances
         // on tool calls too, so it moves while the text is still stale.
@@ -989,16 +982,9 @@ export class EventStore {
           if (lastEntryAt != null) {
             chat.lastMessageAt = Math.max(chat.lastMessageAt ?? 0, lastEntryAt)
           }
-          // The entry ids come along because the fork's entries *are* the
-          // source's (cloned shallowly, `_id` and all), so they resolve in the
-          // copy exactly as they did in the original.
-          if (sourceChat.lastUserMessagePreview) {
-            chat.lastUserMessagePreview = sourceChat.lastUserMessagePreview
-            chat.lastUserMessagePreviewId = sourceChat.lastUserMessagePreviewId
-          }
+          if (sourceChat.lastUserMessagePreview) chat.lastUserMessagePreview = sourceChat.lastUserMessagePreview
           if (sourceChat.lastAgentMessagePreview) {
             chat.lastAgentMessagePreview = sourceChat.lastAgentMessagePreview
-            chat.lastAgentMessagePreviewId = sourceChat.lastAgentMessagePreviewId
             chat.lastAgentMessagePreviewAt = sourceChat.lastAgentMessagePreviewAt
           }
           // Same transcript, so the same last-agent-activity timestamp a

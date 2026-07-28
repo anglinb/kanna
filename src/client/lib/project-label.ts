@@ -36,6 +36,14 @@ export interface ProjectSidebarLabel {
    */
   currentBranch?: string
   /**
+   * Whether the project is in a repo at all, once the server has looked —
+   * absent while it hasn't. Not derivable from the fields above: a renamed
+   * project drops `repoPath`, and a detached HEAD drops `currentBranch`, so a
+   * surface reading "neither is set" as "no repo" would offer to `git init` a
+   * folder that is already a repo.
+   */
+  hasGitRepo?: boolean
+  /**
    * `owner/repo` for the hover card's project line, falling back to the bare
    * repo when the origin owner isn't known. Absent entirely when the project
    * isn't in a repo.
@@ -80,13 +88,14 @@ export interface ProjectSidebarLabel {
  * this must never render an empty string while it waits.
  */
 export function getProjectSidebarLabel(
-  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner" | "repoUrl">
+  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner" | "repoUrl" | "hasGitRepo">
 ): ProjectSidebarLabel {
   // The checkout and the remote are facts about the folder, so they survive a
   // rename even though the *name* doesn't.
   const currentBranch = group.branchName ? { currentBranch: group.branchName } : {}
   const repoUrl = group.repoUrl ? { repoUrl: group.repoUrl } : {}
-  const facts = { ...currentBranch, ...repoUrl }
+  const hasGitRepo = group.hasGitRepo == null ? {} : { hasGitRepo: group.hasGitRepo }
+  const facts = { ...currentBranch, ...repoUrl, ...hasGitRepo }
   if (group.sidebarTitle) {
     return { name: group.sidebarTitle, ...facts, text: group.sidebarTitle }
   }
@@ -112,7 +121,7 @@ export function getProjectSidebarLabel(
 
 /** The flat `repo/branch` string — see `ProjectSidebarLabel.text`. */
 export function formatProjectSidebarLabel(
-  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner" | "repoUrl">
+  group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner" | "repoUrl" | "hasGitRepo">
 ): string {
   return getProjectSidebarLabel(group).text
 }

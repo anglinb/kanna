@@ -5,6 +5,7 @@ import { PROVIDERS, type SidebarChatRow } from "../../../../shared/types"
 import { formatDuration, formatPromptTimestamp } from "../../messages/ResultMessage"
 import { PROVIDER_ICONS } from "../../provider-icons"
 import { toMessagePreview } from "../../../../shared/message-preview"
+import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import { useHasFinePointer } from "../../../lib/pointer"
 import { cn } from "../../../lib/utils"
 import type { SidebarThread } from "../../../lib/thread-sections"
@@ -120,13 +121,12 @@ function useTurnClock(active: boolean): number {
 }
 
 /**
- * One of the card's two message blocks, clickable when we know which transcript
- * entry it came from.
+ * One of the card's message blocks, clickable when the surface it sits on can
+ * navigate at all.
  *
- * Falls back to plain text rather than a disabled button when there's no
- * target: a chat whose previews predate the entry ids, or the title standing in
- * for a chat with no prompt yet. Nothing about it should suggest a click that
- * won't happen.
+ * Falls back to plain text rather than a disabled button where it cannot — the
+ * archived list, which has no chat to open in place. Nothing should suggest a
+ * click that will not happen.
  */
 function CardMessage({
   children,
@@ -140,8 +140,7 @@ function CardMessage({
   label: string
 }) {
   // Identical box metrics either way, so a message sits in exactly the same
-  // place whether or not it happens to be clickable — the card must not shift
-  // when a chat gains an entry id.
+  // place whether or not it happens to be clickable.
   if (!onSelect) return <div className={cn(className, CARD_ROW_INSET)}>{children}</div>
 
   return (
@@ -171,15 +170,18 @@ export function ChatHoverCardContent({
   onSelectMessage,
   onSelectChat,
   onOpenRepo,
+  onSetupGit,
 }: {
   thread: SidebarThread
   draft?: string
-  /** Absent when the card is read-only (no message targets, archived rows). */
-  onSelectMessage?: (messageId: string) => void
+  /** Absent when the card is read-only (archived rows). */
+  onSelectMessage?: (role: ChatJumpRole) => void
   /** Opens the chat without aiming at a message — what the draft does. */
   onSelectChat?: () => void
   /** Opens the project's forge page. Ignored when the repo has no URL. */
   onOpenRepo?: () => void
+  /** Offers to `git init` the project. Ignored unless it's known not to be a repo. */
+  onSetupGit?: () => void
 }) {
   const row = thread.row
   const nowMs = useTurnClock(getActiveTurnStartedAt(row) != null)
@@ -193,11 +195,11 @@ export function ChatHoverCardContent({
   const endedAt = getActiveTurnStartedAt(row) != null || row.lastTurnEndedAt == null
     ? null
     : formatPromptTimestamp(new Date(row.lastTurnEndedAt).toISOString())
-  // Only the text we actually show is clickable. The reply's id is gated on
-  // `reply` for the same reason its text is: when the prompt is newer than the
-  // answer we show no reply, and the id we hold belongs to the previous turn.
-  const promptTarget = onSelectMessage ? row.lastUserMessagePreviewId : undefined
-  const replyTarget = onSelectMessage && reply ? row.lastAgentMessagePreviewId : undefined
+  // Both blocks are clickable whenever the surface offers the jump at all. The
+  // card doesn't identify the messages and doesn't need to: it shows a chat's
+  // latest prompt and latest reply by definition, and the transcript resolves
+  // those from its own rows the way the minimap does.
+  const canJump = Boolean(onSelectMessage)
 
 
   return (
@@ -216,6 +218,24 @@ export function ChatHoverCardContent({
             <GitBranch className="size-2.5 shrink-0" strokeWidth={2.5} />
             <span className="truncate">{label.currentBranch}</span>
           </span>
+        ) : label.hasGitRepo === false && onSetupGit ? (
+          // A project with no repo has no branch to name, so the slot the
+          // branch would have taken says what's missing instead — and offers
+          // the same one-click fix the chat navbar's "Setup Git" does, since
+          // the card is where you're already looking when you notice.
+          //
+          // Only on a definite `false`: while the server hasn't looked yet,
+          // every row would briefly claim its repo didn't exist.
+          <button
+            type="button"
+            onClick={onSetupGit}
+            // Underlined-on-hover like the repo link opposite it, not filled
+            // like the message rows: both are inline words in a meta line.
+            className="flex min-w-0 cursor-pointer items-center gap-1 rounded-sm transition-colors hover:text-foreground hover:underline underline-offset-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <GitBranch className="size-2.5 shrink-0" strokeWidth={2.5} />
+            <span className="truncate">Setup Git</span>
+          </button>
         ) : null}
         {/* `owner/repo` when the origin owner is known, the bare repo otherwise;
             a renamed project has neither, and shows the name you gave it. Both
@@ -255,7 +275,7 @@ export function ChatHoverCardContent({
           <CardMessage
             className="line-clamp-2 text-sm font-medium text-popover-foreground"
             label="Jump to this prompt"
-            onSelect={promptTarget ? () => onSelectMessage?.(promptTarget) : undefined}
+            onSelect={canJump ? () => onSelectMessage?.("prompt") : undefined}
           >
             {toMessagePreview(row.lastUserMessagePreview || thread.title)}
           </CardMessage>
@@ -267,7 +287,7 @@ export function ChatHoverCardContent({
           <CardMessage
             className={cn("text-sm text-muted-foreground", draft ? "line-clamp-1" : "line-clamp-3")}
             label="Jump to this reply"
-            onSelect={replyTarget ? () => onSelectMessage?.(replyTarget) : undefined}
+            onSelect={canJump ? () => onSelectMessage?.("reply") : undefined}
           >
             {toMessagePreview(reply)}
           </CardMessage>
@@ -339,25 +359,28 @@ export function ChatHoverCard({
   draft = "",
   onSelectMessage,
   onSelectChat,
+  onSetupGit,
   children,
   ...triggerProps
 }: {
   thread: SidebarThread
   /** The chat's unsent draft (`useChatDraft`), read by the row that owns it. */
   draft?: string
-  /** Opens this chat scrolled to one of its messages. Omitted = read-only card. */
-  onSelectMessage?: (chatId: string, messageId: string) => void
+  /** Opens this chat at one end of its last exchange. Omitted = read-only card. */
+  onSelectMessage?: (chatId: string, role: ChatJumpRole) => void
   /** Opens the chat plainly — the draft's action, and the row's. */
   onSelectChat?: (chatId: string) => void
+  /** Prompts to `git init` this chat's project — the navbar's "Setup Git". */
+  onSetupGit?: (chatId: string) => void
   children: ReactNode
 } & ComponentPropsWithRef<typeof HoverCardTrigger>) {
   const hasFinePointer = useHasFinePointer()
   const [open, setOpen] = useState(false)
   const repoUrl = thread.projectLabel.repoUrl
 
-  const handleSelectMessage = useCallback((messageId: string) => {
+  const handleSelectMessage = useCallback((role: ChatJumpRole) => {
     setOpen(false)
-    onSelectMessage?.(thread.chatId, messageId)
+    onSelectMessage?.(thread.chatId, role)
   }, [onSelectMessage, thread.chatId])
 
   const handleSelectChat = useCallback(() => {
@@ -373,6 +396,13 @@ export function ChatHoverCard({
     setOpen(false)
     window.open(repoUrl, "_blank", "noopener,noreferrer")
   }, [repoUrl])
+
+  // Closed before the confirm opens: the dialog takes the pointer, so a card
+  // left standing would hang over the transcript for as long as it's up.
+  const handleSetupGit = useCallback(() => {
+    setOpen(false)
+    onSetupGit?.(thread.chatId)
+  }, [onSetupGit, thread.chatId])
 
   return (
     <HoverCard
@@ -446,6 +476,7 @@ export function ChatHoverCard({
             onSelectMessage={onSelectMessage ? handleSelectMessage : undefined}
             onSelectChat={onSelectChat ? handleSelectChat : undefined}
             onOpenRepo={handleOpenRepo}
+            onSetupGit={onSetupGit ? handleSetupGit : undefined}
           />
         </HoverCardContent>
       )}

@@ -88,6 +88,12 @@ export function deriveSidebarData(
     workingTrees?: ReadonlyMap<string, WorkingTreeProbe>
     /** Per-project repo/branch identity, from `WorktreeProbe.getRepoLabels()`. */
     repoLabels?: ReadonlyMap<string, ProjectRepoLabel>
+    /**
+     * Projects known not to be in a repo, from
+     * `WorktreeProbe.getProjectsWithoutRepo()`. Distinct from "no repo label"
+     * — see `SidebarProjectGroup.hasGitRepo`.
+     */
+    projectsWithoutRepo?: ReadonlySet<string>
   }
 ): SidebarData {
   const nowMs = options?.nowMs ?? Date.now()
@@ -155,9 +161,7 @@ export function deriveSidebarData(
           ...(chat.lastTurnEndedAt != null ? { lastTurnEndedAt: chat.lastTurnEndedAt } : {}),
           ...(chat.lastAgentMessageAt != null ? { lastAgentMessageAt: chat.lastAgentMessageAt } : {}),
           ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
-          ...(chat.lastUserMessagePreviewId ? { lastUserMessagePreviewId: chat.lastUserMessagePreviewId } : {}),
           ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
-          ...(chat.lastAgentMessagePreviewId ? { lastAgentMessagePreviewId: chat.lastAgentMessagePreviewId } : {}),
           ...(chat.lastAgentMessagePreviewAt != null
             ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
             : {}),
@@ -181,6 +185,13 @@ export function deriveSidebarData(
       realTitle: project.title,
       ...(project.sidebarTitle ? { sidebarTitle: project.sidebarTitle } : {}),
       ...(repoLabel ? { repoName: repoLabel.repoName } : {}),
+      // Only ever stated when known. A label answers it outright; otherwise the
+      // probe has to have looked and come back empty-handed.
+      ...(repoLabel
+        ? { hasGitRepo: true }
+        : options?.projectsWithoutRepo?.has(project.id)
+          ? { hasGitRepo: false }
+          : {}),
       ...(repoLabel?.branchName ? { branchName: repoLabel.branchName } : {}),
       ...(repoLabel?.repoOwner ? { repoOwner: repoLabel.repoOwner } : {}),
       ...(repoLabel?.repoUrl ? { repoUrl: repoLabel.repoUrl } : {}),

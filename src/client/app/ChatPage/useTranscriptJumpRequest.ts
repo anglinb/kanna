@@ -28,15 +28,15 @@ export function useTranscriptJumpRequest(): {
   const [jumpRequest, setJumpRequest] = useState<TranscriptJumpRequest | null>(null)
 
   const jump = readChatJumpLocationState(location.state)
-  const messageId = jump?.jumpToMessageId
+  const role = jump?.jumpToRole
   const requestId = jump?.jumpRequestId
   const { pathname, search } = location
 
   useEffect(() => {
-    if (!messageId || !requestId) return
-    setJumpRequest({ messageId, requestId })
+    if (!role || !requestId) return
+    setJumpRequest({ role, requestId })
     navigate(`${pathname}${search}`, { replace: true, state: null })
-  }, [messageId, navigate, pathname, requestId, search])
+  }, [navigate, pathname, requestId, role, search])
 
   const onJumpRequestHandled = useCallback((handledId: string) => {
     setJumpRequest((current) => (current?.requestId === handledId ? null : current))
