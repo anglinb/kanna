@@ -169,7 +169,7 @@ describe("TurnFileTracker", () => {
 
     // The committed content the edit was made on top of — not the edit itself,
     // and not whatever HEAD holds by the time the sidebar asks.
-    expect(files).toEqual([{ path: "app.txt", baseBlob }])
+    expect(files).toEqual([{ path: "app.txt", baseBlob, additions: 1, deletions: 1 }])
   })
 
   test("a file the turn created has no committed base at all", async () => {
@@ -182,7 +182,7 @@ describe("TurnFileTracker", () => {
 
     // `null`, meaning "not committed" — distinct from an absent base, which
     // would mean the lookup never ran.
-    expect(files).toEqual([{ path: "new.txt", baseBlob: null }])
+    expect(files).toEqual([{ path: "new.txt", baseBlob: null, additions: 1, deletions: 0 }])
   })
 
   test("a turn that commits its own work records the base it started from", async () => {
@@ -198,7 +198,7 @@ describe("TurnFileTracker", () => {
       await run(["git", "commit", "-am", "agent commit"], repoRoot)
     })
 
-    expect(files).toEqual([{ path: "app.txt", baseBlob: beforeTurn }])
+    expect(files).toEqual([{ path: "app.txt", baseBlob: beforeTurn, additions: 1, deletions: 1 }])
     expect((await run(["git", "rev-parse", "HEAD:app.txt"], repoRoot)).trim()).not.toBe(beforeTurn)
   })
 
@@ -214,7 +214,49 @@ describe("TurnFileTracker", () => {
 
     // Nothing is committed here, so "not in HEAD" is the honest base — and the
     // first commit of this path will duly retire the claim.
-    expect(files).toEqual([{ path: "app.txt", baseBlob: null }])
+    expect(files).toEqual([{ path: "app.txt", baseBlob: null, additions: 1, deletions: 0 }])
+  })
+
+  test("counts the lines the turn added and removed", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "app.txt"), "one\ntwo\nthree\n", "utf8")
+      await writeFile(path.join(repoRoot, "extra.txt"), "a\nb\n", "utf8")
+    })
+
+    expect(files.map((file) => [file.path, file.additions, file.deletions])).toEqual([
+      // Rewrote the one committed line as three.
+      ["app.txt", 3, 1],
+      ["extra.txt", 2, 0],
+    ])
+  })
+
+  test("leaves a binary file's counts out rather than calling them zero", async () => {
+    // numstat reports `-` for binary. Absent counts mean "unknown", which the
+    // hover card renders as no number at all — "+0" would be a claim.
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]))
+    })
+
+    expect(files).toEqual([{ path: "logo.png", baseBlob: null }])
+  })
+
+  test("keeps paths with spaces intact", async () => {
+    // `-z` earns its place here: git C-quotes such a path by default, and a
+    // quoted path matches neither `git status` nor the file on disk.
+    const repoRoot = await createRepo()
+    const { runTurn } = trackerFor(repoRoot)
+
+    const paths = await runTurn("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "notes with spaces.md"), "hi\n", "utf8")
+    })
+
+    expect(paths).toEqual(["notes with spaces.md"])
   })
 
   test("leaves no temp index files behind", async () => {

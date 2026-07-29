@@ -94,9 +94,9 @@ export class TurnFileTracker {
     try {
       const [pre, postTree] = await Promise.all([pending, this.captureTree(localPath)])
       if (!pre.tree || !postTree || pre.tree === postTree) return
-      const paths = await this.diffTrees(localPath, pre.tree, postTree)
-      if (paths.length === 0) return
-      await this.options.recordFiles(chatId, await this.toTouchedFiles(localPath, pre.head, paths))
+      const changes = await this.diffTrees(localPath, pre.tree, postTree)
+      if (changes.length === 0) return
+      await this.options.recordFiles(chatId, await this.toTouchedFiles(localPath, pre.head, changes))
     } catch (error) {
       // Never let file tracking break a turn's completion path.
       console.warn(`${LOG_PREFIX} turn file tracking failed for chat ${chatId}:`, error)
@@ -119,13 +119,14 @@ export class TurnFileTracker {
   private async toTouchedFiles(
     localPath: string,
     head: string | null,
-    paths: string[]
+    changes: TurnFileChange[]
   ): Promise<TouchedFile[]> {
-    if (head === null) return paths.map((filePath) => ({ path: filePath, baseBlob: null }))
+    const paths = changes.map((change) => change.path)
+    if (head === null) return changes.map((change) => ({ ...change, baseBlob: null }))
     const location = await this.locationFor(localPath)
     const blobs = location ? await readTreeBlobs(location.repoRoot, head, paths) : null
-    if (!blobs) return paths.map((filePath) => ({ path: filePath }))
-    return paths.map((filePath) => ({ path: filePath, baseBlob: blobs.get(filePath) ?? null }))
+    if (!blobs) return changes.map((change) => ({ ...change }))
+    return changes.map((change) => ({ ...change, baseBlob: blobs.get(change.path) ?? null }))
   }
 
   /** The pre-turn worktree and the commit it sits on, captured together. */
@@ -180,17 +181,59 @@ export class TurnFileTracker {
   }
 
   /**
+   * What the turn changed, and by how much.
+   *
    * `--no-renames` on purpose: a rename should yield *both* names, since either
-   * one can be the path that later shows up dirty.
+   * one can be the path that later shows up dirty. It also keeps `-z` records
+   * to a single path each — a rename under `-z` splits its paths across extra
+   * NUL fields.
+   *
+   * `-z` because the default output C-quotes any path with a space or a quote
+   * in it, which would then match neither `git status` nor the file on disk.
    */
-  private async diffTrees(localPath: string, fromTree: string, toTree: string): Promise<string[]> {
+  private async diffTrees(localPath: string, fromTree: string, toTree: string): Promise<TurnFileChange[]> {
     const location = await this.locationFor(localPath)
     if (!location) return []
     const diff = await runGit(
-      ["diff", "--name-only", "--no-renames", fromTree, toTree],
+      ["diff", "--numstat", "-z", "--no-renames", fromTree, toTree],
       location.repoRoot,
     )
     if (diff.exitCode !== 0) return []
-    return diff.stdout.split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
+    return parseNumstat(diff.stdout)
   }
+}
+
+/** One path a turn changed, with the lines it added and removed there. */
+export interface TurnFileChange {
+  path: string
+  /** Absent for binary files, which numstat reports as `-` rather than a count. */
+  additions?: number
+  deletions?: number
+}
+
+/**
+ * `--numstat -z` records: `<additions> TAB <deletions> TAB <path> NUL`.
+ *
+ * Binary files come back as `-` on both counts. Those keep the path (the chat
+ * did change the file) but carry no numbers, so nothing downstream has to
+ * decide what "+0" means for a PNG.
+ */
+export function parseNumstat(stdout: string): TurnFileChange[] {
+  const changes: TurnFileChange[] = []
+  for (const record of stdout.split("\0")) {
+    if (!record) continue
+    const firstTab = record.indexOf("\t")
+    const secondTab = record.indexOf("\t", firstTab + 1)
+    if (firstTab === -1 || secondTab === -1) continue
+    const filePath = record.slice(secondTab + 1)
+    if (!filePath) continue
+    const additions = Number.parseInt(record.slice(0, firstTab), 10)
+    const deletions = Number.parseInt(record.slice(firstTab + 1, secondTab), 10)
+    changes.push({
+      path: filePath,
+      ...(Number.isNaN(additions) ? {} : { additions }),
+      ...(Number.isNaN(deletions) ? {} : { deletions }),
+    })
+  }
+  return changes
 }

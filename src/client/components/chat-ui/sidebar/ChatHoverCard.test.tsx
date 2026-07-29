@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { SidebarChatRow } from "../../../../shared/types"
+import type { ChatTouchedFilesResult, SidebarChatRow } from "../../../../shared/types"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { ChatHoverCardContent } from "./ChatHoverCard"
@@ -346,5 +346,76 @@ describe("ChatHoverCardContent", () => {
     const html = render({ lastUserMessagePreview: undefined, lastAgentMessagePreview: undefined })
 
     expect(html).toContain("Refactor the ws router")
+  })
+
+  describe("the file list", () => {
+    const FILES: ChatTouchedFilesResult = {
+      files: [
+        { path: "src/embed/widget.ts", additions: 60, deletions: 1, uncommitted: true },
+        { path: "poems/moon.md", additions: 6 },
+      ],
+      // Files that can't say how much changed never reach the client — see
+      // `hasLineCounts` — so every row here carries a number.
+      totalCount: 2,
+    }
+
+    function renderWithFiles(result: ChatTouchedFilesResult, onOpenFile?: (path: string) => void) {
+      return renderToStaticMarkup(
+        <ChatHoverCardContent thread={thread()} touchedFiles={result} onOpenFile={onOpenFile} />
+      )
+    }
+
+    test("lists what the chat changed, under the harness line", () => {
+      const html = renderWithFiles(FILES)
+
+      expect(html).toContain("src/embed/widget.ts")
+      expect(html).toContain("poems/moon.md")
+      // An appendix to the summary, not a replacement for it.
+      expect(html.indexOf("Claude")).toBeLessThan(html.indexOf("src/embed/widget.ts"))
+    })
+
+    test("shows each file's counts the way the git panel does", () => {
+      const html = renderWithFiles(FILES)
+
+      expect(html).toContain("+60")
+      expect(html).toContain("-1")
+      expect(html).toContain("+6")
+    })
+
+    test("offers each file to the editor", () => {
+      const opened: string[] = []
+      const html = renderWithFiles(FILES, (filePath) => opened.push(filePath))
+
+      // Labelled by path: down a list of eight, it is the only thing telling
+      // one control from the next.
+      expect(html).toContain("Open src/embed/widget.ts")
+      expect(html).not.toContain("disabled")
+    })
+
+    test("renders the rows inert when there is nowhere to open them", () => {
+      const html = renderWithFiles(FILES)
+
+      expect(html).toContain("disabled")
+    })
+
+    test("says how many it left out", () => {
+      const html = renderWithFiles({ files: FILES.files, totalCount: 290 })
+
+      expect(html).toContain("288 more files")
+    })
+
+    test("counts one leftover file in the singular", () => {
+      const html = renderWithFiles({ files: FILES.files, totalCount: 3 })
+
+      expect(html).toContain("1 more file")
+      expect(html).not.toContain("1 more files")
+    })
+
+    test("adds nothing to a card whose chat has changed nothing", () => {
+      const withFiles = renderWithFiles({ files: [], totalCount: 0 })
+      const without = renderToStaticMarkup(<ChatHoverCardContent thread={thread()} />)
+
+      expect(withFiles).toBe(without)
+    })
   })
 })

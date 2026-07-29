@@ -49,21 +49,46 @@ function readTouchedFiles(event: { files?: TouchedFile[]; paths?: string[] }): T
 }
 
 /**
- * Unions touched files, newest base blob winning per path.
+ * Unions touched files: newest base blob wins per path, line counts accumulate.
  *
- * Last-write-wins is the point: a path this chat touched, had committed, and
- * touched again must be measured against the *newer* commit, or the chat would
- * read as settled while it still has live uncommitted work in that file. The
- * cap only gates *new* paths — rebasing a path already in the set is free, so a
- * chat at the ceiling keeps its existing claims accurate.
+ * The two halves answer different questions and so merge differently. A base
+ * blob is a *position* — the commit this chat's claim stands on — and a path
+ * this chat touched, had committed, then touched again must be measured
+ * against the newer commit, or the chat would read as settled while it still
+ * has live uncommitted work there. Line counts are a *quantity*: each event
+ * carries one turn's numstat, so a chat that edits a file across five turns
+ * has written the sum of them.
+ *
+ * The cap only gates *new* paths — updating a path already in the set is free,
+ * so a chat at the ceiling keeps its existing claims accurate.
  */
 function mergeTouchedFiles(existing: TouchedFile[] | undefined, incoming: TouchedFile[]): TouchedFile[] {
   const merged = new Map((existing ?? []).map((file) => [file.path, file]))
   for (const file of incoming) {
-    if (!merged.has(file.path) && merged.size >= TOUCHED_PATHS_LIMIT) continue
-    merged.set(file.path, file)
+    const previous = merged.get(file.path)
+    if (!previous && merged.size >= TOUCHED_PATHS_LIMIT) continue
+    merged.set(file.path, {
+      ...file,
+      ...addCounts("additions", previous, file),
+      ...addCounts("deletions", previous, file),
+    })
   }
   return [...merged.values()]
+}
+
+/**
+ * One count, carried forward and added to. Stays absent when neither side has
+ * a number, so a binary file (or anything recorded before counts) reads as
+ * "unknown" rather than as zero lines changed.
+ */
+function addCounts(
+  key: "additions" | "deletions",
+  previous: TouchedFile | undefined,
+  incoming: TouchedFile
+): Partial<TouchedFile> {
+  const total = (previous?.[key] ?? 0) + (incoming[key] ?? 0)
+  if (previous?.[key] === undefined && incoming[key] === undefined) return {}
+  return { [key]: total }
 }
 // How much of each transcript tail is scanned at boot to rebuild chat metadata
 // (lastMessageAt, previews) that only lives in snapshots between compactions.
@@ -1492,14 +1517,16 @@ export class EventStore {
     const chat = this.state.chatsById.get(chatId)
     if (!chat) return
     // Nothing new to learn — skip the append rather than growing the log with
-    // a repeat of what we already know (the common case for a chat iterating
-    // on the same handful of files, turn after turn). A path whose base blob
-    // moved is *not* a repeat: it means the path was committed between the two
-    // turns, and recording the newer base is what keeps the claim honest.
+    // a repeat of what we already know. A path whose base blob moved is *not* a
+    // repeat: it means the path was committed between the two turns, and
+    // recording the newer base is what keeps the claim honest. Neither is one
+    // carrying line counts, which accumulate — dropping those would undercount
+    // exactly the files a chat works on most.
     const known = new Map((chat.touchedFiles ?? []).map((file) => [file.path, file]))
     if (files.every((file) => {
       const previous = known.get(file.path)
-      return previous != null && previous.baseBlob === file.baseBlob
+      if (previous == null || previous.baseBlob !== file.baseBlob) return false
+      return !file.additions && !file.deletions
     })) return
     const event: ChatEvent = {
       v: STORE_VERSION,

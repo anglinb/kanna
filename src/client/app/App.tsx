@@ -13,7 +13,7 @@ import { useChatSoundPreferencesStore } from "../stores/chatSoundPreferencesStor
 import type { ChatSoundPreference } from "../stores/chatSoundPreferencesStore"
 import { getSetupLaunchAction, useProviderAuthStore } from "../stores/providerAuthStore"
 import { SetupWizard } from "../components/auth/SetupWizard"
-import type { ProviderAuthSnapshot } from "../../shared/types"
+import type { ChatTouchedFilesResult, ProviderAuthSnapshot } from "../../shared/types"
 import { playChatNotificationSound, shouldPlayChatSound } from "../lib/chatSounds"
 import { getBrowserWindowTitle, getChatSoundBurstCount } from "./chatNotifications"
 import { KannaSidebar } from "./KannaSidebar"
@@ -287,6 +287,12 @@ function KannaLayout() {
   const handleSidebarOpenExternalPath = useCallback((action: "open_finder" | "open_editor", localPath: string) => {
     void state.handleOpenExternalPath(action, localPath)
   }, [state.handleOpenExternalPath])
+  // Straight to the socket rather than through `useKannaState`: the result is
+  // read by one hover card and belongs to no snapshot, so there's no app state
+  // for it to land in.
+  const handleLoadTouchedFiles = useCallback((chatId: string) => (
+    state.socket.command<ChatTouchedFilesResult>({ type: "chat.touchedFiles", chatId })
+  ), [state.socket])
   const handleSidebarSetupGit = useCallback((chatId: string) => {
     void state.handleSetupGit(chatId)
   }, [state.handleSetupGit])
@@ -325,6 +331,7 @@ function KannaLayout() {
       onCopyPath={handleSidebarCopyPath}
       onOpenExternalPath={handleSidebarOpenExternalPath}
       onSetupGit={handleSidebarSetupGit}
+      onLoadTouchedFiles={handleLoadTouchedFiles}
       onRenameProject={handleSidebarRenameProject}
       onHideProject={handleSidebarHideProject}
       onReorderProjectGroups={handleSidebarReorderProjectGroups}
@@ -348,6 +355,7 @@ function KannaLayout() {
     handleSidebarReorderProjectGroups,
     handleSidebarSetupGit,
     handleSidebarHideProject,
+    handleLoadTouchedFiles,
     showMobileOpenButton,
     state.activeChatId,
     state.activeProjectId,

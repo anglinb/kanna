@@ -24,7 +24,7 @@ import type { WorktreeProbe } from "./worktree-probe"
 import type { ProviderAuthManager } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
-import { deriveChatSnapshot, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
+import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
 import type {
   ChatSnapshot,
   LlmProviderSnapshot,
@@ -1209,6 +1209,21 @@ export function createWsRouter({
             includeSidebar: true,
             includeLocalProjects: true,
             chatIds: new Set([command.chatId]),
+          })
+          return
+        }
+        case "chat.touchedFiles": {
+          const chat = store.getChat(command.chatId)
+          if (!chat) {
+            throw new Error("Chat not found")
+          }
+          // Ack-only: nothing about reading a list changes any snapshot, and
+          // this fires on every hover.
+          send(ws, {
+            v: PROTOCOL_VERSION,
+            type: "ack",
+            id,
+            result: deriveChatTouchedFiles(chat, worktreeProbe.getStates().get(chat.projectId)),
           })
           return
         }

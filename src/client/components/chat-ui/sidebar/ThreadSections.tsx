@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from "react"
 import { Archive, ChevronRight, MoreHorizontal } from "lucide-react"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
-import type { SidebarChatRow, SidebarData } from "../../../../shared/types"
+import type { ChatTouchedFilesResult, SidebarChatRow, SidebarData } from "../../../../shared/types"
 import {
   computeSidebarThreadSections,
   flattenSidebarThreads,
@@ -114,6 +114,8 @@ interface Props {
   onSelectChatMessage: (chatId: string, role: ChatJumpRole) => void
   /** Prompts to `git init` a chat's project — the card's "Setup Git". */
   onSetupGit: (chatId: string) => void
+  /** Fetches what a chat changed, for its hover card. */
+  onLoadTouchedFiles?: (chatId: string) => Promise<ChatTouchedFilesResult>
   onOpenArchivedChat: (chatId: string) => void
   onRestoreChat: (chatId: string) => void
   onCreateChat: (projectId: string) => void
@@ -143,6 +145,7 @@ function ThreadSectionsImpl({
   onSelectChat,
   onSelectChatMessage,
   onSetupGit,
+  onLoadTouchedFiles,
   onOpenArchivedChat,
   onRestoreChat,
   onCreateChat,
@@ -202,6 +205,7 @@ function ThreadSectionsImpl({
       onSelect={onSelectChat}
       onSelectMessage={onSelectChatMessage}
       onSetupGit={onSetupGit}
+      onLoadTouchedFiles={onLoadTouchedFiles}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
       onShareChat={onShareChat}
@@ -289,6 +293,7 @@ function ThreadSectionsImpl({
                     detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
                     dimIdleTitles={false}
                     onSelect={onOpenArchivedChat}
+                    onLoadTouchedFiles={onLoadTouchedFiles}
                     onCreateChat={onCreateChat}
                     onRenameChat={onRenameChat}
                     onShareChat={onShareChat}

@@ -1,8 +1,10 @@
-import { type ComponentPropsWithRef, type ReactNode, useCallback, useState } from "react"
-import { TurnCardMessage, TurnCardMetaRow, TurnCardTimingRow } from "../../ui/turn-card"
+import { type ComponentPropsWithRef, type ReactNode, useCallback, useEffect, useState } from "react"
+import { TURN_CARD_ROW_INSET, TurnCardMessage, TurnCardMetaRow, TurnCardTimingRow } from "../../ui/turn-card"
 import { GitBranch, PencilLine } from "lucide-react"
 import { getRepoUrlLabel } from "../../../../shared/git-url"
-import { PROVIDERS, type SidebarChatRow } from "../../../../shared/types"
+import { PROVIDERS, type ChatTouchedFilesResult, type SidebarChatRow } from "../../../../shared/types"
+import { resolveDiffFilePath } from "../../../app/ChatPage/utils"
+import { DiffFileStat } from "../git/shared"
 import { formatPromptTimestamp } from "../../messages/ResultMessage"
 import { PROVIDER_ICONS } from "../../provider-icons"
 import { toMessagePreview } from "../../../../shared/message-preview"
@@ -84,23 +86,155 @@ function formatTurnCount(row: SidebarChatRow): string | null {
   return `${row.turnCount} turn${row.turnCount === 1 ? "" : "s"}`
 }
 
+/**
+ * The files this chat changed, under the footer.
+ *
+ * A chat's name and its last exchange say what it was *about*; this says what
+ * it *did*, which is the other half of deciding whether to open it — and the
+ * only place that answer exists outside opening the chat and reading its tools.
+ *
+ * Rows are the git panel's file rows (`DiffFileStat`, same path treatment), so
+ * "a file and how much changed in it" looks the same wherever you meet it here.
+ * Clicking one opens it in your editor: the file is the thing you'd go to next,
+ * and the card is already under the pointer.
+ */
+function ChatTouchedFileList({
+  result,
+  onOpenFile,
+}: {
+  result: ChatTouchedFilesResult
+  onOpenFile?: (path: string) => void
+}) {
+  if (result.files.length === 0) return null
+  const hidden = result.totalCount - result.files.length
+
+  return (
+    <>
+      {/* Edge to edge: the card's padding is `px-1.5`, so the rule cancels it
+          to span the full width and read as a section break rather than as
+          another indented row. */}
+      <div className="-mx-1.5 mt-2 border-t border-border/60" aria-hidden />
+      <div className="mt-1.5">
+        {result.files.map((file) => (
+          <button
+            key={file.path}
+            type="button"
+            // Named by path rather than "open file": down a list of eight, the
+            // path is the only thing distinguishing one control from the next.
+            aria-label={`Open ${file.path}`}
+            onClick={onOpenFile ? () => onOpenFile(file.path) : undefined}
+            disabled={!onOpenFile}
+            className={cn(
+              "flex w-full items-center gap-2 rounded text-left text-[12px] text-muted-foreground",
+              TURN_CARD_ROW_INSET,
+              onOpenFile
+                ? "cursor-pointer transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                : "cursor-default",
+            )}
+          >
+            {/* Plain truncation, as in the git panel — the same path in the two
+                places you read it should break the same way. The full path is on
+                the title, since this is the one row here that routinely won't
+                fit. */}
+            <span className="min-w-0 flex-1 truncate" title={file.path}>{file.path}</span>
+            <DiffFileStat additions={file.additions} deletions={file.deletions} className="shrink-0" />
+          </button>
+        ))}
+        {hidden > 0 ? (
+          // Says what it left out rather than trailing off: a card that shows
+          // eight of 291 files without saying so reads as the whole answer.
+          <div className={cn("text-[12px] text-muted-foreground/70", TURN_CARD_ROW_INSET)}>
+            {hidden} more file{hidden === 1 ? "" : "s"}
+          </div>
+        ) : null}
+      </div>
+    </>
+  )
+}
+
+/**
+ * Fetched lists, keyed by chat *and* by what would change one — its turn count,
+ * when its last turn landed, and whether it still has uncommitted work. Hovering
+ * back along a row you already visited is then free, while a chat that has since
+ * run or had its work committed refetches rather than showing you the list from
+ * before.
+ */
+const touchedFilesCache = new Map<string, ChatTouchedFilesResult>()
+/** Enough for a long hover session; the whole point is to survive re-hovers, not to persist. */
+const TOUCHED_FILES_CACHE_LIMIT = 64
+
+function getTouchedFilesCacheKey(row: SidebarChatRow) {
+  return [row.chatId, row.turnCount ?? 0, row.lastTurnEndedAt ?? 0, row.uncommittedWork ? 1 : 0].join(" ")
+}
+
+/**
+ * Loads a chat's file list while its card is open, or `null` while there is
+ * nothing (yet) to show.
+ *
+ * Only ever asks for the row under the pointer — a sidebar of 500 chats can't
+ * carry this on its snapshot, and a card you never opened costs nothing. A
+ * failed fetch stays `null`: the card is a peek, and an error line in it would
+ * be louder than the fact it failed to load an appendix.
+ */
+function useChatTouchedFiles(
+  row: SidebarChatRow | null,
+  load?: (chatId: string) => Promise<ChatTouchedFilesResult>
+): ChatTouchedFilesResult | null {
+  const cacheKey = row ? getTouchedFilesCacheKey(row) : null
+  const [result, setResult] = useState<ChatTouchedFilesResult | null>(
+    () => (cacheKey ? touchedFilesCache.get(cacheKey) ?? null : null)
+  )
+
+  useEffect(() => {
+    if (!row || !cacheKey || !load) return
+    const cached = touchedFilesCache.get(cacheKey)
+    if (cached) {
+      setResult(cached)
+      return
+    }
+    // Cleared rather than left showing the previous chat's files: cards are
+    // reused as the pointer runs down the list, and one row's list under
+    // another row's title is worse than no list at all.
+    setResult(null)
+    let cancelled = false
+    void load(row.chatId).then((next) => {
+      if (touchedFilesCache.size >= TOUCHED_FILES_CACHE_LIMIT) {
+        touchedFilesCache.delete(touchedFilesCache.keys().next().value as string)
+      }
+      touchedFilesCache.set(cacheKey, next)
+      if (!cancelled) setResult(next)
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [cacheKey, load, row])
+
+  return result
+}
+
 /** Exported for tests: the card body, without the hover-card machinery around it. */
 export function ChatHoverCardContent({
   thread,
   draft = "",
+  touchedFiles,
   onSelectMessage,
   onSelectChat,
   onOpenRepo,
+  onOpenFile,
   onSetupGit,
 }: {
   thread: SidebarThread
   draft?: string
+  /** What this chat changed; absent until the fetch lands (or if it fails). */
+  touchedFiles?: ChatTouchedFilesResult | null
   /** Absent when the card is read-only (archived rows). */
   onSelectMessage?: (role: ChatJumpRole) => void
   /** Opens the chat without aiming at a message — what the draft does. */
   onSelectChat?: () => void
   /** Opens the project's forge page. Ignored when the repo has no URL. */
   onOpenRepo?: () => void
+  /** Opens one of the chat's files in the user's editor, by repo-relative path. */
+  onOpenFile?: (path: string) => void
   /** Offers to `git init` the project. Ignored unless it's known not to be a repo. */
   onSetupGit?: () => void
 }) {
@@ -249,6 +383,15 @@ export function ChatHoverCardContent({
           </>
         ) : null}
       />
+      {/* Below the footer, not above it: the exchange and the harness line are
+          what the card has always said, and the file list is an appendix to
+          them — long, scannable, and the thing you drop to when the summary
+          above didn't settle it. Nothing renders at all until the fetch lands,
+          so the card doesn't resize under a pointer that's already reading it
+          unless there's something to show. */}
+      {touchedFiles ? (
+        <ChatTouchedFileList result={touchedFiles} onOpenFile={onOpenFile} />
+      ) : null}
     </>
   )
 }
@@ -276,6 +419,8 @@ export function ChatHoverCard({
   onSelectMessage,
   onSelectChat,
   onSetupGit,
+  onLoadTouchedFiles,
+  onOpenExternalPath,
   children,
   ...triggerProps
 }: {
@@ -288,11 +433,24 @@ export function ChatHoverCard({
   onSelectChat?: (chatId: string) => void
   /** Prompts to `git init` this chat's project — the navbar's "Setup Git". */
   onSetupGit?: (chatId: string) => void
+  /** Fetches what this chat changed. Omitted = the card shows no file list. */
+  onLoadTouchedFiles?: (chatId: string) => Promise<ChatTouchedFilesResult>
+  /** The row's own opener, reused to send a file to the editor. */
+  onOpenExternalPath?: (action: "open_finder" | "open_editor", localPath: string) => void
   children: ReactNode
 } & ComponentPropsWithRef<typeof HoverCardTrigger>) {
   const hasFinePointer = useHasFinePointer()
   const [open, setOpen] = useState(false)
   const repoUrl = thread.projectLabel.repoUrl
+  const touchedFiles = useChatTouchedFiles(open ? thread.row : null, onLoadTouchedFiles)
+
+  // Repo-relative, as the server records them, so the project path goes back on
+  // before the machine is asked to open anything.
+  const handleOpenFile = useCallback((filePath: string) => {
+    if (!onOpenExternalPath) return
+    setOpen(false)
+    onOpenExternalPath("open_editor", resolveDiffFilePath(thread.row.localPath, filePath))
+  }, [onOpenExternalPath, thread.row.localPath])
 
   const handleSelectMessage = useCallback((role: ChatJumpRole) => {
     setOpen(false)
@@ -368,6 +526,11 @@ export function ChatHoverCard({
             // lives on each row (`CARD_ROW_INSET`), so text still lands 12px
             // from the edge while a row's hover fill can run wider than it.
             "w-80 rounded-lg border-border bg-popover/95 px-1.5 py-2 text-xs shadow-xl backdrop-blur-sm",
+            // File rows carry their own `py-0.5`, so the card's full `pb-2`
+            // under the last one reads as a wider gap than the one above the
+            // list. Only when the list is there: without it the footer is plain
+            // text that wants the full padding.
+            touchedFiles?.files.length ? "pb-1.5" : null,
             // The bridge: an invisible strip of the card laid over the gap
             // between the row and the card, so the pointer never leaves the
             // card's hitbox on its way there and no close timer is needed to
@@ -389,9 +552,11 @@ export function ChatHoverCard({
           <ChatHoverCardContent
             thread={thread}
             draft={draft}
+            touchedFiles={touchedFiles}
             onSelectMessage={onSelectMessage ? handleSelectMessage : undefined}
             onSelectChat={onSelectChat ? handleSelectChat : undefined}
             onOpenRepo={handleOpenRepo}
+            onOpenFile={onOpenExternalPath ? handleOpenFile : undefined}
             onSetupGit={onSetupGit ? handleSetupGit : undefined}
           />
         </HoverCardContent>

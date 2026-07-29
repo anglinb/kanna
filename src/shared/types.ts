@@ -915,6 +915,37 @@ export interface SidebarChatRow {
   canFork?: boolean
 }
 
+/**
+ * One file a chat changed, as the sidebar's hover card lists them.
+ *
+ * Fetched per chat rather than carried on `SidebarChatRow`: a chat can hold
+ * hundreds of these, and the sidebar snapshot is serialized in full on every
+ * broadcast to dedupe it.
+ */
+export interface ChatTouchedFile {
+  /** Repo-root-relative, as git reports it. */
+  path: string
+  /**
+   * Lines the chat wrote here across all its turns — not the file's current
+   * diff against HEAD. Absent for binary files and for anything it changed
+   * before turn-level counts were recorded.
+   */
+  additions?: number
+  deletions?: number
+  /**
+   * This file is still dirty *and* nobody has committed it since the chat
+   * touched it — i.e. one of the claims putting the chat in Relevant. These
+   * lead the list.
+   */
+  uncommitted?: boolean
+}
+
+export interface ChatTouchedFilesResult {
+  /** Ranked and capped by the server; `totalCount` says what was left out. */
+  files: ChatTouchedFile[]
+  totalCount: number
+}
+
 export interface SidebarProjectGroup {
   groupKey: string
   title: string

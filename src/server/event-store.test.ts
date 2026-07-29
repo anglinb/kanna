@@ -917,6 +917,42 @@ describe("EventStore", () => {
     expect(reloaded.requireChat(chat.id).touchedFiles).toEqual([{ path: "src/app.ts", baseBlob: "blob-second" }])
   })
 
+  test("line counts accumulate across turns while the base stays the latest", async () => {
+    // Each event carries one turn's numstat, so a chat that keeps editing one
+    // file has written the sum of them — while its *position* (the base blob)
+    // is only ever the most recent commit it worked from.
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "blob-first", additions: 10, deletions: 2 }])
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "blob-second", additions: 5, deletions: 3 }])
+
+    const expected = [{ path: "src/app.ts", baseBlob: "blob-second", additions: 15, deletions: 5 }]
+    expect(store.requireChat(chat.id).touchedFiles).toEqual(expected)
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.requireChat(chat.id).touchedFiles).toEqual(expected)
+  })
+
+  test("a file with no counts keeps the totals it already had", async () => {
+    // The backfill re-records paths to date them, carrying no numstat of its
+    // own; dating a claim must not erase how much the chat wrote there.
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", additions: 7, deletions: 1 }])
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "dated-later" }])
+
+    expect(store.requireChat(chat.id).touchedFiles)
+      .toEqual([{ path: "src/app.ts", baseBlob: "dated-later", additions: 7, deletions: 1 }])
+  })
+
   test("re-recording the same file with the same base writes nothing", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)

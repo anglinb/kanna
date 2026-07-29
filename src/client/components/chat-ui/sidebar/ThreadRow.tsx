@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { Archive, RotateCcw, Split } from "lucide-react"
+import type { ChatTouchedFilesResult } from "../../../../shared/types"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../../lib/utils"
@@ -27,6 +28,7 @@ export function ThreadRow({
   onSelect,
   onSelectMessage,
   onSetupGit,
+  onLoadTouchedFiles,
   onCreateChat,
   onRenameChat,
   onShareChat,
@@ -65,6 +67,12 @@ export function ThreadRow({
    * `onSelectMessage`: the archived list passes nothing.
    */
   onSetupGit?: (chatId: string) => void
+  /**
+   * Fetches the files the chat changed, for its hover card. Optional like the
+   * two above — a surface with no socket of its own (tests, the archived list)
+   * simply shows no file list.
+   */
+  onLoadTouchedFiles?: (chatId: string) => Promise<ChatTouchedFilesResult>
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
   onShareChat: (chatId: string) => void
@@ -149,6 +157,8 @@ export function ThreadRow({
         onSelectMessage={onSelectMessage}
         onSelectChat={onSelect}
         onSetupGit={onSetupGit}
+        onLoadTouchedFiles={onLoadTouchedFiles}
+        onOpenExternalPath={onOpenExternalPath}
       >
         <div
           // The marker the sidebar's scroll-to-active querySelector looks for.

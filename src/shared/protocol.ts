@@ -162,6 +162,12 @@ export type ClientCommand =
   | { type: "chat.unarchive"; chatId: string }
   | { type: "chat.delete"; chatId: string }
   | { type: "chat.setDraftProtection"; chatIds: string[] }
+  /**
+   * The files a chat changed, for its sidebar hover card. Ack-only and read
+   * on demand: the list is too big per chat to ride along on every sidebar
+   * snapshot, and it's only ever wanted for the one row under the pointer.
+   */
+  | { type: "chat.touchedFiles"; chatId: string }
   | { type: "chat.markRead"; chatId: string }
   | { type: "chat.setDone"; chatId: string; done: boolean }
   /**

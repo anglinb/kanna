@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { deriveChatSnapshot, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
+import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
 import { createEmptyState, type TouchedFile } from "./events"
 import type { WorkingTreeProbe } from "./diff-store"
 
@@ -758,6 +758,102 @@ describe("read models", () => {
       )
 
       expect(rows[0]?.uncommittedWork).toBe(true)
+    })
+
+    describe("deriveChatTouchedFiles", () => {
+      function chatWith(files: TouchedFile[]) {
+        const state = stateWithChats([{ id: "chat-1", touchedFiles: files }])
+        return state.chatsById.get("chat-1")!
+      }
+
+      test("leads with the live claims, then the biggest edits", () => {
+        // The uncommitted file is the one you might still act on, so it leads
+        // however small it is; below that, size is the best answer to "what did
+        // this chat do here".
+        const result = deriveChatTouchedFiles(
+          chatWith([
+            { path: "big.ts", baseBlob: "b", additions: 200, deletions: 10 },
+            { path: "tiny.ts", baseBlob: "head-tiny", additions: 1 },
+            { path: "middling.ts", baseBlob: "b", additions: 30 },
+          ]),
+          { dirty: true, paths: new Set(["tiny.ts"]), headBlobs: new Map([["tiny.ts", "head-tiny"]]) },
+        )
+
+        expect(result.files.map((file) => file.path)).toEqual(["tiny.ts", "big.ts", "middling.ts"])
+        expect(result.files[0]?.uncommitted).toBe(true)
+        expect(result.files[1]?.uncommitted).toBeUndefined()
+      })
+
+      test("breaks ties on path, so the list holds still between renders", () => {
+        const result = deriveChatTouchedFiles(
+          chatWith([
+            { path: "b.ts", additions: 4 },
+            { path: "a.ts", additions: 4 },
+            { path: "c.ts", additions: 4 },
+          ]),
+          undefined,
+        )
+
+        expect(result.files.map((file) => file.path)).toEqual(["a.ts", "b.ts", "c.ts"])
+      })
+
+      test("caps the list and reports how many it left out", () => {
+        const files = Array.from({ length: 20 }, (_, index) => ({
+          path: `file-${String(index).padStart(2, "0")}.ts`,
+          additions: index + 1,
+        }))
+
+        const result = deriveChatTouchedFiles(chatWith(files), undefined, 8)
+
+        expect(result.files).toHaveLength(8)
+        expect(result.totalCount).toBe(20)
+        // Biggest first, so the cap drops the least interesting eight-ninths.
+        expect(result.files[0]?.path).toBe("file-19.ts")
+      })
+
+      test("drops files that can't say how much changed", () => {
+        // Legacy paths (recorded by `--name-only`), binary files (numstat has
+        // no count for them), and mode-only changes all render as a filename
+        // and nothing else — which reads as a bug, not as information.
+        const result = deriveChatTouchedFiles(
+          chatWith([
+            { path: "app.ts", additions: 6, deletions: 0 },
+            { path: "legacy.ts" },
+            { path: "logo.png", baseBlob: null },
+            { path: "script.sh", additions: 0, deletions: 0 },
+          ]),
+          undefined,
+        )
+
+        expect(result.files).toEqual([{ path: "app.ts", additions: 6, deletions: 0 }])
+        // And they don't survive as "3 more files" either — that line promises
+        // rows the card would never render.
+        expect(result.totalCount).toBe(1)
+      })
+
+      test("says nothing at all for a chat recorded before counts existed", () => {
+        // Every pre-existing chat today. The list heals a path at a time, as
+        // later turns touch them.
+        const result = deriveChatTouchedFiles(
+          chatWith([{ path: "a.ts", baseBlob: "x" }, { path: "b.ts", baseBlob: "y" }]),
+          { dirty: true, paths: new Set(["a.ts"]), headBlobs: new Map([["a.ts", "x"]]) },
+        )
+
+        expect(result).toEqual({ files: [], totalCount: 0 })
+      })
+
+      test("marks nothing uncommitted when the tree is clean", () => {
+        const result = deriveChatTouchedFiles(
+          chatWith([{ path: "app.ts", baseBlob: "b", additions: 3 }]),
+          { dirty: false, paths: new Set(), headBlobs: new Map() },
+        )
+
+        expect(result.files[0]?.uncommitted).toBeUndefined()
+      })
+
+      test("says nothing for a chat that has changed nothing", () => {
+        expect(deriveChatTouchedFiles(chatWith([]), undefined)).toEqual({ files: [], totalCount: 0 })
+      })
     })
 
     test("flags each chat on its own files, not on the project's", () => {

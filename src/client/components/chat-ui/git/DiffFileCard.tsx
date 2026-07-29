@@ -8,7 +8,7 @@ import { AttachmentFileCard, AttachmentImageCard } from "../../messages/Attachme
 import { AttachmentPreviewModal } from "../../messages/AttachmentPreviewModal"
 import { classifyAttachmentPreview } from "../../messages/attachmentPreview"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../ui/context-menu"
-import { StageCheckbox, type DiffFile, type DiffRenderMode } from "./shared"
+import { DiffFileStat, StageCheckbox, type DiffFile, type DiffRenderMode } from "./shared"
 
 export function shouldLoadDiffPatchNow(args: {
   isCollapsed: boolean
@@ -220,14 +220,7 @@ export function DiffFileCard({
               <div className="min-w-0 truncate select-none ml-2 mr-1">{file.path}</div>
             </div>
             <div className="flex shrink-0 items-center gap-2 select-none">
-              <span className="whitespace-nowrap text-xs font-mono">
-                {file.additions > 0 ? <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span> : null}
-                {file.deletions > 0 ? (
-                  <span className={file.additions > 0 ? "ml-2 text-red-600 dark:text-red-400" : "text-red-600 dark:text-red-400"}>
-                    -{file.deletions}
-                  </span>
-                ) : null}
-              </span>
+              <DiffFileStat additions={file.additions} deletions={file.deletions} />
               <button
                 type="button"
                 aria-label={`Open actions for ${file.path}`}

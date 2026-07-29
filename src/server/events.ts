@@ -138,6 +138,18 @@ export interface TouchedFile {
    * which keeps the old behaviour of flagging on a dirty-path match alone.
    */
   baseBlob?: string | null
+  /**
+   * Lines this chat wrote to this path, summed over every turn that changed it
+   * — how much of the file is the chat's doing, not what the file currently
+   * differs from `HEAD` by. A chat that added ten lines and then deleted them
+   * reads as `+10 -10` rather than as nothing, which is the honest answer to
+   * "what did this chat do here".
+   *
+   * Absent for binary files (numstat has no count for them) and for anything
+   * recorded before turn-level counts existed.
+   */
+  additions?: number
+  deletions?: number
 }
 
 export interface StoreState {

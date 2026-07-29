@@ -19,7 +19,7 @@ import { SegmentedControl } from "../components/ui/segmented-control"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
-import type { KeybindingsSnapshot, SidebarData, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
+import type { ChatTouchedFilesResult, KeybindingsSnapshot, SidebarData, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
 import type { SocketStatus } from "./socket"
 import {
   getSidebarJumpTargetIndex,
@@ -84,6 +84,8 @@ interface KannaSidebarProps {
   onDeleteChat: (chat: SidebarChatRow) => void
   onCopyPath: (localPath: string) => void
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
+  /** Fetches what a chat changed, for the hover card's file list. */
+  onLoadTouchedFiles?: (chatId: string) => Promise<ChatTouchedFilesResult>
   /** Prompts to `git init` a chat's project — the hover card's "Setup Git". */
   onSetupGit: (chatId: string) => void
   onRenameProject: (projectId: string, sidebarTitle: string | undefined, realTitle: string) => void
@@ -118,6 +120,7 @@ function KannaSidebarImpl({
   onDeleteChat,
   onCopyPath,
   onOpenExternalPath,
+  onLoadTouchedFiles,
   onSetupGit,
   onRenameProject,
   onHideProject,
@@ -269,6 +272,7 @@ function KannaSidebarImpl({
         onSelect={selectChat}
         onSelectMessage={selectChatMessage}
         onSetupGit={onSetupGit}
+        onLoadTouchedFiles={onLoadTouchedFiles}
         onCreateChat={onCreateChat}
         onRenameChat={onRenameChat}
         onShareChat={onShareChat}
@@ -280,7 +284,7 @@ function KannaSidebarImpl({
         onDeleteChat={onDeleteChat}
       />
     )
-  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onRestoreChat, onSetupGit, onShareChat, resolvedKeybindings, selectChat, selectChatMessage, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
+  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onLoadTouchedFiles, onOpenExternalPath, onRenameChat, onRestoreChat, onSetupGit, onShareChat, resolvedKeybindings, selectChat, selectChatMessage, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -714,6 +718,7 @@ function KannaSidebarImpl({
                 onSelectChat={selectChat}
                 onSelectChatMessage={selectChatMessage}
                 onSetupGit={onSetupGit}
+                onLoadTouchedFiles={onLoadTouchedFiles}
                 onOpenArchivedChat={onOpenArchivedChat}
                 onRestoreChat={onRestoreChat}
                 onCreateChat={onCreateChat}

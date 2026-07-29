@@ -3,6 +3,8 @@ import process from "node:process"
 import type {
   ChatRuntime,
   ChatSnapshot,
+  ChatTouchedFile,
+  ChatTouchedFilesResult,
   KannaStatus,
   LocalProjectsSnapshot,
   SidebarChatRow,
@@ -91,11 +93,63 @@ function getSidebarChatBuckets(chats: SidebarChatRow[], nowMs: number) {
  * couldn't read `HEAD` — counts as live: that's the pre-existing behaviour, and
  * a stale dot beats silently hiding work you have not committed.
  */
-function isTouchLive(file: TouchedFile, dirtyTree: WorkingTreeProbe) {
+export function isTouchLive(file: TouchedFile, dirtyTree: WorkingTreeProbe) {
   if (!dirtyTree.paths.has(file.path)) return false
   if (file.baseBlob === undefined) return true
   if (!dirtyTree.headBlobs.has(file.path)) return true
   return dirtyTree.headBlobs.get(file.path) === file.baseBlob
+}
+
+/** How many files the hover card lists before falling back to "N more". */
+export const CHAT_TOUCHED_FILES_LIMIT = 8
+
+/**
+ * Can this file say how much the chat changed in it?
+ *
+ * Rows without a number are dropped rather than listed bare. Three kinds have
+ * none — paths recorded before turn-level counts existed, binary files (numstat
+ * reports `-` for them), and mode-only changes (`0 0`) — and on screen all
+ * three are the same thing: a filename claiming the chat did something, with no
+ * evidence of what. The list is worth more as "here is what it changed, and by
+ * how much" than as a longer list half of which can't answer the second half.
+ *
+ * The bare rows heal on their own: any turn that touches the path again records
+ * its numstat, and the row comes back with a count.
+ */
+function hasLineCounts(file: TouchedFile) {
+  return (file.additions ?? 0) + (file.deletions ?? 0) > 0
+}
+
+/**
+ * The files a chat changed, ranked for its hover card.
+ *
+ * Live claims lead — those are the files that put the chat in Relevant, and the
+ * ones you might still act on — then the biggest edits, since "what did this
+ * chat do" is answered better by the file it rewrote than by the one it touched
+ * a line of. Ties break on path so the list is stable between renders rather
+ * than reshuffling as counts change.
+ *
+ * Capped, with the full size returned alongside: one chat here has 291 touched
+ * files, and a hover card is not a place to scroll.
+ */
+export function deriveChatTouchedFiles(
+  chat: ChatRecord,
+  workingTree: WorkingTreeProbe | undefined,
+  limit = CHAT_TOUCHED_FILES_LIMIT
+): ChatTouchedFilesResult {
+  const dirtyTree = workingTree?.dirty ? workingTree : undefined
+  const files = (chat.touchedFiles ?? []).filter(hasLineCounts).map((file) => ({
+    path: file.path,
+    ...(file.additions == null ? {} : { additions: file.additions }),
+    ...(file.deletions == null ? {} : { deletions: file.deletions }),
+    ...(dirtyTree && isTouchLive(file, dirtyTree) ? { uncommitted: true as const } : {}),
+  }))
+  const churn = (file: ChatTouchedFile) => (file.additions ?? 0) + (file.deletions ?? 0)
+  files.sort((left, right) =>
+    Number(Boolean(right.uncommitted)) - Number(Boolean(left.uncommitted))
+    || churn(right) - churn(left)
+    || left.path.localeCompare(right.path))
+  return { files: files.slice(0, limit), totalCount: files.length }
 }
 
 export function deriveSidebarData(

@@ -266,6 +266,9 @@ describe("WorktreeProbe integration", () => {
     // Recorded against the commit the turn started from, so committing this
     // work is what later retires the claim.
     expect(touched[0]?.baseBlob).toMatch(/^[0-9a-f]{40}$/u)
+    // And the turn's own numstat rides along, through the exact wiring
+    // `server.ts` uses — this is what the hover card's `+1 -1` reads.
+    expect([touched[0]?.additions, touched[0]?.deletions]).toEqual([1, 1])
     const flagged = deriveSidebarData(store.state, new Map(), { workingTrees: probe.getStates() })
     expect(flagged.projectGroups[0]?.chats[0]?.uncommittedWork).toBe(true)
 
