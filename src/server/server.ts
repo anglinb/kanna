@@ -370,7 +370,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             cloud = runtime
             selfPairedCloud = runtime
             runtime.start({
-              localUrl: `http://127.0.0.1:${actualPort}`,
+              // Byte-identical to the CLI's launch URL for a paired machine
+              // (cli-runtime builds `http://localhost:<port>`; pairing is only
+              // offered when we're bound to 127.0.0.1). The control plane
+              // re-syncs the tunnel's remote ingress whenever the reported
+              // local service changes, so a different spelling here would cost
+              // a pointless Cloudflare round-trip on the next boot.
+              localUrl: `http://localhost:${actualPort}`,
               log: (message) => console.log(`${LOG_PREFIX} ${message}`),
               warn: (message) => console.warn(`${LOG_PREFIX} ${message}`),
             })
