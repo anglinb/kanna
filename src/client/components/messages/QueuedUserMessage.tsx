@@ -29,7 +29,7 @@ export function QueuedUserMessage({ message, onRemove, onSendNow }: QueuedUserMe
         {message.content ? (
           <div className="relative group">
 
-              <div className="grid grid-cols-[1fr_auto] items-end gap-2.5 rounded-[20px] border border-dashed border-border bg-transparent pl-3.5 pr-1.5 py-1.5 prose prose-sm prose-invert text-left text-primary [&_p]:whitespace-pre-line">
+              <div className="grid grid-cols-[1fr_auto] items-end gap-2.5 rounded-2xl border border-dashed border-border bg-transparent pl-3.5 pr-1.5 py-1.5 prose prose-sm prose-invert text-left text-primary [&_p]:whitespace-pre-line">
                 <div>
                 <TranscriptMarkdown text={message.content} />
                 </div>

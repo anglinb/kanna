@@ -21,7 +21,7 @@ export function ProcessingMessage({ status }: ProcessingMessageProps) {
   const isFailed = status === "failed"
 
   return (
-    <MetaRow className="ml-[1px]">
+    <MetaRow className="ml-[1px] mt-3">
       <MetaContent>
         {isFailed ? (
           <X className="size-4.5 text-red-500" />

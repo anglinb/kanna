@@ -115,7 +115,7 @@ export function UserMessage({ content, attachments = [], steered = false, flash 
                 `:first-child` margin reset onto itself, which grew the bubble
                 by a paragraph's top margin for the length of the flash. */}
             <div className={cn(
-              "min-w-0 flex-1 rounded-[20px] border border-border bg-muted px-3.5 py-1.5 text-primary prose prose-sm prose-invert [&_p]:whitespace-pre-line",
+              "min-w-0 flex-1 rounded-2xl border border-border bg-muted px-3.5 py-1.5 text-primary prose prose-sm prose-invert [&_p]:whitespace-pre-line",
               flash && "kanna-jump-flash",
             )}>
               <TranscriptMarkdown text={parsedContent.body} />
