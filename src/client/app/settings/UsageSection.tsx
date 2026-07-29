@@ -139,15 +139,12 @@ function WindowRow({ window }: { window: UsageLimitWindow }) {
 export function ProviderCard({
   snapshot,
   collapsible = false,
-  defaultExpanded = true,
   refreshing = false,
   onRefresh,
 }: {
   snapshot: ProviderUsageSnapshot
-  /** When true, the header toggles the body open/closed. */
+  /** When true, the card starts collapsed and the header toggles it open/closed. */
   collapsible?: boolean
-  /** Initial open state when collapsible. */
-  defaultExpanded?: boolean
   /** Show "Refreshing…" in the header's timestamp slot while a read is in flight. */
   refreshing?: boolean
   /**
@@ -159,13 +156,7 @@ export function ProviderCard({
 }) {
   const Icon = PROVIDER_ICONS[snapshot.provider]
   const hasContent = snapshot.windows.length > 0 || snapshot.credits
-  const [expanded, setExpanded] = useState(defaultExpanded)
-  // Follow the selection: when defaultExpanded flips (e.g. the composer's
-  // provider changed), snap open/closed to match. Manual toggles persist until
-  // the next selection change.
-  useEffect(() => {
-    if (collapsible) setExpanded(defaultExpanded)
-  }, [collapsible, defaultExpanded])
+  const [expanded, setExpanded] = useState(false)
   const showBody = !collapsible || expanded
 
   const timestampText = refreshing
@@ -199,43 +190,76 @@ export function ProviderCard({
       <span className="shrink-0 text-xs text-muted-foreground">{timestampText}</span>
     )
 
-  const header = (
-    <div className="flex items-center justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-2.5">
-        {collapsible ? (
-          // Harness icon by default; on card hover it cross-fades (scale/fade/
-          // blur, like the sidebar logo) to a chevron indicating expand state.
-          <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
-            <Icon className="absolute inset-0 h-4 w-4 text-foreground transition-all duration-150 ease-out opacity-100 scale-100 blur-none group-hover/usage-card:opacity-0 group-hover/usage-card:scale-50 group-hover/usage-card:blur-[1px]" />
-            <ChevronRight
-              className={cn(
-                "absolute inset-0 h-4 w-4 text-muted-foreground transition-all duration-150 ease-out opacity-0 scale-50 blur-[1px] group-hover/usage-card:opacity-100 group-hover/usage-card:scale-100 group-hover/usage-card:blur-none",
-                expanded ? "rotate-90" : undefined,
-              )}
-            />
-          </span>
-        ) : (
-          <Icon className="h-4 w-4 shrink-0 text-foreground" />
-        )}
-        <span className="truncate text-sm font-semibold text-foreground">
-          {providerLabel(snapshot.provider)}
+  // Scope and plan share one pill ("Personal Pro"); `capitalize` title-cases the
+  // raw plan string ("max" → "Max").
+  const planBadgeText = [accountScopeLabel(snapshot.plan), snapshot.plan].filter(Boolean).join(" ")
+
+  const identity = (
+    <div className="flex min-w-0 items-center gap-2.5">
+      {collapsible ? (
+        // Harness icon by default; on card hover it cross-fades (scale/fade/
+        // blur, like the sidebar logo) to a chevron indicating expand state.
+        <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+          <Icon className="absolute inset-0 h-4 w-4 text-foreground transition-all duration-150 ease-out opacity-100 scale-100 blur-none group-hover/usage-card:opacity-0 group-hover/usage-card:scale-50 group-hover/usage-card:blur-[1px]" />
+          <ChevronRight
+            className={cn(
+              "absolute inset-0 h-4 w-4 text-muted-foreground transition-all duration-150 ease-out opacity-0 scale-50 blur-[1px] group-hover/usage-card:opacity-100 group-hover/usage-card:scale-100 group-hover/usage-card:blur-none",
+              expanded ? "rotate-90" : undefined,
+            )}
+          />
         </span>
-        {snapshot.plan || accountScopeLabel(snapshot.plan) ? (
-          <div className="flex shrink-0 items-center gap-1">
-            {accountScopeLabel(snapshot.plan) ? (
-              <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                {accountScopeLabel(snapshot.plan)}
-              </span>
-            ) : null}
-            {snapshot.plan ? (
-              <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
-                {snapshot.plan}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+      ) : (
+        <Icon className="h-4 w-4 shrink-0 text-foreground" />
+      )}
+      <span className="truncate text-sm font-semibold text-foreground">
+        {providerLabel(snapshot.provider)}
+      </span>
+      {planBadgeText ? (
+        <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
+          {planBadgeText}
+        </span>
+      ) : null}
+    </div>
+  )
+
+  // Collapsed cards fold the first window's meter into the header, laid out on
+  // the same grid the expanded rows use so every bar lines up card to card. The
+  // row title and the freshness stamp (which the header no longer prints) live
+  // in the bar's tooltip instead.
+  const summaryWindow = snapshot.windows[0] ?? null
+  const summaryResets = summaryWindow?.resetsAt ? formatUntil(summaryWindow.resetsAt) : null
+
+  const header = showBody ? (
+    <div className="flex items-center justify-between gap-3">
+      {identity}
       {timestampNode}
+    </div>
+  ) : (
+    <div className={WINDOW_ROW_GRID}>
+      {identity}
+      <div className="truncate text-xs text-muted-foreground">
+        {summaryResets ? `Resets ${summaryResets}` : ""}
+      </div>
+      {summaryWindow ? (
+        <Tooltip delayDuration={0}>
+          <TooltipTrigger asChild>
+            {/* Padding widens the 8px bar's hover target without adding height:
+                the identity column already sets the row's height. */}
+            <div className="min-w-0 py-1.5">
+              <UsageBar usedPercent={summaryWindow.usedPercent} />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="center">
+            <div>{summaryWindow.label}</div>
+            {timestampText ? <div className="text-muted-foreground">{timestampText}</div> : null}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        <div />
+      )}
+      <div className="text-right text-sm font-medium tabular-nums text-foreground">
+        {summaryWindow ? formatPercent(summaryWindow.usedPercent) : ""}
+      </div>
     </div>
   )
 

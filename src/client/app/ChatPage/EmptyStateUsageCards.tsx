@@ -7,9 +7,9 @@ import { ProviderCard } from "../settings/UsageSection"
 /**
  * Compact harness usage meters shown on the empty (new chat) page. Renders
  * only providers with live limit data (Claude/Codex when signed in with a
- * subscription). The provider currently selected in the composer is shown
- * first and expanded; the rest are collapsed. Display-only — refresh lives on
- * the Settings → Usage page.
+ * subscription). Cards start collapsed — each header carries its first window's
+ * meter — with the composer's current provider listed first. Display-only —
+ * refresh lives on the Settings → Usage page.
  */
 export function EmptyStateUsageCards({
   socket,
@@ -47,12 +47,7 @@ export function EmptyStateUsageCards({
   return (
     <div className="w-full space-y-3 text-left">
       {cards.map((provider) => (
-        <ProviderCard
-          key={provider.provider}
-          snapshot={provider}
-          collapsible
-          defaultExpanded={provider.provider === selectedProvider}
-        />
+        <ProviderCard key={provider.provider} snapshot={provider} collapsible />
       ))}
     </div>
   )
