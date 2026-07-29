@@ -1,6 +1,6 @@
 import path from "node:path"
 import { stat } from "node:fs/promises"
-import { APP_NAME, getRuntimeProfile } from "../shared/branding"
+import { APP_NAME, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
 import type { ChatAttachment } from "../shared/types"
 import type { ShareMode } from "../shared/share"
 import {
@@ -20,6 +20,7 @@ import { UsageLimitsManager } from "./usage-limits"
 import { DiffStore } from "./diff-store"
 import { WorktreeProbe } from "./worktree-probe"
 import { TurnFileTracker } from "./worktree-snapshot"
+import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { clearGitHubRepoCache } from "./github"
@@ -323,6 +324,17 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const staleChatAutoArchiveInterval = setInterval(runAutoArchiveStaleChats, STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS)
   const staleChatDeleteInterval = setInterval(runDeleteStaleChats, STALE_CHAT_DELETE_INTERVAL_MS)
   worktreeProbe.start()
+  // Claims recorded before base blobs never expire on their own, so a chat
+  // whose work shipped months ago keeps returning to Relevant on someone
+  // else's edit. Dating them is two git calls per affected chat and only
+  // happens once, so it runs in the background rather than delaying boot.
+  void backfillTouchedFileBases(store, { onProgress: (message) => console.log(message) })
+    .then((result) => {
+      if (result.chats > 0) void router.broadcastSidebar()
+    })
+    .catch((error) => {
+      console.warn(`${LOG_PREFIX} touched-file backfill failed:`, error)
+    })
 
   const distDir = path.join(import.meta.dir, "..", "..", "dist", "client")
 
