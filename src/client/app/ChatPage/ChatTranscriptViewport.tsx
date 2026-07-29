@@ -740,8 +740,13 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }} />
   )
 
+  // Same box geometry as a transcript row (816px wide, 8px of horizontal
+  // padding around an 800px text column) rather than a bare 800px column.
+  // The two only look alike above 816px; below it the row still insets its
+  // content by the padding and a plain 800px box does not, so the spinner
+  // would sit 8px left of every tool icon above it.
   const listFooter = (
-    <div className="mx-auto w-full max-w-[800px]">
+    <div className="mx-auto w-full max-w-[816px] px-2">
       {isProcessing ? <ProcessingMessage status={runtimeStatus ?? undefined} /> : null}
       {queuedMessages.map((message) => (
         <QueuedUserMessage
