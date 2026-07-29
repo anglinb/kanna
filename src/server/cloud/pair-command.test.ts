@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { CloudPairResponse } from "../../shared/cloud-api"
 import { CloudApiError, type CloudApiClient } from "./api-client"
 import type { CloudIdentity } from "./identity"
+import type { PairSessionSnapshot } from "./pair-session"
 import { runPairCommand, type PairCommandDeps } from "./pair-command"
 
 const PAIR_RESPONSE: CloudPairResponse = {
@@ -46,6 +47,12 @@ function createHarness(overrides: {
       const result = overrides.pairResult ?? PAIR_RESPONSE
       if (result instanceof Error) throw result
       return result
+    },
+    async requestDeviceCode() {
+      throw new Error("not used")
+    },
+    async pollDeviceCode() {
+      throw new Error("not used")
     },
     async heartbeat() {},
     async markOffline() {},
@@ -146,6 +153,53 @@ describe("kanna pair", () => {
     const code = await runPairCommand({ action: "pair", pairingCode: "NOPE" }, deps)
     expect(code).toBe(1)
     expect(calls.warn.some((line) => line.includes("invalid"))).toBe(true)
+  })
+
+  test("bare `kanna pair` prints a claim link + QR and waits for the browser half", async () => {
+    const { calls, deps } = createHarness()
+    let settled: PairSessionSnapshot = {
+      status: "waiting",
+      claimUrl: "https://kanna.sh/machine?pair=ABC123",
+      expiresAt: 1,
+    }
+    deps.renderQr = (url) => `[qr:${url}]`
+    deps.sleep = async () => {
+      // The browser half completes while the command is waiting.
+      settled = { status: "paired", appOrigin: "https://jakemor-mbp.kanna.sh" }
+    }
+    deps.createPairSession = (sessionDeps) => ({
+      start: async () => {
+        // The manager writes credentials through onPaired, as the real one does.
+        void sessionDeps.onPaired({ ...IDENTITY, appOrigin: "https://jakemor-mbp.kanna.sh" })
+        return settled
+      },
+      status: () => settled,
+      stop: () => {},
+    })
+
+    const code = await runPairCommand({ action: "pair", pairingCode: null }, deps)
+
+    expect(code).toBe(0)
+    expect(calls.log.some((line) => line.includes("[qr:https://kanna.sh/machine?pair=ABC123]"))).toBe(true)
+    expect(calls.log.some((line) => line === "https://kanna.sh/machine?pair=ABC123")).toBe(true)
+    expect(calls.log.some((line) => line.includes("paired!"))).toBe(true)
+    expect(calls.written).toHaveLength(1)
+  })
+
+  test("bare `kanna pair` reports an expired link with exit 1", async () => {
+    const { calls, deps } = createHarness()
+    deps.renderQr = () => "[qr]"
+    deps.sleep = async () => {}
+    deps.createPairSession = () => ({
+      start: async () => ({ status: "expired" }),
+      status: () => ({ status: "expired" }),
+      stop: () => {},
+    })
+
+    const code = await runPairCommand({ action: "pair", pairingCode: null }, deps)
+
+    expect(code).toBe(1)
+    expect(calls.warn.some((line) => line.includes("could not start pairing"))).toBe(true)
   })
 
   test("status reports paired/enabled state", async () => {

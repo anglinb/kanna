@@ -49,6 +49,13 @@ export const CLOUD_BROWSER_PATH_PREFIX = "/__cloud"
  */
 export const CLOUD_WS_ENDPOINT_PATH = "/api/cloud/ws-endpoint"
 
+/**
+ * Machine-served, local requests only: `POST` starts (or reuses) a
+ * device-code claim session and `GET` reports its state. Backs the sidebar's
+ * one-click "Use this machine from anywhere" flow.
+ */
+export const CLOUD_PAIR_SESSION_PATH = "/api/cloud/pair-session"
+
 // ---------------------------------------------------------------------------
 // Machine → control plane (`{controlUrl}/…`)
 // ---------------------------------------------------------------------------
@@ -77,6 +84,54 @@ export interface CloudPairResponse {
   tunnelToken: string
   /** Permanent tunnel hostname, e.g. "tun-<machineId>.kanna.sh". */
   tunnelHost: string
+}
+
+// ---------------------------------------------------------------------------
+// Device-code pairing (machine-initiated, the one-click flow)
+//
+// The machine asks for a claim code, shows `claimUrl` (link + QR), and polls
+// with `deviceToken` until a signed-in browser claims it at kanna.sh/machine.
+// Inverts the older dashboard-first flow: no terminal step, and the browser
+// half can happen on a phone.
+// ---------------------------------------------------------------------------
+
+/** Browser path on the site that redeems a claim code (`?pair=<code>`). */
+export const CLOUD_CLAIM_PATH = "/machine"
+
+/** Query parameter carrying the claim code on CLOUD_CLAIM_PATH. */
+export const CLOUD_CLAIM_CODE_PARAM = "pair"
+
+/** `POST {controlUrl}/device-code` — unauthenticated; starts a claim session. */
+export interface CloudDeviceCodeRequest {
+  /** Suggested display name (this machine's hostname) to prefill the form. */
+  machineName?: string
+}
+
+export interface CloudDeviceCodeResponse {
+  /** The code embedded in `claimUrl`. Single-use, short TTL. */
+  code: string
+  /**
+   * Secret the machine polls with. Separate from `code` on purpose: the code
+   * travels through a QR/link and must not be enough to collect credentials.
+   */
+  deviceToken: string
+  /** Full URL to open in any browser, e.g. "https://kanna.sh/machine?pair=…". */
+  claimUrl: string
+  /** Unix ms. After this the code is gone and the machine asks for a new one. */
+  expiresAt: number
+  /** Suggested polling cadence. */
+  pollIntervalMs: number
+}
+
+/**
+ * `POST {controlUrl}/device-code/poll` with `Authorization: Bearer
+ * <deviceToken>`. 404 means the session is gone (expired or already
+ * redeemed) — treat like "expired".
+ */
+export interface CloudDeviceCodePollResponse {
+  status: "pending" | "claimed"
+  /** Present when status is "claimed"; identical to the /pair response. */
+  pairing?: CloudPairResponse
 }
 
 /**

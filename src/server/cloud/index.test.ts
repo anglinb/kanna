@@ -33,6 +33,12 @@ describe("createCloudRuntime direct mode", () => {
       pair: async () => {
         throw new Error("not used")
       },
+      requestDeviceCode: async () => {
+        throw new Error("not used")
+      },
+      pollDeviceCode: async () => {
+        throw new Error("not used")
+      },
       heartbeat: async (_token, update) => {
         heartbeats.push(update)
       },

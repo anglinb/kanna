@@ -7,6 +7,7 @@
 
 import process from "node:process"
 import { createInterface } from "node:readline/promises"
+import { renderANSI } from "uqr"
 import { getCloudFilePathDisplay, LOG_PREFIX } from "../../shared/branding"
 import { getMachineDisplayName } from "../machine-name"
 import { CloudApiError, createCloudApiClient, type CloudApiClient } from "./api-client"
@@ -16,6 +17,7 @@ import {
   writeCloudIdentity,
   type CloudIdentity,
 } from "./identity"
+import { createPairSessionManager, type PairSessionManager } from "./pair-session"
 
 export type PairAction = "pair" | "status" | "disable" | "enable" | "remove"
 
@@ -33,6 +35,10 @@ export interface PairCommandDeps {
   createApiClient?: (controlUrl?: string) => CloudApiClient
   getMachineName?: () => string
   confirm?: (question: string) => Promise<boolean>
+  /** Device-code flow seams (bare `kanna pair`). */
+  createPairSession?: typeof createPairSessionManager
+  renderQr?: (url: string) => string
+  sleep?: (ms: number) => Promise<void>
 }
 
 async function promptConfirm(question: string) {
@@ -46,6 +52,74 @@ async function promptConfirm(question: string) {
   } finally {
     rl.close()
   }
+}
+
+/** How often the terminal flow re-reads the (server-side) session state. */
+const DEVICE_FLOW_TICK_MS = 500
+
+/**
+ * Bare `kanna pair`: machine-initiated pairing. Prints the claim URL + QR and
+ * blocks until the browser half finishes, then writes credentials — the same
+ * session manager the sidebar's one-click flow uses.
+ */
+async function runDeviceCodePairing(args: {
+  identity: CloudIdentity | null
+  log: (message: string) => void
+  warn: (message: string) => void
+  createPairSession: typeof createPairSessionManager
+  createApiClient: (controlUrl?: string) => CloudApiClient
+  writeIdentity: (identity: CloudIdentity) => Promise<void>
+  getMachineName: () => string
+  renderQr: (url: string) => string
+  sleep: (ms: number) => Promise<void>
+}): Promise<number> {
+  const { log, warn } = args
+  if (args.identity) {
+    warn(`${LOG_PREFIX} this machine is already paired as ${args.identity.appOrigin} — re-pairing replaces it`)
+  }
+
+  let manager: PairSessionManager
+  try {
+    manager = args.createPairSession({
+      machineName: args.getMachineName(),
+      createApiClient: () => args.createApiClient(),
+      onPaired: (identity) => args.writeIdentity(identity),
+    })
+  } catch (error) {
+    warn(`${LOG_PREFIX} pairing failed: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+
+  const started = await manager.start()
+  if (started.status !== "waiting" || !started.claimUrl) {
+    warn(`${LOG_PREFIX} could not start pairing${started.error ? `: ${started.error}` : ""}`)
+    return 1
+  }
+
+  log("")
+  log(args.renderQr(started.claimUrl))
+  log(`${LOG_PREFIX} open this link (or scan the code) to claim this machine:`)
+  log(started.claimUrl)
+  log(`${LOG_PREFIX} waiting…`)
+
+  let snapshot = manager.status()
+  while (snapshot.status === "waiting") {
+    await args.sleep(DEVICE_FLOW_TICK_MS)
+    snapshot = manager.status()
+  }
+  manager.stop()
+
+  if (snapshot.status === "paired" && snapshot.appOrigin) {
+    log(`${LOG_PREFIX} paired! this machine is now ${snapshot.appOrigin}`)
+    log(`${LOG_PREFIX} credentials saved to ${getCloudFilePathDisplay()}`)
+    return 0
+  }
+  if (snapshot.status === "expired") {
+    warn(`${LOG_PREFIX} that link expired — run \`kanna pair\` again for a fresh one`)
+    return 1
+  }
+  warn(`${LOG_PREFIX} pairing failed${snapshot.error ? `: ${snapshot.error}` : ""}`)
+  return 1
 }
 
 /** Returns the process exit code. */
@@ -68,8 +142,19 @@ export async function runPairCommand(args: PairCommandArgs, deps: PairCommandDep
   switch (args.action) {
     case "pair": {
       if (!args.pairingCode) {
-        warn(`${LOG_PREFIX} missing pairing code — get one at https://kanna.sh/machines`)
-        return 1
+        // No code: run the device flow right here — print a claim link (and a
+        // QR for phones) and wait for someone to name the machine on kanna.sh.
+        return runDeviceCodePairing({
+          identity,
+          log,
+          warn,
+          createPairSession: deps.createPairSession ?? createPairSessionManager,
+          createApiClient,
+          writeIdentity,
+          getMachineName,
+          renderQr: deps.renderQr ?? ((url) => renderANSI(url, { ecc: "L", border: 2 })),
+          sleep: deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+        })
       }
       if (identity) {
         warn(`${LOG_PREFIX} this machine is already paired as ${identity.appOrigin} — re-pairing replaces it`)

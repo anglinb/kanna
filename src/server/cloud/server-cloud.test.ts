@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
+  CLOUD_PAIR_SESSION_PATH,
   CLOUD_WS_ENDPOINT_PATH,
   DEFAULT_CLOUD_CONTROL_URL,
   PROXY_AUTH_HEADER,
@@ -10,6 +11,7 @@ import {
 } from "../../shared/cloud-api"
 import { startKannaServer } from "../server"
 import { createConnectTokenManager } from "./connect-token"
+import type { PairSessionSnapshot } from "./pair-session"
 import type { CloudIdentity } from "./identity"
 import type { CloudRuntime } from "./index"
 
@@ -43,7 +45,12 @@ function fakeCloudRuntime(): CloudRuntime {
   }
 }
 
-async function startCloudServer(options: { port: number; cloud?: CloudRuntime | null; password?: string | null }) {
+async function startCloudServer(options: {
+  port: number
+  cloud?: CloudRuntime | null
+  password?: string | null
+  allowCloudPairing?: boolean
+}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-cloud-server-"))
   tempDirs.push(dataDir)
   const server = await startKannaServer({
@@ -52,9 +59,53 @@ async function startCloudServer(options: { port: number; cloud?: CloudRuntime | 
     cloud: options.cloud,
     password: options.password ?? null,
     trustProxy: Boolean(options.cloud),
+    allowCloudPairing: options.allowCloudPairing,
   })
   stops.push(server.stop)
   return server
+}
+
+/**
+ * Stands in for the kanna.sh control plane so the pair-session endpoint can
+ * be driven end to end (the real client resolves this through
+ * KANNA_CLOUD_CONTROL_URL).
+ */
+function startFakeControlPlane() {
+  const calls: string[] = []
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      calls.push(`${req.method} ${url.pathname}`)
+      if (url.pathname === "/api/cloud/device-code") {
+        return Response.json({
+          code: "CLAIMCODE1234",
+          deviceToken: "device-token",
+          claimUrl: "https://kanna.sh/machine?pair=CLAIMCODE1234",
+          expiresAt: Date.now() + 900_000,
+          pollIntervalMs: 50_000,
+        })
+      }
+      if (url.pathname === "/api/cloud/device-code/poll") {
+        return Response.json({ status: "pending" })
+      }
+      return new Response("not found", { status: 404 })
+    },
+  })
+  const previous = process.env.KANNA_CLOUD_CONTROL_URL
+  process.env.KANNA_CLOUD_CONTROL_URL = `http://127.0.0.1:${server.port}/api/cloud`
+  return {
+    calls,
+    stop() {
+      if (previous === undefined) {
+        delete process.env.KANNA_CLOUD_CONTROL_URL
+      } else {
+        process.env.KANNA_CLOUD_CONTROL_URL = previous
+      }
+      server.stop(true)
+    },
+  }
 }
 
 describe("server cloud integration", () => {
@@ -173,6 +224,69 @@ describe("server cloud integration", () => {
       badSocket.addEventListener("close", () => resolve(false), { once: true })
     })
     expect(badOpened).toBe(false)
+  })
+
+  test("pair session: POST mints a claim URL, GET reports it, and the session is reused", async () => {
+    const controlPlane = startFakeControlPlane()
+    try {
+      const server = await startCloudServer({ port: 4369, allowCloudPairing: true })
+      const base = `http://127.0.0.1:${server.port}${CLOUD_PAIR_SESSION_PATH}`
+
+      const idle = await fetch(base)
+      expect(await idle.json() as PairSessionSnapshot).toEqual({ status: "idle" })
+
+      const started = await fetch(base, { method: "POST" })
+      expect(started.status).toBe(200)
+      const snapshot = await started.json() as PairSessionSnapshot
+      expect(snapshot.status).toBe("waiting")
+      expect(snapshot.claimUrl).toBe("https://kanna.sh/machine?pair=CLAIMCODE1234")
+
+      const polled = await fetch(base)
+      expect((await polled.json() as PairSessionSnapshot).claimUrl).toBe(snapshot.claimUrl)
+
+      // Re-opening the dialog must not burn a second code.
+      await fetch(base, { method: "POST" })
+      expect(controlPlane.calls.filter((call) => call === "POST /api/cloud/device-code")).toHaveLength(1)
+    } finally {
+      controlPlane.stop()
+    }
+  })
+
+  test("pair session: never exposed to proxied or raw-tunnel traffic", async () => {
+    const server = await startCloudServer({
+      port: 4370,
+      cloud: fakeCloudRuntime(),
+      allowCloudPairing: true,
+    })
+    const base = `http://127.0.0.1:${server.port}${CLOUD_PAIR_SESSION_PATH}`
+
+    const proxied = await fetch(base, {
+      headers: { host: "tun-m1.kanna.sh", [PROXY_AUTH_HEADER]: PROXY_SECRET },
+    })
+    expect(proxied.status).toBe(404)
+
+    const rawTunnel = await fetch(base, { headers: { host: "tun-m1.kanna.sh" } })
+    expect(rawTunnel.status).toBe(404)
+  })
+
+  test("pair session: an already-paired machine reports its hosted URL instead", async () => {
+    const server = await startCloudServer({ port: 4371, cloud: fakeCloudRuntime() })
+    const response = await fetch(`http://127.0.0.1:${server.port}${CLOUD_PAIR_SESSION_PATH}`)
+
+    expect(await response.json() as PairSessionSnapshot).toEqual({
+      status: "paired",
+      appOrigin: IDENTITY.appOrigin,
+    })
+  })
+
+  test("pair session: runs that can't pair in place say so (client falls back)", async () => {
+    // 4372/4373 belong to the cross-repo wire e2e — don't collide.
+    const server = await startCloudServer({ port: 4374 })
+    const response = await fetch(`http://127.0.0.1:${server.port}${CLOUD_PAIR_SESSION_PATH}`, {
+      method: "POST",
+    })
+
+    expect(await response.json() as { status: string }).toEqual({ status: "unsupported" })
   })
 
   test("without cloud, behavior is unchanged (no guard)", async () => {

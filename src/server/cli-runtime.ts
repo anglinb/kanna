@@ -68,6 +68,7 @@ export interface CliRuntimeDeps {
     onMigrationProgress?: (message: string) => void
     trustProxy?: boolean
     cloud?: CloudRuntime | null
+    allowCloudPairing?: boolean
   }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: AnalyticsReporter }>
   fetchLatestVersion: (packageName: string) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
@@ -107,7 +108,8 @@ function printHelp() {
 
 Usage:
   ${CLI_COMMAND} [options]
-  ${CLI_COMMAND} pair <code>   Pair with kanna.sh and start (get a code at https://kanna.sh/machines)
+  ${CLI_COMMAND} pair          Claim this machine on kanna.sh (prints a link + QR) and start
+  ${CLI_COMMAND} pair <code>   Same, using a code from https://kanna.sh/machines
   ${CLI_COMMAND} pair --status|--disable|--enable|--remove
 
 Options:
@@ -146,10 +148,9 @@ function parsePairArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  if (action === "pair" && !pairingCode) {
-    throw new Error(`${CLI_COMMAND} pair needs a pairing code — get one at https://kanna.sh/machines`)
-  }
-
+  // A bare `kanna pair` is the one-click flow: the machine asks kanna.sh for
+  // a claim link, prints it (plus a QR), and waits. A code argument still
+  // works for links minted from the dashboard.
   return { kind: "pair", args: { action, pairingCode } }
 }
 
@@ -416,6 +417,9 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     ...runOptions,
     trustProxy: isShareEnabled(runOptions.share) || cloudRuntime !== null,
     cloud: cloudRuntime,
+    // Unpaired but cloud-capable: the sidebar can claim this machine in one
+    // click and the server attaches the runtime without a restart.
+    allowCloudPairing: cloudEligible && !identity,
     onMigrationProgress: deps.log,
     update: {
       version: deps.version,

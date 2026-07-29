@@ -592,8 +592,8 @@ describe("parseArgs pair subcommand", () => {
     expect(parseArgs(["pair", "--remove"])).toEqual({ kind: "pair", args: { action: "remove", pairingCode: null } })
   })
 
-  test("pair without a code throws with pointer to kanna.sh", () => {
-    expect(() => parseArgs(["pair"])).toThrow("kanna.sh/machines")
+  test("pair without a code runs the device flow (no code required)", () => {
+    expect(parseArgs(["pair"])).toEqual({ kind: "pair", args: { action: "pair", pairingCode: null } })
   })
 
   test("pair rejects extra arguments", () => {

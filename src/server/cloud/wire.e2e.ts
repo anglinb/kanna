@@ -41,6 +41,8 @@ const KANNA_PORT = 4372
 /** Second real kanna server: the dev-box (direct mode, no connector). */
 const DEVBOX_SUBDOMAIN = `${GITHUB_LOGIN}-box`
 const DEVBOX_KANNA_PORT = 4373
+/** Claimed through the device-code flow (machine-initiated pairing). */
+const CLAIM_SUBDOMAIN = `${GITHUB_LOGIN}-air`
 
 const missing = [
   !existsSync(path.join(SITE_ROOT, "package.json")) && "../kanna-site checkout",
@@ -544,6 +546,79 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     devboxRuntime = null
     const after = await proxyFetch("/", { host: `${DEVBOX_SUBDOMAIN}.kanna.sh` })
     expect(after.status).toBe(404)
+  })
+
+  // -------------------------------------------------------------------------
+  // Device-code flow: the machine mints the claim link itself, a signed-in
+  // browser names the machine at kanna.sh/machine?pair=…, and the machine's
+  // next poll returns the same credentials `/pair` would have.
+  // -------------------------------------------------------------------------
+
+  test("device code: machine mints a claim link → browser claims → machine polls credentials", async () => {
+    const client = createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
+    const issued = await client.requestDeviceCode("Wire E2E Laptop")
+    expect(issued.code.length).toBeGreaterThan(6)
+    expect(issued.deviceToken).not.toBe(issued.code)
+    const claimUrl = new URL(issued.claimUrl)
+    expect(claimUrl.pathname).toBe("/machine")
+    expect(claimUrl.searchParams.get("pair")).toBe(issued.code)
+
+    // Nothing claimed yet.
+    expect((await client.pollDeviceCode(issued.deviceToken)).status).toBe("pending")
+
+    // Browser half: the claim page reads what's waiting…
+    const lookup = await proxyFetch(`/api/cloud/device-code/${issued.code}`, { host: "kanna.sh" })
+    expect(lookup.status).toBe(200)
+    const waiting = await lookup.json() as { suggestedName: string | null; machine: unknown }
+    expect(waiting.suggestedName).toBe("Wire E2E Laptop")
+    expect(waiting.machine).toBeNull()
+
+    // …the code alone must not be enough to collect credentials.
+    const unauthenticatedLookup = await proxyFetch(`/api/cloud/device-code/${issued.code}`, {
+      host: "kanna.sh",
+      session: false,
+    })
+    expect(unauthenticatedLookup.status).toBe(401)
+
+    cfCalls.length = 0
+    const claim = await proxyFetch(`/api/cloud/device-code/${issued.code}/claim`, {
+      method: "POST",
+      host: "kanna.sh",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subdomain: CLAIM_SUBDOMAIN }),
+    })
+    expect(claim.status).toBe(201)
+    const claimed = await claim.json() as { machine: { id: string; subdomain: string; name: string } }
+    expect(claimed.machine.subdomain).toBe(CLAIM_SUBDOMAIN)
+    expect(claimed.machine.name).toBe("Wire E2E Laptop")
+
+    // Claiming provisions the same transport the dashboard path does.
+    const paths = cfCalls.map((call) => `${call.method} ${call.path}`)
+    expect(paths.some((p) => p.startsWith("POST") && p.includes("/cfd_tunnel"))).toBe(true)
+    expect(paths.some((p) => p.includes("/dns_records"))).toBe(true)
+
+    const result = await client.pollDeviceCode(issued.deviceToken)
+    expect(result.status).toBe("claimed")
+    expect(result.pairing?.subdomain).toBe(CLAIM_SUBDOMAIN)
+    expect(result.pairing?.appOrigin).toBe(`https://${CLAIM_SUBDOMAIN}.kanna.sh`)
+    expect(result.pairing?.tunnelToken).toBe("wire-connector-token")
+    expect(result.pairing?.tunnelHost).toBe(`tun-${claimed.machine.id}.kanna.sh`)
+    expect(result.pairing?.machineToken).toBeTruthy()
+
+    // The credentials are handed out exactly once.
+    await expect(client.pollDeviceCode(issued.deviceToken)).rejects.toThrow()
+
+    // Cleanup so the subdomain doesn't linger for reruns of this suite.
+    await createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
+      .removeMachine(result.pairing!.machineToken)
+  }, 30_000)
+
+  test("device code: an unknown code is rejected on both halves", async () => {
+    const client = createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
+    await expect(client.pollDeviceCode("not-a-real-device-token")).rejects.toThrow()
+
+    const lookup = await proxyFetch("/api/cloud/device-code/ZZZZZZZZZZZZ", { host: "kanna.sh" })
+    expect(lookup.status).toBe(404)
   })
 })
 

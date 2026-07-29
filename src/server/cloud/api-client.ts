@@ -8,6 +8,9 @@ import process from "node:process"
 import {
   CLOUD_CONTROL_URL_ENV_VAR,
   DEFAULT_CLOUD_CONTROL_URL,
+  type CloudDeviceCodePollResponse,
+  type CloudDeviceCodeRequest,
+  type CloudDeviceCodeResponse,
   type CloudHeartbeatRequest,
   type CloudPairRequest,
   type CloudPairResponse,
@@ -31,6 +34,16 @@ export interface CloudApiClientDeps {
 export interface CloudApiClient {
   controlUrl: string
   pair(pairingCode: string, machineName?: string): Promise<CloudPairResponse>
+  /**
+   * Starts a device-code claim session: returns the URL to show (link + QR)
+   * and the secret to poll with.
+   */
+  requestDeviceCode(machineName?: string): Promise<CloudDeviceCodeResponse>
+  /**
+   * Polls a claim session. Throws CloudApiError 404/410 once the session is
+   * expired or already redeemed.
+   */
+  pollDeviceCode(deviceToken: string): Promise<CloudDeviceCodePollResponse>
   /** Liveness + the local service the connector fronts (~every 2 min). */
   heartbeat(machineToken: string, update: CloudHeartbeatRequest): Promise<void>
   /** Best-effort graceful shutdown signal — flips the machine offline immediately. */
@@ -90,6 +103,32 @@ export function createCloudApiClient(deps: CloudApiClientDeps = {}): CloudApiCli
         !payload.tunnelHost
       ) {
         throw new CloudApiError("control plane returned an incomplete pair response", 502)
+      }
+      return payload
+    },
+
+    async requestDeviceCode(machineName) {
+      const body: CloudDeviceCodeRequest = { machineName }
+      const response = await request("/device-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      const payload = await response.json() as CloudDeviceCodeResponse
+      if (!payload.code || !payload.deviceToken || !payload.claimUrl || !payload.expiresAt) {
+        throw new CloudApiError("control plane returned an incomplete device-code response", 502)
+      }
+      return payload
+    },
+
+    async pollDeviceCode(deviceToken) {
+      const response = await request("/device-code/poll", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${deviceToken}` },
+      })
+      const payload = await response.json() as CloudDeviceCodePollResponse
+      if (payload.status === "claimed" && !payload.pairing?.machineToken) {
+        throw new CloudApiError("control plane claimed a device code without credentials", 502)
       }
       return payload
     },

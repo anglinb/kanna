@@ -71,6 +71,12 @@ function createFakeApi() {
     pair: async () => {
       throw new Error("not used")
     },
+    requestDeviceCode: async () => {
+      throw new Error("not used")
+    },
+    pollDeviceCode: async () => {
+      throw new Error("not used")
+    },
     heartbeat: async (_token, update) => {
       if (failNextWith) {
         const error = failNextWith
