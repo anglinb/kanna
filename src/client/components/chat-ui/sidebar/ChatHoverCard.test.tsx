@@ -351,11 +351,12 @@ describe("ChatHoverCardContent", () => {
   describe("the file list", () => {
     const FILES: ChatTouchedFilesResult = {
       files: [
-        { path: "src/embed/widget.ts", additions: 60, deletions: 1, uncommitted: true },
+        { path: "src/embed/widget.ts", additions: 60, deletions: 1 },
         { path: "poems/moon.md", additions: 6 },
       ],
-      // Files that can't say how much changed never reach the client — see
-      // `hasLineCounts` — so every row here carries a number.
+      // Every row is a live claim carrying a count: the server sends only files
+      // still uncommitted (`isTouchLive`) that can say how much changed
+      // (`hasLineCounts`).
       totalCount: 2,
     }
 
@@ -365,7 +366,7 @@ describe("ChatHoverCardContent", () => {
       )
     }
 
-    test("lists what the chat changed, under the harness line", () => {
+    test("lists the files behind the chat's claim, under the harness line", () => {
       const html = renderWithFiles(FILES)
 
       expect(html).toContain("src/embed/widget.ts")

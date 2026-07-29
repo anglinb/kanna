@@ -87,11 +87,14 @@ function formatTurnCount(row: SidebarChatRow): string | null {
 }
 
 /**
- * The files this chat changed, under the footer.
+ * Why this chat is in Relevant: the files it changed that are still sitting
+ * uncommitted, and how much of each is its doing.
  *
- * A chat's name and its last exchange say what it was *about*; this says what
- * it *did*, which is the other half of deciding whether to open it — and the
- * only place that answer exists outside opening the chat and reading its tools.
+ * The sidebar can only assert the claim — a dot, a section — and "relevant to
+ * your uncommitted work" is a conclusion you otherwise have to take on trust.
+ * This is where it's shown its working, so the list is the same set the flag is
+ * computed from: present exactly when the chat is in Relevant, empty the moment
+ * its files are committed.
  *
  * Rows are the git panel's file rows (`DiffFileStat`, same path treatment), so
  * "a file and how much changed in it" looks the same wherever you meet it here.

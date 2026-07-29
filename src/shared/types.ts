@@ -916,11 +916,17 @@ export interface SidebarChatRow {
 }
 
 /**
- * One file a chat changed, as the sidebar's hover card lists them.
+ * One file behind a chat's claim on your uncommitted work — a file it changed
+ * that is *still* uncommitted. The hover card lists these as the evidence for
+ * why the chat is in Relevant at all.
+ *
+ * Only live claims appear. Committing a file answers "why is this chat here?"
+ * with "it isn't any more", so the row goes with it; a chat with nothing
+ * outstanding has an empty list rather than a history of what it once did.
  *
  * Fetched per chat rather than carried on `SidebarChatRow`: a chat can hold
- * hundreds of these, and the sidebar snapshot is serialized in full on every
- * broadcast to dedupe it.
+ * hundreds of touched paths, and the sidebar snapshot is serialized in full on
+ * every broadcast to dedupe it.
  */
 export interface ChatTouchedFile {
   /** Repo-root-relative, as git reports it. */
@@ -928,16 +934,11 @@ export interface ChatTouchedFile {
   /**
    * Lines the chat wrote here across all its turns — not the file's current
    * diff against HEAD. Absent for binary files and for anything it changed
-   * before turn-level counts were recorded.
+   * before turn-level counts were recorded; the server drops those rows rather
+   * than list a filename with nothing to say.
    */
   additions?: number
   deletions?: number
-  /**
-   * This file is still dirty *and* nobody has committed it since the chat
-   * touched it — i.e. one of the claims putting the chat in Relevant. These
-   * lead the list.
-   */
-  uncommitted?: boolean
 }
 
 export interface ChatTouchedFilesResult {

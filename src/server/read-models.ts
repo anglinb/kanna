@@ -121,16 +121,22 @@ function hasLineCounts(file: TouchedFile) {
 }
 
 /**
- * The files a chat changed, ranked for its hover card.
+ * Why this chat is in Relevant — the files whose claims are still live, which
+ * is exactly what `uncommittedWork` is computed from.
  *
- * Live claims lead — those are the files that put the chat in Relevant, and the
- * ones you might still act on — then the biggest edits, since "what did this
- * chat do" is answered better by the file it rewrote than by the one it touched
- * a line of. Ties break on path so the list is stable between renders rather
- * than reshuffling as counts change.
+ * Deliberately the *same* predicate as the sidebar dot rather than the chat's
+ * whole history: the card is the evidence for the flag, so a chat the sidebar
+ * calls relevant can always show you why, and a chat it doesn't shows nothing.
+ * Listing files the chat had committed would make the two disagree — a list of
+ * changes sitting under a row that says there are none reads as a stale cache,
+ * which is precisely what this data is not.
  *
- * Capped, with the full size returned alongside: one chat here has 291 touched
- * files, and a hover card is not a place to scroll.
+ * Ordered by size, since with every row live the question left is "which of
+ * these is the substantial one". Ties break on path so the list holds still
+ * between renders rather than reshuffling as counts change.
+ *
+ * Capped, with the full size returned alongside: a chat can hold hundreds of
+ * touched paths, and a hover card is not a place to scroll.
  */
 export function deriveChatTouchedFiles(
   chat: ChatRecord,
@@ -138,17 +144,15 @@ export function deriveChatTouchedFiles(
   limit = CHAT_TOUCHED_FILES_LIMIT
 ): ChatTouchedFilesResult {
   const dirtyTree = workingTree?.dirty ? workingTree : undefined
-  const files = (chat.touchedFiles ?? []).filter(hasLineCounts).map((file) => ({
-    path: file.path,
-    ...(file.additions == null ? {} : { additions: file.additions }),
-    ...(file.deletions == null ? {} : { deletions: file.deletions }),
-    ...(dirtyTree && isTouchLive(file, dirtyTree) ? { uncommitted: true as const } : {}),
-  }))
+  const files = !dirtyTree ? [] : (chat.touchedFiles ?? [])
+    .filter((file) => hasLineCounts(file) && isTouchLive(file, dirtyTree))
+    .map((file) => ({
+      path: file.path,
+      ...(file.additions == null ? {} : { additions: file.additions }),
+      ...(file.deletions == null ? {} : { deletions: file.deletions }),
+    }))
   const churn = (file: ChatTouchedFile) => (file.additions ?? 0) + (file.deletions ?? 0)
-  files.sort((left, right) =>
-    Number(Boolean(right.uncommitted)) - Number(Boolean(left.uncommitted))
-    || churn(right) - churn(left)
-    || left.path.localeCompare(right.path))
+  files.sort((left, right) => churn(right) - churn(left) || left.path.localeCompare(right.path))
   return { files: files.slice(0, limit), totalCount: files.length }
 }
 

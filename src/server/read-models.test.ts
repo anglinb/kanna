@@ -766,22 +766,50 @@ describe("read models", () => {
         return state.chatsById.get("chat-1")!
       }
 
-      test("leads with the live claims, then the biggest edits", () => {
-        // The uncommitted file is the one you might still act on, so it leads
-        // however small it is; below that, size is the best answer to "what did
-        // this chat do here".
+      test("lists only the files the chat's claim actually rests on", () => {
+        // The card is the evidence for the sidebar's flag, so it shows the same
+        // set the flag is computed from: `big.ts` was committed since this chat
+        // touched it (HEAD moved off its base) and `middling.ts` isn't dirty at
+        // all, so neither is part of why the chat is here.
         const result = deriveChatTouchedFiles(
           chatWith([
-            { path: "big.ts", baseBlob: "b", additions: 200, deletions: 10 },
+            { path: "big.ts", baseBlob: "old-base", additions: 200, deletions: 10 },
             { path: "tiny.ts", baseBlob: "head-tiny", additions: 1 },
             { path: "middling.ts", baseBlob: "b", additions: 30 },
           ]),
-          { dirty: true, paths: new Set(["tiny.ts"]), headBlobs: new Map([["tiny.ts", "head-tiny"]]) },
+          {
+            dirty: true,
+            paths: new Set(["tiny.ts", "big.ts"]),
+            headBlobs: new Map([["tiny.ts", "head-tiny"], ["big.ts", "someone-elses-commit"]]),
+          },
         )
 
-        expect(result.files.map((file) => file.path)).toEqual(["tiny.ts", "big.ts", "middling.ts"])
-        expect(result.files[0]?.uncommitted).toBe(true)
-        expect(result.files[1]?.uncommitted).toBeUndefined()
+        expect(result.files.map((file) => file.path)).toEqual(["tiny.ts"])
+      })
+
+      test("orders the live claims by size", () => {
+        const result = deriveChatTouchedFiles(
+          chatWith([
+            { path: "small.ts", additions: 2 },
+            { path: "big.ts", additions: 200, deletions: 10 },
+            { path: "middling.ts", additions: 30 },
+          ]),
+          { dirty: true, paths: new Set(["small.ts", "big.ts", "middling.ts"]), headBlobs: new Map() },
+        )
+
+        expect(result.files.map((file) => file.path)).toEqual(["big.ts", "middling.ts", "small.ts"])
+      })
+
+      test("says nothing once the work is committed, like the flag it explains", () => {
+        // A committed chat is not in Relevant, so its card has no "why" to
+        // show — a list under a row claiming no outstanding work would read as
+        // a stale cache.
+        const result = deriveChatTouchedFiles(
+          chatWith([{ path: "app.ts", baseBlob: "what-the-chat-edited-from", additions: 9, deletions: 2 }]),
+          { dirty: true, paths: new Set(["app.ts"]), headBlobs: new Map([["app.ts", "the-commit-that-landed-it"]]) },
+        )
+
+        expect(result).toEqual({ files: [], totalCount: 0 })
       })
 
       test("breaks ties on path, so the list holds still between renders", () => {
@@ -791,7 +819,7 @@ describe("read models", () => {
             { path: "a.ts", additions: 4 },
             { path: "c.ts", additions: 4 },
           ]),
-          undefined,
+          { dirty: true, paths: new Set(["a.ts", "b.ts", "c.ts"]), headBlobs: new Map() },
         )
 
         expect(result.files.map((file) => file.path)).toEqual(["a.ts", "b.ts", "c.ts"])
@@ -803,7 +831,11 @@ describe("read models", () => {
           additions: index + 1,
         }))
 
-        const result = deriveChatTouchedFiles(chatWith(files), undefined, 8)
+        const result = deriveChatTouchedFiles(
+          chatWith(files),
+          { dirty: true, paths: new Set(files.map((file) => file.path)), headBlobs: new Map() },
+          8,
+        )
 
         expect(result.files).toHaveLength(8)
         expect(result.totalCount).toBe(20)
@@ -822,7 +854,11 @@ describe("read models", () => {
             { path: "logo.png", baseBlob: null },
             { path: "script.sh", additions: 0, deletions: 0 },
           ]),
-          undefined,
+          {
+            dirty: true,
+            paths: new Set(["app.ts", "legacy.ts", "logo.png", "script.sh"]),
+            headBlobs: new Map(),
+          },
         )
 
         expect(result.files).toEqual([{ path: "app.ts", additions: 6, deletions: 0 }])
@@ -842,13 +878,19 @@ describe("read models", () => {
         expect(result).toEqual({ files: [], totalCount: 0 })
       })
 
-      test("marks nothing uncommitted when the tree is clean", () => {
+      test("says nothing when the tree is clean", () => {
         const result = deriveChatTouchedFiles(
           chatWith([{ path: "app.ts", baseBlob: "b", additions: 3 }]),
           { dirty: false, paths: new Set(), headBlobs: new Map() },
         )
 
-        expect(result.files[0]?.uncommitted).toBeUndefined()
+        expect(result).toEqual({ files: [], totalCount: 0 })
+      })
+
+      test("says nothing when the project has no probe yet", () => {
+        const result = deriveChatTouchedFiles(chatWith([{ path: "app.ts", additions: 3 }]), undefined)
+
+        expect(result).toEqual({ files: [], totalCount: 0 })
       })
 
       test("says nothing for a chat that has changed nothing", () => {
