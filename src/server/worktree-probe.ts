@@ -4,6 +4,7 @@ import { buildRepoBrowseUrl } from "../shared/git-url"
 import type { StoreState } from "./events"
 import {
   probeWorkingTree,
+  readTreeBlobs,
   resolveWorkingTreeLocation,
   type WorkingTreeLocation,
   type WorkingTreeProbe,
@@ -11,10 +12,11 @@ import {
 } from "./diff-store"
 
 /**
- * Tracks, per project, whether the working tree is dirty and which paths are
- * dirty — the input to the sidebar's "this chat is relevant to your
- * uncommitted work" dot, which intersects these paths with the files a chat
- * actually touched (`ChatRecord.touchedPaths`) — plus the repo name and branch
+ * Tracks, per project, whether the working tree is dirty, which paths are dirty
+ * and what `HEAD` holds for each of them — the input to the sidebar's "this
+ * chat is relevant to your uncommitted work" dot, which intersects those paths
+ * with the files a chat actually touched (`ChatRecord.touchedFiles`) and keeps
+ * only the ones no commit has settled since — plus the repo name and branch
  * behind the sidebar's `repo/branch` label.
  *
  * Entirely in-memory and derived: nothing is persisted, so a restart just
@@ -99,6 +101,13 @@ function probesEqual(left: WorkingTreeProbe | undefined, right: WorkingTreeProbe
   if (!left || left.dirty !== right.dirty || left.paths.size !== right.paths.size) return false
   for (const dirtyPath of right.paths) {
     if (!left.paths.has(dirtyPath)) return false
+  }
+  // Blobs are part of the reading, not decoration: a checkout can leave the
+  // dirty set untouched while moving what `HEAD` holds for those paths, which
+  // is exactly the event that retires chats' claims on them.
+  if (left.headBlobs.size !== right.headBlobs.size) return false
+  for (const [dirtyPath, blob] of right.headBlobs) {
+    if (!left.headBlobs.has(dirtyPath) || left.headBlobs.get(dirtyPath) !== blob) return false
   }
   return true
 }
@@ -247,9 +256,13 @@ export class WorktreeProbe {
    * Record a probe supplied by someone who already did the filesystem work
    * (see `DiffStore.onWorkingTreeProbe`). Also refreshes the stamp so the tick
    * doesn't immediately redo the same scan.
+   *
+   * Returns the work rather than swallowing it: production fires and forgets,
+   * but the scan still has to be paired with a `HEAD` read before it can be
+   * published, so callers that need the state settled can await it.
    */
-  recordExternalProbe(projectId: string, scan: WorkingTreeScan) {
-    void this.applyProbe(projectId, scan)
+  recordExternalProbe(projectId: string, scan: WorkingTreeScan): Promise<void> {
+    return this.applyProbe(projectId, scan)
   }
 
   /** Full probe for a single project. Called when one of its turns ends. */
@@ -424,14 +437,20 @@ export class WorktreeProbe {
   }
 
   private async applyProbe(projectId: string, scan: WorkingTreeScan) {
-    // A scan *is* the probe now — the reading is a set of paths, so there is
-    // no state to carry between passes and nothing to go stale. (This used to
-    // fold scans into a per-path "first seen dirty" ledger to derive a
+    // A scan plus what `HEAD` currently holds for its paths *is* the probe —
+    // no state carried between passes, nothing to go stale. (This used to fold
+    // scans into a per-path "first seen dirty" ledger to derive a
     // `dirtySinceMs`; a single file left uncommitted overnight then flagged
     // every chat that had run since, whether or not it touched that file.)
-    const probe: WorkingTreeProbe = { dirty: scan.dirty, paths: new Set(scan.paths) }
-    // Publish before the stamp read so `getStates()` is correct the moment this
-    // returns control — `recordExternalProbe` doesn't await us.
+    const probe: WorkingTreeProbe = {
+      dirty: scan.dirty,
+      paths: new Set(scan.paths),
+      headBlobs: await this.readHeadBlobs(projectId, scan.paths),
+    }
+    // Publish before the stamp read, so nothing that only wanted the reading
+    // waits on bookkeeping. The blob lookup above is the one thing publication
+    // does wait for: a probe carrying paths but no blobs would read every claim
+    // as live, i.e. flash the dot back onto chats a commit had just settled.
     const changed = !probesEqual(this.probes.get(projectId), probe)
     this.probes.set(projectId, probe)
     if (changed) {
@@ -446,6 +465,27 @@ export class WorktreeProbe {
     if (entry?.location) {
       entry.stamp = (await this.readStamp(entry.location.gitDir)).combined
     }
+  }
+
+  /**
+   * What `HEAD` holds for each dirty path — the half of the reading that says
+   * whether a chat's claim on a path has been settled by a commit.
+   *
+   * Resolves the project's location first: a scan can arrive from the git panel
+   * (`recordExternalProbe`) before any tick has looked at that project, and
+   * answering "unknown" there would leave the dot on until the next scan.
+   * An empty map is the honest answer when the lookup can't run — see
+   * `WorkingTreeProbe.headBlobs`.
+   */
+  private async readHeadBlobs(projectId: string, paths: string[]) {
+    if (paths.length === 0) return new Map<string, string | null>()
+    const project = this.getState().projectsById.get(projectId)
+    const entry = project && !project.deletedAt
+      ? await this.ensureEntry(projectId, project.localPath)
+      : this.entries.get(projectId)
+    if (!entry?.location) return new Map<string, string | null>()
+    return await readTreeBlobs(entry.location.repoRoot, "HEAD", paths)
+      ?? new Map<string, string | null>()
   }
 
   /**

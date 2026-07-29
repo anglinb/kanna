@@ -13,6 +13,7 @@ import {
   type SnapshotFile,
   type StoreEvent,
   type StoreState,
+  type TouchedFile,
   type TurnEvent,
   cloneTranscriptEntries,
   cloneTranscriptEntriesForClient,
@@ -35,6 +36,35 @@ const CHAT_MESSAGE_PREVIEW_MAX_LENGTH = 160
  * whatever is dirty anyway, so the tail adds nothing.
  */
 const TOUCHED_PATHS_LIMIT = 500
+
+/**
+ * What a `chat_files_touched` event says, in the current shape. Events written
+ * before base blobs existed carry bare `paths`; those become entries with no
+ * `baseBlob`, i.e. claims that no commit can expire — the behaviour they were
+ * recorded under.
+ */
+function readTouchedFiles(event: { files?: TouchedFile[]; paths?: string[] }): TouchedFile[] {
+  if (event.files) return event.files
+  return (event.paths ?? []).map((filePath) => ({ path: filePath }))
+}
+
+/**
+ * Unions touched files, newest base blob winning per path.
+ *
+ * Last-write-wins is the point: a path this chat touched, had committed, and
+ * touched again must be measured against the *newer* commit, or the chat would
+ * read as settled while it still has live uncommitted work in that file. The
+ * cap only gates *new* paths — rebasing a path already in the set is free, so a
+ * chat at the ceiling keeps its existing claims accurate.
+ */
+function mergeTouchedFiles(existing: TouchedFile[] | undefined, incoming: TouchedFile[]): TouchedFile[] {
+  const merged = new Map((existing ?? []).map((file) => [file.path, file]))
+  for (const file of incoming) {
+    if (!merged.has(file.path) && merged.size >= TOUCHED_PATHS_LIMIT) continue
+    merged.set(file.path, file)
+  }
+  return [...merged.values()]
+}
 // How much of each transcript tail is scanned at boot to rebuild chat metadata
 // (lastMessageAt, previews) that only lives in snapshots between compactions.
 const TRANSCRIPT_METADATA_TAIL_BYTES = 256 * 1024
@@ -302,11 +332,21 @@ export class EventStore {
         this.state.projectIdsByPath.set(project.localPath, project.id)
       }
       for (const chat of parsed.chats) {
+        const { touchedPaths, ...rest } = chat
         this.state.chatsById.set(chat.id, {
-          ...chat,
+          ...rest,
           unread: chat.unread ?? false,
           readAnchor: chat.readAnchor ?? null,
           pendingForkSessionToken: chat.pendingForkSessionToken ?? null,
+          // Snapshots written before base blobs carry bare paths; they keep
+          // their old "any dirty match counts" reading rather than being
+          // guessed a base that could expire them wrongly.
+          ...(chat.touchedFiles ?? touchedPaths
+            ? { touchedFiles: mergeTouchedFiles(
+                touchedPaths?.map((filePath) => ({ path: filePath })),
+                chat.touchedFiles ?? []
+              ) }
+            : {}),
         })
       }
       this.legacySidebarProjectOrder = normalizeSidebarProjectOrder(parsed.sidebarProjectOrder)
@@ -626,12 +666,7 @@ export class EventStore {
       case "chat_files_touched": {
         const chat = this.state.chatsById.get(event.chatId)
         if (!chat) break
-        const paths = new Set(chat.touchedPaths ?? [])
-        for (const filePath of event.paths) {
-          if (paths.size >= TOUCHED_PATHS_LIMIT) break
-          paths.add(filePath)
-        }
-        chat.touchedPaths = [...paths]
+        chat.touchedFiles = mergeTouchedFiles(chat.touchedFiles, readTouchedFiles(event))
         // Like the read anchor, this is bookkeeping about a chat rather than a
         // change to it — bumping `updatedAt` would churn sidebar ordering.
         break
@@ -956,8 +991,10 @@ export class EventStore {
     // The fork carries the same conversation, so it carries the same claim on
     // the files that conversation changed — it stays in Relevant alongside its
     // source rather than starting with an empty touched set.
-    if (sourceChat.touchedPaths?.length) {
-      await this.recordFilesTouched(chatId, sourceChat.touchedPaths)
+    // Base blobs come along too, so a fork of a chat whose work is already
+    // committed inherits a settled claim rather than a live one.
+    if (sourceChat.touchedFiles?.length) {
+      await this.recordFilesTouched(chatId, sourceChat.touchedFiles)
     }
     await this.setChatProvider(chatId, sourceChat.provider)
     await this.setPlanMode(chatId, sourceChat.planMode)
@@ -1449,22 +1486,27 @@ export class EventStore {
     this.onTurnStarted?.(chatId)
   }
 
-  /** Records the paths one turn changed; replay unions them into `touchedPaths`. */
-  async recordFilesTouched(chatId: string, paths: string[]) {
-    if (paths.length === 0) return
+  /** Records the files one turn changed; replay unions them into `touchedFiles`. */
+  async recordFilesTouched(chatId: string, files: TouchedFile[]) {
+    if (files.length === 0) return
     const chat = this.state.chatsById.get(chatId)
     if (!chat) return
     // Nothing new to learn — skip the append rather than growing the log with
     // a repeat of what we already know (the common case for a chat iterating
-    // on the same handful of files, turn after turn).
-    const known = new Set(chat.touchedPaths ?? [])
-    if (paths.every((filePath) => known.has(filePath))) return
+    // on the same handful of files, turn after turn). A path whose base blob
+    // moved is *not* a repeat: it means the path was committed between the two
+    // turns, and recording the newer base is what keeps the claim honest.
+    const known = new Map((chat.touchedFiles ?? []).map((file) => [file.path, file]))
+    if (files.every((file) => {
+      const previous = known.get(file.path)
+      return previous != null && previous.baseBlob === file.baseBlob
+    })) return
     const event: ChatEvent = {
       v: STORE_VERSION,
       type: "chat_files_touched",
       timestamp: Date.now(),
       chatId,
-      paths,
+      files,
     }
     await this.append(this.chatsLogPath, event)
   }

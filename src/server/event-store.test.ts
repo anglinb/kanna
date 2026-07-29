@@ -878,16 +878,59 @@ describe("EventStore", () => {
     await store.setChatProvider(source.id, "claude")
     await store.setSessionToken(source.id, "session-1")
     await store.appendMessage(source.id, entry("user_prompt", 1_000, { content: "edit files" }))
-    await store.recordFilesTouched(source.id, ["src/app.ts", "src/util.ts"])
+    await store.recordFilesTouched(source.id, [
+      { path: "src/app.ts", baseBlob: "blob-app" },
+      { path: "src/util.ts", baseBlob: null },
+    ])
 
     const forked = await store.forkChat(source.id)
 
     // Same conversation, same claim on the files it changed — the fork belongs
-    // in Relevant next to its source, not with an empty touched set.
-    expect(forked.touchedPaths).toEqual(["src/app.ts", "src/util.ts"])
+    // in Relevant next to its source, not with an empty touched set. Base blobs
+    // come too, so the fork expires with the same commit its source does.
+    const inherited = [
+      { path: "src/app.ts", baseBlob: "blob-app" },
+      { path: "src/util.ts", baseBlob: null },
+    ]
+    expect(forked.touchedFiles).toEqual(inherited)
     const reloaded = new EventStore(dataDir)
     await reloaded.initialize()
-    expect(reloaded.requireChat(forked.id).touchedPaths).toEqual(["src/app.ts", "src/util.ts"])
+    expect(reloaded.requireChat(forked.id).touchedFiles).toEqual(inherited)
+  })
+
+  test("a later turn's base blob replaces an earlier one for the same path", async () => {
+    // The path was committed between the two turns, so the newer commit is what
+    // the claim must be measured against — otherwise a chat with live work in a
+    // file it had previously landed would read as settled.
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "blob-first" }])
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "blob-second" }])
+
+    expect(store.requireChat(chat.id).touchedFiles).toEqual([{ path: "src/app.ts", baseBlob: "blob-second" }])
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.requireChat(chat.id).touchedFiles).toEqual([{ path: "src/app.ts", baseBlob: "blob-second" }])
+  })
+
+  test("re-recording the same file with the same base writes nothing", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "blob-first" }])
+    const afterFirst = await Bun.file(join(dataDir, "chats.jsonl")).text()
+    await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "blob-first" }])
+
+    // The common case — a chat iterating on the same handful of files, turn
+    // after turn — must not grow the log with a repeat of what it already says.
+    expect(await Bun.file(join(dataDir, "chats.jsonl")).text()).toBe(afterFirst)
   })
 
   test("a fork inherits lastTurnEndedAt, so it keeps the conversation's recency", async () => {

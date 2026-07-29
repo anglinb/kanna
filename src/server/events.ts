@@ -104,12 +104,40 @@ export interface ChatRecord {
   lastAgentMessagePreviewAt?: number
   lastTurnOutcome: "success" | "failed" | "cancelled" | null
   /**
-   * Repo-root-relative paths this chat has changed, unioned across its turns
-   * and measured by diffing worktree snapshots at each turn boundary (see
-   * `TurnFileTracker`). Intersected with the currently-dirty paths to decide
-   * whether a chat is relevant to your uncommitted work.
+   * Files this chat has changed, unioned across its turns and measured by
+   * diffing worktree snapshots at each turn boundary (see `TurnFileTracker`).
+   * Intersected with the currently-dirty paths to decide whether a chat is
+   * relevant to your uncommitted work.
+   *
+   * Last write wins per path: a later turn's base blob replaces an earlier
+   * one's, so a chat that edits a file, has it committed, then edits it again
+   * is measured against the newer commit rather than the one it started from.
+   */
+  touchedFiles?: TouchedFile[]
+  /**
+   * Legacy shape — paths with no base blob, written before commits could expire
+   * a claim. Normalized into `touchedFiles` when an old snapshot loads and
+   * never written again.
    */
   touchedPaths?: string[]
+}
+
+/** One file a chat changed, and the committed content it changed it from. */
+export interface TouchedFile {
+  /** Repo-root-relative. */
+  path: string
+  /**
+   * Blob sha this path held in `HEAD` when the touching turn started, or `null`
+   * when it wasn't committed at all. The chat's claim on the path lives exactly
+   * as long as `HEAD` still holds this blob: committing the path — by anyone,
+   * including the chat itself — replaces it and retires the claim, so a chat
+   * whose work has landed can't be dragged back into Relevant by someone else
+   * dirtying the same file later.
+   *
+   * Absent means *unknown* (recorded before base blobs, or the lookup failed),
+   * which keeps the old behaviour of flagging on a dirty-path match alone.
+   */
+  baseBlob?: string | null
 }
 
 export interface StoreState {
@@ -242,8 +270,10 @@ export type ChatEvent =
       type: "chat_files_touched"
       timestamp: number
       chatId: string
-      /** Paths one turn changed; replay unions them into `ChatRecord.touchedPaths`. */
-      paths: string[]
+      /** Files one turn changed; replay unions them into `ChatRecord.touchedFiles`. */
+      files?: TouchedFile[]
+      /** Legacy shape: paths with no base blob. Read on replay, never written. */
+      paths?: string[]
     }
 
 export type MessageEvent = {

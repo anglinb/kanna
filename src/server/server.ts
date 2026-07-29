@@ -160,7 +160,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       const project = chat ? store.state.projectsById.get(chat.projectId) : undefined
       return project?.localPath ?? null
     },
-    recordPaths: (chatId, paths) => store.recordFilesTouched(chatId, paths),
+    recordFiles: (chatId, files) => store.recordFilesTouched(chatId, files),
   })
   store.onTurnStarted = (chatId) => {
     turnFiles.beginTurn(chatId)

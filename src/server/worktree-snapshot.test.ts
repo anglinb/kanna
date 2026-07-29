@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { TurnFileTracker } from "./worktree-snapshot"
+import { TurnFileTracker, type TouchedFile } from "./worktree-snapshot"
 
 const tempDirs: string[] = []
 
@@ -37,21 +37,27 @@ async function createRepo() {
 
 /** A tracker over one repo, collecting what it records per chat. */
 function trackerFor(repoRoot: string | null) {
-  const recorded = new Map<string, string[]>()
+  const recordedFiles = new Map<string, TouchedFile[]>()
   const tracker = new TurnFileTracker({
     resolveChatPath: () => repoRoot,
-    recordPaths: async (chatId, paths) => {
-      recorded.set(chatId, [...(recorded.get(chatId) ?? []), ...paths])
+    recordFiles: async (chatId, files) => {
+      recordedFiles.set(chatId, [...(recordedFiles.get(chatId) ?? []), ...files])
     },
   })
+  const pathsFor = (chatId: string) => (recordedFiles.get(chatId) ?? []).map((file) => file.path)
   /** One whole turn: snapshot, let `mutate` play the agent, snapshot and diff. */
   const runTurn = async (chatId: string, mutate: () => Promise<void>) => {
     await tracker.beginTurn(chatId)
     await mutate()
     await tracker.endTurn(chatId)
-    return recorded.get(chatId) ?? []
+    return pathsFor(chatId)
   }
-  return { tracker, recorded, runTurn }
+  /** Same turn, but keeping the base blobs the paths were recorded with. */
+  const runTurnForFiles = async (chatId: string, mutate: () => Promise<void>) => {
+    await runTurn(chatId, mutate)
+    return recordedFiles.get(chatId) ?? []
+  }
+  return { tracker, recordedFiles, runTurn, runTurnForFiles }
 }
 
 describe("TurnFileTracker", () => {
@@ -103,7 +109,7 @@ describe("TurnFileTracker", () => {
 
   test("records nothing for a turn that changed nothing", async () => {
     const repoRoot = await createRepo()
-    const { runTurn, recorded } = trackerFor(repoRoot)
+    const { runTurn, recordedFiles: recorded } = trackerFor(repoRoot)
 
     await runTurn("chat-1", async () => {})
 
@@ -114,7 +120,7 @@ describe("TurnFileTracker", () => {
     // The dirty set comes from `git status`, so anything it hides must be
     // hidden here too or a chat could hold paths that can never intersect.
     const repoRoot = await createRepo()
-    const { runTurn, recorded } = trackerFor(repoRoot)
+    const { runTurn, recordedFiles: recorded } = trackerFor(repoRoot)
 
     await runTurn("chat-1", async () => {
       await mkdir(path.join(repoRoot, "ignored"), { recursive: true })
@@ -152,6 +158,65 @@ describe("TurnFileTracker", () => {
     expect(paths).toEqual(["app.txt"])
   })
 
+  test("records the blob each path held at the turn's starting commit", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+    const baseBlob = (await run(["git", "rev-parse", "HEAD:app.txt"], repoRoot)).trim()
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
+    })
+
+    // The committed content the edit was made on top of — not the edit itself,
+    // and not whatever HEAD holds by the time the sidebar asks.
+    expect(files).toEqual([{ path: "app.txt", baseBlob }])
+  })
+
+  test("a file the turn created has no committed base at all", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "new.txt"), "brand new\n", "utf8")
+    })
+
+    // `null`, meaning "not committed" — distinct from an absent base, which
+    // would mean the lookup never ran.
+    expect(files).toEqual([{ path: "new.txt", baseBlob: null }])
+  })
+
+  test("a turn that commits its own work records the base it started from", async () => {
+    // Read at turn start, so the chat's own commit can't become its base — the
+    // recorded blob is the content it replaced, which is what lets that commit
+    // retire the claim.
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+    const beforeTurn = (await run(["git", "rev-parse", "HEAD:app.txt"], repoRoot)).trim()
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
+      await run(["git", "commit", "-am", "agent commit"], repoRoot)
+    })
+
+    expect(files).toEqual([{ path: "app.txt", baseBlob: beforeTurn }])
+    expect((await run(["git", "rev-parse", "HEAD:app.txt"], repoRoot)).trim()).not.toBe(beforeTurn)
+  })
+
+  test("records a null base for every path in a repo with no commits", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "kanna-turn-files-unborn-"))
+    tempDirs.push(root)
+    await run(["git", "init", "-b", "main"], root)
+    const { runTurnForFiles } = trackerFor(root)
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(root, "app.txt"), "first\n", "utf8")
+    })
+
+    // Nothing is committed here, so "not in HEAD" is the honest base — and the
+    // first commit of this path will duly retire the claim.
+    expect(files).toEqual([{ path: "app.txt", baseBlob: null }])
+  })
+
   test("leaves no temp index files behind", async () => {
     const repoRoot = await createRepo()
     const { runTurn } = trackerFor(repoRoot)
@@ -184,7 +249,7 @@ describe("TurnFileTracker", () => {
   test("records nothing when the project is not a repo", async () => {
     const plain = await mkdtemp(path.join(tmpdir(), "kanna-turn-files-plain-"))
     tempDirs.push(plain)
-    const { runTurn, recorded } = trackerFor(plain)
+    const { runTurn, recordedFiles: recorded } = trackerFor(plain)
 
     await runTurn("chat-1", async () => {
       await writeFile(path.join(plain, "app.txt"), "changed\n", "utf8")
@@ -197,7 +262,7 @@ describe("TurnFileTracker", () => {
     // Server restarted mid-turn: no baseline, so we say nothing rather than
     // attributing every change since some arbitrary point to this chat.
     const repoRoot = await createRepo()
-    const { tracker, recorded } = trackerFor(repoRoot)
+    const { tracker, recordedFiles: recorded } = trackerFor(repoRoot)
 
     await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
     await tracker.endTurn("chat-1")
@@ -209,7 +274,7 @@ describe("TurnFileTracker", () => {
     // Two chats in one worktree. Each still gets its own baseline; what they
     // can't do is tell each other's edits apart inside an overlapping window.
     const repoRoot = await createRepo()
-    const { tracker, recorded } = trackerFor(repoRoot)
+    const { tracker, recordedFiles: recorded } = trackerFor(repoRoot)
 
     await tracker.beginTurn("chat-a")
     await writeFile(path.join(repoRoot, "a.txt"), "a\n", "utf8")
@@ -219,7 +284,7 @@ describe("TurnFileTracker", () => {
     await writeFile(path.join(repoRoot, "b.txt"), "b\n", "utf8")
     await tracker.endTurn("chat-b")
 
-    expect(recorded.get("chat-a")).toEqual(["a.txt"])
-    expect(recorded.get("chat-b")).toEqual(["b.txt"])
+    expect(recorded.get("chat-a")?.map((file) => file.path)).toEqual(["a.txt"])
+    expect(recorded.get("chat-b")?.map((file) => file.path)).toEqual(["b.txt"])
   })
 })

@@ -11,7 +11,7 @@ import type {
 } from "../shared/types"
 import type { WorkingTreeProbe } from "./diff-store"
 import type { ProjectRepoLabel } from "./worktree-probe"
-import type { ChatRecord, StoreState } from "./events"
+import type { ChatRecord, StoreState, TouchedFile } from "./events"
 import { resolveLocalPath } from "./paths"
 import { SERVER_PROVIDERS } from "./provider-catalog"
 
@@ -76,6 +76,28 @@ function getSidebarChatBuckets(chats: SidebarChatRow[], nowMs: number) {
   }
 }
 
+/**
+ * Does this chat still have a live claim on one of the dirty paths?
+ *
+ * Two questions, both answered without a clock: is the path dirty at all, and
+ * is the committed content it was changed *from* still what `HEAD` holds. The
+ * second is what stops a chat being resurrected by someone else's later edit —
+ * once chat A's work is committed, `HEAD` moves to that content, so when chat B
+ * dirties the same file five hours on, only chat B (which recorded the *new*
+ * commit as its base) matches. Without it, `touchedFiles` is a union that only
+ * grows and every chat that ever edited a hot file lights up together.
+ *
+ * Unknown on either side — a claim recorded before base blobs, or a probe that
+ * couldn't read `HEAD` — counts as live: that's the pre-existing behaviour, and
+ * a stale dot beats silently hiding work you have not committed.
+ */
+function isTouchLive(file: TouchedFile, dirtyTree: WorkingTreeProbe) {
+  if (!dirtyTree.paths.has(file.path)) return false
+  if (file.baseBlob === undefined) return true
+  if (!dirtyTree.headBlobs.has(file.path)) return true
+  return dirtyTree.headBlobs.get(file.path) === file.baseBlob
+}
+
 export function deriveSidebarData(
   state: StoreState,
   activeStatuses: Map<string, KannaStatus>,
@@ -132,10 +154,10 @@ export function deriveSidebarData(
   function toSidebarChatRows(project: NonNullable<typeof projects[number]>, projectChats: ChatRecord[]) {
     const workingTree = options?.workingTrees?.get(project.id)
     // Authorship, not recency: a chat is relevant because a file it actually
-    // changed is still uncommitted. `touchedPaths` comes from diffing worktree
+    // changed is still uncommitted. `touchedFiles` comes from diffing worktree
     // snapshots at each turn boundary, so it covers edits made through any
     // tool — including a Bash command we never parsed.
-    const dirtyPaths = workingTree?.dirty ? workingTree.paths : undefined
+    const dirtyTree = workingTree?.dirty ? workingTree : undefined
     return projectChats
       .sort((a, b) => getSidebarChatSortTimestamp(b) - getSidebarChatSortTimestamp(a))
       .map((chat) => {
@@ -143,8 +165,8 @@ export function deriveSidebarData(
         // Chats that predate file tracking have no paths and so are never
         // flagged — the safe direction: they simply sit in their date bucket
         // until their next turn records something.
-        const uncommittedWork = dirtyPaths != null
-          && (chat.touchedPaths?.some((touched) => dirtyPaths.has(touched)) ?? false)
+        const uncommittedWork = dirtyTree != null
+          && (chat.touchedFiles?.some((file) => isTouchLive(file, dirtyTree)) ?? false)
         return {
           _id: chat.id,
           _creationTime: chat.createdAt,

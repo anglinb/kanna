@@ -985,6 +985,66 @@ export interface WorkingTreeProbe {
   dirty: boolean
   /** Dirty paths, for intersecting against a chat's touched-path set. */
   paths: ReadonlySet<string>
+  /**
+   * What each dirty path currently holds in `HEAD` — `null` for a path that
+   * isn't committed at all. Compared against the base blob a chat recorded when
+   * it touched the path: equal means nobody has committed that path since, so
+   * the chat's claim on it is still live. See `TouchedFile.baseBlob`.
+   *
+   * Empty when the lookup couldn't run (unborn HEAD, a dirty set past
+   * `MAX_HEAD_BLOB_PATHS`, git failure). A path with no entry is *unknown*, not
+   * uncommitted — callers treat it as live, which is the pre-base-blob
+   * behaviour and the safe direction.
+   */
+  headBlobs: ReadonlyMap<string, string | null>
+}
+
+/**
+ * Beyond this many paths the `HEAD` lookup is skipped entirely rather than
+ * fanned out over dozens of `ls-tree` calls. A dirty set that large is a
+ * generated-files accident or a fresh clone of someone else's mess; leaving
+ * every claim "unknown" for it is cheaper and no worse than before base blobs
+ * existed.
+ */
+const MAX_HEAD_BLOB_PATHS = 1000
+
+/** Pathspecs per `ls-tree`, so a big dirty set can't blow the argument limit. */
+const HEAD_BLOB_PATH_BATCH = 200
+
+/**
+ * Blob sha of each path at `treeish`, `null` for paths that aren't in it.
+ *
+ * `null` (the return value, not a map entry) means the question couldn't be
+ * answered — an unborn HEAD, a rewritten commit, git falling over — which
+ * callers must not confuse with "not committed".
+ */
+export async function readTreeBlobs(
+  repoRoot: string,
+  treeish: string,
+  paths: readonly string[]
+): Promise<Map<string, string | null> | null> {
+  if (paths.length === 0) return new Map()
+  if (paths.length > MAX_HEAD_BLOB_PATHS) return null
+
+  const blobs = new Map<string, string | null>(paths.map((filePath) => [filePath, null]))
+  for (let index = 0; index < paths.length; index += HEAD_BLOB_PATH_BATCH) {
+    const batch = paths.slice(index, index + HEAD_BLOB_PATH_BATCH)
+    // `-z` because a path with a space or a quote in it would otherwise come
+    // back C-quoted and no longer match what `git status` reported.
+    const listed = await runGit(["ls-tree", "-z", treeish, "--", ...batch], repoRoot)
+    if (listed.exitCode !== 0) return null
+    for (const record of listed.stdout.split("\0")) {
+      // `<mode> SP <type> SP <sha> TAB <path>`
+      const tab = record.indexOf("\t")
+      if (tab === -1) continue
+      const fields = record.slice(0, tab).split(" ")
+      const sha = fields[2]
+      const filePath = record.slice(tab + 1)
+      if (!sha || !blobs.has(filePath)) continue
+      blobs.set(filePath, sha)
+    }
+  }
+  return blobs
 }
 
 export interface WorkingTreeLocation {

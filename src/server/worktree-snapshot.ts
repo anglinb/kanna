@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto"
 import { rm } from "node:fs/promises"
 import path from "node:path"
 import { LOG_PREFIX } from "../shared/branding"
-import { resolveWorkingTreeLocation, runGit, type WorkingTreeLocation } from "./diff-store"
+import { readTreeBlobs, resolveWorkingTreeLocation, runGit, type WorkingTreeLocation } from "./diff-store"
+import type { TouchedFile } from "./events"
 
 /**
  * Which files a chat actually changed, by snapshotting the working tree at each
@@ -25,19 +26,38 @@ import { resolveWorkingTreeLocation, runGit, type WorkingTreeLocation } from "./
  * loose objects are not pruned anywhere near that fast. (If per-chat diffs or
  * turn-level revert ever want the trees kept, add refs then — the recorded
  * paths don't change.)
+ *
+ * Each recorded path carries the blob it held in `HEAD` when the turn *started*
+ * — the committed content the turn's edit was made on top of. That's what
+ * expires a claim: once anyone commits the path, `HEAD` no longer holds that
+ * blob and the chat stops being relevant to it, without any clock being
+ * involved. Turn *start* rather than turn end, because agents routinely commit
+ * their own work mid-turn — a base read afterwards would be the chat's own
+ * commit and would keep the chat alive on work it had already landed.
  */
 
-/** Per-chat pre-turn trees, plus a location cache so `git rev-parse` runs once per project. */
+/** A path one turn changed, and the committed content it was based on. */
+export type { TouchedFile } from "./events"
+
+/** What `beginTurn` banks: the pre-turn worktree, and the commit it sat on. */
+interface PendingTurn {
+  /** Tree object of the whole worktree, dirty content included. */
+  tree: string | null
+  /** `HEAD` at turn start; `null` on an unborn HEAD (nothing committed yet). */
+  head: string | null
+}
+
+/** Per-chat pre-turn state, plus a location cache so `git rev-parse` runs once per project. */
 export class TurnFileTracker {
-  private readonly pendingTrees = new Map<string, Promise<string | null>>()
+  private readonly pendingTurns = new Map<string, Promise<PendingTurn>>()
   private readonly locations = new Map<string, Promise<WorkingTreeLocation | null>>()
 
   constructor(
     private readonly options: {
       /** Absolute project path for a chat, or null when it can't be resolved. */
       resolveChatPath: (chatId: string) => string | null
-      /** Persist the paths a turn changed. Never called with an empty list. */
-      recordPaths: (chatId: string, paths: string[]) => Promise<void>
+      /** Persist the files a turn changed. Never called with an empty list. */
+      recordFiles: (chatId: string, files: TouchedFile[]) => Promise<void>
     }
   ) {}
 
@@ -53,8 +73,8 @@ export class TurnFileTracker {
   beginTurn(chatId: string): Promise<void> {
     const localPath = this.options.resolveChatPath(chatId)
     if (!localPath) return Promise.resolve()
-    const capture = this.captureTree(localPath)
-    this.pendingTrees.set(chatId, capture)
+    const capture = this.captureTurn(localPath)
+    this.pendingTurns.set(chatId, capture)
     return capture.then(() => undefined, () => undefined)
   }
 
@@ -65,26 +85,64 @@ export class TurnFileTracker {
    * flagged, which is the safe direction.
    */
   async endTurn(chatId: string): Promise<void> {
-    const pending = this.pendingTrees.get(chatId)
-    this.pendingTrees.delete(chatId)
+    const pending = this.pendingTurns.get(chatId)
+    this.pendingTurns.delete(chatId)
     if (!pending) return
     const localPath = this.options.resolveChatPath(chatId)
     if (!localPath) return
 
     try {
-      const [preTree, postTree] = await Promise.all([pending, this.captureTree(localPath)])
-      if (!preTree || !postTree || preTree === postTree) return
-      const paths = await this.diffTrees(localPath, preTree, postTree)
-      if (paths.length > 0) await this.options.recordPaths(chatId, paths)
+      const [pre, postTree] = await Promise.all([pending, this.captureTree(localPath)])
+      if (!pre.tree || !postTree || pre.tree === postTree) return
+      const paths = await this.diffTrees(localPath, pre.tree, postTree)
+      if (paths.length === 0) return
+      await this.options.recordFiles(chatId, await this.toTouchedFiles(localPath, pre.head, paths))
     } catch (error) {
       // Never let file tracking break a turn's completion path.
       console.warn(`${LOG_PREFIX} turn file tracking failed for chat ${chatId}:`, error)
     }
   }
 
-  /** Drops a chat's pending tree without recording anything. */
+  /** Drops a chat's pending state without recording anything. */
   forget(chatId: string): void {
-    this.pendingTrees.delete(chatId)
+    this.pendingTurns.delete(chatId)
+  }
+
+  /**
+   * Pairs each changed path with the blob it held at the turn's starting commit.
+   *
+   * An unborn HEAD gives every path a `null` base — accurate, since nothing is
+   * committed there — while a failed lookup leaves the base *absent*, which
+   * reads downstream as "unknown" and keeps the pre-base-blob behaviour rather
+   * than inventing a base that would expire the claim early.
+   */
+  private async toTouchedFiles(
+    localPath: string,
+    head: string | null,
+    paths: string[]
+  ): Promise<TouchedFile[]> {
+    if (head === null) return paths.map((filePath) => ({ path: filePath, baseBlob: null }))
+    const location = await this.locationFor(localPath)
+    const blobs = location ? await readTreeBlobs(location.repoRoot, head, paths) : null
+    if (!blobs) return paths.map((filePath) => ({ path: filePath }))
+    return paths.map((filePath) => ({ path: filePath, baseBlob: blobs.get(filePath) ?? null }))
+  }
+
+  /** The pre-turn worktree and the commit it sits on, captured together. */
+  private async captureTurn(localPath: string): Promise<PendingTurn> {
+    const [tree, head] = await Promise.all([
+      this.captureTree(localPath),
+      this.readHead(localPath),
+    ])
+    return { tree, head }
+  }
+
+  /** `null` on an unborn HEAD or a project that isn't a repo. */
+  private async readHead(localPath: string): Promise<string | null> {
+    const location = await this.locationFor(localPath)
+    if (!location) return null
+    const head = await runGit(["rev-parse", "--verify", "HEAD"], location.repoRoot)
+    return head.exitCode === 0 ? head.stdout.trim() || null : null
   }
 
   private locationFor(localPath: string): Promise<WorkingTreeLocation | null> {

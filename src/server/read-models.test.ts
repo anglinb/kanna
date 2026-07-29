@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { deriveChatSnapshot, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
-import { createEmptyState } from "./events"
+import { createEmptyState, type TouchedFile } from "./events"
+import type { WorkingTreeProbe } from "./diff-store"
 
 describe("read models", () => {
   test("includes the project folder modification time", () => {
@@ -583,7 +584,7 @@ describe("read models", () => {
   })
 
   describe("uncommittedWork", () => {
-    function stateWithChats(chats: Array<{ id: string; touchedPaths?: string[] }>) {
+    function stateWithChats(chats: Array<{ id: string; touchedFiles?: TouchedFile[] }>) {
       const state = createEmptyState()
       state.projectsById.set("project-1", {
         id: "project-1",
@@ -606,19 +607,34 @@ describe("read models", () => {
           autoPlan: false,
           sessionToken: null,
           lastTurnOutcome: null,
-          ...(chat.touchedPaths == null ? {} : { touchedPaths: chat.touchedPaths }),
+          ...(chat.touchedFiles == null ? {} : { touchedFiles: chat.touchedFiles }),
         })
       }
       return state
     }
 
+    /** Dirty paths whose `HEAD` blobs the probe couldn't read — everything unknown. */
     function tree(dirty: boolean, ...paths: string[]) {
-      return new Map([["project-1", { dirty, paths: new Set(paths) }]])
+      return new Map([["project-1", { dirty, paths: new Set(paths), headBlobs: new Map() }]])
+    }
+
+    /** Dirty paths with what `HEAD` currently holds for each. */
+    function treeAt(...entries: Array<[string, string | null]>) {
+      return new Map([["project-1", {
+        dirty: true,
+        paths: new Set(entries.map(([dirtyPath]) => dirtyPath)),
+        headBlobs: new Map(entries),
+      }]])
+    }
+
+    /** Shorthand for a chat's touched file, as `TurnFileTracker` would record it. */
+    function touched(filePath: string, baseBlob: string | null): TouchedFile {
+      return { path: filePath, baseBlob }
     }
 
     function rowsFor(
-      chats: Array<{ id: string; touchedPaths?: string[] }>,
-      workingTrees?: ReadonlyMap<string, { dirty: boolean; paths: ReadonlySet<string> }>
+      chats: Array<{ id: string; touchedFiles?: TouchedFile[] }>,
+      workingTrees?: ReadonlyMap<string, WorkingTreeProbe>
     ) {
       const sidebar = deriveSidebarData(stateWithChats(chats), new Map(), {
         nowMs: 1_000_000,
@@ -628,7 +644,7 @@ describe("read models", () => {
     }
 
     test("flags a chat that touched a file which is still dirty", () => {
-      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(true, "src/app.ts"))
+      const rows = rowsFor([{ id: "chat-1", touchedFiles: [{ path: "src/app.ts" }] }], tree(true, "src/app.ts"))
 
       expect(rows[0]?.uncommittedWork).toBe(true)
     })
@@ -636,14 +652,14 @@ describe("read models", () => {
     test("leaves a chat whose files were all committed unflagged", () => {
       // The whole point: this chat ran recently, but nothing it changed is
       // still outstanding, so it is not part of your current diff.
-      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(true, "src/other.ts"))
+      const rows = rowsFor([{ id: "chat-1", touchedFiles: [{ path: "src/app.ts" }] }], tree(true, "src/other.ts"))
 
       expect(rows[0]?.uncommittedWork).toBeUndefined()
     })
 
     test("one dirty file out of many is enough", () => {
       const rows = rowsFor(
-        [{ id: "chat-1", touchedPaths: ["a.ts", "b.ts", "c.ts"] }],
+        [{ id: "chat-1", touchedFiles: [{ path: "a.ts" }, { path: "b.ts" }, { path: "c.ts" }] }],
         tree(true, "zz.ts", "b.ts"),
       )
 
@@ -651,7 +667,7 @@ describe("read models", () => {
     })
 
     test("flags nothing when the tree is clean", () => {
-      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(false))
+      const rows = rowsFor([{ id: "chat-1", touchedFiles: [{ path: "src/app.ts" }] }], tree(false))
 
       expect(rows[0]?.uncommittedWork).toBeUndefined()
     })
@@ -665,17 +681,83 @@ describe("read models", () => {
     })
 
     test("flags nothing when the project has no probe entry yet", () => {
-      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], new Map())
+      const rows = rowsFor([{ id: "chat-1", touchedFiles: [{ path: "src/app.ts" }] }], new Map())
 
       expect(rows[0]?.uncommittedWork).toBeUndefined()
     })
 
     test("omits the field entirely rather than emitting false", () => {
-      const rows = rowsFor([{ id: "chat-1", touchedPaths: ["src/app.ts"] }], tree(true, "other.ts"))
+      const rows = rowsFor([{ id: "chat-1", touchedFiles: [{ path: "src/app.ts" }] }], tree(true, "other.ts"))
 
       // The sidebar dedupe signature is a JSON.stringify of the whole snapshot,
       // so an always-present `false` would be pure wire noise.
       expect("uncommittedWork" in (rows[0] ?? {})).toBe(false)
+    })
+
+    test("a commit of the path retires the claim, even while it's dirty again", () => {
+      // Chat A edited the file and had it committed; chat B has since dirtied
+      // it. Only chat B is part of the current diff — chat A's work shipped.
+      const rows = rowsFor(
+        [
+          { id: "chat-a", touchedFiles: [touched("app.ts", "blob-original")] },
+          { id: "chat-b", touchedFiles: [touched("app.ts", "blob-chat-a")] },
+        ],
+        treeAt(["app.ts", "blob-chat-a"]),
+      )
+
+      const flagged = rows.filter((row) => row.uncommittedWork).map((row) => row.chatId)
+      expect(flagged).toEqual(["chat-b"])
+    })
+
+    test("keeps every chat whose base is still what HEAD holds", () => {
+      // Nothing has been committed, so both chats' edits are live in the tree.
+      const rows = rowsFor(
+        [
+          { id: "chat-a", touchedFiles: [touched("app.ts", "blob-original")] },
+          { id: "chat-b", touchedFiles: [touched("app.ts", "blob-original")] },
+        ],
+        treeAt(["app.ts", "blob-original"]),
+      )
+
+      const flagged = rows.filter((row) => row.uncommittedWork).map((row) => row.chatId).sort()
+      expect(flagged).toEqual(["chat-a", "chat-b"])
+    })
+
+    test("an uncommitted new file stays claimed by its author", () => {
+      // Never in HEAD, still not in HEAD: null on both sides is a match, not a
+      // mismatch, or creating a file would flag nobody.
+      const rows = rowsFor(
+        [{ id: "chat-1", touchedFiles: [touched("new.ts", null)] }],
+        treeAt(["new.ts", null]),
+      )
+
+      expect(rows[0]?.uncommittedWork).toBe(true)
+    })
+
+    test("committing a file the chat created retires its claim too", () => {
+      const rows = rowsFor(
+        [{ id: "chat-1", touchedFiles: [touched("new.ts", null)] }],
+        treeAt(["new.ts", "blob-committed"]),
+      )
+
+      expect(rows[0]?.uncommittedWork).toBeUndefined()
+    })
+
+    test("an unknown base still flags, as it did before base blobs existed", () => {
+      // Claims recorded before this tracking, and probes that couldn't read
+      // HEAD. A dot that's one commit stale beats hiding uncommitted work.
+      const rows = rowsFor([{ id: "chat-1", touchedFiles: [{ path: "app.ts" }] }], treeAt(["app.ts", "blob-x"]))
+
+      expect(rows[0]?.uncommittedWork).toBe(true)
+    })
+
+    test("a known base with an unreadable HEAD still flags", () => {
+      const rows = rowsFor(
+        [{ id: "chat-1", touchedFiles: [touched("app.ts", "blob-original")] }],
+        tree(true, "app.ts"),
+      )
+
+      expect(rows[0]?.uncommittedWork).toBe(true)
     })
 
     test("flags each chat on its own files, not on the project's", () => {
@@ -683,9 +765,9 @@ describe("read models", () => {
       // dirty was flagged, so one agent's edit lit up every other chat.
       const rows = rowsFor(
         [
-          { id: "chat-a", touchedPaths: ["a.ts"] },
-          { id: "chat-b", touchedPaths: ["b.ts"] },
-          { id: "chat-c", touchedPaths: ["c.ts"] },
+          { id: "chat-a", touchedFiles: [{ path: "a.ts" }] },
+          { id: "chat-b", touchedFiles: [{ path: "b.ts" }] },
+          { id: "chat-c", touchedFiles: [{ path: "c.ts" }] },
         ],
         tree(true, "a.ts", "c.ts"),
       )

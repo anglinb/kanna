@@ -22,7 +22,7 @@ function wireTurnTracking(store: EventStore, probe: WorktreeProbe) {
       const project = chat ? store.state.projectsById.get(chat.projectId) : undefined
       return project?.localPath ?? null
     },
-    recordPaths: (chatId, paths) => store.recordFilesTouched(chatId, paths),
+    recordFiles: (chatId, files) => store.recordFilesTouched(chatId, files),
   })
   store.onTurnStarted = (chatId) => {
     turnStarted.push(tracker.beginTurn(chatId))
@@ -105,7 +105,7 @@ describe("WorktreeProbe", () => {
 
     expect(probe.getStates().get("project-1")).toBeUndefined()
     await probe.refreshForChat("chat-1")
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set() })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set(), headBlobs: new Map() })
 
     await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
     await probe.refreshForChat("chat-1")
@@ -167,7 +167,7 @@ describe("WorktreeProbe", () => {
     await run(["git", "commit", "-am", "external"], repoRoot)
     await tick(probe)
 
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set() })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set(), headBlobs: new Map() })
   })
 
   test("the tick skips projects whose chats never finished a turn", async () => {
@@ -202,9 +202,16 @@ describe("WorktreeProbe", () => {
       changes += 1
     })
 
-    probe.recordExternalProbe("project-1", { dirty: true, paths: ["a.txt"] })
+    // Resolves the project's location itself, so a scan arriving from the git
+    // panel before any tick still gets its HEAD blobs read.
+    await probe.recordExternalProbe("project-1", { dirty: true, paths: ["a.txt"] })
 
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: true, paths: new Set(["a.txt"]) })
+    expect(probe.getStates().get("project-1")).toEqual({
+      dirty: true,
+      paths: new Set(["a.txt"]),
+      // Uncommitted file: in the working tree, absent from HEAD.
+      headBlobs: new Map([["a.txt", null]]),
+    })
     expect(changes).toBe(1)
   })
 
@@ -216,7 +223,7 @@ describe("WorktreeProbe", () => {
 
     await probe.refreshForChat("chat-1")
 
-    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set() })
+    expect(probe.getStates().get("project-1")).toEqual({ dirty: false, paths: new Set(), headBlobs: new Map() })
   })
 })
 
@@ -254,7 +261,11 @@ describe("WorktreeProbe integration", () => {
     await Promise.all(turnEnded)
 
     expect(broadcasts).toBeGreaterThan(0)
-    expect(store.state.chatsById.get(chat.id)?.touchedPaths).toEqual(["app.txt"])
+    const touched = store.state.chatsById.get(chat.id)?.touchedFiles ?? []
+    expect(touched.map((file) => file.path)).toEqual(["app.txt"])
+    // Recorded against the commit the turn started from, so committing this
+    // work is what later retires the claim.
+    expect(touched[0]?.baseBlob).toMatch(/^[0-9a-f]{40}$/u)
     const flagged = deriveSidebarData(store.state, new Map(), { workingTrees: probe.getStates() })
     expect(flagged.projectGroups[0]?.chats[0]?.uncommittedWork).toBe(true)
 
@@ -528,6 +539,188 @@ describe("WorktreeProbe integration", () => {
       projectsWithoutRepo: probe.getProjectsWithoutRepo(),
     })
     expect(probed.projectGroups[0]?.hasGitRepo).toBe(false)
+  })
+})
+
+/**
+ * One real repo, one real store, turns wired exactly as `server.ts` wires them.
+ * Everything here runs git for real — the point is that the claim rules hold
+ * against actual commits, not against a hand-built probe.
+ */
+async function createTrackedProject() {
+  const repoRoot = await createRepo()
+  const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-data-"))
+  tempDirs.push(dataDir)
+
+  const store = new EventStore(dataDir)
+  await store.initialize()
+  const project = await store.openProject(repoRoot)
+  const probe = new WorktreeProbe(() => store.state, () => {})
+  const { turnStarted, turnEnded } = wireTurnTracking(store, probe)
+
+  /** A whole turn: start (snapshot + base commit), agent edits, finish (record + reprobe). */
+  const runTurn = async (chatId: string, mutate: () => Promise<void>) => {
+    await store.recordTurnStarted(chatId)
+    await Promise.all(turnStarted)
+    await mutate()
+    await store.recordTurnFinished(chatId)
+    await Promise.all(turnEnded)
+  }
+  const write = (name: string, contents: string) =>
+    writeFile(path.join(repoRoot, name), contents, "utf8")
+  const commitAll = (message: string) => run(["git", "commit", "-am", message], repoRoot)
+  /** Chat ids the sidebar currently marks as bearing on uncommitted work. */
+  const flaggedChatIds = (state = store.state) =>
+    (deriveSidebarData(state, new Map(), { workingTrees: probe.getStates() }).projectGroups[0]?.chats ?? [])
+      .filter((row) => row.uncommittedWork)
+      .map((row) => row.chatId)
+      .sort()
+
+  return { repoRoot, dataDir, store, project, probe, runTurn, write, commitAll, flaggedChatIds }
+}
+
+/**
+ * The rule the sidebar's dot turns on: a chat is relevant while a file it
+ * changed is dirty *and* nobody has committed that file since it did.
+ *
+ * The scenario throughout is the one that motivated base blobs — chat A edits a
+ * file and its work is committed, then hours later chat B edits the same file.
+ */
+describe("uncommitted-work claims", () => {
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  test("without base blobs, a commit doesn't retire the claim — the bug", async () => {
+    // Reproduces the old paths-only rule against a real repo. `touchedFiles`
+    // recorded before base blobs existed carry no base, which is exactly what
+    // the previous implementation stored and how it decided: intersect the
+    // chat's paths with the dirty set, full stop. `touchedFiles` is a union
+    // that only ever grows and a commit writes nothing against the chat, so
+    // chat A's claim on app.txt outlives the commit that shipped it — and chat
+    // B dirtying the same file five hours later drags chat A back into
+    // Relevant alongside it.
+    const tracked = await createTrackedProject()
+    const chatA = await tracked.store.createChat(tracked.project.id)
+    const chatB = await tracked.store.createChat(tracked.project.id)
+
+    await tracked.runTurn(chatA.id, () => tracked.write("app.txt", "chat A\n"))
+    await tracked.commitAll("chat A's work")
+    await tracked.runTurn(chatB.id, () => tracked.write("app.txt", "chat B\n"))
+
+    // The root cause, pinned: the commit wrote nothing against chat A, so its
+    // claim on the path is still there afterwards. Only the base blob beside it
+    // can say the claim is spent.
+    expect(tracked.store.state.chatsById.get(chatA.id)?.touchedFiles?.map((file) => file.path))
+      .toEqual(["app.txt"])
+
+    // Age the records down to the pre-base-blob shape, leaving everything else
+    // — the real repo, the real commit, the real probe — untouched.
+    for (const chat of tracked.store.state.chatsById.values()) {
+      chat.touchedFiles = chat.touchedFiles?.map((file) => ({ path: file.path }))
+    }
+
+    expect(tracked.flaggedChatIds()).toEqual([chatA.id, chatB.id].sort())
+  })
+
+  test("with base blobs, only the chat with live work is flagged", async () => {
+    // Same repo, same commit, same second edit — now with what the tracker
+    // actually records. Chat A's base is the blob it edited *from*; the commit
+    // moved HEAD to chat A's own content, so its base no longer matches and the
+    // claim is settled. Chat B recorded that new commit as its base, so its
+    // claim is the live one.
+    const tracked = await createTrackedProject()
+    const chatA = await tracked.store.createChat(tracked.project.id)
+    const chatB = await tracked.store.createChat(tracked.project.id)
+
+    await tracked.runTurn(chatA.id, () => tracked.write("app.txt", "chat A\n"))
+    await tracked.commitAll("chat A's work")
+    await tracked.runTurn(chatB.id, () => tracked.write("app.txt", "chat B\n"))
+
+    expect(tracked.flaggedChatIds()).toEqual([chatB.id])
+  })
+
+  test("the settled claim stays settled across a restart", async () => {
+    // Base blobs live in the event log, not in memory, so a reload can't
+    // resurrect chat A the way replaying a bare path list would.
+    const tracked = await createTrackedProject()
+    const chatA = await tracked.store.createChat(tracked.project.id)
+    const chatB = await tracked.store.createChat(tracked.project.id)
+
+    await tracked.runTurn(chatA.id, () => tracked.write("app.txt", "chat A\n"))
+    await tracked.commitAll("chat A's work")
+    await tracked.runTurn(chatB.id, () => tracked.write("app.txt", "chat B\n"))
+
+    const reloaded = new EventStore(tracked.dataDir)
+    await reloaded.initialize()
+
+    expect(tracked.flaggedChatIds(reloaded.state)).toEqual([chatB.id])
+  })
+
+  test("both chats stay flagged while neither one's work is committed", async () => {
+    // The other side of the rule: two chats with live edits to one file are
+    // both genuinely part of the current diff, and expiring either would hide
+    // uncommitted work.
+    const tracked = await createTrackedProject()
+    const chatA = await tracked.store.createChat(tracked.project.id)
+    const chatB = await tracked.store.createChat(tracked.project.id)
+
+    await tracked.runTurn(chatA.id, () => tracked.write("app.txt", "chat A\n"))
+    await tracked.runTurn(chatB.id, () => tracked.write("app.txt", "chat A\nchat B\n"))
+
+    expect(tracked.flaggedChatIds()).toEqual([chatA.id, chatB.id].sort())
+  })
+
+  test("a chat that commits its own work mid-turn doesn't stay claimed to it", async () => {
+    // Why the base is read at turn *start*: agents commit their own work all
+    // the time, and a base read afterwards would be the chat's own commit —
+    // leaving it live on work it had already landed.
+    const tracked = await createTrackedProject()
+    const chatA = await tracked.store.createChat(tracked.project.id)
+    const chatB = await tracked.store.createChat(tracked.project.id)
+
+    await tracked.runTurn(chatA.id, async () => {
+      await tracked.write("app.txt", "chat A\n")
+      await tracked.commitAll("chat A commits its own work")
+    })
+    await tracked.runTurn(chatB.id, () => tracked.write("app.txt", "chat B\n"))
+
+    expect(tracked.flaggedChatIds()).toEqual([chatB.id])
+  })
+
+  test("a chat that edits the file again after the commit is flagged again", async () => {
+    // Last write wins per path: chat A's second turn rebases its claim onto the
+    // commit that landed its first one, so a settled chat comes back the moment
+    // it does new work — it just can't come back on someone else's.
+    const tracked = await createTrackedProject()
+    const chatA = await tracked.store.createChat(tracked.project.id)
+    const chatB = await tracked.store.createChat(tracked.project.id)
+
+    await tracked.runTurn(chatA.id, () => tracked.write("app.txt", "chat A\n"))
+    await tracked.commitAll("chat A's work")
+    await tracked.runTurn(chatB.id, () => tracked.write("app.txt", "chat B\n"))
+    expect(tracked.flaggedChatIds()).toEqual([chatB.id])
+
+    await tracked.runTurn(chatA.id, () => tracked.write("app.txt", "chat B\nchat A again\n"))
+
+    expect(tracked.flaggedChatIds()).toEqual([chatA.id, chatB.id].sort())
+  })
+
+  test("a new file both chats never committed keeps its author flagged", async () => {
+    // The null-base path: never in HEAD on either side is a match, and the
+    // commit that first adds it is what retires the claim.
+    const tracked = await createTrackedProject()
+    const chatA = await tracked.store.createChat(tracked.project.id)
+
+    await tracked.runTurn(chatA.id, () => tracked.write("new.txt", "brand new\n"))
+    expect(tracked.flaggedChatIds()).toEqual([chatA.id])
+
+    await run(["git", "add", "."], tracked.repoRoot)
+    await run(["git", "commit", "-m", "land the new file"], tracked.repoRoot)
+    const chatB = await tracked.store.createChat(tracked.project.id)
+    await tracked.runTurn(chatB.id, () => tracked.write("new.txt", "chat B\n"))
+
+    expect(tracked.flaggedChatIds()).toEqual([chatB.id])
   })
 })
 
