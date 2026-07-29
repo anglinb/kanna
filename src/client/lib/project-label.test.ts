@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { formatProjectSidebarLabel, getProjectSidebarLabel } from "./project-label"
+import { formatProjectRepoBranch, formatProjectSidebarLabel, getProjectSidebarLabel } from "./project-label"
+
+describe("formatProjectRepoBranch", () => {
+  test("names the branch even when the sidebar would hide it", () => {
+    expect(formatProjectRepoBranch({ repoName: "kanna", branchName: "main" })).toBe("kanna/main")
+  })
+
+  test("falls back to the bare repo on a detached HEAD", () => {
+    expect(formatProjectRepoBranch({ repoName: "kanna" })).toBe("kanna")
+  })
+
+  test("has nothing to say outside a repo, leaving the caller its own fallback", () => {
+    expect(formatProjectRepoBranch({})).toBeNull()
+    expect(formatProjectRepoBranch({ branchName: "feat/x" })).toBeNull()
+  })
+})
 
 describe("formatProjectSidebarLabel", () => {
   test("uses the folder name when the project is not in a repo", () => {

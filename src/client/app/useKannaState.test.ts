@@ -3,6 +3,7 @@ import {
   applySidebarProjectOrder,
   countMatchingUserPrompts,
   getActiveChatSnapshot,
+  getMostRecentlyActiveProjectId,
   getNextMeasuredInputHeight,
   getNewestRemainingChatId,
   getPreviousPrompt,
@@ -112,6 +113,32 @@ describe("getNewestRemainingChatId", () => {
     const sidebarData = createSidebarData()
 
     expect(getNewestRemainingChatId(sidebarData.projectGroups, "missing")).toBeNull()
+  })
+})
+
+describe("getMostRecentlyActiveProjectId", () => {
+  test("picks the most recently active project, not the snapshot's lead", () => {
+    const sidebarData = createSidebarData()
+    // project-2 leads the snapshot (as a stale manual drag order would), but
+    // project-1 holds the newest chat activity.
+    const groups = [sidebarData.projectGroups[1]!, sidebarData.projectGroups[0]!]
+
+    expect(getMostRecentlyActiveProjectId(groups)).toBe("project-1")
+  })
+
+  test("ignores projects with no unarchived chats", () => {
+    const sidebarData = createSidebarData()
+    const empty = { ...sidebarData.projectGroups[1]!, groupKey: "project-empty", chats: [] }
+
+    expect(getMostRecentlyActiveProjectId([empty, sidebarData.projectGroups[1]!])).toBe("project-2")
+  })
+
+  test("falls back to the first group when nothing has chats", () => {
+    const sidebarData = createSidebarData()
+    const empty = { ...sidebarData.projectGroups[0]!, chats: [] }
+
+    expect(getMostRecentlyActiveProjectId([empty])).toBe("project-1")
+    expect(getMostRecentlyActiveProjectId([])).toBeNull()
   })
 })
 

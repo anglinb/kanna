@@ -1054,6 +1054,7 @@ export function ChatPage() {
         canCancel={state.canCancel}
         projectId={projectId}
         projectPath={state.navbarLocalPath ?? null}
+        projectRepoLabel={state.navbarRepoLabel}
         activeProvider={state.runtime?.provider ?? null}
         availableProviders={state.availableProviders}
         contextWindowSnapshot={contextWindowSnapshot}

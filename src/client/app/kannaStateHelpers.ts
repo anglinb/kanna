@@ -160,6 +160,42 @@ export function composerStateFromSendOptions(options?: {
   return null
 }
 
+/** Most recent chat activity in a project, for activity ordering. */
+export function projectActivity(group: SidebarData["projectGroups"][number]): number {
+  let latest = 0
+  for (const chat of group.chats) {
+    const activity = chat.lastMessageAt ?? chat._creationTime
+    if (activity > latest) latest = activity
+  }
+  return latest
+}
+
+/**
+ * The project to treat as "current" when no chat is open — the home page's
+ * composer, `handleCompose`, and the command palette's "New Chat In" hoist all
+ * lean on it. Deliberately *not* `projectGroups[0]`: the sidebar snapshot leads
+ * with the persisted manual drag order (`sidebar-order.json`), which can be
+ * arbitrarily stale, so that would hoist a project you last touched months ago.
+ * Every surface that renders these groups sorts by activity; this matches.
+ */
+export function getMostRecentlyActiveProjectId(projectGroups: SidebarData["projectGroups"]): string | null {
+  let bestId: string | null = null
+  let bestActivity = -1
+
+  for (const group of projectGroups) {
+    if (group.chats.length === 0) continue
+    const activity = projectActivity(group)
+    if (activity > bestActivity) {
+      bestActivity = activity
+      bestId = group.groupKey
+    }
+  }
+
+  // No project has an unarchived chat yet (fresh install): the snapshot's lead
+  // is as good an answer as any.
+  return bestId ?? projectGroups[0]?.groupKey ?? null
+}
+
 export function getProjectIdForChat(projectGroups: SidebarData["projectGroups"], chatId: string | null) {
   if (!chatId) return null
   // Archived chats are viewable in place, so they resolve project context too.

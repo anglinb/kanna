@@ -119,6 +119,22 @@ export function getProjectSidebarLabel(
   }
 }
 
+/**
+ * `repo/branch` for surfaces with room to always name the branch (the composer
+ * placeholder), unlike `ProjectSidebarLabel.text`, which hides an unremarkable
+ * one. Null when the project isn't in a repo — or hasn't been probed yet, since
+ * `repoName` can't tell those apart — leaving the caller to name the folder.
+ * A rename doesn't apply here: this says where the agent will work, not what
+ * the project is called.
+ */
+export function formatProjectRepoBranch(
+  group: Pick<SidebarProjectGroup, "repoName" | "branchName">
+): string | null {
+  if (!group.repoName) return null
+  // No branch on a detached HEAD; the bare repo still beats the path.
+  return group.branchName ? `${group.repoName}/${group.branchName}` : group.repoName
+}
+
 /** The flat `repo/branch` string — see `ProjectSidebarLabel.text`. */
 export function formatProjectSidebarLabel(
   group: Pick<SidebarProjectGroup, "title" | "sidebarTitle" | "repoName" | "branchName" | "repoOwner" | "repoUrl" | "hasGitRepo">

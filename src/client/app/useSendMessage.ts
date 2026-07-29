@@ -6,6 +6,7 @@ import { generateUUID } from "../lib/utils"
 import {
   composerStateFromSendOptions,
   countMatchingUserPrompts,
+  getMostRecentlyActiveProjectId,
   getUserPromptSignature,
   NEW_CHAT_OPTIMISTIC_SCOPE,
   type OptimisticProcessingState,
@@ -110,7 +111,7 @@ export function useSendMessage(params: {
     }])
 
     try {
-      let projectId = selectedProjectId ?? sidebarProjectGroups[0]?.groupKey ?? null
+      let projectId = selectedProjectId ?? getMostRecentlyActiveProjectId(sidebarProjectGroups)
       if (!activeChatId && !projectId && fallbackLocalProjectPath) {
         const project = await socket.command<{ projectId: string }>({
           type: "project.open",

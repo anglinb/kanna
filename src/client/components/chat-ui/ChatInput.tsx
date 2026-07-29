@@ -131,8 +131,14 @@ interface Props {
   canCancel?: boolean
   chatId?: string | null
   projectId?: string | null
-  /** Current project directory, shown in the placeholder ("Build something in ~/…"). */
+  /** Current project directory — the placeholder's fallback when there's no repo. */
   projectPath?: string | null
+  /**
+   * `repo/branch` for the current project, preferred over the path in the
+   * placeholder: it's what the sidebar calls the project and it says which
+   * checkout the turn will land on. Null outside a repo.
+   */
+  projectRepoLabel?: string | null
   inputElementRef?: React.Ref<HTMLTextAreaElement>
   activeProvider: AgentProvider | null
   availableProviders: ProviderCatalogEntry[]
@@ -156,6 +162,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   chatId,
   projectId,
   projectPath,
+  projectRepoLabel,
   inputElementRef,
   activeProvider,
   availableProviders,
@@ -222,9 +229,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const skillsFetchRef = useRef<{ provider: AgentProvider | null; pending: boolean }>({ provider: null, pending: false })
   const selectedSkillItemRef = useRef<HTMLButtonElement | null>(null)
 
-  const placeholder = projectPath
-    ? `Build in ${formatPathWithTilde(projectPath)}`
-    : "Build something..."
+  const projectLabel = projectRepoLabel ?? (projectPath ? formatPathWithTilde(projectPath) : null)
+  const placeholder = projectLabel ? `Build in ${projectLabel}` : "Build something..."
 
   const activeContextWindow = useMemo(() => {
     if (providerPrefs.provider !== "claude") {

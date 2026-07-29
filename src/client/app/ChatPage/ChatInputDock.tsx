@@ -16,6 +16,7 @@ interface ChatInputDockProps {
   canCancel: boolean
   projectId: string | null
   projectPath: string | null
+  projectRepoLabel: string | null
   activeProvider: AgentProvider | null
   availableProviders: KannaState["availableProviders"]
   contextWindowSnapshot: ContextWindowSnapshot | null
@@ -37,6 +38,7 @@ export const ChatInputDock = memo(function ChatInputDock({
   canCancel,
   projectId,
   projectPath,
+  projectRepoLabel,
   activeProvider,
   availableProviders,
   contextWindowSnapshot,
@@ -68,6 +70,7 @@ export const ChatInputDock = memo(function ChatInputDock({
             chatId={activeChatId}
             projectId={projectId}
             projectPath={projectPath}
+            projectRepoLabel={projectRepoLabel}
             activeProvider={activeProvider}
             availableProviders={availableProviders}
             contextWindowSnapshot={contextWindowSnapshot}

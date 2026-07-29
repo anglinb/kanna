@@ -76,16 +76,6 @@ interface SortableProjectGroupProps {
 const DRAG_REORDER_TRIGGER_OFFSET_PX = 20
 const SIDEBAR_REORDER_MEDIA_QUERY = "(min-width: 768px)"
 
-/** Most recent chat activity in a project, for New Sidebar's activity ordering. */
-export function projectActivity(group: SidebarProjectGroup): number {
-  let latest = 0
-  for (const chat of group.chats) {
-    const activity = chat.lastMessageAt ?? chat._creationTime
-    if (activity > latest) latest = activity
-  }
-  return latest
-}
-
 function subscribeToSidebarReorderMediaQuery(onChange: () => void) {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return () => undefined

@@ -13,10 +13,12 @@ import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
 import { useTheme } from "../hooks/useTheme"
 import { processTranscriptMessages } from "../lib/parseTranscript"
+import { formatProjectRepoBranch } from "../lib/project-label"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
 import {
   applySidebarProjectOrder,
   getActiveChatSnapshot,
+  getMostRecentlyActiveProjectId,
   getNewestRemainingChatId,
   getPreviousPrompt,
   getProjectIdForChat,
@@ -60,6 +62,7 @@ export {
   applySidebarProjectOrder,
   countMatchingUserPrompts,
   getActiveChatSnapshot,
+  getMostRecentlyActiveProjectId,
   getNewestRemainingChatId,
   getNextMeasuredInputHeight,
   getPreviousPrompt,
@@ -174,6 +177,12 @@ export interface KannaState {
   standaloneShareUrl: string | null
   standaloneShareComplete: boolean
   navbarLocalPath?: string
+  /**
+   * `repo/branch` for the project `navbarLocalPath` points at, null when that
+   * folder isn't in a repo (or hasn't been probed) — the composer placeholder
+   * names the checkout when there is one and the path when there isn't.
+   */
+  navbarRepoLabel: string | null
   editorLabel: string
   hasSelectedProject: boolean
   openSidebar: () => void
@@ -395,9 +404,9 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
   useEffect(() => {
     if (selectedProjectId) return
-    const firstGroup = sidebarProjectGroups[0]
-    if (firstGroup) {
-      setSelectedProjectId(firstGroup.groupKey)
+    const seed = getMostRecentlyActiveProjectId(sidebarProjectGroups)
+    if (seed) {
+      setSelectedProjectId(seed)
     }
   }, [selectedProjectId, sidebarProjectGroups])
 
@@ -556,6 +565,13 @@ export function useKannaState(activeChatId: string | null): KannaState {
     runtime?.localPath
     ?? fallbackLocalProjectPath
     ?? sidebarProjectGroups[0]?.localPath
+  // The composer names the project the way the sidebar does — `repo/branch` —
+  // so the id is matched first and the path only stands in when there's no
+  // active project (the new-chat composer falling back to a local project).
+  const navbarProjectGroup =
+    sidebarProjectGroups.find((group) => group.groupKey === activeProjectId)
+    ?? sidebarProjectGroups.find((group) => group.localPath === navbarLocalPath)
+  const navbarRepoLabel = navbarProjectGroup ? formatProjectRepoBranch(navbarProjectGroup) : null
   const hasSelectedProject = Boolean(
     selectedProjectId
     ?? runtime?.projectId
@@ -875,7 +891,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const handleCompose = useCallback(() => {
     const intent = resolveComposeIntent({
       selectedProjectId,
-      sidebarProjectId: sidebarProjectGroups[0]?.groupKey,
+      sidebarProjectId: getMostRecentlyActiveProjectId(sidebarProjectGroups),
       fallbackLocalProjectPath,
     })
     if (intent) {
@@ -926,6 +942,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     standaloneShareUrl,
     standaloneShareComplete,
     navbarLocalPath,
+    navbarRepoLabel,
     editorLabel,
     hasSelectedProject,
     openSidebar,
