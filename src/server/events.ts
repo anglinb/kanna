@@ -279,6 +279,22 @@ export type ChatEvent =
     }
   | {
       v: 2
+      type: "chat_last_message_at_set"
+      timestamp: number
+      chatId: string
+      /**
+       * When the user's newest message landed — `ChatRecord.lastMessageAt`.
+       *
+       * Logged rather than left to be re-derived from the transcript on boot:
+       * the rehydration only reads each transcript's tail, so a chat whose last
+       * prompt sits behind megabytes of tool output came back with no
+       * timestamp at all and fell out of every recency-driven sidebar section.
+       * One line per prompt, not per entry.
+       */
+      at: number
+    }
+  | {
+      v: 2
       type: "chat_files_touched"
       timestamp: number
       chatId: string

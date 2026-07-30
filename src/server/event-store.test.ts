@@ -1053,6 +1053,145 @@ describe("EventStore", () => {
     expect(reloadedChat?.lastAgentMessagePreview).toBe("Done, the fix is in auth.ts")
   })
 
+  describe("lastMessageAt survives a restart", () => {
+    /** An assistant entry big enough to push everything before it out of the tail window. */
+    function bulkyEntry(createdAt: number) {
+      return entry("assistant_text", createdAt, { text: "x".repeat(300 * 1024) })
+    }
+
+    test("keeps the prompt's timestamp when the transcript tail no longer holds it", async () => {
+      // The failure this fixes: boot re-derives `lastMessageAt` from the last
+      // 256 KB of the transcript, so one long agentic turn buries the prompt
+      // and the chat comes back with no timestamp — invisible in every
+      // recency-driven sidebar section despite a full conversation.
+      const dataDir = await createTempDataDir()
+      const store = new EventStore(dataDir)
+      await store.initialize()
+
+      const project = await store.openProject("/tmp/project")
+      const chat = await store.createChat(project.id)
+      await store.appendMessage(chat.id, entry("user_prompt", 1_000, { content: "start the big refactor" }))
+      await store.appendMessage(chat.id, bulkyEntry(2_000))
+
+      const reloaded = new EventStore(dataDir)
+      await reloaded.initialize()
+
+      // The prompt's own timestamp, from the log — not the trailing entry's.
+      expect(reloaded.getChat(chat.id)?.lastMessageAt).toBe(1_000)
+      expect(reloaded.getChat(chat.id)?.hasMessages).toBe(true)
+    })
+
+    test("falls back to the newest transcript entry for chats logged before the stamp existed", async () => {
+      // Same shape, but with no logged stamp — every chat that ran before this
+      // was recorded. Dating it by its last entry is a turn's length off and
+      // still puts it back in the sidebar.
+      const dataDir = await createTempDataDir()
+      const store = new EventStore(dataDir)
+      await store.initialize()
+      const project = await store.openProject("/tmp/project")
+      const chat = await store.createChat(project.id)
+
+      // Written straight to the transcript, bypassing the store's stamp — a
+      // conversation as an older build left it on disk.
+      await writeFile(
+        join(dataDir, "transcripts", `${chat.id}.jsonl`),
+        [entry("user_prompt", 1_000, { content: "buried prompt" }), bulkyEntry(2_000), entry("assistant_text", 3_000, { text: "done" })]
+          .map((line) => JSON.stringify(line)).join("\n") + "\n",
+        "utf8"
+      )
+
+      const reloaded = new EventStore(dataDir)
+      await reloaded.initialize()
+
+      expect(reloaded.getChat(chat.id)?.lastMessageAt).toBe(3_000)
+      expect(reloaded.getChat(chat.id)?.hasMessages).toBe(true)
+    })
+
+    test("the fallback never overrides a prompt the tail still holds", async () => {
+      const dataDir = await createTempDataDir()
+      const store = new EventStore(dataDir)
+      await store.initialize()
+      const project = await store.openProject("/tmp/project")
+      const chat = await store.createChat(project.id)
+
+      await writeFile(
+        join(dataDir, "transcripts", `${chat.id}.jsonl`),
+        [entry("user_prompt", 1_000, { content: "hello" }), entry("assistant_text", 2_000, { text: "hi" })]
+          .map((line) => JSON.stringify(line)).join("\n") + "\n",
+        "utf8"
+      )
+
+      const reloaded = new EventStore(dataDir)
+      await reloaded.initialize()
+
+      // The agent replied later, but "when you last messaged" is the prompt.
+      expect(reloaded.getChat(chat.id)?.lastMessageAt).toBe(1_000)
+    })
+
+    test("leaves a chat with no transcript undated", async () => {
+      // An empty new chat must stay hidden; the fallback only speaks for chats
+      // that actually have entries.
+      const dataDir = await createTempDataDir()
+      const store = new EventStore(dataDir)
+      await store.initialize()
+      const project = await store.openProject("/tmp/project")
+      const chat = await store.createChat(project.id)
+
+      const reloaded = new EventStore(dataDir)
+      await reloaded.initialize()
+
+      expect(reloaded.getChat(chat.id)?.lastMessageAt).toBeUndefined()
+    })
+
+    test("stamps once per prompt, never per entry", async () => {
+      const dataDir = await createTempDataDir()
+      const store = new EventStore(dataDir)
+      await store.initialize()
+      const project = await store.openProject("/tmp/project")
+      const chat = await store.createChat(project.id)
+
+      const countStamps = async () =>
+        (await readFile(join(dataDir, "chats.jsonl"), "utf8"))
+          .split("\n").filter((line) => line.includes('"chat_last_message_at_set"')).length
+
+      await store.appendMessage(chat.id, entry("user_prompt", 1_000, { content: "one" }))
+      expect(await countStamps()).toBe(1)
+
+      // A whole turn's worth of agent output adds nothing to the chat log.
+      await store.appendMessage(chat.id, entry("assistant_text", 2_000, { text: "working" }))
+      await store.appendMessage(chat.id, entry("assistant_text", 3_000, { text: "still working" }))
+      expect(await countStamps()).toBe(1)
+
+      await store.appendMessage(chat.id, entry("user_prompt", 4_000, { content: "two" }))
+      expect(await countStamps()).toBe(2)
+
+      // Older than what we already know: nothing new to say, nothing written.
+      await store.appendMessage(chat.id, entry("user_prompt", 500, { content: "out of order" }))
+      expect(await countStamps()).toBe(2)
+      expect(store.getChat(chat.id)?.lastMessageAt).toBe(4_000)
+    })
+
+    test("a fork keeps its inherited recency across a restart", async () => {
+      const dataDir = await createTempDataDir()
+      const store = new EventStore(dataDir)
+      await store.initialize()
+
+      const project = await store.openProject("/tmp/project")
+      const source = await store.createChat(project.id)
+      await store.setChatProvider(source.id, "claude")
+      await store.setSessionToken(source.id, "session-1")
+      await store.appendMessage(source.id, entry("user_prompt", 1_000, { content: "do the thing" }))
+      await store.appendMessage(source.id, entry("assistant_text", 2_000, { text: "done" }))
+
+      const forked = await store.forkChat(source.id)
+      expect(forked.lastMessageAt).toBe(2_000)
+
+      const reloaded = new EventStore(dataDir)
+      await reloaded.initialize()
+      expect(reloaded.getChat(forked.id)?.lastMessageAt).toBe(2_000)
+    })
+  })
+
   test("counts turns, and survives the replay that would double-count them", async () => {
     // The hazard this guards: the count accumulates, so it lives on the *store*
     // event rather than in `applyMessageMetadata`, which boot re-runs over each

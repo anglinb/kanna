@@ -199,6 +199,7 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_done_state_set":
     case "chat_read_anchor_set":
     case "chat_files_touched":
+    case "chat_last_message_at_set":
       return 9
     case "chat_deleted":
     case "chat_archived":
@@ -289,6 +290,15 @@ export class EventStore {
    * message previews) is applied in memory on append and only persisted when a
    * snapshot compaction runs. Rebuild it from the transcript files on boot so
    * restarts between compactions don't regress it.
+   *
+   * Only the tail of each transcript is read, which is enough for the common
+   * case and bounded regardless of how large a conversation grows — but a chat
+   * whose last prompt sits behind megabytes of tool output has no prompt in
+   * that window at all. Those chats used to come back with no `lastMessageAt`
+   * and vanish from every recency-driven sidebar section despite having a full
+   * conversation; the fallback below dates them by their newest entry instead.
+   * Chats messaged from now on carry the real timestamp in the log
+   * (`recordLastMessageAt`) and never reach it.
    */
   private async hydrateChatMetadataFromTranscripts() {
     const chats = [...this.state.chatsById.values()].filter((chat) => !chat.deletedAt)
@@ -303,13 +313,26 @@ export class EventStore {
           // The slice may begin mid-line; drop the partial first line.
           lines.shift()
         }
+        let newestEntryAt: number | null = null
         for (const line of lines) {
           if (!line.trim()) continue
           try {
-            this.applyMessageMetadata(chat.id, JSON.parse(line) as TranscriptEntry)
+            const entry = JSON.parse(line) as TranscriptEntry
+            this.applyMessageMetadata(chat.id, entry)
+            if (typeof entry.createdAt === "number") {
+              newestEntryAt = Math.max(newestEntryAt ?? 0, entry.createdAt)
+            }
           } catch {
             // Skip partial or corrupt lines (e.g. an append cut off by a crash).
           }
+        }
+        // Approximate, and deliberately last: it dates the chat by the agent's
+        // final entry rather than by the user's prompt, which is wrong by a
+        // turn's length but right about when the chat was last alive. Only
+        // reached when nothing better exists — a prompt in the tail or a
+        // logged stamp both leave `lastMessageAt` already set.
+        if (chat.lastMessageAt == null && newestEntryAt != null) {
+          chat.lastMessageAt = newestEntryAt
         }
       } catch {
         // Metadata hydration is best-effort; the transcript itself is untouched.
@@ -688,6 +711,17 @@ export class EventStore {
         // mutation, and bumping it would churn sidebar ordering/signatures.
         break
       }
+      case "chat_last_message_at_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        // Exactly what `applyMessageMetadata` does for the prompt this event
+        // stands in for, so a restart lands on the same state the live append
+        // did — including `updatedAt`, which a user message legitimately moves.
+        chat.lastMessageAt = Math.max(chat.lastMessageAt ?? 0, event.at)
+        chat.hasMessages = true
+        chat.updatedAt = Math.max(chat.updatedAt, event.at)
+        break
+      }
       case "chat_files_touched": {
         const chat = this.state.chatsById.get(event.chatId)
         if (!chat) break
@@ -802,7 +836,12 @@ export class EventStore {
     if (!chat) return
     chat.hasMessages = true
     if (entry.kind === "user_prompt") {
-      chat.lastMessageAt = entry.createdAt
+      // Monotonic, like `lastAgentMessageAt` below and like the logged stamp
+      // this mirrors (`recordLastMessageAt`), which only ever moves forward.
+      // Assigning outright let two things walk it backwards: an out-of-order
+      // append, and boot re-reading a fork's copied transcript, where the
+      // inherited timestamp would lose to the older prompt inside the copy.
+      chat.lastMessageAt = Math.max(chat.lastMessageAt ?? 0, entry.createdAt)
       if (!entry.hidden) {
         const preview = buildChatMessagePreview(entry.content)
         if (preview) chat.lastUserMessagePreview = preview
@@ -1037,14 +1076,6 @@ export class EventStore {
         if (chat) {
           chat.hasMessages = true
           chat.updatedAt = Math.max(chat.updatedAt, createdAt)
-          // Mirror what a transcript reload would derive: the fork inherits
-          // the copied conversation's recency and previews. Without
-          // lastMessageAt the fork reads as an empty draft and stays hidden
-          // from recency-driven sidebar sections until its first new message.
-          const lastEntryAt = sourceEntries[sourceEntries.length - 1]?.createdAt
-          if (lastEntryAt != null) {
-            chat.lastMessageAt = Math.max(chat.lastMessageAt ?? 0, lastEntryAt)
-          }
           // The fork's conversation *is* the source's, so it inherits its turns
           // too — a fork of a twenty-turn chat has twenty turns behind it, and
           // starting the count from zero would read as a fresh chat.
@@ -1063,6 +1094,14 @@ export class EventStore {
         this.setCachedTranscript(chatId, cloneTranscriptEntries(sourceEntries))
       })
       await this.writeChain
+      // The fork inherits the copied conversation's recency: without a
+      // `lastMessageAt` it reads as an empty draft and stays hidden from every
+      // recency-driven sidebar section until its first new message. Set by the
+      // event rather than in the block above, so it survives the restart —
+      // this transcript is a copy, so rehydrating it hits the same tail limit
+      // the source's did, and would otherwise date the fork by whatever prompt
+      // happens to sit inside the window.
+      await this.recordLastMessageAt(chatId, sourceEntries[sourceEntries.length - 1]?.createdAt)
     }
 
     return this.state.chatsById.get(chatId)!
@@ -1443,6 +1482,13 @@ export class EventStore {
 
   async appendMessage(chatId: string, entry: TranscriptEntry) {
     this.requireChat(chatId)
+    // A user prompt is the only entry that moves `lastMessageAt`, so stamping
+    // it here costs one log line per prompt rather than one per entry — and it
+    // has to be logged, because boot only re-derives this from the transcript's
+    // last 256 KB. See `recordLastMessageAt`.
+    if (entry.kind === "user_prompt") {
+      await this.recordLastMessageAt(chatId, entry.createdAt)
+    }
     const payload = `${JSON.stringify(entry)}\n`
     const transcriptPath = this.transcriptPath(chatId)
     this.writeChain = this.writeChain.then(async () => {
@@ -1509,6 +1555,35 @@ export class EventStore {
     }
     await this.append(this.turnsLogPath, event)
     this.onTurnStarted?.(chatId)
+  }
+
+  /**
+   * Persists when the user last messaged a chat.
+   *
+   * Every recency-driven sidebar section keys off `lastMessageAt` — the date
+   * buckets, Relevant and the palette's recents all drop a chat that hasn't
+   * got one — while the value itself used to live only in memory and in
+   * whatever snapshot happened to be written since. Between compactions a
+   * restart re-derived it by scanning each transcript's tail, which silently
+   * fails for exactly the chats that worked hardest: one long agentic turn can
+   * push the last prompt megabytes behind the tail window, and the chat comes
+   * back invisible despite having a full conversation in it.
+   *
+   * Only ever moves forward, and only writes when it actually moves, so
+   * replaying a prompt (or a fork inheriting one) adds nothing to the log.
+   */
+  private async recordLastMessageAt(chatId: string, at: number | undefined) {
+    if (at == null) return
+    const chat = this.state.chatsById.get(chatId)
+    if (!chat || (chat.lastMessageAt ?? 0) >= at) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_last_message_at_set",
+      timestamp: Date.now(),
+      chatId,
+      at,
+    }
+    await this.append(this.chatsLogPath, event)
   }
 
   /** Records the files one turn changed; replay unions them into `touchedFiles`. */
