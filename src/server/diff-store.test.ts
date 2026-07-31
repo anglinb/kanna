@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { appendGitIgnoreEntry, DiffStore, extractGitHubRepoSlug, fetchGitHubPullRequests, probeWorkingTree, resolveWorkingTreeLocation } from "./diff-store"
@@ -69,6 +69,121 @@ describe("DiffStore", () => {
     expect(snapshot.files[0]?.deletions).toBe(1)
     await expect(store.readPatch({ projectPath: repoRoot, path: "app.txt" })).resolves.toMatchObject({
       patch: expect.stringContaining("-base"),
+    })
+  })
+
+  describe("symlinks", () => {
+    /**
+     * The shape that exposed this: a tooling symlink pointing at a *directory*
+     * inside the repo. `stat` follows the link, so it reported "not a regular
+     * file" — indistinguishable from a file deleted mid-scan — and the panel
+     * dropped it, while the sidebar's dirty set (one `git status`, no stat
+     * calls) kept flagging chats for it.
+     */
+    async function createLinkedSkill(repoRoot: string) {
+      await mkdir(path.join(repoRoot, ".agents/skills/shadcn"), { recursive: true })
+      await writeFile(path.join(repoRoot, ".agents/skills/shadcn/SKILL.md"), "# shadcn\n", "utf8")
+      await mkdir(path.join(repoRoot, ".claude/skills"), { recursive: true })
+      await symlink("../../.agents/skills/shadcn", path.join(repoRoot, ".claude/skills/shadcn"))
+    }
+
+    test("shows an untracked symlink to a directory, like git does", async () => {
+      const repoRoot = await createRepo()
+      tempDirs.push(repoRoot)
+      await writeFile(path.join(repoRoot, "app.txt"), "base\n", "utf8")
+      await run(["git", "add", "."], repoRoot)
+      await run(["git", "commit", "-m", "init"], repoRoot)
+      await createLinkedSkill(repoRoot)
+
+      // git reports it, so the panel has to: it's a committable change, stored
+      // as a blob holding the target path.
+      expect(await run(["git", "status", "--short", "--untracked-files=all"], repoRoot))
+        .toContain("?? .claude/skills/shadcn")
+
+      const store = new DiffStore(repoRoot)
+      await store.initialize()
+      await store.refreshSnapshot("project-1", repoRoot)
+
+      const link = store.getProjectSnapshot("project-1").files.find((file) => file.path === ".claude/skills/shadcn")
+      expect(link).toBeDefined()
+      expect(link?.isUntracked).toBe(true)
+      // One line — the target path — not the target's contents.
+      expect(link?.additions).toBe(1)
+      expect(link?.size).toBe("../../.agents/skills/shadcn".length)
+    })
+
+    test("reads a symlink's patch as its target path", async () => {
+      const repoRoot = await createRepo()
+      tempDirs.push(repoRoot)
+      await writeFile(path.join(repoRoot, "app.txt"), "base\n", "utf8")
+      await run(["git", "add", "."], repoRoot)
+      await run(["git", "commit", "-m", "init"], repoRoot)
+      await createLinkedSkill(repoRoot)
+
+      const store = new DiffStore(repoRoot)
+      await store.initialize()
+      await store.refreshSnapshot("project-1", repoRoot)
+
+      const { patch } = await store.readPatch({ projectPath: repoRoot, path: ".claude/skills/shadcn" })
+      // Following the link would have thrown EISDIR and rendered nothing.
+      expect(patch).toContain("+../../.agents/skills/shadcn")
+      expect(patch).not.toContain("# shadcn")
+    })
+
+    test("a symlink to a file diffs as the link, not the file it points at", async () => {
+      // The quiet half of the same bug: `readFile` follows the link, so a link
+      // to a real file rendered that file's whole contents as the change.
+      const repoRoot = await createRepo()
+      tempDirs.push(repoRoot)
+      await writeFile(path.join(repoRoot, "real.txt"), "line one\nline two\nline three\n", "utf8")
+      await run(["git", "add", "."], repoRoot)
+      await run(["git", "commit", "-m", "init"], repoRoot)
+      await symlink("real.txt", path.join(repoRoot, "alias.txt"))
+
+      const store = new DiffStore(repoRoot)
+      await store.initialize()
+      await store.refreshSnapshot("project-1", repoRoot)
+
+      const link = store.getProjectSnapshot("project-1").files.find((file) => file.path === "alias.txt")
+      expect(link?.additions).toBe(1)
+      const { patch } = await store.readPatch({ projectPath: repoRoot, path: "alias.txt" })
+      expect(patch).toContain("+real.txt")
+      expect(patch).not.toContain("line two")
+    })
+
+    test("still drops an untracked file that vanished mid-scan", async () => {
+      // The guard this rides on has a real job — keep it doing it.
+      const repoRoot = await createRepo()
+      tempDirs.push(repoRoot)
+      await writeFile(path.join(repoRoot, "app.txt"), "base\n", "utf8")
+      await run(["git", "add", "."], repoRoot)
+      await run(["git", "commit", "-m", "init"], repoRoot)
+      await writeFile(path.join(repoRoot, "ghost.txt"), "here for now\n", "utf8")
+
+      const store = new DiffStore(repoRoot)
+      await store.initialize()
+      await rm(path.join(repoRoot, "ghost.txt"))
+      await store.refreshSnapshot("project-1", repoRoot)
+
+      expect(store.getProjectSnapshot("project-1").files.map((file) => file.path)).not.toContain("ghost.txt")
+    })
+
+    test("a dangling symlink still counts — git commits it either way", async () => {
+      const repoRoot = await createRepo()
+      tempDirs.push(repoRoot)
+      await writeFile(path.join(repoRoot, "app.txt"), "base\n", "utf8")
+      await run(["git", "add", "."], repoRoot)
+      await run(["git", "commit", "-m", "init"], repoRoot)
+      await symlink("nowhere/at/all", path.join(repoRoot, "broken-link"))
+
+      const store = new DiffStore(repoRoot)
+      await store.initialize()
+      await store.refreshSnapshot("project-1", repoRoot)
+
+      const link = store.getProjectSnapshot("project-1").files.find((file) => file.path === "broken-link")
+      expect(link?.additions).toBe(1)
+      const { patch } = await store.readPatch({ projectPath: repoRoot, path: "broken-link" })
+      expect(patch).toContain("+nowhere/at/all")
     })
   })
 

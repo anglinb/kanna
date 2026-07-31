@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { lstat, mkdtemp, readFile, readlink, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type {
@@ -832,9 +832,29 @@ async function listDirtyPaths(repoRoot: string, options?: { noOptionalLocks?: bo
   return paths
 }
 
+/**
+ * A symlink's whole content is its target path — one line, no newline — so it
+ * counts as a single addition and renders as text rather than being sniffed
+ * from a filename that usually has no extension.
+ */
+const SYMLINK_LINE_COUNT = 1
+const SYMLINK_MIME_TYPE = "text/plain"
+
+/**
+ * What git would store for this path in the working tree.
+ *
+ * Symlinks are read as their target text, which is exactly what git commits
+ * for them (mode 120000, blob = the link's target, no trailing newline). They
+ * can't go through `readFile`, which follows the link: that fails outright
+ * when the target is a directory, and quietly returns the *target's* bytes
+ * when it isn't — attributing a whole file's contents to a one-line link.
+ */
 async function readWorktreeFile(repoRoot: string, relativePath: string): Promise<string | null> {
   const absolutePath = path.join(repoRoot, relativePath)
-  const fileInfo = await stat(absolutePath).catch(() => null)
+  const fileInfo = await lstat(absolutePath).catch(() => null)
+  if (fileInfo?.isSymbolicLink()) {
+    return await readlink(absolutePath).catch(() => null)
+  }
   if (!fileInfo?.isFile()) {
     return null
   }
@@ -1145,7 +1165,11 @@ async function getCachedLineCount(args: {
 }
 
 async function getWorktreeFileSize(repoRoot: string, relativePath: string): Promise<number> {
-  const fileInfo = await stat(path.join(repoRoot, relativePath)).catch(() => null)
+  // `lstat` for the same reason `readWorktreeFile` uses it: a symlink's own
+  // size is its target path, and following it would weigh the patch against a
+  // file whose bytes are never part of this diff.
+  const fileInfo = await lstat(path.join(repoRoot, relativePath)).catch(() => null)
+  if (fileInfo?.isSymbolicLink()) return fileInfo.size
   return fileInfo?.isFile() ? fileInfo.size : 0
 }
 
@@ -1226,30 +1250,41 @@ async function computeCurrentFiles(
     const relativePath = entry.path
     const beforePath = entry.previousPath ?? relativePath
     const absolutePath = path.join(repoRoot, relativePath)
-    const fileInfo = await stat(absolutePath).catch(() => null)
+    // `lstat`, so a symlink is measured as itself rather than as whatever it
+    // points at. Following it made every symlink-to-directory look like a
+    // non-file, which the guard below then read as "gone".
+    const fileInfo = await lstat(absolutePath).catch(() => null)
     const isFile = fileInfo?.isFile() ?? false
+    const isSymlink = fileInfo?.isSymbolicLink() ?? false
 
-    if (!isFile && entry.isUntracked) {
+    if (!isFile && !isSymlink && entry.isUntracked) {
       // The untracked file vanished between `git status` and this scan.
       return null
     }
 
-    const mimeType = isFile ? inferProjectFileContentType(relativePath, Bun.file(absolutePath).type) : undefined
-    const size = isFile ? fileInfo!.size : undefined
-    const mtimeMs = isFile ? fileInfo!.mtimeMs : undefined
+    // A symlink is a committable change like any other — git keeps it as a
+    // blob holding the target path — so it reads as a one-line text file
+    // rather than being sized, sniffed or line-counted through its target.
+    const mimeType = isSymlink
+      ? SYMLINK_MIME_TYPE
+      : isFile ? inferProjectFileContentType(relativePath, Bun.file(absolutePath).type) : undefined
+    const size = isFile || isSymlink ? fileInfo!.size : undefined
+    const mtimeMs = isFile || isSymlink ? fileInfo!.mtimeMs : undefined
 
     const trackedStats = trackedStatsByPath.get(relativePath)
     const additions = trackedStats
       ? trackedStats.additions
-      : isFile
-        ? await getCachedLineCount({
-            cache: lineCountCache,
-            nextCache: nextLineCountCache,
-            absolutePath,
-            size: size ?? 0,
-            mtimeMs: mtimeMs ?? 0,
-          })
-        : 0
+      : isSymlink
+        ? SYMLINK_LINE_COUNT
+        : isFile
+          ? await getCachedLineCount({
+              cache: lineCountCache,
+              nextCache: nextLineCountCache,
+              absolutePath,
+              size: size ?? 0,
+              mtimeMs: mtimeMs ?? 0,
+            })
+          : 0
     const deletions = trackedStats?.deletions ?? 0
 
     return {

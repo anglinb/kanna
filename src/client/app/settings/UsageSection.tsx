@@ -122,6 +122,16 @@ function UsageBar({ usedPercent }: { usedPercent: number | null }) {
 /** Shared grid so every window row lines up like a table (settings + empty state). */
 const WINDOW_ROW_GRID = "grid grid-cols-[minmax(0,1fr)_5rem_minmax(4rem,1.4fr)_2.375rem] items-center gap-3"
 
+/**
+ * Same grid for a collapsed card's header, minus the reset column on narrow
+ * screens — the provider name plus a meter is all that fits on a phone, and the
+ * reset time is one tap away in the expanded rows.
+ */
+const COLLAPSED_HEADER_GRID = cn(
+  "grid grid-cols-[minmax(0,1fr)_minmax(4rem,1.4fr)_2.375rem] items-center gap-3",
+  "md:grid-cols-[minmax(0,1fr)_5rem_minmax(4rem,1.4fr)_2.375rem]",
+)
+
 function WindowRow({ window }: { window: UsageLimitWindow }) {
   const resets = window.resetsAt ? formatUntil(window.resetsAt) : null
   return (
@@ -235,9 +245,9 @@ export function ProviderCard({
       {timestampNode}
     </div>
   ) : (
-    <div className={WINDOW_ROW_GRID}>
+    <div className={COLLAPSED_HEADER_GRID}>
       {identity}
-      <div className="truncate text-xs text-muted-foreground">
+      <div className="hidden truncate text-xs text-muted-foreground md:block">
         {summaryResets ? `Resets ${summaryResets}` : ""}
       </div>
       {summaryWindow ? (
