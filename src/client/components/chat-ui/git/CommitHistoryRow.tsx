@@ -15,7 +15,7 @@ export function CommitHistoryRow({ entry, isPendingPush = false }: { entry: Chat
         window.open(entry.githubUrl, "_blank", "noopener,noreferrer")
       }}
       className={cn(
-        "flex w-full items-start gap-3 rounded-lg border border-border bg-background pl-3 pr-2 py-2 text-left transition-colors",
+        "flex w-full items-start gap-3 pl-3 pr-2 py-2.5 text-left transition-colors",
         isClickable ? "hover:bg-accent" : "cursor-default opacity-60"
       )}
     >

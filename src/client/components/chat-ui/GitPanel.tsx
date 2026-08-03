@@ -567,7 +567,7 @@ function GitPanelImpl({
                   <p className="text-sm text-muted-foreground">No recent commits on {diffs.branchName ?? "this branch"}.</p>
                 </div>
               ) : (
-                <div className="space-y-1.5 p-1.5">
+                <div className="divide-y divide-border">
                   {branchHistory.map((entry, index) => <CommitHistoryRow key={entry.sha} entry={entry} isPendingPush={index < aheadCount} />)}
                 </div>
               )
