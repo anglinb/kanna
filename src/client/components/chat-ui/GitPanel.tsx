@@ -567,7 +567,7 @@ function GitPanelImpl({
                   <p className="text-sm text-muted-foreground">No recent commits on {diffs.branchName ?? "this branch"}.</p>
                 </div>
               ) : (
-                <div className="divide-y divide-border">
+                <div className="divide-y divide-border pt-1.5">
                   {branchHistory.map((entry, index) => <CommitHistoryRow key={entry.sha} entry={entry} isPendingPush={index < aheadCount} />)}
                 </div>
               )
@@ -576,7 +576,8 @@ function GitPanelImpl({
                 <p className="text-sm text-muted-foreground">No file changes.</p>
               </div>
             ) : (
-              <div className="space-y-1.5 p-1.5 pb-10">
+              <div className="pt-1.5 pb-10">
+                <div className="divide-y divide-border">
                 {(visibleFileCount < diffs.files.length ? diffs.files.slice(0, visibleFileCount) : diffs.files).map((file) => {
                   const isCollapsed = collapsedPaths[file.path] ?? true
                   const isChecked = isDiffPathChecked(diffCommitSelection, file.path)
@@ -585,7 +586,6 @@ function GitPanelImpl({
                     <DiffFileCard
                       key={file.path}
                       file={file}
-                      rootRef={scrollContainerRef}
                       projectId={projectId}
                       isCollapsed={isCollapsed}
                       isChecked={isChecked}
@@ -612,14 +612,15 @@ function GitPanelImpl({
                   <button
                     type="button"
                     onClick={() => setVisibleFileCount((count) => count + VISIBLE_DIFF_FILE_INCREMENT)}
-                    className="flex w-full items-center justify-center rounded-lg border border-dashed border-border px-3 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    className="flex w-full items-center justify-center px-3 py-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   >
                     Show {Math.min(VISIBLE_DIFF_FILE_INCREMENT, diffs.files.length - visibleFileCount)} more of {(diffs.files.length - visibleFileCount).toLocaleString()} remaining files
                   </button>
                 ) : null}
+                </div>
 
                 {viewMode === "changes" ? (
-                  <div className="pointer-events-none sticky inset-x-0 bottom-11 py-1 pb-6 z-30 overflow-y-auto">
+                  <div className="pointer-events-none sticky inset-x-0 bottom-11 px-1.5 py-1 pb-6 z-30 overflow-y-auto">
                   <div className="absolute inset-x-0 bottom-0 top-0 bg-gradient-to-t from-background to-background/10 md:to-background/0" />
                   <div className="pointer-events-auto relative">
                     <div className="space-y-0 rounded-xl  backdrop-blur-md mx-auto max-w-[700px]">

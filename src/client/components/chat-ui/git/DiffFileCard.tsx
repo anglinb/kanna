@@ -1,8 +1,7 @@
 import { PatchDiff } from "@pierre/diffs/react"
 import { Ban, ChevronDown, ChevronUp, Code, Copy, Ellipsis, FolderOpen, LoaderCircle, Trash2 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react"
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
 import type { ChatAttachment } from "../../../../shared/types"
-import { useStickyState } from "../../../hooks/useStickyState"
 import { cn } from "../../../lib/utils"
 import { AttachmentFileCard, AttachmentImageCard } from "../../messages/AttachmentCard"
 import { AttachmentPreviewModal } from "../../messages/AttachmentPreviewModal"
@@ -71,7 +70,6 @@ export function canIgnoreDiffFolder(file: DiffFile) {
 
 export function DiffFileCard({
   file,
-  rootRef,
   projectId,
   isCollapsed,
   isChecked,
@@ -87,7 +85,6 @@ export function DiffFileCard({
   onLoadPatch,
 }: {
   file: DiffFile
-  rootRef: RefObject<HTMLDivElement | null>
   projectId: string | null
   isCollapsed: boolean
   isChecked: boolean
@@ -107,10 +104,6 @@ export function DiffFileCard({
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
   const autoLoadPatchKeyRef = useRef<string | null>(null)
-  const { sentinelRef, isStuck } = useStickyState<HTMLDivElement>({
-    rootRef,
-    disabled: isCollapsed,
-  })
   const previewAttachment = useMemo(() => getDiffPreviewAttachment(projectId, file), [file, projectId])
   const hasPreviewAttachment = previewAttachment !== null
   const shouldLoadPatchWhenVisible = shouldLoadDiffPatchNow({
@@ -194,8 +187,7 @@ export function DiffFileCard({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div ref={cardRef} key={file.path} className="relative rounded-lg border border-border bg-background">
-          {!isCollapsed ? <div ref={sentinelRef} className="pointer-events-none absolute inset-x-0 top-0 h-px" aria-hidden="true" /> : null}
+        <div ref={cardRef} key={file.path} className="relative bg-background">
           <div
             role="button"
             tabIndex={0}
@@ -206,9 +198,7 @@ export function DiffFileCard({
               handleToggleRequest()
             }}
             className={cn(
-              "group/header sticky top-0 z-20 flex cursor-pointer items-center justify-between gap-3 bg-background pl-[7px] pr-2.5 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-              !isCollapsed && !isStuck && "rounded-t-[calc(theme(borderRadius.lg)-1px)]",
-              isCollapsed && "rounded-[calc(theme(borderRadius.lg)-1px)]",
+              "group/header sticky top-0 z-20 flex cursor-pointer items-center justify-between gap-3 bg-background pl-[13px] pr-4 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
               !isCollapsed && "border-b border-border/50"
             )}
           >
@@ -239,7 +229,7 @@ export function DiffFileCard({
             </div>
           </div>
           {!isCollapsed ? (
-            <div className="kanna-diff-patch overflow-hidden rounded-b-[calc(theme(borderRadius.lg)-1px)] pb-[1px]">
+            <div className="kanna-diff-patch overflow-hidden pb-[1px]">
               {previewAttachment ? (
                 <div className="flex justify-center p-3">
                   {previewAttachment.kind === "image" ? (
