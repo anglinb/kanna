@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
-import { Flower, House, Loader2, PanelLeft, Search, X, Menu, Plus, Settings, SquarePen, Terminal } from "lucide-react"
+import { ArrowLeft, Flower, House, Loader2, PanelLeft, Search, X, Menu, Plus, Settings, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
@@ -15,7 +15,7 @@ import { projectActivity } from "./kannaStateHelpers"
 import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
 import { Kbd } from "../components/ui/kbd"
-import { SegmentedControl } from "../components/ui/segmented-control"
+import { SidebarViewSwitcher, type SidebarView } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
@@ -51,9 +51,6 @@ function persistSidebarWidth(width: number) {
   if (typeof window === "undefined") return
   window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clampSidebarWidth(width)))
 }
-
-/** Which view the sidebar shows when the recent-chats Labs mode is enabled. */
-type SidebarView = "recents" | "projects"
 
 function readStoredSidebarView(): SidebarView {
   if (typeof window === "undefined") return "recents"
@@ -623,22 +620,6 @@ function KannaSidebarImpl({
           </div>
         </div>
 
-        {newSidebarEnabled ? (
-          <div className="px-[7px] py-2">
-            <SegmentedControl
-              value={sidebarView}
-              onValueChange={changeSidebarView}
-              options={[
-                { value: "recents", label: "Chats" },
-                { value: "projects", label: "Projects" },
-              ]}
-              size="sm"
-              className="grid w-full grid-cols-2"
-              optionClassName="w-full justify-center"
-            />
-          </div>
-        ) : null}
-
         <div
           ref={scrollContainerRef}
           className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
@@ -650,6 +631,19 @@ function KannaSidebarImpl({
           <div className="p-[7px]">
             {newSidebarEnabled ? (
               <div className="flex flex-col gap-[1px] pb-2">
+                {/* The Projects view has no section header to hang the view
+                    switcher off (project headers carry their own actions), so
+                    the way back to Chats is a button in this list. */}
+                {sidebarView === "projects" ? (
+                  <button
+                    type="button"
+                    onClick={() => changeSidebarView("recents")}
+                    className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                  >
+                    <ArrowLeft className="h-4 w-4 shrink-0" />
+                    <span>All Chats</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => openCommandPalette("new-thread")}
@@ -729,7 +723,16 @@ function KannaSidebarImpl({
                 onDeleteChat={onDeleteChat}
                 onCopyPath={onCopyPath}
                 onOpenExternalPath={onOpenExternalPath}
+                viewSwitcher={<SidebarViewSwitcher view={sidebarView} onChange={changeSidebarView} />}
               />
+            ) : null}
+
+            {/* With no chats at all `ThreadSections` renders nothing, taking the
+                switcher with it — and the Projects view would be unreachable. */}
+            {newSidebarEnabled && sidebarView === "recents" && threadByChatId.size === 0 ? (
+              <div className="flex items-center justify-end p-[10px]">
+                <SidebarViewSwitcher view={sidebarView} onChange={changeSidebarView} />
+              </div>
             ) : null}
 
             {!newSidebarEnabled || sidebarView === "projects" ? (

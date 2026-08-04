@@ -68,11 +68,14 @@ export function InputPopover({
   trigger,
   triggerClassName,
   disabled = false,
+  align = "center",
   children,
 }: {
   trigger: React.ReactNode
   triggerClassName?: string
   disabled?: boolean
+  /** Where the panel lines up with the trigger. Composer controls center it; a trigger pinned to an edge wants "start". */
+  align?: "start" | "center" | "end"
   children: React.ReactNode | ((close: () => void) => React.ReactNode)
 }) {
   const [open, setOpen] = useState(false)
@@ -104,7 +107,7 @@ export function InputPopover({
           {trigger}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="center" className="w-64 overflow-hidden p-0">
+      <PopoverContent align={align} className="w-64 overflow-hidden p-0">
         {/* Runtime-discovered model lists (e.g. Cursor) can be long — scroll instead of overflowing the viewport. */}
         <div className="max-h-80 overflow-y-auto divide-y divide-border/60">
           {typeof children === "function" ? children(() => setOpen(false)) : children}
