@@ -16,15 +16,14 @@ import {
 const TRANSCRIPT_COLUMN_MAX_WIDTH_PX = 800
 const TRANSCRIPT_COLUMN_PADDING_PX = 24
 
-/** Narrowest transcript pane the strip earns its place in. */
+/** Narrowest pane, padding included, the strip earns its place beside. */
 const MIN_TRANSCRIPT_WIDTH_PX = 855
 
 /**
- * The gutter that pane leaves either side of the column. Narrower than a fully
- * magnified tick, so at the low end the swell reaches back over the column's
- * padding — deliberate: the strip is worth more there than the clearance is.
+ * The gutter that leaves either side of the column — a hair under what a fully
+ * magnified tick wants, so at the low end the swell just grazes the column edge.
  */
-const MIN_GUTTER_PX = (MIN_TRANSCRIPT_WIDTH_PX - TRANSCRIPT_COLUMN_PADDING_PX - TRANSCRIPT_COLUMN_MAX_WIDTH_PX) / 2
+const MIN_GUTTER_PX = (MIN_TRANSCRIPT_WIDTH_PX - TRANSCRIPT_COLUMN_MAX_WIDTH_PX) / 2
 
 /** Inset from the left edge of the chat pane. */
 const STRIP_INSET_PX = 15
