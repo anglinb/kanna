@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ReactNode } from "react"
+import { memo, useMemo, useState } from "react"
 import { Archive, ChevronRight, MoreHorizontal } from "lucide-react"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { ChatTouchedFilesResult, SidebarChatRow, SidebarData } from "../../../../shared/types"
@@ -27,21 +27,18 @@ import { ThreadRow } from "./ThreadRow"
  * button). With `onToggle` it's a collapse toggle; without, a static pinned
  * header (In Progress / Review) whose empty chevron slot keeps its title
  * aligned with the buckets'. `onArchiveAll` adds the "…" button and a
- * matching right-click menu with Archive All. `trailing` pins an always-visible
- * control to the far right, pushing "…" (hover-only) to its left.
+ * matching right-click menu with Archive All.
  */
 function SectionHeader({
   label,
   onToggle,
   isExpanded,
   onArchiveAll,
-  trailing,
 }: {
   label: string
   onToggle?: () => void
   isExpanded?: boolean
   onArchiveAll?: () => void
-  trailing?: ReactNode
 }) {
   const collapsible = onToggle != null
   const header = (
@@ -72,19 +69,16 @@ function SectionHeader({
           </span>
         ) : null}
       </div>
-      {onArchiveAll || trailing ? (
-        <div className="absolute right-2 flex items-center gap-[1px]">
-          {onArchiveAll ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5.5 w-5.5 !rounded opacity-100 md:opacity-0 md:group-hover/section:opacity-100"
-              onClick={openContextMenuFromButton}
-            >
-              <MoreHorizontal className="size-3.5 text-slate-500 dark:text-slate-400" />
-            </Button>
-          ) : null}
-          {trailing}
+      {onArchiveAll ? (
+        <div className="absolute right-2 flex items-center gap-[1px] opacity-100 md:opacity-0 md:group-hover/section:opacity-100">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-5.5 w-5.5 !rounded"
+            onClick={openContextMenuFromButton}
+          >
+            <MoreHorizontal className="size-3.5 text-slate-500 dark:text-slate-400" />
+          </Button>
         </div>
       ) : null}
     </div>
@@ -132,12 +126,6 @@ interface Props {
   onDeleteChat: (chat: SidebarChatRow) => void
   onCopyPath: (localPath: string) => void
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
-  /**
-   * Chats/Projects switcher, docked in whichever section header renders first.
-   * Which one that is depends on what you have open, so it can't be hard-coded
-   * — it just follows the top of the list.
-   */
-  viewSwitcher?: ReactNode
 }
 
 /**
@@ -168,7 +156,6 @@ function ThreadSectionsImpl({
   onDeleteChat,
   onCopyPath,
   onOpenExternalPath,
-  viewSwitcher,
 }: Props) {
   // Drafts are browser-local, so they reach the sections as an argument rather
   // than as a field on the rows the server sent.
@@ -207,12 +194,6 @@ function ThreadSectionsImpl({
     && sections.archived.length === 0
   ) return null
 
-  // The switcher rides the topmost header, in render order.
-  const firstSectionKey = pinnedGroups[0]?.key
-    ?? (relevant.length > 0 ? "relevant" : undefined)
-    ?? sections.buckets[0]?.key
-    ?? "archived"
-
   const renderRow = (thread: SidebarThread) => (
     <ThreadRow
       key={thread.chatId}
@@ -241,10 +222,7 @@ function ThreadSectionsImpl({
     <div>
       {pinnedGroups.map((group) => (
         <div key={group.key}>
-          <SectionHeader
-            label={group.heading}
-            trailing={group.key === firstSectionKey ? viewSwitcher : undefined}
-          />
+          <SectionHeader label={group.heading} />
           <div className="space-y-[2px] mb-3">
             {group.threads.map(renderRow)}
           </div>
@@ -261,7 +239,6 @@ function ThreadSectionsImpl({
             <SectionHeader
               label="Relevant"
               isExpanded={isExpanded}
-              trailing={firstSectionKey === "relevant" ? viewSwitcher : undefined}
               onToggle={() => toggleBucket("relevant", true)}
               onArchiveAll={() => {
                 for (const thread of relevant) onArchiveChat(thread.row)
@@ -282,7 +259,6 @@ function ThreadSectionsImpl({
             <SectionHeader
               label={bucket.label}
               isExpanded={isExpanded}
-              trailing={bucket.key === firstSectionKey ? viewSwitcher : undefined}
               onToggle={() => toggleBucket(bucket.key, bucket.defaultExpanded)}
               onArchiveAll={() => {
                 for (const thread of bucket.threads) onArchiveChat(thread.row)
@@ -303,7 +279,6 @@ function ThreadSectionsImpl({
             <SectionHeader
               label="Archived"
               isExpanded={isExpanded}
-              trailing={firstSectionKey === "archived" ? viewSwitcher : undefined}
               onToggle={() => toggleBucket("archived", false)}
             />
             {isExpanded ? (
