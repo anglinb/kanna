@@ -204,15 +204,18 @@ export function useChatPageSidebarActions({
     void state.handleOpenExternalPath("open_finder", filePath)
   }, [state.handleOpenExternalPath])
 
+  // Commit and message generation address the project the diff panel is
+  // rendering rather than the active chat: the file selection came from that
+  // project's snapshot, and the active chat can switch (to another project)
+  // while the commit — or the generate round-trip before it — is in flight.
   const handleCommitDiffs = useCallback(async (args: { paths: string[]; summary: string; description: string; mode: DiffCommitMode }) => {
-    const chatId = activeChatIdRef.current
-    if (!chatId) {
+    if (!projectId) {
       return null
     }
     try {
       const result = await state.socket.command<DiffCommitResult>({
-        type: "chat.commitDiffs",
-        chatId,
+        type: "project.commitDiffs",
+        projectId,
         paths: args.paths,
         summary: args.summary,
         description: args.description,
@@ -239,7 +242,7 @@ export function useChatPageSidebarActions({
       })
       return null
     }
-  }, [dialog, refreshDiffs, state.socket])
+  }, [dialog, projectId, refreshDiffs, state.socket])
 
   const handleSyncBranch = useCallback(async (action: "fetch" | "pull" | "push" | "publish") => {
     const chatId = activeChatIdRef.current
@@ -275,14 +278,13 @@ export function useChatPageSidebarActions({
   }, [dialog, refreshDiffs, state.socket])
 
   const handleGenerateCommitMessage = useCallback(async (args: { paths: string[] }) => {
-    const chatId = activeChatIdRef.current
-    if (!chatId) {
+    if (!projectId) {
       return { subject: "", body: "" }
     }
 
     const result = await state.socket.command<{ subject: string; body: string }>({
-      type: "chat.generateCommitMessage",
-      chatId,
+      type: "project.generateCommitMessage",
+      projectId,
       paths: args.paths,
     })
 
@@ -290,7 +292,7 @@ export function useChatPageSidebarActions({
       subject: result.subject,
       body: result.body,
     }
-  }, [state.socket])
+  }, [projectId, state.socket])
 
   const handleInitializeGit = useCallback(async () => {
     const chatId = activeChatIdRef.current

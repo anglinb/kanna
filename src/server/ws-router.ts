@@ -792,6 +792,31 @@ export function createWsRouter({
     run: (project: ReturnType<typeof resolveChatProject>["project"]) => Promise<{ result?: unknown; changed?: boolean }>,
   ) {
     const { project } = resolveChatProject(chatId)
+    await runProjectGitCommand(ws, id, project, run)
+  }
+
+  /**
+   * The same shape for git commands the client addresses by project — the ones
+   * driven by the diff panel's own file selection, which must land on the
+   * project that produced that selection even if the active chat has moved on.
+   */
+  async function handleProjectGitCommand(
+    ws: ServerWebSocket<ClientState>,
+    id: string,
+    projectId: string,
+    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Promise<{ result?: unknown; changed?: boolean }>,
+  ) {
+    const project = store.getProject(projectId)
+    if (!project) throw new Error("Project not found")
+    await runProjectGitCommand(ws, id, project, run)
+  }
+
+  async function runProjectGitCommand(
+    ws: ServerWebSocket<ClientState>,
+    id: string,
+    project: ReturnType<typeof resolveChatProject>["project"],
+    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Promise<{ result?: unknown; changed?: boolean }>,
+  ) {
     const { result, changed } = await run(project)
     if (result === undefined) {
       send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
@@ -1391,8 +1416,8 @@ export function createWsRouter({
           })
           return
         }
-        case "chat.generateCommitMessage": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
+        case "project.generateCommitMessage": {
+          await handleProjectGitCommand(ws, id, command.projectId, async (project) => ({
             result: await diffStore.generateCommitMessage({
               projectPath: project.localPath,
               paths: command.paths,
@@ -1400,8 +1425,8 @@ export function createWsRouter({
           }))
           return
         }
-        case "chat.commitDiffs": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
+        case "project.commitDiffs": {
+          await handleProjectGitCommand(ws, id, command.projectId, async (project) => {
             const result = await diffStore.commitFiles({
               projectId: project.id,
               projectPath: project.localPath,

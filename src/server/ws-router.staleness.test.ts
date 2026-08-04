@@ -506,8 +506,8 @@ const CASES: StalenessCase[] = [
     expectChanged: [TOPIC_IDS.projectGit],
   },
   {
-    name: "chat.commitDiffs (snapshot changed)",
-    command: { type: "chat.commitDiffs", chatId: "chat-1", paths: ["a.txt"], summary: "Commit", description: "", mode: "commit_only" },
+    name: "project.commitDiffs (snapshot changed)",
+    command: { type: "project.commitDiffs", projectId: "project-1", paths: ["a.txt"], summary: "Commit", description: "", mode: "commit_only" },
     expectChanged: [TOPIC_IDS.projectGit],
   },
   {

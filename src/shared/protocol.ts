@@ -97,6 +97,12 @@ export type ClientCommand =
   | { type: "project.remove"; projectId: string }
   | { type: "sidebar.reorderProjectGroups"; projectIds: string[] }
   | { type: "project.readDiffPatch"; projectId: string; path: string }
+  // Committing is addressed by project, not by chat: the diff panel's file
+  // selection belongs to the project it is rendering, and the active chat can
+  // move to another project mid-flow (notably across the "generate a message"
+  // round-trip) — which would otherwise aim the commit at the wrong repo.
+  | { type: "project.generateCommitMessage"; projectId: string; paths: string[] }
+  | { type: "project.commitDiffs"; projectId: string; paths: string[]; summary: string; description?: string; mode: DiffCommitMode }
   | { type: "system.ping" }
   | { type: "fs.list"; path?: string; nearest?: boolean }
   | { type: "fs.mkdir"; path: string }
@@ -243,8 +249,6 @@ export type ClientCommand =
       bringChanges?: boolean
     }
   | { type: "chat.createBranch"; chatId: string; name: string; baseBranchName?: string }
-  | { type: "chat.generateCommitMessage"; chatId: string; paths: string[] }
-  | { type: "chat.commitDiffs"; chatId: string; paths: string[]; summary: string; description?: string; mode: DiffCommitMode }
   | { type: "chat.discardDiffFile"; chatId: string; path: string }
   | { type: "chat.ignoreDiffFile"; chatId: string; path: string }
   | { type: "chat.cancel"; chatId: string }
