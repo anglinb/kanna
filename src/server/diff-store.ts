@@ -2342,13 +2342,14 @@ export class DiffStore {
 
     const currentDirtyPaths = await listDirtyPaths(repo.repoRoot)
     const dirtyPathsByPath = new Map(currentDirtyPaths.map((entry) => [entry.path, entry]))
-    const selectedEntries = normalizedPaths.map((selectedPath) => {
-      const entry = dirtyPathsByPath.get(selectedPath)
-      if (!entry) {
-        throw new Error(`File is no longer changed: ${selectedPath}`)
-      }
-      return entry
-    })
+    // Same stale-selection tolerance as commitFiles: describe whatever is still
+    // dirty rather than refusing to write a message at all.
+    const selectedEntries = normalizedPaths
+      .map((selectedPath) => dirtyPathsByPath.get(selectedPath))
+      .filter((entry): entry is DirtyPathEntry => entry !== undefined)
+    if (selectedEntries.length === 0) {
+      throw new Error("Nothing to describe: the selected files are no longer changed.")
+    }
 
     // The prompt truncates patch content anyway, so only build patches for the
     // first few files. This keeps "select all + generate" cheap when thousands
@@ -2422,12 +2423,23 @@ export class DiffStore {
 
     const currentDirtyEntries = await listDirtyPaths(repo.repoRoot)
     const currentDirtyPathsByPath = new Map(currentDirtyEntries.map((entry) => [entry.path, entry]))
-    const missingPaths = normalizedPaths.filter((relativePath) => !currentDirtyPathsByPath.has(relativePath))
-    if (missingPaths.length > 0) {
-      // The selection is stale (e.g. an agent committed or reverted the file
-      // since the sidebar snapshot) — refresh so the sidebar catches up.
+    // A selection is built from the sidebar snapshot, so it can name files that
+    // stopped being dirty since it was pushed — an agent committed or reverted
+    // them while the panel sat there. Those paths have nothing left to commit
+    // and would fail git's pathspec, so they drop out and the rest of the
+    // selection still goes through; failing the whole commit over them left the
+    // author with nothing to do but retry. Only a selection with nothing dirty
+    // left in it is an error.
+    const skippedPaths = normalizedPaths.filter((relativePath) => !currentDirtyPathsByPath.has(relativePath))
+    const committablePaths = normalizedPaths.filter((relativePath) => currentDirtyPathsByPath.has(relativePath))
+    if (committablePaths.length === 0) {
+      // Refresh so the sidebar catches up to what git actually has.
       await this.refreshSnapshot(args.projectId, args.projectPath)
-      throw new Error(`File is no longer changed: ${missingPaths[0]}`)
+      throw new Error(
+        normalizedPaths.length === 1
+          ? `Nothing to commit: ${normalizedPaths[0]} is no longer changed.`
+          : "Nothing to commit: the selected files are no longer changed."
+      )
     }
 
     // Pathspecs are passed over stdin so committing thousands of files does
@@ -2439,7 +2451,7 @@ export class DiffStore {
     // neither the worktree nor the index, so a `git add` pathspec would fail
     // with "did not match any files". `git commit --only` below still matches
     // them against HEAD and commits the staged state.
-    const trackedPaths = normalizedPaths.filter((relativePath) => {
+    const trackedPaths = committablePaths.filter((relativePath) => {
       const entry = currentDirtyPathsByPath.get(relativePath)
       return entry ? !entry.isUntracked && entry.hasUnstagedChanges : false
     })
@@ -2455,7 +2467,7 @@ export class DiffStore {
       }
     }
 
-    const untrackedPaths = normalizedPaths.filter((relativePath) => currentDirtyPathsByPath.get(relativePath)?.isUntracked)
+    const untrackedPaths = committablePaths.filter((relativePath) => currentDirtyPathsByPath.get(relativePath)?.isUntracked)
     if (untrackedPaths.length > 0) {
       const addUntrackedResult = await runGit(
         ["add", "--pathspec-from-file=-", "--pathspec-file-nul"],
@@ -2482,7 +2494,7 @@ export class DiffStore {
     }
     commitArgs.push("--pathspec-from-file=-", "--pathspec-file-nul")
 
-    const commitResult = await runGit(commitArgs, repo.repoRoot, { stdin: toPathspecStdin(normalizedPaths) })
+    const commitResult = await runGit(commitArgs, repo.repoRoot, { stdin: toPathspecStdin(committablePaths) })
     if (commitResult.exitCode !== 0) {
       await this.refreshSnapshot(args.projectId, args.projectPath)
       return createCommitFailure(args.mode, formatGitFailure(commitResult))
@@ -2490,6 +2502,7 @@ export class DiffStore {
 
     const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
     const branchName = await getBranchName(repo.repoRoot)
+    const skipped = skippedPaths.length > 0 ? { skippedPaths } : {}
 
     if (args.mode === "commit_only") {
       return {
@@ -2498,6 +2511,7 @@ export class DiffStore {
         branchName,
         pushed: false,
         snapshotChanged,
+        ...skipped,
       } satisfies DiffCommitResult
     }
 
@@ -2508,6 +2522,7 @@ export class DiffStore {
         branchName,
         pushed: false,
         snapshotChanged,
+        ...skipped,
       } satisfies DiffCommitResult
     }
 
@@ -2526,6 +2541,7 @@ export class DiffStore {
       branchName,
       pushed: true,
       snapshotChanged: snapshotChanged || postPushSnapshotChanged,
+      ...skipped,
     } satisfies DiffCommitResult
   }
 

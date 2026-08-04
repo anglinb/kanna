@@ -28,7 +28,8 @@ function ViewLabel({ name, grouping }: { name: string; grouping: string }) {
  * with the view or with which section happens to render first. The odd width
  * optically centers the gear under the header's Projects (house) button: the
  * scroll area insets its content by 7px, so 17px of button puts the glyph on
- * the same 24px-from-the-edge axis the house sits on.
+ * the same 24px-from-the-edge axis the house sits on — plus a 1px nudge left,
+ * because the gear's silhouette reads a hair right of that axis at this size.
  */
 export function SidebarViewSwitcher({
   view,
@@ -41,7 +42,7 @@ export function SidebarViewSwitcher({
     <InputPopover
       // Right-edge trigger: hang the 16rem panel leftward, into the sidebar.
       align="end"
-      triggerClassName="h-8 w-[34px] justify-center rounded-lg border border-border/0 p-0 hover:border-border hover:bg-muted"
+      triggerClassName="mr-px h-8 w-[34px] justify-center rounded-lg border border-border/0 p-0 hover:border-border hover:bg-muted"
       trigger={<Settings2 className="size-4 shrink-0" />}
     >
       {(close) => (

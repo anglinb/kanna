@@ -1747,6 +1747,11 @@ export type ChatMergeBranchResult = ChatMergeBranchSuccess | ChatMergeBranchFail
 export type DiffCommitSuccess = BranchActionSuccess & {
   mode: DiffCommitMode
   pushed: boolean
+  /**
+   * Selected paths that had stopped being changed by the time the commit ran,
+   * so they were left out of it. Empty for the ordinary case.
+   */
+  skippedPaths?: string[]
 }
 
 export type DiffCommitFailure = BranchActionFailure & {

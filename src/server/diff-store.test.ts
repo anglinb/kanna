@@ -313,6 +313,69 @@ describe("DiffStore", () => {
     expect(snapshot.files).toHaveLength(0)
   })
 
+  test("commits the still-dirty files when the selection went stale", async () => {
+    const repoRoot = await createRepo()
+    tempDirs.push(repoRoot)
+    await writeFile(path.join(repoRoot, "app.txt"), "base\n", "utf8")
+    await writeFile(path.join(repoRoot, "notes.txt"), "keep\n", "utf8")
+    await run(["git", "add", "."], repoRoot)
+    await run(["git", "commit", "-m", "init"], repoRoot)
+
+    await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
+    await writeFile(path.join(repoRoot, "notes.txt"), "changed too\n", "utf8")
+
+    const store = new DiffStore(repoRoot)
+    await store.initialize()
+    await store.refreshSnapshot("project-1", repoRoot)
+
+    // An agent commits one of the selected files out-of-band, the way it would
+    // while the sidebar snapshot sits in the browser.
+    await run(["git", "add", "notes.txt"], repoRoot)
+    await run(["git", "commit", "-m", "agent commit"], repoRoot)
+
+    const result = await store.commitFiles({
+      projectId: "project-1",
+      projectPath: repoRoot,
+      paths: ["app.txt", "notes.txt"],
+      summary: "Update app",
+      mode: "commit_only",
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "commit_only",
+      skippedPaths: ["notes.txt"],
+    })
+    expect((await run(["git", "log", "-1", "--pretty=%s"], repoRoot)).trim()).toBe("Update app")
+    expect((await run(["git", "status", "--porcelain"], repoRoot)).trim()).toBe("")
+    expect(store.getProjectSnapshot("project-1").files).toHaveLength(0)
+  })
+
+  test("fails only when nothing in the selection is still changed", async () => {
+    const repoRoot = await createRepo()
+    tempDirs.push(repoRoot)
+    await writeFile(path.join(repoRoot, "app.txt"), "base\n", "utf8")
+    await run(["git", "add", "."], repoRoot)
+    await run(["git", "commit", "-m", "init"], repoRoot)
+
+    await writeFile(path.join(repoRoot, "app.txt"), "changed\n", "utf8")
+
+    const store = new DiffStore(repoRoot)
+    await store.initialize()
+    await store.refreshSnapshot("project-1", repoRoot)
+
+    await run(["git", "add", "app.txt"], repoRoot)
+    await run(["git", "commit", "-m", "agent commit"], repoRoot)
+
+    await expect(store.commitFiles({
+      projectId: "project-1",
+      projectPath: repoRoot,
+      paths: ["app.txt"],
+      summary: "Update app",
+      mode: "commit_only",
+    })).rejects.toThrow("Nothing to commit: app.txt is no longer changed.")
+  })
+
   test("commit_and_push publishes an unpublished branch", async () => {
     const repoRoot = await createRepo()
     const remoteRoot = await createBareRemote()
