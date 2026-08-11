@@ -28,23 +28,23 @@ export function QueuedUserMessage({ message, onRemove, onSendNow }: QueuedUserMe
         ) : null}
         {message.content ? (
           <div className="relative group">
-
-              <div className="grid grid-cols-[1fr_auto] items-end gap-2.5 rounded-2xl border border-dashed border-border bg-transparent pl-3.5 pr-1.5 py-1.5 prose prose-sm prose-invert text-left text-primary [&_p]:whitespace-pre-line">
-                <div>
+            {/* min-w-0 on the grid and on the text track: a `1fr` track sizes to
+                min-content by default, so an unbreakable token (a long URL)
+                widens the bubble past the column instead of wrapping the way it
+                does in UserMessage. */}
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2.5 rounded-2xl border border-dashed border-border bg-transparent pl-3.5 pr-1.5 py-1.5 prose prose-sm prose-invert text-left text-primary [&_p]:whitespace-pre-line">
+              <div className="min-w-0">
                 <TranscriptMarkdown text={message.content} />
-                </div>
-                  <Button
-                  type="button"
-                  variant="default"
-                  size="none"
-                  className="rounded-full size-[24px] bg-muted text-muted-foreground border border-primary/10 group-hover:!text-primary hover:bg-muted/60"
-                  onClick={onSendNow}
-                >
-                  {/* Send Now */}
-                  <ArrowUp className="size-3.5"/>
-                </Button>
-
-              
+              </div>
+              <Button
+                type="button"
+                variant="default"
+                size="none"
+                className="shrink-0 rounded-full size-[24px] bg-muted text-muted-foreground border border-primary/10 group-hover:!text-primary hover:bg-muted/60"
+                onClick={onSendNow}
+              >
+                <ArrowUp className="size-3.5"/>
+              </Button>
             </div>
             <Button
               type="button"
