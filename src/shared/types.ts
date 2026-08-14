@@ -1363,6 +1363,7 @@ export type KeybindingAction =
   | "createChatInCurrentProject"
   | "openAddProject"
   | "openCommandPalette"
+  | "toggleFocusMode"
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string[]> = {
   toggleEmbeddedTerminal: ["cmd+j", "ctrl+`"],
@@ -1374,6 +1375,7 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string[]> = {
   createChatInCurrentProject: ["cmd+alt+n"],
   openAddProject: ["cmd+alt+o"],
   openCommandPalette: ["cmd+k", "ctrl+k"],
+  toggleFocusMode: ["cmd+shift+f", "ctrl+shift+f"],
 }
 
 export interface KeybindingsSnapshot {

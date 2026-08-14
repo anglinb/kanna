@@ -67,6 +67,7 @@ const DEFAULT_KEYBINDINGS_SNAPSHOT: KeybindingsSnapshot = {
     createChatInCurrentProject: ["cmd+alt+n"],
     openAddProject: ["cmd+alt+o"],
     openCommandPalette: ["cmd+k", "ctrl+k"],
+    toggleFocusMode: ["cmd+shift+f", "ctrl+shift+f"],
   },
   warning: null,
   filePathDisplay: "~/.kanna/keybindings.json",

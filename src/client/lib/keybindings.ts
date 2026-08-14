@@ -10,6 +10,47 @@ export const KEYBINDING_ACTION_LABELS: Record<KeybindingAction, string> = {
   createChatInCurrentProject: "New Chat In Current Project",
   openAddProject: "Open Add Project",
   openCommandPalette: "Open Command Palette",
+  toggleFocusMode: "Toggle Focus Mode",
+}
+
+const SHORTCUT_MODIFIER_GLYPHS: Record<string, string> = {
+  cmd: "⌘", command: "⌘", meta: "⌘",
+  ctrl: "⌃", control: "⌃",
+  alt: "⌥", option: "⌥",
+  shift: "⇧",
+}
+
+const SHORTCUT_KEY_GLYPHS: Record<string, string> = {
+  enter: "↵", return: "↵", escape: "⎋", esc: "⎋",
+  backspace: "⌫", delete: "⌦", tab: "⇥", space: "␣",
+  up: "↑", down: "↓", left: "←", right: "→",
+  arrowup: "↑", arrowdown: "↓", arrowleft: "←", arrowright: "→",
+}
+
+/** Canonical mac ordering: Control, Option, Shift, Command. */
+const SHORTCUT_GLYPH_ORDER = ["⌃", "⌥", "⇧", "⌘"]
+
+/** Render a binding like "cmd+alt+k" as glyphs "⌥⌘K". */
+export function shortcutToGlyphs(binding: string): string {
+  const modifiers = new Set<string>()
+  let key = ""
+  for (const raw of binding.split("+").map((part) => part.trim().toLowerCase()).filter(Boolean)) {
+    const modifier = SHORTCUT_MODIFIER_GLYPHS[raw]
+    if (modifier) modifiers.add(modifier)
+    else key = raw
+  }
+  const orderedModifiers = SHORTCUT_GLYPH_ORDER.filter((glyph) => modifiers.has(glyph))
+  const keyGlyph = SHORTCUT_KEY_GLYPHS[key] ?? key.toUpperCase()
+  return [...orderedModifiers, keyGlyph].join("")
+}
+
+/** An action's first binding as glyphs, or null when it has none. */
+export function formatActionShortcut(
+  snapshot: KeybindingsSnapshot | null,
+  action: KeybindingAction
+): string | null {
+  const binding = getBindingsForAction(snapshot, action)[0]
+  return binding ? shortcutToGlyphs(binding) : null
 }
 
 export function formatKeybindingInput(bindings: string[] | undefined) {
@@ -91,6 +132,7 @@ export function getResolvedKeybindings(snapshot: KeybindingsSnapshot | null): Ke
       createChatInCurrentProject: snapshot?.bindings.createChatInCurrentProject ?? DEFAULT_KEYBINDINGS.createChatInCurrentProject,
       openAddProject: snapshot?.bindings.openAddProject ?? DEFAULT_KEYBINDINGS.openAddProject,
       openCommandPalette: snapshot?.bindings.openCommandPalette ?? DEFAULT_KEYBINDINGS.openCommandPalette,
+      toggleFocusMode: snapshot?.bindings.toggleFocusMode ?? DEFAULT_KEYBINDINGS.toggleFocusMode,
     },
     warning: snapshot?.warning ?? null,
     filePathDisplay: snapshot?.filePathDisplay ?? "",

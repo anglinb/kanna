@@ -62,7 +62,7 @@ export function shouldShowSidebarNumberJumpHints(
 
 export function isSidebarModifierShortcut(
   snapshot: KeybindingsSnapshot | null,
-  action: "createChatInCurrentProject" | "openAddProject",
+  action: "createChatInCurrentProject" | "openAddProject" | "toggleFocusMode",
   event: KeyboardEvent
 ): boolean {
   return findMatchingActionBinding(snapshot, action, event) !== null

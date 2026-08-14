@@ -9,6 +9,7 @@ import { formatSidebarAgeLabel } from "../lib/formatters"
 import { getSidebarChatTimestamp } from "../lib/sidebarChats"
 import { cn, normalizeChatId } from "../lib/utils"
 import { LocalProjectsSection } from "../components/chat-ui/sidebar/LocalProjectsSection"
+import { FocusModePill } from "../components/chat-ui/sidebar/FocusModePill"
 import { projectActivity } from "./kannaStateHelpers"
 import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
@@ -29,6 +30,15 @@ import {
 import { SIDEBAR_VIEW_STORAGE_KEY, SIDEBAR_WIDTH_STORAGE_KEY } from "../lib/storageKeys"
 import { useAppSettingsStore } from "../stores/appSettingsStore"
 import { useSidebarData } from "../stores/sidebarStore"
+import {
+  focusSidebarData,
+  isFocusModeEnabled,
+  resolveFocusedProjectGroup,
+  setFocusMode,
+  toggleFocusMode,
+  useFocusModeEnabled,
+} from "../stores/focusModeStore"
+import { formatActionShortcut } from "../lib/keybindings"
 import { useStableSidebarThreads } from "./useStableSidebarThreads"
 import { OPEN_COMMAND_PALETTE_EVENT, openCommandPalette } from "../components/command-palette/CommandPalette"
 
@@ -127,7 +137,20 @@ function KannaSidebarImpl({
   // The one place that wants the whole snapshot. Selected here rather than
   // passed down so a sidebar push re-renders this component and nothing above
   // it — the chat page and the transcript are untouched by it.
-  const data = useSidebarData()
+  const allProjectsData = useSidebarData()
+  const focusModeEnabled = useFocusModeEnabled()
+  // Focus mode narrows the sidebar to one project. Resolved and applied once,
+  // here, so the Chats view, the Projects view and the number-jump indices all
+  // agree on what is on screen. The focused project is whichever one is current,
+  // so opening a chat elsewhere re-points focus rather than leaving it.
+  const focusedProjectGroup = useMemo(
+    () => resolveFocusedProjectGroup(allProjectsData.projectGroups, focusModeEnabled, currentProjectId),
+    [allProjectsData.projectGroups, currentProjectId, focusModeEnabled]
+  )
+  const data = useMemo(
+    () => focusSidebarData(allProjectsData, focusedProjectGroup),
+    [allProjectsData, focusedProjectGroup]
+  )
   const location = useLocation()
   const navigate = useNavigate()
   const isStandalone = useIsStandalone()
@@ -176,18 +199,20 @@ function KannaSidebarImpl({
 
   const activeVisibleCount = visibleChats.length
   const archivedProject = useMemo(
-    () => data.projectGroups.find((group) => group.groupKey === archivedProjectId) ?? null,
-    [archivedProjectId, data.projectGroups]
+    () => allProjectsData.projectGroups.find((group) => group.groupKey === archivedProjectId) ?? null,
+    [archivedProjectId, allProjectsData.projectGroups]
   )
 
   useEffect(() => {
     visibleChatsRef.current = visibleChats
   }, [visibleChats])
 
+  // Tracked against every project, not the focused view — a collapsed project
+  // that focus mode hides must come back collapsed, not reset.
   useEffect(() => {
     setCollapsedSections((previous) => {
       const next = new Set<string>()
-      const projectKeys = new Set(data.projectGroups.map((group) => group.groupKey))
+      const projectKeys = new Set(allProjectsData.projectGroups.map((group) => group.groupKey))
       const initializedKeys = initializedCollapsedGroupKeysRef.current
 
       for (const key of previous) {
@@ -200,7 +225,7 @@ function KannaSidebarImpl({
         [...initializedKeys].filter((key) => projectKeys.has(key))
       )
 
-      for (const group of data.projectGroups) {
+      for (const group of allProjectsData.projectGroups) {
         if (initializedCollapsedGroupKeysRef.current.has(group.groupKey)) continue
         initializedCollapsedGroupKeysRef.current.add(group.groupKey)
         if (group.defaultCollapsed) {
@@ -214,7 +239,7 @@ function KannaSidebarImpl({
 
       return next
     })
-  }, [data.projectGroups])
+  }, [allProjectsData.projectGroups])
 
   const toggleSection = useCallback((key: string) => {
     setCollapsedSections((previous) => {
@@ -315,6 +340,18 @@ function KannaSidebarImpl({
         event.preventDefault()
         onClose()
         openCommandPalette("add-project")
+        return
+      }
+
+      if (isSidebarModifierShortcut(resolvedKeybindings, "toggleFocusMode", event)) {
+        // Turning focus on with no current project would hide every chat, so
+        // the shortcut only turns it off in that state.
+        if (!currentProjectId && !isFocusModeEnabled()) {
+          return
+        }
+
+        event.preventDefault()
+        toggleFocusMode()
         return
       }
 
@@ -426,6 +463,9 @@ function KannaSidebarImpl({
   }, [newSidebarProjectsView])
   const visibleProjectGroups = useMemo(() => {
     if (!newSidebarProjectsView) return data.projectGroups
+    // Focus mode already picked the one project to show. Hiding it for being
+    // empty would leave the view blank under a pill naming it.
+    if (focusedProjectGroup) return data.projectGroups
     const sticky = stickyProjectActivityRef.current
     const visible = data.projectGroups.filter((group) => {
       if (group.chats.length > 0) {
@@ -437,7 +477,7 @@ function KannaSidebarImpl({
     // Sticky (just-emptied) groups sort by their remembered activity.
     return visible.sort((left, right) =>
       (sticky.get(right.groupKey) ?? projectActivity(right)) - (sticky.get(left.groupKey) ?? projectActivity(left)))
-  }, [data.projectGroups, newSidebarProjectsView])
+  }, [data.projectGroups, focusedProjectGroup, newSidebarProjectsView])
 
   const isSettingsActive = location.pathname.startsWith("/settings")
   const isUtilityPageActive = isLocalProjectsActive || isSettingsActive
@@ -635,33 +675,49 @@ function KannaSidebarImpl({
           }}
         >
           <div className="p-[7px]">
-            {newSidebarEnabled ? (
+            {/* The focus row joins this block rather than sitting below it, so
+                it inherits the same width, padding and row rhythm as the
+                buttons — which is the whole of its treatment. That puts it
+                under "Add Project" in the Chats view and above the project list
+                in the Projects view, since the block leads both. */}
+            {newSidebarEnabled || focusedProjectGroup ? (
               <div className="flex flex-col gap-[1px] pb-2">
-                {/* The switcher overlays the New Chat row's right end rather
-                    than sharing a flex row with it, so all three rows keep the
-                    same full-width hover target. */}
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => openCommandPalette("new-thread")}
-                    className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
-                  >
-                    <SquarePen className="h-4 w-4 shrink-0" />
-                    <span>New Chat</span>
-                  </button>
-                  <div className="absolute inset-y-0 right-0 flex items-center">
-                    <SidebarViewSwitcher view={sidebarView} onChange={changeSidebarView} />
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openCommandPalette("add-project")}
-                  className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
-                >
-                  <Plus className="h-4 w-4 shrink-0" />
-                  <span>Add Project</span>
-                </button>
-                {devbox ? (
+                {newSidebarEnabled ? (
+                  <>
+                    {/* The switcher overlays the New Chat row's right end rather
+                        than sharing a flex row with it, so all three rows keep
+                        the same full-width hover target. */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => openCommandPalette("new-thread")}
+                        className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                      >
+                        <SquarePen className="h-4 w-4 shrink-0" />
+                        <span>New Chat</span>
+                      </button>
+                      <div className="absolute inset-y-0 right-0 flex items-center">
+                        <SidebarViewSwitcher view={sidebarView} onChange={changeSidebarView} />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openCommandPalette("add-project")}
+                      className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                    >
+                      <Plus className="h-4 w-4 shrink-0" />
+                      <span>Add Project</span>
+                    </button>
+                  </>
+                ) : null}
+                {focusedProjectGroup ? (
+                  <FocusModePill
+                    projectTitle={focusedProjectGroup.title}
+                    shortcutHint={formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined}
+                    onExit={() => setFocusMode(false)}
+                  />
+                ) : null}
+                {newSidebarEnabled && devbox ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -700,7 +756,12 @@ function KannaSidebarImpl({
               </div>
             ) : null}
 
-            {!hasVisibleChats && !isConnecting && data.projectGroups.length === 0 ? (
+            {!isConnecting && (
+              (!hasVisibleChats && data.projectGroups.length === 0)
+              // A focused project with no chats: say so, rather than leave the
+              // list blank under a pill naming the project.
+              || focusedProjectGroup?.chats.length === 0
+            ) ? (
               <p className="text-sm text-slate-400 p-2 mt-6 text-center">No conversations yet</p>
             ) : null}
 

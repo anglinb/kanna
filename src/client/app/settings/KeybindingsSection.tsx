@@ -18,6 +18,7 @@ function buildKeybindingPayload(source: Record<string, string>): Record<Keybindi
     createChatInCurrentProject: parseKeybindingInput(source.createChatInCurrentProject ?? ""),
     openAddProject: parseKeybindingInput(source.openAddProject ?? ""),
     openCommandPalette: parseKeybindingInput(source.openCommandPalette ?? ""),
+    toggleFocusMode: parseKeybindingInput(source.toggleFocusMode ?? ""),
   }
 }
 

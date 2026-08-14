@@ -17,6 +17,9 @@ export const OPEN_EXTERNAL_SELECT_STORAGE_KEY = "kanna:last-open-external"
 /** localStorage: active sidebar view ("recents" | "projects") when the recent-chats Labs mode is on. */
 export const SIDEBAR_VIEW_STORAGE_KEY = "kanna:sidebar-view"
 
+/** localStorage: focus mode is on, so the sidebar shows only the open chat's project. */
+export const SIDEBAR_FOCUS_MODE_STORAGE_KEY = "kanna:sidebar-focus-mode"
+
 // Legacy setup-wizard markers. Onboarding progress is now machine-wide state
 // in the server's settings file (`setupShown`/`setupCompleted`/`setupDismissed`
 // on the app-settings snapshot) so a second browser — local or via the cloud

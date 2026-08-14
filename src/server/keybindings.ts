@@ -163,6 +163,7 @@ function createDefaultSnapshot(filePath: string, warning: string | null = null):
       createChatInCurrentProject: [...DEFAULT_KEYBINDINGS.createChatInCurrentProject],
       openAddProject: [...DEFAULT_KEYBINDINGS.openAddProject],
       openCommandPalette: [...DEFAULT_KEYBINDINGS.openCommandPalette],
+      toggleFocusMode: [...DEFAULT_KEYBINDINGS.toggleFocusMode],
     },
     warning,
     filePathDisplay: formatDisplayPath(filePath),

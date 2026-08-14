@@ -11,6 +11,7 @@ import {
   EyeOff,
   File,
   FlaskConical,
+  Focus,
   Folder,
   FolderOpen,
   Gauge,
@@ -43,7 +44,7 @@ import { useComposer } from "../../hooks/useComposer"
 import { useTheme } from "../../hooks/useTheme"
 import { CHAT_MODE_LABELS } from "../../lib/composer"
 import type { ProjectRequest } from "../../app/kannaStateHelpers"
-import { actionMatchesEvent, getBindingsForAction } from "../../lib/keybindings"
+import { actionMatchesEvent, getBindingsForAction, shortcutToGlyphs } from "../../lib/keybindings"
 import { formatSidebarAgeLabel, getPathBasename } from "../../lib/formatters"
 import { getThreadDetailLabel, type ThreadDetailScope } from "../../lib/thread-detail-label"
 import { formatPathWithTilde } from "../../lib/pathUtils"
@@ -61,6 +62,7 @@ import {
 } from "../../lib/project-fs"
 import { filterProjects, groupProjectsByRecency } from "../../lib/project-groups"
 import { useRightSidebarStore } from "../../stores/rightSidebarStore"
+import { setFocusMode, useFocusModeEnabled } from "../../stores/focusModeStore"
 import { useSidebarStore } from "../../stores/sidebarStore"
 import { useChatHasDraft } from "../../stores/chatInputStore"
 import { useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
@@ -148,37 +150,6 @@ interface PaletteAction {
   /** Only surfaced while the user is typing — keeps the empty-query list curated. */
   searchOnly?: boolean
   run: () => void
-}
-
-const SHORTCUT_MODIFIER_GLYPHS: Record<string, string> = {
-  cmd: "⌘", command: "⌘", meta: "⌘",
-  ctrl: "⌃", control: "⌃",
-  alt: "⌥", option: "⌥",
-  shift: "⇧",
-}
-
-const SHORTCUT_KEY_GLYPHS: Record<string, string> = {
-  enter: "↵", return: "↵", escape: "⎋", esc: "⎋",
-  backspace: "⌫", delete: "⌦", tab: "⇥", space: "␣",
-  up: "↑", down: "↓", left: "←", right: "→",
-  arrowup: "↑", arrowdown: "↓", arrowleft: "←", arrowright: "→",
-}
-
-/** Canonical mac ordering: Control, Option, Shift, Command. */
-const SHORTCUT_GLYPH_ORDER = ["⌃", "⌥", "⇧", "⌘"]
-
-/** Render a binding like "cmd+alt+k" as glyphs "⌥⌘K". */
-function shortcutToGlyphs(binding: string): string {
-  const modifiers = new Set<string>()
-  let key = ""
-  for (const raw of binding.split("+").map((part) => part.trim().toLowerCase()).filter(Boolean)) {
-    const modifier = SHORTCUT_MODIFIER_GLYPHS[raw]
-    if (modifier) modifiers.add(modifier)
-    else key = raw
-  }
-  const orderedModifiers = SHORTCUT_GLYPH_ORDER.filter((glyph) => modifiers.has(glyph))
-  const keyGlyph = SHORTCUT_KEY_GLYPHS[key] ?? key.toUpperCase()
-  return [...orderedModifiers, keyGlyph].join("")
 }
 
 function ShortcutHint({ binding }: { binding: string }) {
@@ -328,6 +299,8 @@ export function CommandPalette({ state }: { state: KannaState }) {
   const rightPanel = useRightSidebarStore((store) =>
     (projectId ? store.projects[projectId]?.rightPanel : undefined) ?? "hidden")
   const isMac = (state.localProjects?.machine.platform ?? "darwin") === "darwin"
+  // Reactive so the action's label flips between Focus and Exit Focus Mode.
+  const focusModeEnabled = useFocusModeEnabled()
   // The active chat's row plus the project group that owns it (for the
   // "Hide <project>" action, which needs the group key + title).
   const currentChat = useMemo(() => {
@@ -563,6 +536,25 @@ export function CommandPalette({ state }: { state: KannaState }) {
         // and, unlike the project-picked path, hides its "New Chat" row (the
         // root already offers "New Chat in <current>").
         run: () => pushPage({ page: "project-chats" }),
+      })
+    }
+
+    // Focus mode narrows the sidebar to the current project. The exit variant
+    // stays offered even with no current project, so the sidebar can always be
+    // widened back out from here.
+    if (projectId || focusModeEnabled) {
+      list.push({
+        id: "toggle-focus-mode",
+        title: focusModeEnabled
+          ? "Exit Focus Mode"
+          : currentProjectTitle ? `Focus ${currentProjectTitle}` : "Focus Current Project",
+        keywords: ["focus", "filter sidebar", "narrow", "only this project", "hide other projects", "single project"],
+        icon: <Focus className={ICON_CLASS} />,
+        shortcut: chatShortcuts("toggleFocusMode"),
+        run: () => {
+          close()
+          setFocusMode(!focusModeEnabled)
+        },
       })
     }
 
@@ -988,6 +980,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
     currentProjectTitle,
     editorCommandTemplate,
     editorPreset,
+    focusModeEnabled,
     isMac,
     navigate,
     onChatPage,
