@@ -515,25 +515,31 @@ function GitPanelImpl({
                         setViewMode(projectId, value as SidebarViewMode)
                       }}
                       size="sm"
+                      className="gap-0.5"
                       // Tighter than the shared "sm" size: this picker sits in
                       // a 40px header beside the diff controls, not on a
                       // settings row where it stands alone.
-                      optionClassName="flex-1 justify-center px-2 py-0.5 text-xs"
+                      optionClassName="flex-1 justify-center px-1.5 py-0.5 text-xs"
                       options={[
                         {
                           value: "changes",
                           label: (
-                            <span className="inline-flex items-center gap-1">
+                            <span className="inline-flex items-center gap-1.5">
                               Changes
                               {diffs.files.length > 0 ? (
                                 <span
                                   className={cn(
+                                    // The pill clears the segment by 3px top and
+                                    // bottom. The negative margin eats 4px of
+                                    // the segment's 6px right padding so it
+                                    // clears the right edge by the same 3px.
+                                    "-mr-1 inline-flex min-w-[1.125rem] items-center justify-center px-1 py-[3px]",
                                     // Concentric with the control: its outer
                                     // radius is 8px and 5px of padding sit
                                     // between that edge and the pill (3px on
                                     // the control, 2px on the segment), which
                                     // leaves the pill 3px.
-                                    "inline-flex min-w-[1.125rem] items-center justify-center rounded-[3px] px-1 py-[3px] text-[10px] leading-none tabular-nums",
+                                    "rounded-[3px] text-[10px] leading-none tabular-nums",
                                     viewMode === "changes"
                                       ? "bg-slate-900/20 dark:bg-white/20"
                                       : "bg-slate-900/10 dark:bg-white/10"
