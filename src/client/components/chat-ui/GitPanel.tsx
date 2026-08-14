@@ -514,15 +514,18 @@ function GitPanelImpl({
                         setViewMode(projectId, value as SidebarViewMode)
                       }}
                       size="sm"
-                      optionClassName="flex-1 justify-center"
+                      // Tighter than the shared "sm" size: this picker sits in
+                      // a 40px header beside the diff controls, not on a
+                      // settings row where it stands alone.
+                      optionClassName="flex-1 justify-center px-2 py-0.5 text-xs"
                       options={[
                         {
                           value: "changes",
                           label: (
-                            <span className="inline-flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1">
                               Changes
                               {diffs.files.length > 0 ? (
-                                <span className="inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-slate-900/10 px-1 py-0.5 text-[10px] leading-none tabular-nums dark:bg-white/10">
+                                <span className="inline-flex min-w-[1rem] items-center justify-center rounded-full bg-slate-900/10 px-1 py-px text-[10px] leading-none tabular-nums dark:bg-white/10">
                                   {selectedCount}
                                 </span>
                               ) : null}
