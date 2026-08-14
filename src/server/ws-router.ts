@@ -535,13 +535,22 @@ export function createWsRouter({
 
   async function pushSnapshots(
     ws: ServerWebSocket<ClientState>,
-    options?: { skipPrune?: boolean; filter?: SnapshotBroadcastFilter; cache?: SnapshotComputationCache }
+    options?: {
+      skipPrune?: boolean
+      filter?: SnapshotBroadcastFilter
+      cache?: SnapshotComputationCache
+      /** Answer exactly one subscription — see the `subscribe` handler. */
+      onlySubscriptionId?: string
+    }
   ) {
     if (!options?.skipPrune) {
       await maybePruneStaleEmptyChats([ws])
     }
     const snapshotSignatures = ensureSnapshotSignatures(ws)
     for (const [id, topic] of ws.data.subscriptions.entries()) {
+      if (options?.onlySubscriptionId !== undefined && id !== options.onlySubscriptionId) {
+        continue
+      }
       if (!shouldIncludeTopic(topic, options?.filter)) {
         continue
       }
@@ -1635,12 +1644,17 @@ export function createWsRouter({
         if (parsed.topic.type === "local-projects") {
           void refreshDiscovery().then(() => {
             if (ws.data.subscriptions.has(parsed.id)) {
-              void pushSnapshots(ws, { skipPrune: true })
+              void pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: parsed.id })
             }
           })
           return
         }
-        await pushSnapshots(ws, { skipPrune: true })
+        // Only the subscription just made. Opening a chat used to answer every
+        // topic on the socket, so the transcript queued behind a full sidebar
+        // derive and re-serialization — and the sidebar is iterated first,
+        // because the new subscription is appended last. Nothing else asked for
+        // an update, and anything that changes meanwhile is broadcast anyway.
+        await pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: parsed.id })
         // Kick a fresh usage read on subscribe so the page opens accurate;
         // the onChange fanout delivers the result to all subscribers.
         if (parsed.topic.type === "usage-limits" && usageLimits) {

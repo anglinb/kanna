@@ -65,7 +65,13 @@ class FakeWebSocket {
       if (snapshot?.type !== "chat") continue
       folded = applyIncrementalChatSnapshot(folded, snapshot.data as ChatSnapshot | null) ?? folded
     }
-    return folded ? { type: "chat" as const, data: folded } : latest
+    if (!folded) return latest
+    // `incremental` describes the frame that carried the entries, not the state
+    // the socket ended up holding. A fresh subscriber is answered with one whole
+    // frame and never has the flag; a socket that folded a slice onto an earlier
+    // frame does. Comparing the two as *states* must not see that difference.
+    const { incremental: _wireMarker, ...state } = folded
+    return { type: "chat" as const, data: state }
   }
 }
 

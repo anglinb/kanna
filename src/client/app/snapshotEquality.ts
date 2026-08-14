@@ -180,6 +180,36 @@ export function applyIncrementalChatSnapshot(
   }
 }
 
+/**
+ * Fold a pushed snapshot into the one on screen — the whole body of the chat
+ * subscription's state updater, extracted so its purity is testable.
+ *
+ * It must be a pure function of its three arguments, and that is not a style
+ * preference. React re-runs state updaters: twice under StrictMode, and again
+ * whenever it re-renders from an attempt it discarded. This logic once cleared
+ * its cached `base` as it went, and the second run then had nothing to splice
+ * the first incremental body onto — it returned null, hit the unplaceable guard,
+ * and left the state at null. Reopening a chat with a warm cache painted an
+ * empty transcript that only recovered on the next unrelated push.
+ *
+ * `base` is the window read from the local cache. It seeds the first fold only;
+ * `current` takes precedence the moment there is one, so it retires on its own
+ * without anyone having to clear it.
+ */
+export function foldChatSnapshot(
+  current: ChatSnapshot | null,
+  base: Pick<ChatSnapshot, "messages" | "startIndex"> | null,
+  incoming: ChatSnapshot | null
+): ChatSnapshot | null {
+  const next = applyIncrementalChatSnapshot(current ?? base, incoming)
+  if (next === null && incoming?.incremental) {
+    // Unplaceable body — keep what is on screen rather than render a transcript
+    // with a hole; the next full push repairs it.
+    return current
+  }
+  return sameChatSnapshotCore(current, next) ? current : next
+}
+
 export function mergeTranscriptEntries(olderHistoryEntries: TranscriptEntry[], recentEntries: TranscriptEntry[]) {
   const deduped = new Map<string, TranscriptEntry>()
   for (const entry of olderHistoryEntries) {

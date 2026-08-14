@@ -42,6 +42,7 @@ describe("password auth", () => {
       expect(response.status).toBe(200)
       expect(response.headers.get("cache-control")).toBe("no-store")
       expect(response.headers.get("content-type")).toContain("text/html")
+      expect(response.headers.get("origin-agent-cluster")).toBe("?1")
       expect(await response.text()).toContain('id="root"')
     } finally {
       await server.stop()
@@ -54,6 +55,7 @@ describe("password auth", () => {
     try {
       const response = await fetch(`http://localhost:${server.port}/health`, { redirect: "manual" })
       expect(response.status).toBe(200)
+      expect(response.headers.get("origin-agent-cluster")).toBe("?1")
     } finally {
       await server.stop()
     }

@@ -1,5 +1,4 @@
-import { ComponentPropsWithoutRef, CSSProperties, FC } from "react"
-
+import type { ComponentPropsWithoutRef, CSSProperties } from "react"
 import { cn } from "../../lib/utils"
 
 export interface AnimatedShinyTextProps extends ComponentPropsWithoutRef<"span"> {
@@ -7,37 +6,37 @@ export interface AnimatedShinyTextProps extends ComponentPropsWithoutRef<"span">
   animate?: boolean
 }
 
-export const AnimatedShinyText: FC<AnimatedShinyTextProps> = ({
+export function AnimatedShinyText({
   children,
   className,
   shimmerWidth = 100,
   animate = true,
+  style,
   ...props
-}) => {
+}: AnimatedShinyTextProps) {
+  const halfShimmerWidth = Math.min(Math.max(shimmerWidth, 0), 100) / 2
+
   return (
     <span
-      style={
-        {
-          "--shiny-width": `${Math.min(shimmerWidth, 100)}px`,
-        } as CSSProperties
-      }
       className={cn(
-        "mx-auto max-w-md text-foreground/50",
-
-        // Only apply animation classes when animate is true
-        animate ? [
-          // Shine effect
-          "animate-shiny-text [background-size:var(--shiny-width)_100%] bg-clip-text [background-position:0_0] bg-no-repeat [transition:background-position_1s_cubic-bezier(.6,.6,0,1)_infinite]",
-
-          // Shine gradient
-          "bg-gradient-to-r from-transparent via-black/80 via-50% to-transparent dark:via-white/80",
-        ] : ["text-neutral"],
-
+        "kanna-shiny-text relative mx-auto inline-block max-w-md overflow-hidden text-foreground/50",
+        !animate && "text-neutral",
         className
       )}
+      style={{
+        ...style,
+        "--shiny-half-width": `${halfShimmerWidth}px`,
+      } as CSSProperties}
       {...props}
     >
       {children}
+      {animate ? (
+        <span aria-hidden className="kanna-shiny-track pointer-events-none absolute inset-0 block">
+          <span className="kanna-shiny-copy block h-full w-full overflow-hidden text-ellipsis whitespace-nowrap text-black/80 dark:text-white/80">
+            {children}
+          </span>
+        </span>
+      ) : null}
     </span>
   )
 }

@@ -139,6 +139,63 @@
   --radius-sm: calc(var(--radius) - 4px);
 }
 
+.kanna-shiny-text {
+  contain: paint;
+}
+
+/* The track moves the fixed mask. The copy moves backward, so the text stays fixed. */
+.kanna-shiny-track {
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent calc(50% - var(--shiny-half-width)),
+    black 50%,
+    transparent calc(50% + var(--shiny-half-width))
+  );
+  mask-image: linear-gradient(
+    90deg,
+    transparent calc(50% - var(--shiny-half-width)),
+    black 50%,
+    transparent calc(50% + var(--shiny-half-width))
+  );
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  animation: kanna-shiny-track 1.33s linear infinite;
+  will-change: transform;
+}
+
+.kanna-shiny-copy {
+  animation: kanna-shiny-copy 1.33s linear infinite;
+  will-change: transform;
+}
+
+@keyframes kanna-shiny-track {
+  from {
+    transform: translateX(calc(-50% - var(--shiny-half-width)));
+  }
+
+  to {
+    transform: translateX(calc(50% + var(--shiny-half-width)));
+  }
+}
+
+@keyframes kanna-shiny-copy {
+  from {
+    transform: translateX(calc(50% + var(--shiny-half-width)));
+  }
+
+  to {
+    transform: translateX(calc(-50% - var(--shiny-half-width)));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kanna-shiny-track {
+    display: none;
+  }
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
@@ -583,20 +640,6 @@
     animation: kanna-cursor-fade-out 0.24s ease-out forwards;
   }
 
-}
-
-@theme inline {
-  --animate-shiny-text: shiny-text 1.33s linear infinite;
-
-  @keyframes shiny-text {
-    0% {
-      background-position: calc(-100% - var(--shiny-width)) 0;
-    }
-
-    100% {
-      background-position: calc(100% + var(--shiny-width)) 0;
-    }
-  }
 }
 
 @layer base {

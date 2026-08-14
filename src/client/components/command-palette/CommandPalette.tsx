@@ -11,7 +11,6 @@ import {
   EyeOff,
   File,
   FlaskConical,
-  Focus,
   Folder,
   FolderOpen,
   Gauge,
@@ -20,6 +19,7 @@ import {
   Globe,
   History,
   House,
+  ListFilter,
   ListTodo,
   Loader2,
   Lock,
@@ -549,7 +549,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
           ? "Exit Focus Mode"
           : currentProjectTitle ? `Focus ${currentProjectTitle}` : "Focus Current Project",
         keywords: ["focus", "filter sidebar", "narrow", "only this project", "hide other projects", "single project"],
-        icon: <Focus className={ICON_CLASS} />,
+        icon: <ListFilter className={ICON_CLASS} />,
         shortcut: chatShortcuts("toggleFocusMode"),
         run: () => {
           close()

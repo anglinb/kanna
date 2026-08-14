@@ -1,14 +1,11 @@
 import { memo, type ReactNode } from "react"
 import { Archive, RotateCcw, Split } from "lucide-react"
-import type { ChatTouchedFilesResult } from "../../../../shared/types"
-import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import { getThreadDetailLabel, type ThreadDetailScope } from "../../../lib/thread-detail-label"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
 import { useChatHasDraft, useChatInputStore } from "../../../stores/chatInputStore"
 import { ThreadRowContent } from "../ThreadRowContent"
-import { ChatHoverCard } from "./ChatHoverCard"
 import { ChatRowMenu } from "./Menus"
 
 interface ThreadRowProps {
@@ -37,24 +34,6 @@ interface ThreadRowProps {
    */
   dimIdleTitles?: boolean
   onSelect: (chatId: string) => void
-  /**
-   * Opens the chat at one end of its last exchange — what the hover card's
-   * prompt and reply do when clicked. Optional: without it those previews are
-   * inert text (the archived list passes nothing).
-   */
-  onSelectMessage?: (chatId: string, role: ChatJumpRole) => void
-  /**
-   * Prompts to `git init` the chat's project — offered by the hover card when
-   * the project turns out not to be a repo. Optional on the same terms as
-   * `onSelectMessage`: the archived list passes nothing.
-   */
-  onSetupGit?: (chatId: string) => void
-  /**
-   * Fetches the files the chat changed, for its hover card. Optional like the
-   * two above — a surface with no socket of its own (tests, the archived list)
-   * simply shows no file list.
-   */
-  onLoadTouchedFiles?: (chatId: string) => Promise<ChatTouchedFilesResult>
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
   onShareChat: (chatId: string) => void
@@ -74,10 +53,14 @@ interface ThreadRowProps {
  *
  * A div rather than a button so the hover-action Buttons can nest inside it.
  *
+ * The row carries no hover card of its own: the sidebar keeps one card for the
+ * whole list and finds the row under the pointer by `data-chat-id`. See
+ * `SidebarChatHoverCard`.
+ *
  * Memoized, and worth keeping that way. There is one of these per chat, each
- * carrying a context menu and a hover card, and the sidebar snapshot is pushed
- * throughout every turn. Without the memo a single chat streaming a reply
- * re-rendered every row in the app.
+ * carrying a context menu, and the sidebar snapshot is pushed throughout every
+ * turn. Without the memo a single chat streaming a reply re-rendered every row
+ * in the app.
  */
 function ThreadRowImpl({
   thread,
@@ -89,9 +72,6 @@ function ThreadRowImpl({
   detailLabelOverride,
   dimIdleTitles = true,
   onSelect,
-  onSelectMessage,
-  onSetupGit,
-  onLoadTouchedFiles,
   onCreateChat,
   onRenameChat,
   onShareChat,
@@ -171,40 +151,30 @@ function ThreadRowImpl({
       onArchive={archived ? () => {} : () => onArchiveChat(thread.row)}
       onDelete={() => onDeleteChat(thread.row)}
     >
-      {/* Sidebar rows only: the palette renders `ThreadRowContent` directly and
-          gets no card — it's already a detail view you opened on purpose. */}
-      <ChatHoverCard
-        thread={thread}
-        onSelectMessage={onSelectMessage}
-        onSelectChat={onSelect}
-        onSetupGit={onSetupGit}
-        onLoadTouchedFiles={onLoadTouchedFiles}
-        onOpenExternalPath={onOpenExternalPath}
+      <div
+        // Two readers: the sidebar's scroll-to-active querySelector, and the
+        // one hover card, which resolves the row under the pointer from it.
+        // When the Chats tab renders above the project groups, its copy is
+        // found first and the sidebar scrolls up to it.
+        data-chat-id={normalizeChatId(thread.chatId)}
+        className={cn(
+          "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
+          isActive
+            ? "bg-muted hover:bg-muted border-border"
+            : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
+        )}
+        onClick={() => onSelect(thread.chatId)}
       >
-        <div
-          // The marker the sidebar's scroll-to-active querySelector looks for.
-          // When the Chats tab renders above the project groups, its copy is
-          // found first and the sidebar scrolls up to it.
-          data-chat-id={normalizeChatId(thread.chatId)}
-          className={cn(
-            "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
-            isActive
-              ? "bg-muted hover:bg-muted border-border"
-              : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
-          )}
-          onClick={() => onSelect(thread.chatId)}
-        >
-          <ThreadRowContent
-            thread={thread}
-            showStatus
-            isActive={isActive}
-            dimIdleTitles={dimIdleTitles}
-            hasDraft={hasDraft}
-            detailLabel={detailLabel}
-            hoverActions={hoverActions}
-          />
-        </div>
-      </ChatHoverCard>
+        <ThreadRowContent
+          thread={thread}
+          showStatus
+          isActive={isActive}
+          dimIdleTitles={dimIdleTitles}
+          hasDraft={hasDraft}
+          detailLabel={detailLabel}
+          hoverActions={hoverActions}
+        />
+      </div>
     </ChatRowMenu>
   )
 }

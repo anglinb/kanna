@@ -12,7 +12,7 @@ import { cn } from "../../lib/utils"
  * the repo into an ellipsis, so the one thing that tells two rows apart was the
  * first to go. The glyph says "not on main" in a fixed 12px; the branch itself,
  * with its owner and everything else about the chat, is in the hover card
- * (`ChatHoverCard`).
+ * (`SidebarChatHoverCard`).
  *
  * Takes `ref` and spreads the rest so it can be a Radix `asChild` trigger — the
  * Projects-tab header uses it as one.

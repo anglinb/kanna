@@ -11,6 +11,7 @@ import { cn, normalizeChatId } from "../lib/utils"
 import { LocalProjectsSection } from "../components/chat-ui/sidebar/LocalProjectsSection"
 import { FocusModePill } from "../components/chat-ui/sidebar/FocusModePill"
 import { projectActivity } from "./kannaStateHelpers"
+import { SidebarChatHoverCard } from "../components/chat-ui/sidebar/ChatHoverCard"
 import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
 import { Kbd } from "../components/ui/kbd"
@@ -298,9 +299,6 @@ function KannaSidebarImpl({
           </Kbd>
         ) : undefined}
         onSelect={selectChat}
-        onSelectMessage={selectChatMessage}
-        onSetupGit={onSetupGit}
-        onLoadTouchedFiles={onLoadTouchedFiles}
         onCreateChat={onCreateChat}
         onRenameChat={onRenameChat}
         onShareChat={onShareChat}
@@ -312,7 +310,7 @@ function KannaSidebarImpl({
         onDeleteChat={onDeleteChat}
       />
     )
-  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onLoadTouchedFiles, onOpenExternalPath, onRenameChat, onRestoreChat, onSetupGit, onShareChat, resolvedKeybindings, selectChat, selectChatMessage, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
+  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onRestoreChat, onShareChat, resolvedKeybindings, selectChat, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -677,11 +675,18 @@ function KannaSidebarImpl({
           <div className="p-[7px]">
             {/* The focus row joins this block rather than sitting below it, so
                 it inherits the same width, padding and row rhythm as the
-                buttons — which is the whole of its treatment. That puts it
-                under "Add Project" in the Chats view and above the project list
-                in the Projects view, since the block leads both. */}
+                buttons — which is the whole of its treatment. It leads the
+                block, and the block leads both views, so focus mode is the
+                first thing the sidebar says either way. */}
             {newSidebarEnabled || focusedProjectGroup ? (
               <div className="flex flex-col gap-[1px] pb-2">
+                {focusedProjectGroup ? (
+                  <FocusModePill
+                    projectTitle={focusedProjectGroup.title}
+                    shortcutHint={formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined}
+                    onExit={() => setFocusMode(false)}
+                  />
+                ) : null}
                 {newSidebarEnabled ? (
                   <>
                     {/* The switcher overlays the New Chat row's right end rather
@@ -709,13 +714,6 @@ function KannaSidebarImpl({
                       <span>Add Project</span>
                     </button>
                   </>
-                ) : null}
-                {focusedProjectGroup ? (
-                  <FocusModePill
-                    projectTitle={focusedProjectGroup.title}
-                    shortcutHint={formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined}
-                    onExit={() => setFocusMode(false)}
-                  />
                 ) : null}
                 {newSidebarEnabled && devbox ? (
                   <button
@@ -772,9 +770,6 @@ function KannaSidebarImpl({
                 editorLabel={editorLabel}
                 nowMs={nowMs}
                 onSelectChat={selectChat}
-                onSelectChatMessage={selectChatMessage}
-                onSetupGit={onSetupGit}
-                onLoadTouchedFiles={onLoadTouchedFiles}
                 onOpenArchivedChat={onOpenArchivedChat}
                 onRestoreChat={onRestoreChat}
                 onCreateChat={onCreateChat}
@@ -815,6 +810,20 @@ function KannaSidebarImpl({
             ) : null}
           </div>
         </div>
+
+        {/* One card for every row above, anchored to whichever is under the
+            pointer — see `SidebarChatHoverCard`. It renders a portal and no
+            layout, so it sits here rather than inside the scrolling list. */}
+        <SidebarChatHoverCard
+          containerRef={scrollContainerRef}
+          threads={threads}
+          onSelectChat={selectChat}
+          onSelectMessage={selectChatMessage}
+          onOpenArchivedChat={onOpenArchivedChat}
+          onSetupGit={onSetupGit}
+          onLoadTouchedFiles={onLoadTouchedFiles}
+          onOpenExternalPath={onOpenExternalPath}
+        />
 
           <MachineSwitcher />
         <div className={cn("hidden md:block border-t border-border p-2", isStandalone && "pb-[55px]")}>

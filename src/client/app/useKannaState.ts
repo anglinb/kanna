@@ -38,8 +38,7 @@ import {
   type StartChatIntent,
 } from "./kannaStateHelpers"
 import {
-  applyIncrementalChatSnapshot,
-  sameChatSnapshotCore,
+  foldChatSnapshot,
   sameDiffs,
   shouldPreserveExistingProjectDiffs,
 } from "./snapshotEquality"
@@ -48,6 +47,7 @@ import {
   createTranscriptCacheWriter,
   readCachedWindow,
   toCachedSpan,
+  type CachedTranscriptWindow,
 } from "./chatTranscriptCache"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { KannaSocket, type SocketStatus } from "./socket"
@@ -87,6 +87,13 @@ export {
 
 /** Stable identity so an empty transcript does not re-derive rows each render. */
 const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
+
+/**
+ * How long to wait for the local transcript cache before subscribing without
+ * it. Generous next to a healthy read and still short enough that a stalled
+ * one is not something you sit and look at.
+ */
+const CACHED_WINDOW_READ_BUDGET_MS = 250
 
 function sameOriginWsUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
@@ -338,6 +345,8 @@ export function useKannaState(activeChatId: string | null): KannaState {
     setChatSnapshot(null)
     setChatReady(false)
 
+    // Narrowed once for the closures below, which lose it otherwise.
+    const chatId = activeChatId
     let cancelled = false
     let unsubscribe: (() => void) | null = null
     // Base for the first incremental push: the server resumes from the cached
@@ -346,41 +355,45 @@ export function useKannaState(activeChatId: string | null): KannaState {
     let base: { messages: TranscriptEntry[]; startIndex: number } | null = null
 
     function handleSnapshot(snapshot: ChatSnapshot | null) {
-      setChatSnapshot((current) => {
-        // Incremental bodies carry only the entries added since the last push,
-        // so they splice onto the window rather than replacing it.
-        const next = applyIncrementalChatSnapshot(current ?? base, snapshot)
-        if (next === null && snapshot?.incremental) {
-          // Unplaceable body — keep what is on screen rather than render a
-          // transcript with a hole; the next full push repairs it.
-          return current
-        }
-        // The cache only ever seeds the first push; after that the live
-        // snapshot is the base.
-        base = null
-        return sameChatSnapshotCore(current, next) ? current : next
-      })
+      // `foldChatSnapshot` is pure by contract — see its comment. Keep this
+      // updater a bare call to it and nothing else; the last thing that folded
+      // inline also cleared `base` as it went, and React re-running the updater
+      // then left the transcript blank.
+      setChatSnapshot((current) => foldChatSnapshot(current, base, snapshot))
       setChatReady(true)
       setCommandError(null)
     }
 
-    // The cache read is a few milliseconds and only gates the subscription, not
-    // the render; a miss subscribes with no span and gets a full window.
-    void readCachedWindow(activeChatId).then((cached) => {
-      if (cancelled) return
+    let subscribed = false
+    function subscribeToChat(cached: CachedTranscriptWindow | null) {
+      if (cancelled || subscribed) return
+      subscribed = true
       const span = toCachedSpan(cached)
       if (cached && span) base = cachedWindowToMessages(cached)
       // No `recentLimit`: the server sizes the window to reach the stored read
       // anchor and returns it inline. Passing one here would re-subscribe (and
       // re-send the whole transcript) once the anchor resolved.
       unsubscribe = socket.subscribe<ChatSnapshot | null>(
-        { type: "chat", chatId: activeChatId, ...(span ? { cachedSpan: span } : {}) },
+        { type: "chat", chatId, ...(span ? { cachedSpan: span } : {}) },
         handleSnapshot
       )
+    }
+
+    // The cache read only decides where the server should resume from, so it
+    // must never be what the transcript is waiting on. It normally takes a few
+    // milliseconds, but IndexedDB is a shared queue: a read issued just as the
+    // cache writer puts a large window can sit behind it, and nothing has even
+    // been asked of the server until it comes back. Past the deadline we
+    // subscribe cold and take the full window — more bytes, but it arrives.
+    const cacheDeadline = window.setTimeout(() => subscribeToChat(null), CACHED_WINDOW_READ_BUDGET_MS)
+    void readCachedWindow(chatId).then((cached) => {
+      window.clearTimeout(cacheDeadline)
+      subscribeToChat(cached)
     })
 
     return () => {
       cancelled = true
+      window.clearTimeout(cacheDeadline)
       unsubscribe?.()
       // A chat closed mid-turn never reaches a settled write, so take what is
       // pending rather than lose the window.

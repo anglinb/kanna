@@ -73,6 +73,15 @@ describe("renderChatStatusDot", () => {
     expect(html).toContain("animate-spin")
     expect(html).not.toContain("bg-emerald-400")
   })
+
+  test("renders the compositor-driven shimmer for a running title", () => {
+    const html = renderRow({ thread: thread({ status: "running" }), showStatus: true, detailLabel: null })
+
+    expect(html).toContain("Refactor the ws router")
+    expect(html).toContain("kanna-shiny-track")
+    expect(html).toContain("kanna-shiny-copy")
+    expect(html).not.toContain("animate-pulse")
+  })
 })
 
 describe("ThreadRowContent relevance treatment", () => {

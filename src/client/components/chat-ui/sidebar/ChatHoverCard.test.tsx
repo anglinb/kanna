@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { ChatTouchedFilesResult, SidebarChatRow } from "../../../../shared/types"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { SidebarThread } from "../../../lib/thread-sections"
-import { ChatHoverCardContent } from "./ChatHoverCard"
+import { CHAT_HOVER_CARD_CONTENT_CLASSNAME, ChatHoverCardContent } from "./ChatHoverCard"
 
 const NOW = Date.now()
 
@@ -63,6 +63,23 @@ function render(
 }
 
 const JUMPS = () => undefined
+
+describe("CHAT_HOVER_CARD_CONTENT_CLASSNAME", () => {
+  test("a closed card is gone, not fading", () => {
+    // The card follows a pointer down a list of rows. An exit animation keeps
+    // the closed one on screen — over the row the pointer has already reached.
+    expect(CHAT_HOVER_CARD_CONTENT_CLASSNAME).toContain("data-[state=closed]:hidden")
+    expect(CHAT_HOVER_CARD_CONTENT_CLASSNAME).not.toContain("animate-out")
+  })
+
+  test("carries the surface it used to inherit from the primitive", () => {
+    // It is anchored by hand now, so no base class comes with it: layering,
+    // the border and the padding all have to be spelled out here.
+    expect(CHAT_HOVER_CARD_CONTENT_CLASSNAME).toContain("z-50")
+    expect(CHAT_HOVER_CARD_CONTENT_CLASSNAME).toContain("border-border")
+    expect(CHAT_HOVER_CARD_CONTENT_CLASSNAME).toContain("px-1.5")
+  })
+})
 
 describe("ChatHoverCardContent", () => {
   test("carries what the row could not: the project, the prompt, the reply", () => {

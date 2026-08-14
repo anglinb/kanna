@@ -47,6 +47,14 @@ const STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS = 60 * 1000
 const STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS = 6 * 60 * 60 * 1000
 const STALE_CHAT_DELETE_INTERVAL_MS = 24 * 60 * 60 * 1000
 
+async function withOriginAgentCluster(response: Response | Promise<Response> | undefined) {
+  const resolved = await response
+  // Chrome groups localhost ports into one site. Origin-keying reduces the
+  // chance that a busy preview shares Kanna's renderer.
+  resolved?.headers.set("Origin-Agent-Cluster", "?1")
+  return resolved
+}
+
 export async function persistUploadedFiles(args: {
   projectId: string
   localPath: string
@@ -400,7 +408,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           // feature-detect cloud mode (the SPA fallback would otherwise
           // return index.html with a 200).
           if (url.pathname === CLOUD_BROWSER_PATH_PREFIX || url.pathname.startsWith(`${CLOUD_BROWSER_PATH_PREFIX}/`)) {
-            return Response.json({ error: "Not found" }, { status: 404 })
+            return withOriginAgentCluster(Response.json({ error: "Not found" }, { status: 404 }))
           }
 
           const upgradeWebSocket = () => {
@@ -426,31 +434,31 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           // surface.
           if (requestClass === "untrusted") {
             if (url.pathname === "/health") {
-              return Response.json({ ok: true, port: actualPort })
+              return withOriginAgentCluster(Response.json({ ok: true, port: actualPort }))
             }
             if (url.pathname === "/ws") {
               if (allowCloudWsUpgrade()) {
-                return upgradeWebSocket()
+                return withOriginAgentCluster(upgradeWebSocket())
               }
-              return new Response("Unauthorized", { status: 401 })
+              return withOriginAgentCluster(new Response("Unauthorized", { status: 401 }))
             }
-            return new Response("Not found", { status: 404 })
+            return withOriginAgentCluster(new Response("Not found", { status: 404 }))
           }
 
           if (url.pathname === "/auth/status") {
-            return auth
+            return withOriginAgentCluster(auth
               ? auth.handleStatus(req)
-              : Response.json({ enabled: false, authenticated: true })
+              : Response.json({ enabled: false, authenticated: true }))
           }
 
           if (url.pathname === "/auth/logout") {
             if (req.method !== "POST") {
-              return new Response(null, { status: 405, headers: { Allow: "POST" } })
+              return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "POST" } }))
             }
 
-            return auth
+            return withOriginAgentCluster(auth
               ? auth.handleLogout(req)
-              : Response.json({ ok: true })
+              : Response.json({ ok: true }))
           }
 
           // Proxied requests skip password auth: the kanna.sh proxy already
@@ -458,12 +466,12 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           if (auth && requestClass !== "proxied") {
             if (url.pathname === "/auth/login") {
               if (req.method === "GET") {
-                return auth.redirectToApp(req)
+                return withOriginAgentCluster(auth.redirectToApp(req))
               }
               if (req.method === "POST") {
-                return auth.handleLogin(req, "/")
+                return withOriginAgentCluster(auth.handleLogin(req, "/"))
               }
-              return new Response(null, { status: 405, headers: { Allow: "GET, POST" } })
+              return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
             }
 
             if (url.pathname === "/ws") {
@@ -471,19 +479,19 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               // (minted through the proxied /api/cloud/ws-endpoint call).
               if (!allowCloudWsUpgrade()) {
                 if (!auth.validateOrigin(req)) {
-                  return new Response("Forbidden", { status: 403 })
+                  return withOriginAgentCluster(new Response("Forbidden", { status: 403 }))
                 }
                 if (!auth.isAuthenticated(req)) {
-                  return new Response("Unauthorized", { status: 401 })
+                  return withOriginAgentCluster(new Response("Unauthorized", { status: 401 }))
                 }
               }
             } else if (url.pathname.startsWith("/api/") && !auth.isAuthenticated(req)) {
-              return Response.json({ error: "Unauthorized" }, { status: 401 })
+              return withOriginAgentCluster(Response.json({ error: "Unauthorized" }, { status: 401 }))
             }
           }
 
           if (url.pathname === "/ws") {
-            return upgradeWebSocket()
+            return withOriginAgentCluster(upgradeWebSocket())
           }
 
           if (url.pathname === "/health") {
@@ -491,36 +499,36 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             // data dir is already being served (single-instance guard). Only
             // exposed on local/proxied requests — the raw-tunnel /health
             // above stays minimal.
-            return Response.json({ ok: true, port: actualPort, instance: instanceFingerprint(store.dataDir) })
+            return withOriginAgentCluster(Response.json({ ok: true, port: actualPort, instance: instanceFingerprint(store.dataDir) }))
           }
 
           if (url.pathname === CLOUD_PAIR_SESSION_PATH) {
             // Local requests only: claiming a machine is something you do at
             // the keyboard, never through the proxy or the raw tunnel.
             if (requestClass !== "local") {
-              return Response.json({ error: "Not found" }, { status: 404 })
+              return withOriginAgentCluster(Response.json({ error: "Not found" }, { status: 404 }))
             }
             const respond = (snapshot: PairSessionSnapshot | { status: "unsupported" }) =>
               Response.json(snapshot, { headers: { "Cache-Control": "no-store" } })
 
             if (cloud) {
-              return respond({ status: "paired", appOrigin: cloud.identity.appOrigin })
+              return withOriginAgentCluster(respond({ status: "paired", appOrigin: cloud.identity.appOrigin }))
             }
             if (!pairSession) {
-              return respond({ status: "unsupported" })
+              return withOriginAgentCluster(respond({ status: "unsupported" }))
             }
             if (req.method === "POST") {
-              return respond(await pairSession.start())
+              return withOriginAgentCluster(respond(await pairSession.start()))
             }
             if (req.method === "GET") {
-              return respond(pairSession.status())
+              return withOriginAgentCluster(respond(pairSession.status()))
             }
-            return new Response(null, { status: 405, headers: { Allow: "GET, POST" } })
+            return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
           }
 
           if (url.pathname === CLOUD_WS_ENDPOINT_PATH) {
             if (req.method !== "GET") {
-              return new Response(null, { status: 405, headers: { Allow: "GET" } })
+              return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
             }
             // Proxied requests get the machine's permanent tunnel WS URL + a
             // short-lived token so the browser's WebSocket bypasses the proxy
@@ -533,33 +541,33 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
                 connectToken: minted.token,
                 expiresInMs: minted.expiresInMs,
               }
-              return Response.json(payload, { headers: { "Cache-Control": "no-store" } })
+              return withOriginAgentCluster(Response.json(payload, { headers: { "Cache-Control": "no-store" } }))
             }
             const payload: CloudWsEndpointResponse = { wsUrl: null }
-            return Response.json(payload, { headers: { "Cache-Control": "no-store" } })
+            return withOriginAgentCluster(Response.json(payload, { headers: { "Cache-Control": "no-store" } }))
           }
 
           const uploadResponse = await handleProjectUpload(req, url, store)
           if (uploadResponse) {
-            return uploadResponse
+            return withOriginAgentCluster(uploadResponse)
           }
 
           const deleteUploadResponse = await handleProjectUploadDelete(req, url, store)
           if (deleteUploadResponse) {
-            return deleteUploadResponse
+            return withOriginAgentCluster(deleteUploadResponse)
           }
 
           const attachmentContentResponse = await handleAttachmentContent(req, url, store)
           if (attachmentContentResponse) {
-            return attachmentContentResponse
+            return withOriginAgentCluster(attachmentContentResponse)
           }
 
           const projectFileContentResponse = await handleProjectFileContent(req, url, store)
           if (projectFileContentResponse) {
-            return projectFileContentResponse
+            return withOriginAgentCluster(projectFileContentResponse)
           }
 
-          return serveStatic(distDir, url.pathname)
+          return withOriginAgentCluster(serveStatic(distDir, url.pathname))
         },
         websocket: {
           open(ws) {
