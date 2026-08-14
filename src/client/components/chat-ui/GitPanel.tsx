@@ -12,6 +12,7 @@ import type {
   GitHubRepoAvailabilityResult,
 } from "../../../shared/types"
 import { formatRelativeTime } from "../../lib/formatters"
+import { cn } from "../../lib/utils"
 import { isDiffPathChecked, useDiffCommitStore } from "../../stores/diffCommitStore"
 import { useRightSidebarStore } from "../../stores/rightSidebarStore"
 import { Button } from "../ui/button"
@@ -525,7 +526,19 @@ function GitPanelImpl({
                             <span className="inline-flex items-center gap-1">
                               Changes
                               {diffs.files.length > 0 ? (
-                                <span className="inline-flex min-w-[1rem] items-center justify-center rounded-full bg-slate-900/10 px-1 py-px text-[10px] leading-none tabular-nums dark:bg-white/10">
+                                <span
+                                  className={cn(
+                                    // Concentric with the control: its outer
+                                    // radius is 8px and 5px of padding sit
+                                    // between that edge and the pill (3px on
+                                    // the control, 2px on the segment), which
+                                    // leaves the pill 3px.
+                                    "inline-flex min-w-[1.125rem] items-center justify-center rounded-[3px] px-1 py-[3px] text-[10px] leading-none tabular-nums",
+                                    viewMode === "changes"
+                                      ? "bg-slate-900/20 dark:bg-white/20"
+                                      : "bg-slate-900/10 dark:bg-white/10"
+                                  )}
+                                >
                                   {selectedCount}
                                 </span>
                               ) : null}
