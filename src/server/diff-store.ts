@@ -11,6 +11,7 @@ import type {
   ChatBranchListResult,
   ChatCheckoutBranchResult,
   ChatCreateBranchResult,
+  ChatCommitChecks,
   ChatDiffFile,
   ChatDiffSnapshot,
   BranchActionSuccess,
@@ -28,6 +29,7 @@ import type {
 import { buildKannaCommitAttribution } from "./attribution"
 import { generateCommitMessageDetailed } from "./generate-commit-message"
 import { getGhAuthInfo } from "./github"
+import { CommitChecksStore } from "./github-checks"
 import { resolveCommandPath } from "./process-utils"
 import { inferProjectFileContentType } from "./uploads"
 
@@ -69,11 +71,20 @@ function upstreamStatusEqual(left: UpstreamStatus, right: UpstreamStatus) {
     && left.lastFetchedAt === right.lastFetchedAt
 }
 
+function commitChecksEqual(left: ChatCommitChecks | undefined, right: ChatCommitChecks | undefined) {
+  if (!left || !right) return left === right
+  return left.state === right.state
+    && left.passed === right.passed
+    && left.total === right.total
+    && left.url === right.url
+}
+
 function branchHistoryEqual(left: ChatBranchHistorySnapshot, right: ChatBranchHistorySnapshot) {
   if (left.entries.length !== right.entries.length) return false
   return left.entries.every((entry, index) => {
     const other = right.entries[index]
     return Boolean(other)
+      && commitChecksEqual(entry.checks, other.checks)
       && entry.sha === other.sha
       && entry.summary === other.summary
       && entry.description === other.description
@@ -710,6 +721,33 @@ async function getBranchHistory(args: {
   }))
 
   return { entries }
+}
+
+const commitChecksStore = new CommitChecksStore()
+
+/**
+ * Adds GitHub check counts to the commits that can have them. Commits Kanna
+ * has not pushed yet are skipped, and the lookup never blocks: the store
+ * answers from cache and refetches in the background, so a fresh rollup
+ * reaches the client on the next snapshot refresh.
+ */
+function attachCommitChecks(args: {
+  history: ChatBranchHistorySnapshot
+  repoSlug: string | undefined
+  unpushedCount: number
+}): ChatBranchHistorySnapshot {
+  if (!args.repoSlug) return args.history
+
+  const pushed = args.history.entries.slice(args.unpushedCount)
+  const checksBySha = commitChecksStore.read(args.repoSlug, pushed.map((entry) => entry.sha))
+  if (checksBySha.size === 0) return args.history
+
+  return {
+    entries: args.history.entries.map((entry) => {
+      const checks = checksBySha.get(entry.sha)
+      return checks ? { ...entry, checks } : entry
+    }),
+  }
 }
 
 function createBranchActionFailure(title: string, detail: string, fallback: string) {
@@ -1753,6 +1791,11 @@ export class DiffStore {
         : Promise.resolve({ entries: [] }),
     ])
     const { aheadCount, behindCount } = upstreamCounts
+    const historyWithChecks = attachCommitChecks({
+      history: branchHistory,
+      repoSlug: originRepoSlug,
+      unpushedCount: hasUpstream ? aheadCount ?? 0 : 0,
+    })
     const nextState = {
       status: "ready",
       branchName,
@@ -1767,7 +1810,7 @@ export class DiffStore {
         ? this.prNumbersByBranch.get(this.getPrBranchKey(repo.repoRoot, branchName))
         : undefined,
       files,
-      branchHistory,
+      branchHistory: historyWithChecks,
     } satisfies StoredChatDiffState
     return this.commitState(projectId, nextState)
   }

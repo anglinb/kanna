@@ -1598,6 +1598,18 @@ export interface ChatDiffFile {
   size?: number
 }
 
+export type ChatCommitChecksState = "pending" | "success" | "failure"
+
+/** GitHub check rollup for one commit, shown beside it in the History tab. */
+export interface ChatCommitChecks {
+  state: ChatCommitChecksState
+  /** Checks that finished successfully. Skipped checks do not count. */
+  passed: number
+  total: number
+  /** Actions run to open on click. Absent when GitHub reports no link. */
+  url?: string
+}
+
 export interface ChatBranchHistoryEntry {
   sha: string
   summary: string
@@ -1606,6 +1618,7 @@ export interface ChatBranchHistoryEntry {
   authoredAt: string
   tags: string[]
   githubUrl?: string
+  checks?: ChatCommitChecks
 }
 
 export interface ChatBranchHistorySnapshot {

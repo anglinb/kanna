@@ -1,4 +1,5 @@
 import type {
+  ChatCommitChecks,
   ChatDiffSnapshot,
   ChatSnapshot,
   ProviderCatalogEntry,
@@ -74,6 +75,14 @@ function sameQueuedMessages(left: ChatSnapshot["queuedMessages"] | null | undefi
   return left.every((message, index) => sameQueuedMessage(message, right[index]!))
 }
 
+function sameCommitChecks(left: ChatCommitChecks | undefined, right: ChatCommitChecks | undefined) {
+  if (!left || !right) return left === right
+  return left.state === right.state
+    && left.passed === right.passed
+    && left.total === right.total
+    && left.url === right.url
+}
+
 export function sameDiffs(left: ChatDiffSnapshot | null | undefined, right: ChatDiffSnapshot | null | undefined) {
   if (left === right) return true
   if (!left || !right) return false
@@ -92,6 +101,7 @@ export function sameDiffs(left: ChatDiffSnapshot | null | undefined, right: Chat
   const sameBranchHistory = leftHistory.every((entry, index) => {
     const other = rightHistory[index]
     return Boolean(other)
+      && sameCommitChecks(entry.checks, other?.checks)
       && entry.sha === other.sha
       && entry.summary === other.summary
       && entry.description === other.description

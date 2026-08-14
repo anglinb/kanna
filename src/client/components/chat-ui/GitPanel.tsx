@@ -503,7 +503,6 @@ function GitPanelImpl({
                         setAllCheckedPaths(projectId, filePaths, someSelected ? true : !allSelected)
                       }}
                     />
-                    <span>{selectedCount} files</span>
                   </div>
                 ) : <div />}
                 <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2">
@@ -517,7 +516,19 @@ function GitPanelImpl({
                       size="sm"
                       optionClassName="flex-1 justify-center"
                       options={[
-                        { value: "changes", label: "Changes"},
+                        {
+                          value: "changes",
+                          label: (
+                            <span className="inline-flex items-center gap-1.5">
+                              Changes
+                              {diffs.files.length > 0 ? (
+                                <span className="inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-slate-900/10 px-1 py-0.5 text-[10px] leading-none tabular-nums dark:bg-white/10">
+                                  {selectedCount}
+                                </span>
+                              ) : null}
+                            </span>
+                          ),
+                        },
                         { value: "history", label: "History" },
                       ]}
                     />
