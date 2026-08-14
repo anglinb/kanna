@@ -8,6 +8,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "../../ui/context-menu"
+import { useOpenedOnce } from "../../../hooks/useOpenedOnce"
 
 /**
  * "Open on GitHub" (or GitLab, or whatever host the remote names), sitting with
@@ -168,142 +169,149 @@ export function ChatRowMenu({
   onDelete: () => void
   children: ReactNode
 }) {
+  // There is one of these per sidebar row and the menu below is a dozen items
+  // with icons, rebuilt on every render of the row that owns it. Nothing is
+  // built until the menu has actually been opened once — see `useOpenedOnce`.
+  const [menuOpened, handleMenuOpenChange] = useOpenedOnce()
+
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={handleMenuOpenChange}>
       <ContextMenuTrigger asChild>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent>
-        {/* Draft leads: its own section, for something only this chat has and
-            only while it has it — so when it's there, it's what you opened the
-            menu for. */}
-        {onClearDraft ? (
-          <>
-            <ContextMenuItem
-              onSelect={(event) => {
-                event.preventDefault()
-                onClearDraft()
-              }}
-            >
-              <PencilOff className="h-3.5 w-3.5" />
-              <span className="text-xs font-medium">Clear Draft</span>
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        ) : null}
+      {!menuOpened ? null : (
+        <ContextMenuContent>
+          {/* Draft leads: its own section, for something only this chat has and
+              only while it has it — so when it's there, it's what you opened the
+              menu for. */}
+          {onClearDraft ? (
+            <>
+              <ContextMenuItem
+                onSelect={(event) => {
+                  event.preventDefault()
+                  onClearDraft()
+                }}
+              >
+                <PencilOff className="h-3.5 w-3.5" />
+                <span className="text-xs font-medium">Clear Draft</span>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          ) : null}
 
-        {archived && onRestore ? (
-          <>
-            <ContextMenuItem
-              onSelect={(event) => {
-                event.preventDefault()
-                onRestore()
-              }}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span className="text-xs font-medium">Restore</span>
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        ) : null}
+          {archived && onRestore ? (
+            <>
+              <ContextMenuItem
+                onSelect={(event) => {
+                  event.preventDefault()
+                  onRestore()
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span className="text-xs font-medium">Restore</span>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          ) : null}
 
-        {/* Chat actions */}
-        <ContextMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            onRename()
-          }}
-        >
-          <Pencil className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">Rename</span>
-        </ContextMenuItem>
-        <ContextMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            onShare()
-          }}
-        >
-          <UserRoundPlus className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">Share</span>
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={!canFork}
-          onSelect={(event) => {
-            event.preventDefault()
-            if (!canFork) return
-            onFork()
-          }}
-        >
-          <Split className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">Fork</span>
-        </ContextMenuItem>
-
-        <ContextMenuSeparator />
-
-        {/* Project actions */}
-        <ContextMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            onNewChat()
-          }}
-        >
-          <SquarePen className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">New Chat</span>
-        </ContextMenuItem>
-        <ContextMenuItem
-          onSelect={(event) => {
-            event.stopPropagation()
-            onCopyPath()
-          }}
-        >
-          <Copy className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">Copy Path</span>
-        </ContextMenuItem>
-        <ContextMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            onOpenInFinder()
-          }}
-        >
-          <FolderOpen className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">Open in Finder</span>
-        </ContextMenuItem>
-        <ContextMenuItem
-          onSelect={(event) => {
-            event.stopPropagation()
-            onOpenInEditor()
-          }}
-        >
-          <Code className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">Open in {editorLabel}</span>
-        </ContextMenuItem>
-        <OpenRepoMenuItem repoUrl={repoUrl} />
-
-        <ContextMenuSeparator />
-
-        {/* Chat lifecycle */}
-        {!archived ? (
+          {/* Chat actions */}
           <ContextMenuItem
             onSelect={(event) => {
               event.preventDefault()
-              onArchive()
+              onRename()
             }}
           >
-            <Archive className="h-3.5 w-3.5" />
-            <span className="text-xs font-medium">Archive Chat</span>
+            <Pencil className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">Rename</span>
           </ContextMenuItem>
-        ) : null}
-        <ContextMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            onDelete()
-          }}
-          className="text-destructive dark:text-red-400 hover:bg-destructive/10 focus:bg-destructive/10 dark:hover:bg-red-500/20 dark:focus:bg-red-500/20"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">Delete Chat</span>
-        </ContextMenuItem>
-      </ContextMenuContent>
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              onShare()
+            }}
+          >
+            <UserRoundPlus className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">Share</span>
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!canFork}
+            onSelect={(event) => {
+              event.preventDefault()
+              if (!canFork) return
+              onFork()
+            }}
+          >
+            <Split className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">Fork</span>
+          </ContextMenuItem>
+
+          <ContextMenuSeparator />
+
+          {/* Project actions */}
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              onNewChat()
+            }}
+          >
+            <SquarePen className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">New Chat</span>
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.stopPropagation()
+              onCopyPath()
+            }}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">Copy Path</span>
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              onOpenInFinder()
+            }}
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">Open in Finder</span>
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.stopPropagation()
+              onOpenInEditor()
+            }}
+          >
+            <Code className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">Open in {editorLabel}</span>
+          </ContextMenuItem>
+          <OpenRepoMenuItem repoUrl={repoUrl} />
+
+          <ContextMenuSeparator />
+
+          {/* Chat lifecycle */}
+          {!archived ? (
+            <ContextMenuItem
+              onSelect={(event) => {
+                event.preventDefault()
+                onArchive()
+              }}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              <span className="text-xs font-medium">Archive Chat</span>
+            </ContextMenuItem>
+          ) : null}
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              onDelete()
+            }}
+            className="text-destructive dark:text-red-400 hover:bg-destructive/10 focus:bg-destructive/10 dark:hover:bg-red-500/20 dark:focus:bg-red-500/20"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium">Delete Chat</span>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      )}
     </ContextMenu>
   )
 }

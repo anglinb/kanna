@@ -1,5 +1,5 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, Paperclip } from "lucide-react"
+import { ArrowUp, Check, Copy, Paperclip } from "lucide-react"
 import {
   chatModeFromFlags,
   type AgentProvider,
@@ -21,6 +21,8 @@ import { useChatInputStore } from "../../stores/chatInputStore"
 import { type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
 import { formatPathWithTilde } from "../../lib/pathUtils"
+import { copyTextToClipboard } from "../../lib/clipboard"
+import { buildUploadErrorReport, simpleUploadError, type UploadErrorReport } from "../../lib/uploadError"
 import { useUnauthenticatedHarnesses } from "../../stores/providerAuthStore"
 import { SignInDialog } from "../auth/SignInDialog"
 import { ChatPreferenceControls } from "./ChatPreferenceControls"
@@ -113,6 +115,46 @@ function replaceTextSelection(args: {
   selectionEnd: number
 }) {
   return `${args.value.slice(0, args.selectionStart)}${args.insertedText}${args.value.slice(args.selectionEnd)}`
+}
+
+/**
+ * Upload failures often happen on a phone, where there is no console and no
+ * devtools. The full report goes on screen and behind a copy button so the user
+ * can hand it over whole.
+ */
+function UploadErrorNotice({ report }: { report: UploadErrorReport }) {
+  const [copied, setCopied] = useState(false)
+
+  async function handleCopy() {
+    if (!await copyTextToClipboard(report.detail)) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
+  }
+
+  const hasDetail = report.detail !== report.message
+
+  return (
+    <div className="max-w-[840px] mx-auto mt-2 px-1 text-sm text-destructive">
+      <div className="flex items-start gap-2">
+        <span className="min-w-0 flex-1 break-words">{report.message}</span>
+        {hasDetail ? (
+          <button
+            type="button"
+            onClick={() => void handleCopy()}
+            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-destructive/40 px-2 py-0.5 text-xs transition-colors hover:bg-destructive/10"
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {copied ? "Copied" : "Copy details"}
+          </button>
+        ) : null}
+      </div>
+      {hasDetail ? (
+        <pre className="mt-2 max-h-48 select-text overflow-auto rounded-md bg-destructive/10 p-2 text-[11px] leading-snug whitespace-pre-wrap break-words text-destructive/90">
+          {report.detail}
+        </pre>
+      ) : null}
+    </div>
+  )
 }
 
 interface ComposerAttachment extends ChatAttachment {
@@ -210,7 +252,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const controlsScrollSpacer = cn("min-w-3", isStandalone && "min-w-8")
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => hydrateComposerAttachments(chatId ? getAttachmentDrafts(chatId) : []))
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null)
-  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadError, setUploadError] = useState<UploadErrorReport | null>(null)
   const uploadQueueRef = useRef<File[]>([])
   const activeUploadsRef = useRef(0)
   const attachmentsRef = useRef<ComposerAttachment[]>([])
@@ -494,25 +536,43 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
         previewUrl,
       }])
 
+      const requestUrl = `/api/projects/${projectId}/uploads`
+      const startedAt = Date.now()
+      let stage = "request"
+      let responseStatus: number | null = null
+      let responseStatusText = ""
+      let responseBody = ""
+
       void (async () => {
         try {
           const formData = new FormData()
           formData.append("files", file)
+          // The server compares this against the bytes it actually received, so
+          // a body truncated in transit reports itself instead of looking like
+          // a parse error.
+          formData.append("clientFileSizes", String(file.size))
 
-          const response = await fetch(`/api/projects/${projectId}/uploads`, {
+          const response = await fetch(requestUrl, {
             method: "POST",
             body: formData,
           })
 
+          stage = "read-body"
+          responseStatus = response.status
+          responseStatusText = response.statusText
+          // Read once as text. An error page is often not JSON, and the raw
+          // body is the only clue when it is not.
+          responseBody = await response.text()
+          stage = "response"
+
           if (!response.ok) {
-            const payload = await response.json().catch(() => ({}))
-            throw new Error(typeof payload.error === "string" ? payload.error : "Upload failed")
+            throw new Error(`The server returned ${response.status}.`)
           }
 
-          const payload = await response.json() as { attachments: ChatAttachment[] }
+          const payload = JSON.parse(responseBody) as { attachments: ChatAttachment[] }
           const uploaded = payload.attachments[0]
           if (!uploaded) {
-            throw new Error("Upload failed")
+            throw new Error("The server saved nothing and returned no attachment.")
           }
 
           if (generation !== uploadGenerationRef.current) {
@@ -547,7 +607,19 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
           setAttachments((current) => current.map((attachment) => (
             attachment.id === tempId ? { ...attachment, status: "failed" } : attachment
           )))
-          setUploadError(error instanceof Error ? error.message : String(error))
+          setUploadError(buildUploadErrorReport({
+            file: { name: file.name, size: file.size, type: file.type },
+            projectId,
+            requestUrl,
+            stage,
+            durationMs: Date.now() - startedAt,
+            responseStatus,
+            responseStatusText,
+            responseBody,
+            error,
+            userAgent: navigator.userAgent,
+            timestamp: new Date().toISOString(),
+          }))
         } finally {
           activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1)
           processUploadQueue()
@@ -558,7 +630,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const enqueueFiles = useCallback((files: File[]) => {
     if (!projectId) {
-      setUploadError("Open a project before uploading files.")
+      setUploadError(simpleUploadError("Open a project before uploading files."))
       return
     }
 
@@ -567,7 +639,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       queuedAttachmentCount: uploadQueueRef.current.length,
       incomingAttachmentCount: files.length,
     })) {
-      setUploadError(`You can upload up to ${MAX_FILES_PER_DROP} files at a time.`)
+      setUploadError(simpleUploadError(`You can upload up to ${MAX_FILES_PER_DROP} files at a time.`))
       return
     }
 
@@ -883,11 +955,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
           </div>
         </div>
 
-        {uploadError ? (
-          <div className="max-w-[840px] mx-auto mt-2 px-1 text-sm text-destructive">
-            {uploadError}
-          </div>
-        ) : null}
+        {uploadError ? <UploadErrorNotice report={uploadError} /> : null}
       </div>
 
       {/* Hidden picker for the command palette's "Attach Files" action. */}

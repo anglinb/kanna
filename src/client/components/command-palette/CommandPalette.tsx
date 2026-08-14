@@ -35,7 +35,7 @@ import {
   Sun,
   Terminal,
 } from "lucide-react"
-import type { ChatMode, ClaudeContextWindow, FsListResult, GitHubRecentReposResult } from "../../../shared/types"
+import type { ChatMode, ClaudeContextWindow, FsListResult, GitHubRecentReposResult, SidebarData } from "../../../shared/types"
 import { DEFAULT_NEW_PROJECTS_DIRECTORY } from "../../../shared/types"
 import { REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
 import type { KannaState } from "../../app/useKannaState"
@@ -61,7 +61,8 @@ import {
 } from "../../lib/project-fs"
 import { filterProjects, groupProjectsByRecency } from "../../lib/project-groups"
 import { useRightSidebarStore } from "../../stores/rightSidebarStore"
-import { useChatDraft } from "../../stores/chatInputStore"
+import { useSidebarStore } from "../../stores/sidebarStore"
+import { useChatHasDraft } from "../../stores/chatInputStore"
 import { useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { PROVIDER_ICONS } from "../chat-ui/ChatPreferenceControls"
@@ -96,6 +97,9 @@ import { useDirectoryBrowser } from "./useDirectoryBrowser"
 import { useRepoMetadata } from "./useRepoMetadata"
 
 /** Window event that opens the command palette from anywhere (e.g. mobile nav). */
+/** Frozen stand-in while the palette is closed — see the selector below. */
+const EMPTY_SIDEBAR_DATA: SidebarData = { projectGroups: [] }
+
 export const OPEN_COMMAND_PALETTE_EVENT = "kanna:open-command-palette"
 
 /** Palette sub-pages callers may deep-link to when opening the palette. */
@@ -206,7 +210,7 @@ function ThreadItem({
 }) {
   // Same treatment as the sidebar: a chat you left mid-sentence swaps its
   // harness glyph for a pencil.
-  const hasDraft = useChatDraft(thread.chatId).length > 0
+  const hasDraft = useChatHasDraft(thread.chatId)
   return (
     <CommandItem value={`thread-${thread.chatId}`} onSelect={() => onSelect(thread)}>
       <ThreadRowContent
@@ -288,6 +292,15 @@ export function CommandPalette({ state }: { state: KannaState }) {
   // no Escape, no page pops, input disabled.
   const paletteLocked = cloneRun !== null && cloneRun.status !== "error"
 
+  // Subscribed only while the palette is up.
+  //
+  // Everything below derives thread lists and project lists off the whole
+  // snapshot, and a running turn moves that snapshot several times a second.
+  // A closed palette that subscribed anyway re-flattened every chat in the app
+  // on each of those pushes, for a list nobody was looking at. Closed, the
+  // selector returns one frozen constant, so the store never re-renders this.
+  const sidebarData = useSidebarStore((store) => (open ? store.data : EMPTY_SIDEBAR_DATA))
+
   const browser = useDirectoryBrowser(state.socket)
 
   const editorPreset = useTerminalPreferencesStore((store) => store.editorPreset)
@@ -319,19 +332,19 @@ export function CommandPalette({ state }: { state: KannaState }) {
   // "Hide <project>" action, which needs the group key + title).
   const currentChat = useMemo(() => {
     if (!state.activeChatId) return null
-    for (const group of state.sidebarData.projectGroups) {
+    for (const group of sidebarData.projectGroups) {
       const row = group.chats.find((chat) => chat.chatId === state.activeChatId)
       if (row) return { row, group }
     }
     return null
-  }, [state.activeChatId, state.sidebarData])
+  }, [state.activeChatId, sidebarData])
   const currentChatRow = currentChat?.row ?? null
   const currentChatGroup = currentChat?.group ?? null
 
-  const threads = useMemo(() => flattenSidebarThreads(state.sidebarData), [state.sidebarData])
+  const threads = useMemo(() => flattenSidebarThreads(sidebarData), [sidebarData])
   const paletteProjects = useMemo(
-    () => flattenVisibleProjectGroups(state.sidebarData.projectGroups),
-    [state.sidebarData]
+    () => flattenVisibleProjectGroups(sidebarData.projectGroups),
+    [sidebarData]
   )
   const settingsEntries = useMemo(() => getSettingsPaletteEntries(), [])
 
@@ -498,9 +511,9 @@ export function CommandPalette({ state }: { state: KannaState }) {
 
   const currentProjectTitle = useMemo(
     () => (projectId
-      ? state.sidebarData.projectGroups.find((group) => group.groupKey === projectId)?.title ?? null
+      ? sidebarData.projectGroups.find((group) => group.groupKey === projectId)?.title ?? null
       : null),
-    [projectId, state.sidebarData.projectGroups]
+    [projectId, sidebarData.projectGroups]
   )
 
   // The project the "Chats in <project>" sub-page browses — the one picked from
@@ -509,9 +522,9 @@ export function CommandPalette({ state }: { state: KannaState }) {
 
   const projectChatsGroup = useMemo(
     () => (projectChatsProjectId
-      ? state.sidebarData.projectGroups.find((group) => group.groupKey === projectChatsProjectId) ?? null
+      ? sidebarData.projectGroups.find((group) => group.groupKey === projectChatsProjectId) ?? null
       : null),
-    [projectChatsProjectId, state.sidebarData.projectGroups]
+    [projectChatsProjectId, sidebarData.projectGroups]
   )
   const projectChatsTitle = projectChatsGroup?.title ?? null
 
@@ -553,7 +566,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
       })
     }
 
-    if (state.sidebarData.projectGroups.length > 0) {
+    if (sidebarData.projectGroups.length > 0) {
       list.push({
         id: "new-thread-choose",
         title: "New Chat in…",
@@ -997,7 +1010,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
     state.handleWriteAppSettings,
     state.keybindings,
     state.navbarLocalPath,
-    state.sidebarData.projectGroups.length,
+    sidebarData.projectGroups.length,
   ])
 
   const trimmedQuery = query.trim()
@@ -1084,7 +1097,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
   // starts a chat where you already are. Typing re-ranks by fuzzy score.
   const projectResults = useMemo(() => {
     if (page !== "new-thread") return []
-    const groups = state.sidebarData.projectGroups
+    const groups = sidebarData.projectGroups
       .filter((group) => group.chats.length > 0)
       .sort((left, right) => projectActivity(right) - projectActivity(left))
     if (!trimmedQuery) {
@@ -1096,7 +1109,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
       .filter((entry) => entry.score > 0)
       .sort((left, right) => right.score - left.score)
       .map((entry) => entry.group)
-  }, [page, projectId, state.sidebarData.projectGroups, trimmedQuery])
+  }, [page, projectId, sidebarData.projectGroups, trimmedQuery])
 
   // "Chats in <project>" sub-page, empty query: the same grouping as the
   // sidebar's Chats tab (In Progress, Review, date buckets, archived last) —

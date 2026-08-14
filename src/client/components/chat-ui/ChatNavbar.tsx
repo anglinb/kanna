@@ -1,3 +1,4 @@
+import { memo } from "react"
 import { Check, Flower, GitBranch, Globe, Loader2, Menu, MoreHorizontal, PanelLeft, PanelRight, Search, SquarePen, Terminal, UserRoundPlus } from "lucide-react"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
 import { Button } from "../ui/button"
@@ -108,7 +109,12 @@ interface Props {
   gitStatus?: "unknown" | "ready" | "no_repo"
 }
 
-export function ChatNavbar({
+/**
+ * Memoized: it sits above the transcript, so it renders on every pushed chat
+ * snapshot — many times a second while a turn runs — for a bar that only
+ * changes when the branch, the panel or the sidebar does.
+ */
+function ChatNavbarImpl({
   sidebarCollapsed,
   onOpenSidebar,
   onExpandSidebar,
@@ -334,3 +340,5 @@ export function ChatNavbar({
     </CardHeader>
   )
 }
+
+export const ChatNavbar = memo(ChatNavbarImpl)

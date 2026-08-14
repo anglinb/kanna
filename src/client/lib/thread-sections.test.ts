@@ -11,7 +11,9 @@ import {
   getReviewThreads,
   mergeRelevantThreads,
   RECENT_THREADS_LIMIT,
+  stabilizeSidebarThreads,
 } from "./thread-sections"
+import { stabilizeSidebarData } from "../app/sidebarStability"
 
 function makeChatRow(overrides: Partial<SidebarChatRow> & Pick<SidebarChatRow, "chatId" | "title">): SidebarChatRow {
   return {
@@ -604,5 +606,149 @@ describe("mergeRelevantThreads", () => {
     const sections = computeSidebarThreadSections(flattenSidebarThreads(data), NOW, draftStartTimes)
     expect(mergeRelevantThreads(sections, draftStartTimes).map((t) => t.chatId))
       .toEqual(["drafting", "unread-new"])
+  })
+})
+
+describe("pending sends", () => {
+  // The gap this closes: the composer clears its draft the instant you press
+  // send, but the server has not yet recorded the message or moved the status
+  // off idle. Without the pending entry the chat qualifies for no section at
+  // all, so the row blinks out and comes back.
+  const SENT_AT = at(2026, 7, 15, 11)
+
+  test("a just-sent empty chat holds its place in In Progress", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "just-sent", title: "new" }), // no lastMessageAt yet
+      makeChatRow({ chatId: "other", title: "o", lastMessageAt: at(2026, 7, 15) }),
+    ])
+
+    const withoutPending = computeSidebarThreadSections(flattenSidebarThreads(data), NOW)
+    expect(withoutPending.inProgress).toHaveLength(0)
+    // Reproduces the bug: the chat is in nothing at all.
+    expect(withoutPending.buckets.flatMap((bucket) => bucket.threads).map((t) => t.chatId))
+      .not.toContain("just-sent")
+
+    const sections = computeSidebarThreadSections(
+      flattenSidebarThreads(data),
+      NOW,
+      undefined,
+      new Map([["just-sent", SENT_AT]]),
+    )
+    expect(sections.inProgress.map((thread) => thread.chatId)).toEqual(["just-sent"])
+  })
+
+  test("a pending send outranks the unread badge it just answered", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "replied", title: "r", unread: true, lastMessageAt: at(2026, 7, 15, 9) }),
+    ])
+
+    const sections = computeSidebarThreadSections(
+      flattenSidebarThreads(data),
+      NOW,
+      undefined,
+      new Map([["replied", SENT_AT]]),
+    )
+
+    expect(sections.review).toHaveLength(0)
+    expect(sections.inProgress.map((thread) => thread.chatId)).toEqual(["replied"])
+  })
+
+  test("the entry goes inert once the snapshot catches up", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "landed", title: "l", lastMessageAt: SENT_AT + 1 }),
+    ])
+
+    const sections = computeSidebarThreadSections(
+      flattenSidebarThreads(data),
+      NOW,
+      undefined,
+      new Map([["landed", SENT_AT]]),
+    )
+
+    // Idle again with the message recorded, so it belongs to a date bucket —
+    // a stale pending entry must not pin it in In Progress.
+    expect(sections.inProgress).toHaveLength(0)
+    expect(sections.buckets.flatMap((bucket) => bucket.threads).map((t) => t.chatId))
+      .toEqual(["landed"])
+  })
+
+  test("a pending send sorts by when it was sent, so it lands where it will stay", () => {
+    const data = makeData([
+      makeChatRow({ chatId: "old-running", title: "a", status: "running", lastMessageAt: at(2026, 7, 15, 8) }),
+      // Created long ago, so a fallback to _creationTime would sort it first.
+      makeChatRow({ chatId: "just-sent", title: "b", lastMessageAt: at(2026, 7, 10) }),
+    ])
+
+    const sections = computeSidebarThreadSections(
+      flattenSidebarThreads(data),
+      NOW,
+      undefined,
+      new Map([["just-sent", SENT_AT]]),
+    )
+
+    // In Progress is oldest-first, so the newest send trails — the slot it keeps
+    // once the server stamps the same moment onto lastMessageAt.
+    expect(sections.inProgress.map((thread) => thread.chatId)).toEqual(["old-running", "just-sent"])
+  })
+})
+
+
+describe("stabilizeSidebarThreads", () => {
+  // Exercised through `stabilizeSidebarData`, because that is what feeds it:
+  // the row and group identities it compares are the ones that pass establishes.
+  function flattenStabilized(previous: SidebarData | null, next: SidebarData) {
+    return flattenSidebarThreads(stabilizeSidebarData(previous, next))
+  }
+
+  test("returns the previous list when every thread is unchanged", () => {
+    const held = makeSidebarData()
+    const first = flattenStabilized(null, held)
+
+    const second = flattenStabilized(held, makeSidebarData())
+
+    expect(stabilizeSidebarThreads(first, second)).toBe(first)
+  })
+
+  test("keeps every thread whose row did not move", () => {
+    const held = makeSidebarData()
+    const first = flattenStabilized(null, held)
+
+    const moved = makeSidebarData()
+    moved.projectGroups[0]!.chats[0] = {
+      ...moved.projectGroups[0]!.chats[0]!,
+      lastAgentMessagePreview: "still working",
+    }
+    const result = stabilizeSidebarThreads(first, flattenStabilized(held, moved))
+
+    expect(result).not.toBe(first)
+    const changed = result.find((thread) => thread.chatId === "chat-1")!
+    expect(changed.row.lastAgentMessagePreview).toBe("still working")
+    for (const thread of result) {
+      if (thread.chatId === "chat-1") continue
+      expect(thread).toBe(first.find((item) => item.chatId === thread.chatId)!)
+    }
+  })
+
+  test("matches by chat id, so an insert does not orphan the rows below it", () => {
+    const held = makeSidebarData()
+    const first = flattenStabilized(null, held)
+
+    const withNewChat = makeSidebarData()
+    withNewChat.projectGroups[0]!.chats = [
+      makeChatRow({ chatId: "chat-new", title: "Just started", lastMessageAt: 1_500 }),
+      ...withNewChat.projectGroups[0]!.chats,
+    ]
+    const result = stabilizeSidebarThreads(first, flattenStabilized(held, withNewChat))
+
+    expect(result[0]!.chatId).toBe("chat-new")
+    // The project group was rebuilt around the insert, but the chat below it is
+    // still the object its row already rendered.
+    expect(result.find((thread) => thread.chatId === "chat-2"))
+      .toBe(first.find((thread) => thread.chatId === "chat-2")!)
+  })
+
+  test("passes the first list through", () => {
+    const threads = flattenSidebarThreads(makeSidebarData())
+    expect(stabilizeSidebarThreads([], threads)).toBe(threads)
   })
 })

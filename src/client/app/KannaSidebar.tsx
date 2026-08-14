@@ -7,8 +7,6 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, Dia
 import { buildChatJumpLocationState, type ChatJumpRole } from "../lib/chat-navigation"
 import { formatSidebarAgeLabel } from "../lib/formatters"
 import { getSidebarChatTimestamp } from "../lib/sidebarChats"
-import { getThreadDetailLabel } from "../lib/thread-detail-label"
-import { flattenSidebarThreads } from "../lib/thread-sections"
 import { cn, normalizeChatId } from "../lib/utils"
 import { LocalProjectsSection } from "../components/chat-ui/sidebar/LocalProjectsSection"
 import { projectActivity } from "./kannaStateHelpers"
@@ -19,7 +17,7 @@ import { SidebarViewSwitcher, type SidebarView } from "../components/chat-ui/sid
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
-import type { ChatTouchedFilesResult, KeybindingsSnapshot, SidebarData, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
+import type { ChatTouchedFilesResult, KeybindingsSnapshot, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
 import type { SocketStatus } from "./socket"
 import {
   getSidebarJumpTargetIndex,
@@ -30,6 +28,8 @@ import {
 } from "./sidebarNumberJump"
 import { SIDEBAR_VIEW_STORAGE_KEY, SIDEBAR_WIDTH_STORAGE_KEY } from "../lib/storageKeys"
 import { useAppSettingsStore } from "../stores/appSettingsStore"
+import { useSidebarData } from "../stores/sidebarStore"
+import { useStableSidebarThreads } from "./useStableSidebarThreads"
 import { OPEN_COMMAND_PALETTE_EVENT, openCommandPalette } from "../components/command-palette/CommandPalette"
 
 export const DEFAULT_SIDEBAR_WIDTH = 275
@@ -58,7 +58,6 @@ function readStoredSidebarView(): SidebarView {
 }
 
 interface KannaSidebarProps {
-  data: SidebarData
   activeChatId: string | null
   connectionStatus: SocketStatus
   ready: boolean
@@ -94,7 +93,6 @@ interface KannaSidebarProps {
 }
 
 function KannaSidebarImpl({
-  data,
   activeChatId,
   connectionStatus,
   ready,
@@ -126,6 +124,10 @@ function KannaSidebarImpl({
   updateSnapshot,
   onOpenChangelog,
 }: KannaSidebarProps) {
+  // The one place that wants the whole snapshot. Selected here rather than
+  // passed down so a sidebar push re-renders this component and nothing above
+  // it — the chat page and the transcript are untouched by it.
+  const data = useSidebarData()
   const location = useLocation()
   const navigate = useNavigate()
   const isStandalone = useIsStandalone()
@@ -163,11 +165,13 @@ function KannaSidebarImpl({
   )
 
   // The Projects tab renders the same `ThreadRow` as the Chats tab, which wants
-  // a SidebarThread. Reuse the flattener rather than synthesising one per row so
-  // projectId/projectTitle/archived stay correct in one place.
+  // a SidebarThread. Flattened once here and shared with the Chats tab so
+  // projectId/projectTitle/archived stay correct in one place — and so both tabs
+  // hand their rows the same identity-stable thread objects.
+  const threads = useStableSidebarThreads(data)
   const threadByChatId = useMemo(
-    () => new Map(flattenSidebarThreads(data).map((thread) => [thread.chatId, thread])),
-    [data]
+    () => new Map(threads.map((thread) => [thread.chatId, thread])),
+    [threads]
   )
 
   const activeVisibleCount = visibleChats.length
@@ -261,11 +265,13 @@ function KannaSidebarImpl({
         // Project-scoped: rows already sit under their project header, so the
         // slot shows the chat's age — swapped for a keycap while the
         // number-jump modifier is held.
-        detailLabel={showNumberJumpHints && shortcutHint ? (
+        detailScope="project-scoped"
+        nowMs={nowMs}
+        detailLabelOverride={showNumberJumpHints && shortcutHint ? (
           <Kbd className="h-4 min-w-4 rounded-sm border-border/50 bg-transparent px-1 text-[10px]">
             {shortcutHint}
           </Kbd>
-        ) : getThreadDetailLabel(thread, "project-scoped", nowMs)}
+        ) : undefined}
         onSelect={selectChat}
         onSelectMessage={selectChatMessage}
         onSetupGit={onSetupGit}
@@ -700,7 +706,7 @@ function KannaSidebarImpl({
 
             {newSidebarEnabled && sidebarView === "recents" ? (
               <ThreadSections
-                data={data}
+                threads={threads}
                 activeChatId={activeChatId}
                 editorLabel={editorLabel}
                 nowMs={nowMs}

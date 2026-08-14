@@ -39,6 +39,19 @@ import type {
  */
 const MAX_TOOL_ENTRY_REQUEST = 256
 
+/** Coalescing window for transcript pushes — roughly one animation frame. */
+const CHAT_BROADCAST_INTERVAL_MS = 16
+
+/**
+ * Coalescing window for sidebar pushes driven by a running turn.
+ *
+ * Far slower than the transcript's because the sidebar shows titles, status
+ * glyphs and relative ages — none of which a reader can follow at frame rate,
+ * and all of which cost a full re-derive plus a whole-snapshot re-render to
+ * deliver. See `armPendingSidebarTimer`.
+ */
+const SIDEBAR_BROADCAST_INTERVAL_MS = 400
+
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
   snapshotSignatures: Map<string, string>
@@ -166,6 +179,7 @@ export function createWsRouter({
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   let pendingBroadcastAll = false
   const pendingBroadcastChatIds = new Set<string>()
+  let pendingSidebarTimer: ReturnType<typeof setTimeout> | null = null
   const resolvedAnalytics = analytics ?? NoopAnalyticsReporter
 
   function getProtectedChatIds() {
@@ -606,18 +620,41 @@ export function createWsRouter({
       return
     }
     if (chatIds.size > 0) {
-      void broadcastFilteredSnapshots({
-        includeSidebar: true,
-        chatIds,
-      })
+      void broadcastFilteredSnapshots({ chatIds })
     }
+  }
+
+  function flushPendingSidebarBroadcast() {
+    pendingSidebarTimer = null
+    void broadcastFilteredSnapshots({ includeSidebar: true })
   }
 
   function armPendingBroadcastTimer() {
     if (pendingBroadcastTimer) {
       return
     }
-    pendingBroadcastTimer = setTimeout(flushPendingBroadcast, 16)
+    pendingBroadcastTimer = setTimeout(flushPendingBroadcast, CHAT_BROADCAST_INTERVAL_MS)
+  }
+
+  /**
+   * The sidebar rides its own, much slower timer.
+   *
+   * A running turn appends entries several times a second, and each one moves a
+   * sidebar field (`lastAgentMessageAt`, the reply preview, `pendingToolKind`),
+   * so the signature dedupe never catches. Sharing the chat timer meant
+   * re-deriving every project group, re-serializing the whole snapshot, and
+   * re-rendering every sidebar row at the transcript's frame rate. Nothing in
+   * the sidebar is read that fast — it is a list of titles and status glyphs.
+   *
+   * Commands that change sidebar *membership* (create, delete, archive, rename)
+   * still call `broadcastFilteredSnapshots` directly and land immediately; only
+   * the streaming hot path is throttled.
+   */
+  function armPendingSidebarTimer() {
+    if (pendingSidebarTimer) {
+      return
+    }
+    pendingSidebarTimer = setTimeout(flushPendingSidebarBroadcast, SIDEBAR_BROADCAST_INTERVAL_MS)
   }
 
   function scheduleBroadcast() {
@@ -631,6 +668,7 @@ export function createWsRouter({
       pendingBroadcastChatIds.add(chatId)
     }
     armPendingBroadcastTimer()
+    armPendingSidebarTimer()
   }
 
   async function broadcastChatAndSidebar(chatId: string) {
@@ -1631,6 +1669,9 @@ export function createWsRouter({
     dispose() {
       if (pendingBroadcastTimer) {
         clearTimeout(pendingBroadcastTimer)
+      }
+      if (pendingSidebarTimer) {
+        clearTimeout(pendingSidebarTimer)
       }
       agent.setBackgroundErrorReporter?.(null)
       disposeTerminalEvents()

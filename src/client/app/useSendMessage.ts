@@ -1,8 +1,10 @@
 import { useCallback, useLayoutEffect, useRef, type Dispatch, type SetStateAction } from "react"
 import type { NavigateFunction } from "react-router-dom"
-import type { AgentProvider, ChatAttachment, ModelOptions, SidebarData, TranscriptEntry } from "../../shared/types"
+import type { AgentProvider, ChatAttachment, ModelOptions, TranscriptEntry } from "../../shared/types"
 import { NEW_CHAT_COMPOSER_ID, useChatPreferencesStore } from "../stores/chatPreferencesStore"
 import { generateUUID } from "../lib/utils"
+import { getSidebarProjectGroups } from "../stores/sidebarStore"
+import { clearSending, markSending } from "../stores/pendingSendStore"
 import {
   composerStateFromSendOptions,
   countMatchingUserPrompts,
@@ -18,7 +20,6 @@ export interface SendContext {
   isProcessing: boolean
   optimisticUserPrompts: OptimisticUserPrompt[]
   serverTranscriptEntries: TranscriptEntry[]
-  sidebarProjectGroups: SidebarData["projectGroups"]
   selectedProjectId: string | null
   fallbackLocalProjectPath: string | null
 }
@@ -62,7 +63,7 @@ export function useSendMessage(params: {
     content: string,
     options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; autoPlan?: boolean; attachments?: ChatAttachment[] }
   ) => {
-    const { isProcessing, optimisticUserPrompts, serverTranscriptEntries, sidebarProjectGroups, selectedProjectId, fallbackLocalProjectPath } = sendContextRef.current
+    const { isProcessing, optimisticUserPrompts, serverTranscriptEntries, selectedProjectId, fallbackLocalProjectPath } = sendContextRef.current
     const attachments = options?.attachments ?? []
     if (activeChatId && isProcessing) {
       try {
@@ -88,6 +89,12 @@ export function useSendMessage(params: {
     const optimisticId = generateUUID()
     const signature = getUserPromptSignature(content, attachments)
     const optimisticScopeId = activeChatId ?? NEW_CHAT_OPTIMISTIC_SCOPE
+    // Holds the chat's place in the sidebar across the round trip. The composer
+    // has already cleared its draft by now, and the server has not yet recorded
+    // the message or moved the status off idle — so without this the row belongs
+    // to no section and blinks out. See `usePendingSendStore`.
+    const sentAt = Date.now()
+    if (activeChatId) markSending(activeChatId, sentAt)
     setOptimisticProcessing({
       scopeId: optimisticScopeId,
       ackedAt: null,
@@ -111,7 +118,7 @@ export function useSendMessage(params: {
     }])
 
     try {
-      let projectId = selectedProjectId ?? getMostRecentlyActiveProjectId(sidebarProjectGroups)
+      let projectId = selectedProjectId ?? getMostRecentlyActiveProjectId(getSidebarProjectGroups())
       if (!activeChatId && !projectId && fallbackLocalProjectPath) {
         const project = await socket.command<{ projectId: string }>({
           type: "project.open",
@@ -147,6 +154,10 @@ export function useSendMessage(params: {
       })
 
       if (!activeChatId && result.chatId) {
+        // A chat created by this send only gets an id here, so it is marked now
+        // — late for the round trip that made it, but in time for the gap
+        // between the ack and the snapshot that reports it running.
+        markSending(result.chatId, sentAt)
         setOptimisticUserPrompts((current) => current.map((prompt) => (
           prompt.id === optimisticId ? { ...prompt, scopeId: result.chatId! } : prompt
         )))
@@ -162,6 +173,9 @@ export function useSendMessage(params: {
     } catch (error) {
       setOptimisticUserPrompts((current) => current.filter((prompt) => prompt.id !== optimisticId))
       setOptimisticProcessing(null)
+      // The send failed, so the row goes back to being placed by what the server
+      // knows — and by the draft the composer restores.
+      if (activeChatId) clearSending(activeChatId)
       setCommandError(error instanceof Error ? error.message : String(error))
       throw error
     }

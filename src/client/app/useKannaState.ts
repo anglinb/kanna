@@ -7,21 +7,28 @@ import { useRightSidebarStore } from "../stores/rightSidebarStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
 import { getEditorPresetLabel, useTerminalPreferencesStore } from "../stores/terminalPreferencesStore"
 import { useChatInputStore } from "../stores/chatInputStore"
+import {
+  findSidebarChat,
+  getSidebarProjectGroups,
+  useChatExists,
+  useFirstProjectGroup,
+  useNavbarRepoLabel,
+  useProjectIdForChat,
+  useSidebarReady,
+  useSidebarStore,
+} from "../stores/sidebarStore"
 import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData } from "../../shared/types"
 import type { AskUserQuestionItem } from "../components/messages/types"
 import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
 import { useTheme } from "../hooks/useTheme"
 import { processTranscriptMessages } from "../lib/parseTranscript"
-import { formatProjectRepoBranch } from "../lib/project-label"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
 import {
-  applySidebarProjectOrder,
   getActiveChatSnapshot,
   getMostRecentlyActiveProjectId,
   getNewestRemainingChatId,
   getPreviousPrompt,
-  getProjectIdForChat,
   NEW_CHAT_OPTIMISTIC_SCOPE,
   reconcileOptimisticUserPrompts,
   resolveComposeIntent,
@@ -144,7 +151,6 @@ export interface KannaState {
   socket: KannaSocket
   activeChatId: string | null
   activeProjectId: string | null
-  sidebarData: SidebarData
   localProjects: LocalProjectsSnapshot | null
   updateSnapshot: UpdateSnapshot | null
   chatSnapshot: ChatSnapshot | null
@@ -247,14 +253,12 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const dialog = useAppDialog()
   const { resolvedTheme } = useTheme()
 
-  const [sidebarData, setSidebarData] = useState<SidebarData>({ projectGroups: [] })
-  const [optimisticSidebarProjectOrder, setOptimisticSidebarProjectOrder] = useState<string[] | null>(null)
   const [localProjects, setLocalProjects] = useState<LocalProjectsSnapshot | null>(null)
   const [chatSnapshot, setChatSnapshot] = useState<ChatSnapshot | null>(null)
   const transcriptCacheWriter = useMemo(() => createTranscriptCacheWriter(), [])
   const [projectDiffSnapshots, setProjectDiffSnapshots] = useState<Record<string, ChatDiffSnapshot | null>>({})
   const [connectionStatus, setConnectionStatus] = useState<SocketStatus>("connecting")
-  const [sidebarReady, setSidebarReady] = useState(false)
+  const sidebarReady = useSidebarReady()
   const [localProjectsReady, setLocalProjectsReady] = useState(false)
   const [chatReady, setChatReady] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
@@ -274,33 +278,16 @@ export function useKannaState(activeChatId: string | null): KannaState {
     diffs: null,
   })
   const editorLabel = getEditorPresetLabel(useTerminalPreferencesStore((store) => store.editorPreset))
-  const sidebarProjectGroups = useMemo(
-    () => applySidebarProjectOrder(sidebarData.projectGroups, optimisticSidebarProjectOrder),
-    [optimisticSidebarProjectOrder, sidebarData.projectGroups]
-  )
-  const resolvedSidebarData = useMemo(
-    () => (
-      sidebarProjectGroups === sidebarData.projectGroups
-        ? sidebarData
-        : {
-            ...sidebarData,
-            projectGroups: sidebarProjectGroups,
-          }
-    ),
-    [sidebarData, sidebarProjectGroups]
-  )
 
   useEffect(() => socket.onStatus(setConnectionStatus), [socket])
 
+  // Straight into the store, never into React state: a running turn moves a
+  // sidebar field several times a second, and holding the snapshot here would
+  // re-render this hook's whole subtree — the chat page included — every time.
+  // Consumers select the slice they paint (see stores/sidebarStore).
   useEffect(() => {
     return socket.subscribe<SidebarData>({ type: "sidebar" }, (snapshot) => {
-      setSidebarData(snapshot)
-      setOptimisticSidebarProjectOrder((current) => (
-        current && applySidebarProjectOrder(snapshot.projectGroups, current) === snapshot.projectGroups
-          ? null
-          : current
-      ))
-      setSidebarReady(true)
+      useSidebarStore.getState().setSnapshot(snapshot)
       setCommandError(null)
     })
   }, [socket])
@@ -402,23 +389,24 @@ export function useKannaState(activeChatId: string | null): KannaState {
   }, [activeChatId, socket, transcriptCacheWriter])
 
 
+  // Seeded once the snapshot lands. Reads the groups off the store rather than
+  // subscribing to them: the seed only has to be right the first time, and a
+  // subscription here would drag every sidebar push back into this hook.
   useEffect(() => {
-    if (selectedProjectId) return
-    const seed = getMostRecentlyActiveProjectId(sidebarProjectGroups)
+    if (selectedProjectId || !sidebarReady) return
+    const seed = getMostRecentlyActiveProjectId(getSidebarProjectGroups())
     if (seed) {
       setSelectedProjectId(seed)
     }
-  }, [selectedProjectId, sidebarProjectGroups])
+  }, [selectedProjectId, sidebarReady])
 
+  // Archived chats are viewable in place (viewing doesn't unarchive), so they
+  // count as existing — only truly unknown/deleted chats bounce home.
+  const activeChatExists = useChatExists(activeChatId)
   useEffect(() => {
     if (!activeChatId) return
     if (!sidebarReady || !chatReady) return
-    // Archived chats are viewable in place (viewing doesn't unarchive), so
-    // they count as existing — only truly unknown/deleted chats bounce home.
-    const exists = sidebarProjectGroups.some((group) =>
-      group.chats.some((chat) => chat.chatId === activeChatId)
-      || (group.archivedChats ?? []).some((chat) => chat.chatId === activeChatId))
-    if (exists) {
+    if (activeChatExists) {
       if (pendingChatId === activeChatId) {
         setPendingChatId(null)
       }
@@ -428,7 +416,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
       return
     }
     navigate("/")
-  }, [activeChatId, chatReady, navigate, pendingChatId, sidebarProjectGroups, sidebarReady])
+  }, [activeChatExists, activeChatId, chatReady, navigate, pendingChatId, sidebarReady])
 
   useEffect(() => {
     if (!chatSnapshot) return
@@ -440,23 +428,16 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
   // Mark a chat read when the user navigates *away* from it, not when it opens.
   // A chat that receives new activity while it's the active chat stays unread
-  // (badge visible) until the user leaves it. We look up the outgoing chat's
-  // unread state through a ref so this effect only re-runs on chat switches, and
-  // skip chats that no longer exist (avoids spurious markRead commands).
-  const sidebarGroupsRef = useRef(sidebarProjectGroups)
-  useEffect(() => {
-    sidebarGroupsRef.current = sidebarProjectGroups
-  }, [sidebarProjectGroups])
-
+  // (badge visible) until the user leaves it. The outgoing chat's unread state
+  // is read off the store at the moment of the switch, so this effect only runs
+  // on chat switches, and chats that no longer exist are skipped (which avoids
+  // spurious markRead commands).
   const previousActiveChatIdRef = useRef<string | null>(null)
   useEffect(() => {
     const previousChatId = previousActiveChatIdRef.current
     previousActiveChatIdRef.current = activeChatId ?? null
     if (!previousChatId || previousChatId === activeChatId) return
-    const previousChat = sidebarGroupsRef.current
-      .flatMap((group) => group.chats)
-      .find((chat) => chat.chatId === previousChatId)
-    if (!previousChat?.unread) return
+    if (!findSidebarChat(previousChatId)?.unread) return
     void socket.command({ type: "chat.markRead", chatId: previousChatId }).catch((error) => {
       setCommandError(error instanceof Error ? error.message : String(error))
     })
@@ -474,12 +455,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
     reportReadAnchor,
   } = useChatReadAnchor(socket, activeChatId, activeChatSnapshot?.readAnchor, chatReady)
 
-  const activeProjectId = useMemo(
-    () => activeChatSnapshot?.runtime.projectId
-      ?? getProjectIdForChat(sidebarProjectGroups, activeChatId)
-      ?? selectedProjectId,
-    [activeChatId, activeChatSnapshot?.runtime.projectId, selectedProjectId, sidebarProjectGroups]
-  )
+  const sidebarProjectIdForChat = useProjectIdForChat(activeChatId)
+  const activeProjectId = activeChatSnapshot?.runtime.projectId
+    ?? sidebarProjectIdForChat
+    ?? selectedProjectId
   const chatDiffSnapshot = useMemo(() => {
     const currentDiffs = activeProjectId ? (projectDiffSnapshots[activeProjectId] ?? null) : null
     if (activeProjectId && currentDiffs) {
@@ -561,21 +540,20 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const canCancel = canCancelStatus(effectiveRuntimeStatus ?? undefined)
   const isDraining = runtime?.isDraining ?? false
   const fallbackLocalProjectPath = localProjects?.projects[0]?.localPath ?? null
+  const firstProjectGroup = useFirstProjectGroup()
   const navbarLocalPath =
     runtime?.localPath
     ?? fallbackLocalProjectPath
-    ?? sidebarProjectGroups[0]?.localPath
+    ?? firstProjectGroup.localPath
+    ?? undefined
   // The composer names the project the way the sidebar does — `repo/branch` —
   // so the id is matched first and the path only stands in when there's no
   // active project (the new-chat composer falling back to a local project).
-  const navbarProjectGroup =
-    sidebarProjectGroups.find((group) => group.groupKey === activeProjectId)
-    ?? sidebarProjectGroups.find((group) => group.localPath === navbarLocalPath)
-  const navbarRepoLabel = navbarProjectGroup ? formatProjectRepoBranch(navbarProjectGroup) : null
+  const navbarRepoLabel = useNavbarRepoLabel(activeProjectId, navbarLocalPath)
   const hasSelectedProject = Boolean(
     selectedProjectId
     ?? runtime?.projectId
-    ?? sidebarProjectGroups[0]?.groupKey
+    ?? firstProjectGroup.groupKey
     ?? fallbackLocalProjectPath
   )
 
@@ -737,7 +715,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
       isProcessing,
       optimisticUserPrompts,
       serverTranscriptEntries,
-      sidebarProjectGroups,
       selectedProjectId,
       fallbackLocalProjectPath,
     },
@@ -754,26 +731,26 @@ export function useKannaState(activeChatId: string | null): KannaState {
     try {
       await socket.command({ type: "chat.delete", chatId: chat.chatId })
       if (chat.chatId === activeChatId) {
-        const nextChatId = getNewestRemainingChatId(sidebarProjectGroups, chat.chatId)
+        const nextChatId = getNewestRemainingChatId(getSidebarProjectGroups(), chat.chatId)
         navigate(nextChatId ? `/chat/${nextChatId}` : "/")
       }
     } catch (error) {
       setCommandError(error instanceof Error ? error.message : String(error))
     }
-  }, [activeChatId, dialog, navigate, sidebarProjectGroups, socket])
+  }, [activeChatId, dialog, navigate, socket])
 
   const handleArchiveChat = useCallback(async (chat: SidebarChatRow) => {
     try {
       await socket.command({ type: "chat.archive", chatId: chat.chatId })
       if (chat.chatId === activeChatId) {
-        const nextChatId = getNewestRemainingChatId(sidebarProjectGroups, chat.chatId)
+        const nextChatId = getNewestRemainingChatId(getSidebarProjectGroups(), chat.chatId)
         navigate(nextChatId ? `/chat/${nextChatId}` : "/")
       }
       setCommandError(null)
     } catch (error) {
       setCommandError(error instanceof Error ? error.message : String(error))
     }
-  }, [activeChatId, navigate, sidebarProjectGroups, socket])
+  }, [activeChatId, navigate, socket])
 
   // Viewing an archived chat is read-only navigation — it stays archived.
   // Restoring is explicit (context menu) or implicit via sending a message
@@ -846,12 +823,12 @@ export function useKannaState(activeChatId: string | null): KannaState {
   }, [navigate, runtime?.projectId, socket])
 
   const handleReorderProjectGroups = useCallback(async (projectIds: string[]) => {
-    setOptimisticSidebarProjectOrder(projectIds)
+    useSidebarStore.getState().setOptimisticProjectOrder(projectIds)
     try {
       await socket.command({ type: "sidebar.reorderProjectGroups", projectIds })
       setCommandError(null)
     } catch (error) {
-      setOptimisticSidebarProjectOrder(null)
+      useSidebarStore.getState().setOptimisticProjectOrder(null)
       setCommandError(error instanceof Error ? error.message : String(error))
     }
   }, [socket])
@@ -891,7 +868,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const handleCompose = useCallback(() => {
     const intent = resolveComposeIntent({
       selectedProjectId,
-      sidebarProjectId: getMostRecentlyActiveProjectId(sidebarProjectGroups),
+      sidebarProjectId: getMostRecentlyActiveProjectId(getSidebarProjectGroups()),
       fallbackLocalProjectPath,
     })
     if (intent) {
@@ -900,7 +877,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     }
 
     navigate("/")
-  }, [fallbackLocalProjectPath, navigate, selectedProjectId, sidebarProjectGroups, startChatFromIntent])
+  }, [fallbackLocalProjectPath, navigate, selectedProjectId, startChatFromIntent])
 
   const openSidebar = useCallback(() => setSidebarOpen(true), [])
   const closeSidebar = useCallback(() => setSidebarOpen(false), [])
@@ -911,7 +888,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     socket,
     activeChatId,
     activeProjectId,
-    sidebarData: resolvedSidebarData,
     localProjects,
     updateSnapshot,
     chatSnapshot,

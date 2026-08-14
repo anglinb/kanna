@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom"
 import { Flower } from "lucide-react"
 import { StandaloneShareDialog } from "../components/chat-ui/StandaloneShareDialog"
@@ -23,6 +23,7 @@ import { OpenRouterCallbackPage } from "./OpenRouterCallbackPage"
 import { SettingsPage } from "./SettingsPage"
 import { TerminalPage } from "./TerminalPage"
 import { useKannaState } from "./useKannaState"
+import { useSidebarStore } from "../stores/sidebarStore"
 import type { AppSettingsSnapshot } from "../../shared/types"
 
 const AUTH_STATUS_RETRY_DELAY_MS = 500
@@ -247,13 +248,15 @@ function KannaLayout() {
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
   const showMobileOpenButton = location.pathname === "/" || location.pathname === "/terminal"
-  const previousSidebarDataRef = useRef<ReturnType<typeof useKannaState>["sidebarData"] | null>(null)
-  const browserTitle = useMemo(() => getBrowserWindowTitle({
+  // Selected as the finished string rather than derived from the snapshot: the
+  // title changes when a chat is renamed or a badge count moves, and this hook
+  // should not re-render the layout for anything else the sidebar carries.
+  const browserTitle = useSidebarStore((store) => getBrowserWindowTitle({
     appName: APP_NAME,
-    sidebarData: state.sidebarData,
+    sidebarData: store.data,
     activeProjectId: state.activeProjectId,
     activeChatId: state.activeChatId,
-  }), [state.activeChatId, state.activeProjectId, state.sidebarData])
+  }))
   const handleSidebarCreateChat = useCallback((projectId: string) => {
     void state.handleCreateChat(projectId)
   }, [state.handleCreateChat])
@@ -305,9 +308,12 @@ function KannaLayout() {
   const handleOpenChangelog = useCallback(() => {
     navigate("/settings/changelog")
   }, [navigate])
-  const sidebarElement = useMemo(() => (
+  // Rendered inline rather than through a `useMemo`: `KannaSidebar` is memoized
+  // and every prop below is now stable, so React skips it on its own. The memo
+  // wrapper used to be defeated anyway — its dep list named the sidebar
+  // snapshot, which moved on every streamed token.
+  const sidebarElement = (
     <KannaSidebar
-      data={state.sidebarData}
       activeChatId={state.activeChatId}
       connectionStatus={state.connectionStatus}
       ready={state.sidebarReady}
@@ -339,39 +345,7 @@ function KannaLayout() {
       updateSnapshot={state.updateSnapshot}
       onOpenChangelog={handleOpenChangelog}
     />
-  ), [
-    handleOpenChangelog,
-    handleSidebarCopyPath,
-    handleSidebarCreateChat,
-    handleSidebarArchiveChat,
-    handleSidebarDeleteChat,
-    handleOpenArchivedChat,
-    handleRestoreChat,
-    handleSidebarForkChat,
-    handleSidebarOpenExternalPath,
-    handleSidebarRenameProject,
-    handleSidebarRenameChat,
-    handleSidebarShareChat,
-    handleSidebarReorderProjectGroups,
-    handleSidebarSetupGit,
-    handleSidebarHideProject,
-    handleLoadTouchedFiles,
-    showMobileOpenButton,
-    state.activeChatId,
-    state.activeProjectId,
-    state.keybindings,
-    state.closeSidebar,
-    state.collapseSidebar,
-    state.connectionStatus,
-    state.editorLabel,
-    state.expandSidebar,
-    state.openSidebar,
-    state.sidebarCollapsed,
-    state.sidebarData,
-    state.sidebarOpen,
-    state.sidebarReady,
-    state.updateSnapshot,
-  ])
+  )
 
   useLayoutEffect(() => {
     document.title = browserTitle
@@ -394,15 +368,28 @@ function KannaLayout() {
     }
   }, [browserTitle])
 
+  // Driven by a store subscription rather than by a render: this compares
+  // consecutive sidebar snapshots, and the layout is no longer re-rendered for
+  // every one of them. The preferences are read through a ref so the
+  // subscription is set up once and never torn down mid-turn (a resubscribe
+  // would lose the previous snapshot and swallow the next chime).
+  const soundSettingsRef = useRef({ appSettings: state.appSettings, chatSoundPreference, chatSoundId })
   useEffect(() => {
-    const burstCount = getChatSoundBurstCount(previousSidebarDataRef.current, state.sidebarData)
-    previousSidebarDataRef.current = state.sidebarData
-
-    if (burstCount <= 0) return
-    if (!shouldPlayChatNotificationSound(state.appSettings, chatSoundPreference)) return
-
-    void playChatNotificationSound(chatSoundId, burstCount).catch(() => undefined)
-  }, [chatSoundId, chatSoundPreference, state.appSettings, state.sidebarData])
+    soundSettingsRef.current = { appSettings: state.appSettings, chatSoundPreference, chatSoundId }
+  })
+  useEffect(() => {
+    return useSidebarStore.subscribe((store, previousStore) => {
+      // The first snapshot has nothing to compare against, and treating the
+      // empty starting state as "previous" would chime once per unread chat on
+      // every page load.
+      if (!previousStore.ready) return
+      const burstCount = getChatSoundBurstCount(previousStore.data, store.data)
+      if (burstCount <= 0) return
+      const { appSettings, chatSoundPreference: preference, chatSoundId: soundId } = soundSettingsRef.current
+      if (!shouldPlayChatNotificationSound(appSettings, preference)) return
+      void playChatNotificationSound(soundId, burstCount).catch(() => undefined)
+    })
+  }, [])
 
   return (
     <div className="flex h-[100dvh] min-h-[100dvh] overflow-hidden">

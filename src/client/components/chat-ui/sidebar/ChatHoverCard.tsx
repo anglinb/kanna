@@ -13,6 +13,24 @@ import { useHasFinePointer } from "../../../lib/pointer"
 import { cn } from "../../../lib/utils"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "../../ui/hover-card"
+import { useChatDraft } from "../../../stores/chatInputStore"
+import { useOpenedOnce } from "../../../hooks/useOpenedOnce"
+
+/**
+ * Reads the chat's draft from inside the open card.
+ *
+ * The draft belongs on the card — it is the card's last line — but subscribing
+ * to it anywhere in the always-mounted part of a row would re-render that row on
+ * every keystroke in the composer. Radix only mounts this while the card is
+ * open, so the subscription lives exactly as long as something is displaying it.
+ * `ChatHoverCardContent` stays a pure function of its props.
+ */
+function ChatHoverCardBody({
+  thread,
+  ...rest
+}: Omit<Parameters<typeof ChatHoverCardContent>[0], "draft">) {
+  return <ChatHoverCardContent thread={thread} draft={useChatDraft(thread.row.chatId)} {...rest} />
+}
 
 /**
  * The card that appears beside a sidebar chat row on hover — the transcript
@@ -418,7 +436,6 @@ export function ChatHoverCardContent({
  */
 export function ChatHoverCard({
   thread,
-  draft = "",
   onSelectMessage,
   onSelectChat,
   onSetupGit,
@@ -428,8 +445,6 @@ export function ChatHoverCard({
   ...triggerProps
 }: {
   thread: SidebarThread
-  /** The chat's unsent draft (`useChatDraft`), read by the row that owns it. */
-  draft?: string
   /** Opens this chat at one end of its last exchange. Omitted = read-only card. */
   onSelectMessage?: (chatId: string, role: ChatJumpRole) => void
   /** Opens the chat plainly — the draft's action, and the row's. */
@@ -444,6 +459,10 @@ export function ChatHoverCard({
 } & ComponentPropsWithRef<typeof HoverCardTrigger>) {
   const hasFinePointer = useHasFinePointer()
   const [open, setOpen] = useState(false)
+  // The card's body is a dozen rows of prompt, reply, timings and files, and
+  // there is one of these per sidebar row. It isn't built until the row has
+  // actually been hovered once — see `useOpenedOnce`.
+  const [everOpened, latchOpened] = useOpenedOnce()
   const repoUrl = thread.projectLabel.repoUrl
   const touchedFiles = useChatTouchedFiles(open ? thread.row : null, onLoadTouchedFiles)
 
@@ -484,7 +503,10 @@ export function ChatHoverCard({
   return (
     <HoverCard
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(nextOpen) => {
+        latchOpened(nextOpen)
+        setOpen(nextOpen)
+      }}
       // Both instant. The card appears the moment you point at a row, and
       // vanishes the moment you stop — closing on a timer to cover the walk
       // across the gap would leave a card hanging over the transcript every
@@ -507,7 +529,7 @@ export function ChatHoverCard({
       >
         {children}
       </HoverCardTrigger>
-      {!hasFinePointer ? null : (
+      {!hasFinePointer || !everOpened ? null : (
         <HoverCardContent
           side="right"
           // Top-aligned with the row rather than centred on it: the card is
@@ -552,9 +574,8 @@ export function ChatHoverCard({
             "data-[side=right]:before:-left-5 data-[side=left]:before:-right-5",
           )}
         >
-          <ChatHoverCardContent
+          <ChatHoverCardBody
             thread={thread}
-            draft={draft}
             touchedFiles={touchedFiles}
             onSelectMessage={onSelectMessage ? handleSelectMessage : undefined}
             onSelectChat={onSelectChat ? handleSelectChat : undefined}

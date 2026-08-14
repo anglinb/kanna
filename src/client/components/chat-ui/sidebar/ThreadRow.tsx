@@ -1,51 +1,33 @@
-import type { ReactNode } from "react"
+import { memo, type ReactNode } from "react"
 import { Archive, RotateCcw, Split } from "lucide-react"
 import type { ChatTouchedFilesResult } from "../../../../shared/types"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
+import { getThreadDetailLabel, type ThreadDetailScope } from "../../../lib/thread-detail-label"
 import type { SidebarThread } from "../../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
-import { useChatDraft, useChatInputStore } from "../../../stores/chatInputStore"
+import { useChatHasDraft, useChatInputStore } from "../../../stores/chatInputStore"
 import { ThreadRowContent } from "../ThreadRowContent"
 import { ChatHoverCard } from "./ChatHoverCard"
 import { ChatRowMenu } from "./Menus"
 
-/**
- * The canonical sidebar chat row: right-click menu, click target, status glyph /
- * harness icon, title, and hover-revealed Fork/Archive. Used by both sidebar
- * tabs; each passes `detailLabel` from `getThreadDetailLabel` with its own
- * scope — the Chats tab spans projects, the Projects tab is already inside one.
- *
- * A div rather than a button so the hover-action Buttons can nest inside it.
- */
-export function ThreadRow({
-  thread,
-  isActive,
-  archived = false,
-  editorLabel,
-  detailLabel,
-  dimIdleTitles = true,
-  onSelect,
-  onSelectMessage,
-  onSetupGit,
-  onLoadTouchedFiles,
-  onCreateChat,
-  onRenameChat,
-  onShareChat,
-  onCopyPath,
-  onOpenExternalPath,
-  onForkChat,
-  onArchiveChat,
-  onRestoreChat,
-  onDeleteChat,
-}: {
+interface ThreadRowProps {
   thread: SidebarThread
   isActive: boolean
   /** Archived rows swap Fork/Archive for Restore and get the archived menu. */
   archived?: boolean
   editorLabel: string
-  /** From `getThreadDetailLabel`; a node only for transient chrome (keycap). */
-  detailLabel: ReactNode
+  /**
+   * Which question the trailing slot answers — see `getThreadDetailLabel`. The
+   * row resolves it itself rather than taking a finished node, so its props stay
+   * comparable and `memo` can skip a row whose chat did not move. A node prop
+   * would be a new element on every render and would defeat that outright.
+   */
+  detailScope: ThreadDetailScope
+  /** Anchor for the age label; the sidebar advances it on a slow interval. */
+  nowMs: number
+  /** Transient chrome that replaces the slot — the number-jump keycap. */
+  detailLabelOverride?: ReactNode
   /**
    * Fade idle/read titles (see `ThreadRowContent`). The Projects tab keeps it —
    * a project's chat list is a long backlog where read rows should recede. The
@@ -82,11 +64,51 @@ export function ThreadRow({
   onArchiveChat: (chat: SidebarThread["row"]) => void
   onRestoreChat: (chatId: string) => void
   onDeleteChat: (chat: SidebarThread["row"]) => void
-}) {
-  // Read once here and handed to both the row and its card: the icon slot and
-  // the card's last line are two readings of the same unsent sentence.
-  const draft = useChatDraft(thread.row.chatId)
+}
+
+/**
+ * The canonical sidebar chat row: right-click menu, click target, status glyph /
+ * harness icon, title, and hover-revealed Fork/Archive. Used by both sidebar
+ * tabs; each passes the `detailScope` its list calls for — the Chats tab spans
+ * projects, the Projects tab is already inside one.
+ *
+ * A div rather than a button so the hover-action Buttons can nest inside it.
+ *
+ * Memoized, and worth keeping that way. There is one of these per chat, each
+ * carrying a context menu and a hover card, and the sidebar snapshot is pushed
+ * throughout every turn. Without the memo a single chat streaming a reply
+ * re-rendered every row in the app.
+ */
+function ThreadRowImpl({
+  thread,
+  isActive,
+  archived = false,
+  editorLabel,
+  detailScope,
+  nowMs,
+  detailLabelOverride,
+  dimIdleTitles = true,
+  onSelect,
+  onSelectMessage,
+  onSetupGit,
+  onLoadTouchedFiles,
+  onCreateChat,
+  onRenameChat,
+  onShareChat,
+  onCopyPath,
+  onOpenExternalPath,
+  onForkChat,
+  onArchiveChat,
+  onRestoreChat,
+  onDeleteChat,
+}: ThreadRowProps) {
+  // Whether there *is* a draft, not what it says. The row shows a pencil and the
+  // menu offers "Clear Draft"; neither needs the text, and subscribing to it
+  // re-rendered this row on every keystroke in the composer. The card reads the
+  // text itself, from inside its own open subtree.
+  const hasDraft = useChatHasDraft(thread.row.chatId)
   const clearDraft = useChatInputStore((state) => state.clearDraft)
+  const detailLabel = detailLabelOverride ?? getThreadDetailLabel(thread, detailScope, nowMs)
   const hoverActions = archived ? (
     <Button
       variant="ghost"
@@ -145,7 +167,7 @@ export function ThreadRow({
       onOpenInFinder={() => onOpenExternalPath("open_finder", thread.row.localPath)}
       onOpenInEditor={() => onOpenExternalPath("open_editor", thread.row.localPath)}
       onFork={() => onForkChat(thread.row)}
-      onClearDraft={draft ? () => clearDraft(thread.row.chatId) : undefined}
+      onClearDraft={hasDraft ? () => clearDraft(thread.row.chatId) : undefined}
       onArchive={archived ? () => {} : () => onArchiveChat(thread.row)}
       onDelete={() => onDeleteChat(thread.row)}
     >
@@ -153,7 +175,6 @@ export function ThreadRow({
           gets no card — it's already a detail view you opened on purpose. */}
       <ChatHoverCard
         thread={thread}
-        draft={draft}
         onSelectMessage={onSelectMessage}
         onSelectChat={onSelect}
         onSetupGit={onSetupGit}
@@ -178,7 +199,7 @@ export function ThreadRow({
             showStatus
             isActive={isActive}
             dimIdleTitles={dimIdleTitles}
-            hasDraft={draft.length > 0}
+            hasDraft={hasDraft}
             detailLabel={detailLabel}
             hoverActions={hoverActions}
           />
@@ -187,3 +208,5 @@ export function ThreadRow({
     </ChatRowMenu>
   )
 }
+
+export const ThreadRow = memo(ThreadRowImpl)

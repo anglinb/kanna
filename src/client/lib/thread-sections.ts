@@ -47,11 +47,50 @@ function activityAt(row: SidebarChatRow): number {
   ) || row._creationTime
 }
 
+/**
+ * One label object per project group, for as long as that group object lives.
+ *
+ * `getProjectSidebarLabel` is a pure function of the group, and groups keep
+ * their identity across pushes that didn't touch them (see
+ * `stabilizeSidebarData`). Caching on that identity means an unchanged project
+ * hands its rows the same label object every time, which is what lets the row
+ * comparison below be a pointer check rather than a field walk.
+ */
+const projectLabelCache = new WeakMap<SidebarData["projectGroups"][number], ProjectSidebarLabel>()
+
+function cachedProjectSidebarLabel(group: SidebarData["projectGroups"][number]): ProjectSidebarLabel {
+  const cached = projectLabelCache.get(group)
+  if (cached) return cached
+  const label = getProjectSidebarLabel(group)
+  projectLabelCache.set(group, label)
+  return label
+}
+
+/**
+ * Hand a rebuilt project group the label its predecessor was using.
+ *
+ * `stabilizeSidebarData` allocates a new group object when a chat inside it
+ * moved, even though the project itself did not change. Without this the new
+ * object would miss the cache and mint a new label, and every row in that
+ * project would see a changed `projectLabel` — so a reply landing in one chat
+ * would re-render every sibling row in its project.
+ *
+ * Only sound where the caller has established that the label's inputs are
+ * unchanged; `stabilizeSidebarData` calls it under exactly that condition.
+ */
+export function carryProjectSidebarLabel(
+  from: SidebarData["projectGroups"][number],
+  to: SidebarData["projectGroups"][number],
+): void {
+  const cached = projectLabelCache.get(from)
+  if (cached) projectLabelCache.set(to, cached)
+}
+
 /** Flattens the sidebar snapshot into one searchable thread list (active + archived). */
 export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
   const threads: SidebarThread[] = []
   for (const group of data.projectGroups) {
-    const projectLabel = getProjectSidebarLabel(group)
+    const projectLabel = cachedProjectSidebarLabel(group)
     const pushRows = (rows: SidebarChatRow[], archived: boolean) => {
       for (const row of rows) {
         threads.push({
@@ -73,6 +112,50 @@ export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
 }
 
 /**
+ * Reuse the previous flatten's thread objects wherever nothing about them
+ * changed.
+ *
+ * `flattenSidebarThreads` allocates a fresh wrapper per chat, so on its own it
+ * hands every sidebar row a new `thread` prop on every push and defeats `memo`
+ * completely. The rows underneath are already identity-stable by then (see
+ * `stabilizeSidebarData`), which makes the comparison here a pointer check for
+ * the row plus a handful of scalars.
+ *
+ * Keyed by chat id rather than by position: a chat appearing or disappearing
+ * shifts every row after it, and matching by position would call all of them
+ * changed when only the list's shape moved.
+ */
+export function stabilizeSidebarThreads(
+  previous: SidebarThread[],
+  next: SidebarThread[],
+): SidebarThread[] {
+  if (previous.length === 0) return next
+
+  const previousByChatId = new Map(previous.map((thread) => [thread.chatId, thread]))
+  let changed = previous.length !== next.length
+
+  const result = next.map((thread, index) => {
+    const before = previousByChatId.get(thread.chatId)
+    const same = before
+      && before.row === thread.row
+      && before.title === thread.title
+      && before.projectId === thread.projectId
+      && before.projectTitle === thread.projectTitle
+      && before.archived === thread.archived
+      && before.lastActivityAt === thread.lastActivityAt
+      && before.projectLabel === thread.projectLabel
+    if (!same) {
+      changed = true
+      return thread
+    }
+    if (!changed && previous[index] !== before) changed = true
+    return before
+  })
+
+  return changed ? result : previous
+}
+
+/**
  * Chats "ready for review" — exactly the ones that would show a status dot in
  * the sidebar as needing you: waiting on the user (plan/question) or unread.
  * Running chats (spinner, still in progress) and archived chats are excluded.
@@ -80,17 +163,37 @@ export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
  * that's been waiting on you longest leads, so Cmd+K → Enter clears the
  * backlog in FIFO order.
  */
-export function getReviewThreads(threads: SidebarThread[]): SidebarThread[] {
+export function getReviewThreads(
+  threads: SidebarThread[],
+  /** Chats this browser has sent to and not yet seen acknowledged. */
+  pendingSends?: PendingSendTimes,
+): SidebarThread[] {
   return threads
     .filter((thread) =>
       !thread.archived
       // A running/starting chat belongs in "In Progress", never "Review" —
       // even if it's still flagged unread (e.g. a follow-up sent while the
-      // previous turn's unread badge is still showing).
+      // previous turn's unread badge is still showing). A chat with a prompt in
+      // flight is the same case one moment earlier: you have just answered it,
+      // so it is not waiting on you, whatever the snapshot still says.
       && thread.row.status !== "running"
       && thread.row.status !== "starting"
+      && !isPendingSend(thread, pendingSends)
       && (thread.row.status === "waiting_for_user" || thread.row.unread))
     .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
+}
+
+/**
+ * Is a prompt for this chat still in flight?
+ *
+ * True only while the snapshot has yet to show the send: once the chat's own
+ * `lastMessageAt` reaches the moment the send started, the server's word takes
+ * over and the pending entry is inert. That is what keeps a stale entry — a
+ * `clearSending` that never ran — from pinning a chat in In Progress forever.
+ */
+function isPendingSend(thread: SidebarThread, pendingSends?: PendingSendTimes): boolean {
+  const sentAt = pendingSends?.get(thread.chatId)
+  return sentAt != null && (thread.row.lastMessageAt ?? 0) < sentAt
 }
 
 /**
@@ -99,27 +202,41 @@ export function getReviewThreads(threads: SidebarThread[]): SidebarThread[] {
  * first (unlike every other section) — the chat that's gone longest without a
  * response leads since it's most likely to need you next.
  *
+ * Chats with a prompt in flight count as working before the server says so.
+ * Without that a chat you just sent to belongs to no section at all for the
+ * length of the round trip — its draft is gone and its status is still idle —
+ * so the row disappears and comes back. See `usePendingSendStore`.
+ *
  * Sorted by `lastMessageAt` — when *you* last hit send — not the shared
  * `lastActivityAt`. Every chat here is running by definition, so agent activity
  * is constant churn: sorting by it would reshuffle the section every time any
  * agent emitted a token, and a chatty agent would sink below a quiet one you
  * kicked off later. "How long since I asked" is the stable thing to queue on.
+ * A pending send sorts by when it was sent, which is the same clock — so the row
+ * takes the slot it will still hold once the server's timestamp arrives, and
+ * doesn't move a second time.
  */
 export function getInProgressThreads(
   threads: SidebarThread[],
   exclude?: ReadonlySet<string>,
+  /** Chats this browser has sent to and not yet seen acknowledged. */
+  pendingSends?: PendingSendTimes,
 ): SidebarThread[] {
   return threads
     .filter((thread) =>
       !thread.archived
       && !(exclude?.has(thread.chatId))
-      && (thread.row.status === "running" || thread.row.status === "starting"))
-    .sort((left, right) => userMessageAt(left) - userMessageAt(right))
+      && (thread.row.status === "running"
+        || thread.row.status === "starting"
+        || isPendingSend(thread, pendingSends)))
+    .sort((left, right) =>
+      userMessageAt(left, pendingSends) - userMessageAt(right, pendingSends))
 }
 
 /** When the user last sent a prompt, falling back to creation for never-prompted chats. */
-function userMessageAt(thread: SidebarThread): number {
-  return thread.row.lastMessageAt ?? thread.row._creationTime
+function userMessageAt(thread: SidebarThread, pendingSends?: PendingSendTimes): number {
+  const sentAt = pendingSends?.get(thread.chatId)
+  return Math.max(thread.row.lastMessageAt ?? thread.row._creationTime, sentAt ?? 0)
 }
 
 /**
@@ -158,6 +275,13 @@ export function getRelevantThreads(
 
 /** Chat id → when its unsent draft appeared; see `useDraftStartTimes`. */
 export type DraftStartTimes = ReadonlyMap<string, number>
+
+/**
+ * Chat id → when a still-unacknowledged send started; see `usePendingSendTimes`.
+ * Declared here rather than imported from the store so this module stays
+ * React-free and directly testable.
+ */
+export type PendingSendTimes = ReadonlyMap<string, number>
 
 /**
  * What a Relevant row sorts by: when you *started writing* in it if you were
@@ -380,9 +504,18 @@ export function computeSidebarThreadSections(
    * draft.
    */
   draftStartTimes?: DraftStartTimes,
+  /**
+   * Chats with a prompt in flight, and when each send started. Browser-local
+   * for the same reason as the drafts above: the server has not been told yet.
+   */
+  pendingSends?: PendingSendTimes,
 ): SidebarThreadSections {
-  const review = getReviewThreads(threads)
-  const inProgress = getInProgressThreads(threads, new Set(review.map((thread) => thread.chatId)))
+  const review = getReviewThreads(threads, pendingSends)
+  const inProgress = getInProgressThreads(
+    threads,
+    new Set(review.map((thread) => thread.chatId)),
+    pendingSends,
+  )
   const pinnedIds = new Set([...review, ...inProgress].map((thread) => thread.chatId))
   const relevant = getRelevantThreads(threads, pinnedIds, draftStartTimes)
   const excludeIds = new Set([...pinnedIds, ...relevant.map((thread) => thread.chatId)])

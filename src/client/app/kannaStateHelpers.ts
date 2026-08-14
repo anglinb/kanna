@@ -214,8 +214,29 @@ export function getTranscriptPaddingBottom(inputHeight: number) {
   return inputHeight + TRANSCRIPT_PADDING_BOTTOM_OFFSET
 }
 
+/**
+ * The composer's height, rounded to whole pixels.
+ *
+ * This runs on every keystroke: the composer re-measures itself in a layout
+ * effect keyed on its value, because typing can wrap it to a new line. The
+ * measurement is `getBoundingClientRect().height`, which is subpixel — and a
+ * backdrop-blurred, gradient-layered container returns a float that drifts in
+ * its last decimals between renders even when nothing moved.
+ *
+ * Handing those drifting floats to `setState` re-rendered the chat page on every
+ * character, and the padding derived from them is a prop on the transcript
+ * viewport — so a keystroke that changed nothing on screen re-rendered the whole
+ * transcript. Rounding collapses the drift, and returning the *previous* value on
+ * a match lets React bail out of the render entirely.
+ *
+ * Whole pixels because that is the resolution the value is used at: it becomes
+ * `padding-bottom` on the transcript. Nothing is lost by not tracking the
+ * fraction, and the reader could not see it if it were.
+ */
 export function getNextMeasuredInputHeight(previousHeight: number, measuredHeight: number) {
-  return measuredHeight > 0 ? measuredHeight : previousHeight
+  if (measuredHeight <= 0) return previousHeight
+  const rounded = Math.round(measuredHeight)
+  return rounded === previousHeight ? previousHeight : rounded
 }
 
 export interface ProjectRequest {

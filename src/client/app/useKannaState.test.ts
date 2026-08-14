@@ -202,6 +202,20 @@ describe("getNextMeasuredInputHeight", () => {
   test("accepts the latest non-zero measurement", () => {
     expect(getNextMeasuredInputHeight(148, 178)).toBe(178)
   })
+
+  test("rounds to whole pixels", () => {
+    expect(getNextMeasuredInputHeight(148, 178.4)).toBe(178)
+    expect(getNextMeasuredInputHeight(148, 178.6)).toBe(179)
+  })
+
+  test("returns the previous value when the rounded height is unchanged", () => {
+    // Identity, not just equality: this is what lets React bail out of the
+    // render, which is the whole point — the composer re-measures on every
+    // keystroke and the value it produces is a prop on the transcript.
+    const previous = 178
+    expect(getNextMeasuredInputHeight(previous, 178.2)).toBe(previous)
+    expect(getNextMeasuredInputHeight(previous, 177.8)).toBe(previous)
+  })
 })
 
 describe("shouldMarkActiveChatRead", () => {

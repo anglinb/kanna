@@ -41,7 +41,8 @@ function render(props: Partial<Parameters<typeof ThreadRow>[0]> = {}) {
       thread={thread()}
       isActive={false}
       editorLabel="VS Code"
-      detailLabel={null}
+      detailScope="project-scoped"
+      nowMs={1}
       onSelect={() => undefined}
       onCreateChat={() => undefined}
       onRenameChat={() => undefined}
@@ -64,15 +65,22 @@ describe("ThreadRow", () => {
     expect(render()).toContain('data-chat-id="chat-1"')
   })
 
-  test("renders the detail label it is given", () => {
-    const html = render({ detailLabel: "4h" })
+  test("resolves the age label from the scope it is given", () => {
+    // Project-scoped rows sit under a project header, so the slot shows age.
+    const html = render({ detailScope: "project-scoped", nowMs: 4 * 60 * 60 * 1000 })
 
     expect(html).toContain("4h")
-    expect(html).not.toContain("Project")
+    expect(html).not.toContain("Project/feature")
   })
 
-  test("renders a node detail label, e.g. the number-jump keycap", () => {
-    const html = render({ detailLabel: <kbd>3</kbd> })
+  test("names the project when the list spans projects", () => {
+    const html = render({ detailScope: "cross-project" })
+
+    expect(html).toContain("Project")
+  })
+
+  test("an override replaces the slot, e.g. the number-jump keycap", () => {
+    const html = render({ detailLabelOverride: <kbd>3</kbd> })
 
     expect(html).toContain("<kbd")
   })

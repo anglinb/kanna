@@ -17,6 +17,7 @@ import {
   RIGHT_SIDEBAR_MIN_WIDTH_PX,
   useRightSidebarStore,
 } from "../../stores/rightSidebarStore"
+import { useProjectRepoUrl } from "../../stores/sidebarStore"
 import { DEFAULT_PROJECT_TERMINAL_LAYOUT, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { shouldCloseTerminalPane } from "../terminalLayoutResize"
@@ -622,10 +623,7 @@ export function ChatPage() {
   // Read off the sidebar snapshot rather than the git one: the sidebar carries
   // a resolved forge URL for every project, while `project-git` only knows a
   // GitHub slug and only for the project currently subscribed.
-  const activeProjectRepoUrl = useMemo(
-    () => state.sidebarData.projectGroups.find((group) => group.groupKey === projectId)?.repoUrl,
-    [projectId, state.sidebarData.projectGroups]
-  )
+  const activeProjectRepoUrl = useProjectRepoUrl(projectId)
 
   // "Open this chat at this message", carried in router state by the sidebar's
   // hover card. Held here rather than read in the viewport so the viewport
@@ -759,6 +757,12 @@ export function ChatPage() {
   const handleOpenExternal = useCallback<NonNullable<ComponentProps<typeof ChatNavbar>["onOpenExternal"]>>((action, editor) => {
     void state.handleOpenExternal(action, editor)
   }, [state.handleOpenExternal])
+
+  // Stable so the memoized navbar can actually skip a render; an inline arrow
+  // here would be a new prop on every streamed entry.
+  const handleExportTranscript = useCallback(() => {
+    void state.handleShareChat(state.activeChatId)
+  }, [state.activeChatId, state.handleShareChat])
 
   const handleRemoveTerminal = useCallback((currentProjectId: string, terminalId: string) => {
     const paneCount = useTerminalLayoutStore.getState().projects[currentProjectId]?.terminals.length ?? 0
@@ -983,7 +987,7 @@ export function ChatPage() {
           onToggleGitPanel={projectId ? handleToggleGitPanel : undefined}
           onToggleBrowserPanel={projectId ? handleToggleBrowserPanel : undefined}
           onOpenExternal={handleOpenExternal}
-          onExportTranscript={state.activeChatId ? () => void state.handleShareChat(state.activeChatId) : undefined}
+          onExportTranscript={state.activeChatId ? handleExportTranscript : undefined}
           canExportTranscript={Boolean(state.activeChatId) && !state.isExportingStandalone}
           isExportingTranscript={state.isExportingStandalone}
           exportTranscriptComplete={state.standaloneShareComplete}

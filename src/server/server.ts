@@ -627,6 +627,14 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   }
 }
 
+function describeUploadError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return String(error)
+  }
+  const cause = error.cause === undefined ? "" : `\ncause: ${String(error.cause)}`
+  return `${error.name}: ${error.message}${cause}\n${error.stack ?? "(no stack)"}`
+}
+
 async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
   if (req.method !== "POST") {
     return null
@@ -642,13 +650,53 @@ async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
     return Response.json({ error: "Project not found" }, { status: 404 })
   }
 
-  const formData = await req.formData()
+  // Parsing is its own failure mode, so it gets its own report. A drag-sourced
+  // File on iOS is backed by a temporary drag-session file. If the system
+  // releases it before the body finishes streaming, the multipart body arrives
+  // shorter than its Content-Length and parsing throws here.
+  let formData: FormData
+  try {
+    formData = await req.formData()
+  } catch (error) {
+    return Response.json({
+      error: "The server could not read the upload request body.",
+      stage: "parse-form-data",
+      detail: describeUploadError(error),
+      contentType: req.headers.get("content-type"),
+      contentLength: req.headers.get("content-length"),
+    }, { status: 400 })
+  }
+
   const files = formData
     .getAll("files")
     .filter((value): value is File => value instanceof File)
 
   if (files.length === 0) {
-    return Response.json({ error: "No files uploaded" }, { status: 400 })
+    return Response.json({
+      error: "No files uploaded",
+      stage: "read-files",
+      detail: `The request parsed, but it carried no file parts.\nform fields: ${[...new Set(formData.keys())].join(", ") || "(none)"}`,
+      contentLength: req.headers.get("content-length"),
+    }, { status: 400 })
+  }
+
+  // The client reports each file's size before sending it. A shortfall here
+  // means the body was truncated in transit, which the parser cannot see.
+  const clientSizes = formData.getAll("clientFileSizes")
+  if (clientSizes.length === files.length) {
+    const truncated = files
+      .map((file, index) => ({ file, expected: Number(clientSizes[index]) }))
+      .filter((entry) => Number.isFinite(entry.expected) && entry.expected !== entry.file.size)
+    if (truncated.length > 0) {
+      return Response.json({
+        error: "The uploaded file arrived incomplete.",
+        stage: "size-mismatch",
+        detail: truncated
+          .map((entry) => `${entry.file.name}: client sent ${entry.expected} bytes, server received ${entry.file.size} bytes`)
+          .join("\n"),
+        contentLength: req.headers.get("content-length"),
+      }, { status: 400 })
+    }
   }
 
   if (files.length > MAX_UPLOAD_FILES) {
@@ -673,7 +721,12 @@ async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
     return Response.json({ attachments })
   } catch (error) {
     console.error("[uploads] Upload failed:", error)
-    return Response.json({ error: "Upload failed" }, { status: 500 })
+    return Response.json({
+      error: "The server could not save the uploaded files.",
+      stage: "persist",
+      detail: describeUploadError(error),
+      files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })),
+    }, { status: 500 })
   }
 }
 

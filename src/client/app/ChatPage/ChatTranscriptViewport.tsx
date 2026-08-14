@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react"
 import {
   MessageScroller,
   MessageScrollerContent,
@@ -249,6 +249,60 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport(props
   )
 })
 
+/** Which rows are on screen, as indices into the resolved row list. */
+interface VisibleRowRange {
+  start: number
+  end: number
+}
+
+/**
+ * The minimap, and the only thing subscribed to what is currently on screen.
+ *
+ * `useMessageScrollerVisibility` fires continuously while scrolling — that is
+ * its job. Calling it at the top of the transcript body meant the body, its
+ * whole row list, and every callback derived in it were rebuilt on every scroll
+ * frame, so that a small overlay could highlight the turn you are looking at.
+ * (It also made the scroll listener's own dependencies change per scroll event,
+ * so the listener was detached and reattached continuously.)
+ *
+ * Subscribing here instead confines that to this component and the memoized
+ * minimap below it. The read-anchor writer needs the same range but is throttled
+ * to once a second and a half, so it reads it from a ref rather than re-render
+ * anything to receive it.
+ */
+const TranscriptMinimapOverlay = memo(function TranscriptMinimapOverlay({
+  rowIndexByRowId,
+  visibleRowRangeRef,
+  ...minimapProps
+}: {
+  rowIndexByRowId: ReadonlyMap<string, number>
+  visibleRowRangeRef: React.RefObject<VisibleRowRange | null>
+} & Omit<ComponentProps<typeof TranscriptMinimap>, "visibleStart" | "visibleEnd">) {
+  const { visibleMessageIds } = useMessageScrollerVisibility()
+
+  const visibleRowRange = useMemo(() => {
+    let start = Number.POSITIVE_INFINITY
+    let end = Number.NEGATIVE_INFINITY
+    for (const rowId of visibleMessageIds) {
+      const index = rowIndexByRowId.get(rowId)
+      if (index === undefined) continue
+      if (index < start) start = index
+      if (index > end) end = index
+    }
+    return Number.isFinite(start) ? { start, end } : null
+  }, [rowIndexByRowId, visibleMessageIds])
+
+  visibleRowRangeRef.current = visibleRowRange
+
+  return (
+    <TranscriptMinimap
+      {...minimapProps}
+      visibleStart={visibleRowRange?.start ?? -1}
+      visibleEnd={visibleRowRange?.end ?? -1}
+    />
+  )
+})
+
 const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   activeChatId,
   listRef,
@@ -288,7 +342,10 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   scrollbarGutterHostRef,
 }: ChatTranscriptViewportProps) {
   const { scrollToEnd, scrollToMessage } = useMessageScroller()
-  const { visibleMessageIds } = useMessageScrollerVisibility()
+  // Written by the minimap overlay, which owns the visibility subscription.
+  // Read only by the throttled read-anchor writer, so a commit of lag costs
+  // nothing and this component stays out of the scroll path entirely.
+  const visibleRowRangeRef = useRef<VisibleRowRange | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
   useScrollbarGutterVar(viewportRef, scrollbarGutterHostRef, "--transcript-scrollbar-w")
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
@@ -596,18 +653,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
    * mirror and nothing to re-derive when something moves rows under a
    * stationary scroll position.
    */
-  const visibleRowRange = useMemo(() => {
-    let start = Number.POSITIVE_INFINITY
-    let end = Number.NEGATIVE_INFINITY
-    for (const rowId of visibleMessageIds) {
-      const index = rowIndexByRowId.get(rowId)
-      if (index === undefined) continue
-      if (index < start) start = index
-      if (index > end) end = index
-    }
-    return Number.isFinite(start) ? { start, end } : null
-  }, [rowIndexByRowId, visibleMessageIds])
-
   const reportTopVisibleMessage = useCallback((isAtEnd: boolean) => {
     if (!onReportReadAnchor) return
     // Never let a programmatic scroll move the stored position.
@@ -615,6 +660,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
 
     // The topmost row actually on screen — not the scroller's own anchor, which
     // marks turn starts and so is far coarser than a read position wants.
+    const visibleRowRange = visibleRowRangeRef.current
     const row = visibleRowRange === null ? undefined : resolvedRowsRef.current[visibleRowRange.start]
     if (!row) return
 
@@ -623,7 +669,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     if (!messageId || isOptimisticMessageId(messageId)) return
 
     onReportReadAnchor(messageId, isAtEnd, measureReadAnchorLayout(viewportRef.current, row.id, headerOffsetPx))
-  }, [headerOffsetPx, onReportReadAnchor, visibleRowRange])
+  }, [headerOffsetPx, onReportReadAnchor])
 
   const handleScroll = useCallback(() => {
     const scrollNode = viewportRef.current
@@ -828,10 +874,10 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
       </OpenLocalLinkProvider>
 
       {showEmptyState ? null : (
-        <TranscriptMinimap
+        <TranscriptMinimapOverlay
+          rowIndexByRowId={rowIndexByRowId}
+          visibleRowRangeRef={visibleRowRangeRef}
           turns={turns}
-          visibleStart={visibleRowRange?.start ?? -1}
-          visibleEnd={visibleRowRange?.end ?? -1}
           transcriptOverflows={transcriptOverflows}
           topPx={headerOffsetPx}
           // Match the empty state: transcriptPaddingBottom carries extra

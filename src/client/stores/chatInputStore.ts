@@ -95,13 +95,29 @@ export const useChatInputStore = create<ChatInputState>()(
  * draft is being typed rather than on every keystroke anywhere. Drafts live in
  * the browser, never on the server, so anything reading this is per-device.
  *
- * Read this at the component that owns a chat row and pass the value down: the
- * presentational pieces stay renderable (and testable) without a live store,
- * which under zustand v5 they would not be — its server snapshot is the
- * *initial* state, so a store read inside one silently renders as empty.
+ * Read this as close to the thing that displays the text as possible, and pass
+ * the value into the presentational piece rather than reading it there. Two
+ * reasons, and they pull the same way: those pieces stay renderable (and
+ * testable) without a live store, which under zustand v5 they would not be —
+ * its server snapshot is the *initial* state, so a store read inside one
+ * silently renders as empty — and a subscription in an always-mounted component
+ * re-renders it on every keystroke. A sidebar row wants `useChatHasDraft`; only
+ * the open hover card wants the text.
  */
 export function useChatDraft(chatId: string): string {
   return useChatInputStore((state) => (state.drafts[chatId] ?? "").trim())
+}
+
+/**
+ * Whether a chat holds an unsent draft, without subscribing to its text.
+ *
+ * The text changes on every keystroke; whether there *is* text changes twice per
+ * draft. Surfaces that only show a pencil icon or enable a "Clear Draft" item
+ * want the second question — asking the first re-rendered a sidebar row (and its
+ * menu and hover card) on every character typed into the composer.
+ */
+export function useChatHasDraft(chatId: string): boolean {
+  return useChatInputStore((state) => (state.drafts[chatId] ?? "").trim().length > 0)
 }
 
 /**

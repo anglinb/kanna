@@ -1,15 +1,14 @@
 import { memo, useMemo, useState } from "react"
 import { Archive, ChevronRight, MoreHorizontal } from "lucide-react"
 import type { ChatJumpRole } from "../../../lib/chat-navigation"
-import type { ChatTouchedFilesResult, SidebarChatRow, SidebarData } from "../../../../shared/types"
+import type { ChatTouchedFilesResult, SidebarChatRow } from "../../../../shared/types"
 import {
   computeSidebarThreadSections,
-  flattenSidebarThreads,
   mergeRelevantThreads,
   type SidebarThread,
 } from "../../../lib/thread-sections"
-import { getThreadDetailLabel } from "../../../lib/thread-detail-label"
 import { useDraftStartTimes } from "../../../stores/chatInputStore"
+import { usePendingSendTimes } from "../../../stores/pendingSendStore"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
 import {
@@ -104,7 +103,8 @@ function SectionHeader({
 }
 
 interface Props {
-  data: SidebarData
+  /** Already flattened and identity-stabilized — see `useStableSidebarThreads`. */
+  threads: SidebarThread[]
   activeChatId: string | null
   editorLabel: string
   /** Anchor for the date buckets; bucketing runs in the browser so it always follows the user's local timezone. */
@@ -138,7 +138,7 @@ interface Props {
  * bucket headers offer Archive All via "…" or right-click.
  */
 function ThreadSectionsImpl({
-  data,
+  threads,
   activeChatId,
   editorLabel,
   nowMs,
@@ -160,9 +160,13 @@ function ThreadSectionsImpl({
   // Drafts are browser-local, so they reach the sections as an argument rather
   // than as a field on the rows the server sent.
   const draftStartTimes = useDraftStartTimes()
+  // Same reason as the drafts: a send this browser has made but not yet seen
+  // acknowledged is not on the rows either, and without it the chat you just
+  // sent to would drop out of every section until the server caught up.
+  const pendingSends = usePendingSendTimes()
   const sections = useMemo(
-    () => computeSidebarThreadSections(flattenSidebarThreads(data), nowMs, draftStartTimes),
-    [data, draftStartTimes, nowMs]
+    () => computeSidebarThreadSections(threads, nowMs, draftStartTimes, pendingSends),
+    [draftStartTimes, nowMs, pendingSends, threads]
   )
   // This tab shows Review inside Relevant rather than as its own header.
   const relevant = useMemo(
@@ -200,7 +204,8 @@ function ThreadSectionsImpl({
       thread={thread}
       isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
       editorLabel={editorLabel}
-      detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
+      detailScope="cross-project"
+      nowMs={nowMs}
       dimIdleTitles={false}
       onSelect={onSelectChat}
       onSelectMessage={onSelectChatMessage}
@@ -290,7 +295,8 @@ function ThreadSectionsImpl({
                     archived
                     isActive={normalizeChatId(thread.chatId) === normalizedActiveChatId}
                     editorLabel={editorLabel}
-                    detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
+                    detailScope="cross-project"
+                    nowMs={nowMs}
                     dimIdleTitles={false}
                     onSelect={onOpenArchivedChat}
                     onLoadTouchedFiles={onLoadTouchedFiles}
