@@ -17,10 +17,7 @@ import { cn } from "../../lib/utils"
  * dropped rather than vendored as no-ops; the call site supplies its own.
  *
  * The behaviour we rely on lives in the primitive: scroll anchoring across
- * content growth, follow-the-end while the reader is at the end, and
- * `content-visibility: auto` on items so offscreen rows cost no layout or
- * paint while staying in the DOM (and therefore addressable, selectable, and
- * findable with the browser's own find-in-page).
+ * content growth, and follow-the-end while the reader is at the end.
  */
 
 function MessageScrollerProvider(
@@ -100,12 +97,16 @@ function MessageScrollerItem({
     <MessageScrollerPrimitive.Item
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
-      // `contain-intrinsic-size` is the placeholder height an offscreen row
-      // reports. The `auto` keyword makes the browser remember each row's real
-      // size once rendered, so this default only governs rows never yet seen —
-      // call sites override it per row with a kind-aware estimate.
+      // No `content-visibility: auto` here, and no `contain-intrinsic-size`
+      // guess with it. Together they size every off-screen row from the guess
+      // until that row renders once. A tool row is ~40px and a long answer is
+      // many hundreds, so a guess is always wrong for some rows. Scrolling up
+      // then resized the rows above the reader and slid the text under their
+      // finger. Safari has no scroll anchoring to correct that. The transcript
+      // is bounded — tool calls collapse into single rows, so a chat is a few
+      // hundred rows — which makes a full render affordable.
       className={cn(
-        "min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]",
+        "min-w-0 shrink-0",
         className
       )}
       {...props}

@@ -926,7 +926,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               onPaste={handlePaste}
               onKeyDown={handleKeyDown}
               disabled={disabled}
-              className="min-w-0 flex-1 text-base p-3 md:p-4 !pr-2 md:pl-6 resize-none max-h-[200px] outline-none bg-transparent border-0 shadow-none"
+              className="min-w-0 flex-1 text-base p-3 md:p-4 !pr-2 md:pl-6 resize-none max-h-[200px] outline-none bg-transparent border-0 shadow-none placeholder:truncate"
             />
             <Button
               type="button"

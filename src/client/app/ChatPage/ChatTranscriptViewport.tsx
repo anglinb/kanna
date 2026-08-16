@@ -50,8 +50,6 @@ import {
   EMPTY_STATE_TEXT,
 } from "./utils"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
-import { estimateTranscriptRowSize } from "./transcriptRowSize"
-
 /**
  * How close to the bottom counts as "at the end", as a fraction of viewport
  * height.
@@ -69,9 +67,8 @@ const AT_END_THRESHOLD_PX = 48
 /**
  * How long a pin keeps correcting itself as the transcript settles.
  *
- * Rows that have never been on screen stand in at an estimated height, so the
- * target's position is computed against guesses and the content resizes under
- * it as those rows actually render. On a cold open of a long chat that goes on
+ * Content above the target can resize after the pin lands — images decode,
+ * fonts swap, code blocks wrap. On a cold open of a long chat that goes on
  * for hundreds of milliseconds — far longer than a frame budget — so the
  * correction is driven by layout changes and bounded by the clock instead.
  */
@@ -424,12 +421,9 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   /**
    * Put a row at the top of the viewport, re-issuing until it stays there.
    *
-   * One pass is not enough on a cold open. Rows that have never been on screen
-   * report `contain-intrinsic-size` rather than a real height, so the target's
-   * position is computed against estimates; as the rows above it render, the
-   * content resizes underneath and the target drifts. Measured on a real chat,
-   * a single jump landed 219px short while the content grew from 2,600px to
-   * 8,900px.
+   * One pass is not always enough on a cold open. Content above the target can
+   * still resize after first layout — images decode, fonts swap, code blocks
+   * wrap — and each shift moves the target under the pin.
    *
    * Each pass measures where the row actually ended up and corrects, stopping
    * as soon as it is within a pixel or two of the intended offset — so a
@@ -834,21 +828,13 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
                   // at the bottom, where the reply arrives, and the read
                   // position is taken from the visible rows rather than from
                   // anchors.
-                  // A per-row estimate of the height an offscreen row reserves.
-                  // A collapsed tool header and a long answer differ by more
-                  // than an order of magnitude, and the browser only keeps this
-                  // until it has laid the row out once.
-                  style={{ containIntrinsicSize: `auto ${estimateTranscriptRowSize(row)}px` }}
                 >
                   {/* The row's own padding is what gives the jump highlight its
-                      breathing room, so it has to be uniform and it has to be
-                      *inside* the box: the scroller item is paint-contained
-                      (`content-visibility: auto`), which clips anything hanging
-                      outside it — which is what a negative margin would do.
-                      The gap between messages used to be 20px of bottom padding
-                      and is now 8 of padding either side plus 4 of margin, so
-                      the rhythm is unchanged. `max-w` grew by the padding to
-                      keep the text column itself at 800px. */}
+                      breathing room, so it has to be uniform and inside the
+                      box. The gap between messages used to be 20px of bottom
+                      padding and is now 8 of padding either side plus 4 of
+                      margin, so the rhythm is unchanged. `max-w` grew by the
+                      padding to keep the text column itself at 800px. */}
                   <div
                     className={cn(
                       "mx-auto mb-1 w-full max-w-[816px] rounded-xl p-2",
