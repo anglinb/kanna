@@ -98,7 +98,7 @@ export function ToolCallMessage({ message, isLoading = false, localPath }: Props
             return <Icon className="size-4 text-muted-icon" />
           })()}
         </div>
-        <MetaLabel className="text-left transition-opacity duration-200 truncate">
+        <MetaLabel className="h-5 text-left transition-opacity duration-200 truncate">
           <AnimatedShinyText
             animate={showLoadingState}
             shimmerWidth={Math.max(20, (name?.length ?? 33) * 3)}

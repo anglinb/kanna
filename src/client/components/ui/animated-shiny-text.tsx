@@ -19,7 +19,11 @@ export function AnimatedShinyText({
   return (
     <span
       className={cn(
-        "kanna-shiny-text relative mx-auto inline-block max-w-md overflow-hidden text-foreground/50",
+        // The base text must truncate like the animated copy below, or long
+        // labels hard-clip at the overflow edge with no ellipsis. `align-top`
+        // matters too: `overflow-hidden` moves an inline-block's baseline to
+        // its bottom edge, which grows the line box past the font's 20px.
+        "kanna-shiny-text relative mx-auto inline-block max-w-md overflow-hidden text-ellipsis whitespace-nowrap align-top text-foreground/50",
         !animate && "text-neutral",
         className
       )}
