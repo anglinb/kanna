@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
+import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData, SIDEBAR_ACTIVITY_RESOLUTION_MS } from "./read-models"
 import { createEmptyState, type TouchedFile } from "./events"
 import type { WorkingTreeProbe } from "./diff-store"
 
@@ -122,6 +122,56 @@ describe("read models", () => {
     expect(sidebar.projectGroups[0]?.previewChats.map((chat) => chat.chatId)).toEqual(["chat-1"])
     expect(sidebar.projectGroups[0]?.olderChats).toEqual([])
     expect(sidebar.projectGroups[0]?.defaultCollapsed).toBe(false)
+  })
+
+  test("quantizes lastAgentMessageAt so streamed entries dedupe to identical snapshots", () => {
+    // The sidebar dedupes pushes by comparing serialized snapshots. The raw
+    // timestamp advances on every transcript entry, so shipping it at
+    // millisecond precision made every entry a "changed" snapshot and every
+    // entry a push. Derived at display granularity, a burst of entries inside
+    // one bucket serializes to the same bytes and never leaves the server.
+    function stateWithAgentActivity(lastAgentMessageAt: number) {
+      const state = createEmptyState()
+      state.projectsById.set("project-1", {
+        id: "project-1",
+        localPath: "/tmp/project",
+        title: "Project",
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      state.projectIdsByPath.set("/tmp/project", "project-1")
+      state.chatsById.set("chat-1", {
+        id: "chat-1",
+        projectId: "project-1",
+        title: "Chat",
+        createdAt: 1,
+        updatedAt: 1,
+        unread: false,
+        provider: "claude",
+        planMode: false,
+        autoPlan: false,
+        sessionToken: null,
+        lastTurnOutcome: null,
+        lastMessageAt: 500_000,
+        lastAgentMessageAt,
+      })
+      return state
+    }
+
+    const base = 600_000
+    const derive = (at: number) =>
+      JSON.stringify(deriveSidebarData(stateWithAgentActivity(at), new Map(), { nowMs: 1_000_000 }))
+
+    // Entries landing within one bucket: byte-identical, so the push dedupes.
+    expect(derive(base + 1)).toBe(derive(base + SIDEBAR_ACTIVITY_RESOLUTION_MS - 1))
+    // Crossing a bucket boundary is a real change and must still go out.
+    expect(derive(base)).not.toBe(derive(base + SIDEBAR_ACTIVITY_RESOLUTION_MS))
+
+    // The value itself sits on a bucket boundary and never leads the raw clock.
+    const row = deriveSidebarData(stateWithAgentActivity(base + 7_331), new Map(), { nowMs: 1_000_000 })
+      .projectGroups[0]?.chats[0]
+    expect(row?.lastAgentMessageAt).toBe(base)
+    expect(row!.lastAgentMessageAt! % SIDEBAR_ACTIVITY_RESOLUTION_MS).toBe(0)
   })
 
   test("uses sidebar-only project titles without changing local project metadata", () => {

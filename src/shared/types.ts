@@ -890,6 +890,11 @@ export interface SidebarChatRow {
    * chat parked mid-turn (plan mode / a permission prompt, which end no turn)
    * still sorts by when it actually started asking for you rather than by when
    * you last hit send. Drives sidebar recency alongside `lastMessageAt`.
+   *
+   * Coarse on purpose: the server floors it to `SIDEBAR_ACTIVITY_RESOLUTION_MS`
+   * buckets (read-models.ts) so a streaming turn serializes to identical
+   * snapshots between real changes and the push dedupe can drop them. Do not
+   * compare it against millisecond timestamps expecting exact ordering.
    */
   lastAgentMessageAt?: number
   /** One-line preview of the latest user prompt. */
