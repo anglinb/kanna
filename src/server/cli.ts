@@ -14,6 +14,12 @@ import { startKannaServer } from "./server"
 const pkg = await Bun.file(new URL("../../package.json", import.meta.url)).json()
 const VERSION: string = pkg.version ?? "0.0.0"
 
+// Last-resort backstop: log escaped rejections (e.g. from requests Bun
+// idle-timed-out mid-handler) instead of letting them crash the process.
+process.on("unhandledRejection", (reason) => {
+  console.error(`${LOG_PREFIX} unhandled rejection:`, reason)
+})
+
 const argv = process.argv.slice(2)
 let resolveExitAction: ((action: "ui_restart" | "exit") => void) | null = null
 

@@ -397,6 +397,18 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       server = Bun.serve<ClientState>({
         port: actualPort,
         hostname,
+        // Bun's default is 10s, which reaps tunneled requests riding out a
+        // Cloudflare edge blip (and coincides exactly with the tunnel
+        // supervisor's self-ping timeout). 60s stays under Cloudflare's
+        // ~100s origin read timeout so the edge gives up first.
+        idleTimeout: 60,
+        // Backstop: a request Bun idle-timed-out can leave its async fetch
+        // handler rejecting later on a dead socket. Without this handler
+        // that rejection escapes and can take the process down.
+        error(err) {
+          console.error(`${LOG_PREFIX} http handler error:`, err)
+          return new Response("Internal server error", { status: 500 })
+        },
         async fetch(req, serverInstance) {
           const url = new URL(req.url)
           const requestClass: CloudRequestClass = cloud
