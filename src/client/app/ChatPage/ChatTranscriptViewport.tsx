@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react"
 import {
   MessageScroller,
   MessageScrollerContent,
@@ -813,9 +813,42 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     applyScrollTarget(prepareJumpToRow(rowId))
   }, [applyScrollTarget, prepareJumpToRow, resolvedRows, rowIndexByMessageId])
 
+  /**
+   * The first loaded row and where it sat when "Load More" was clicked.
+   *
+   * The scroller keeps its position across prepends by watching its first
+   * child, but the first child here is the list header (which holds the
+   * button), so from its point of view nothing was prepended. The
+   * correction is done here instead: once older rows land, the row that was
+   * first is moved back to the same offset it had, in the same frame.
+   */
+  const prependAnchorRef = useRef<{ rowId: string; top: number } | null>(null)
+
+  const captureFirstRow = useCallback(() => {
+    const first = resolvedRows[0]
+    const viewport = viewportRef.current
+    const row = first && viewport?.querySelector(`[data-message-id="${CSS.escape(first.id)}"]`)
+    if (!first || !viewport || !row) return
+    prependAnchorRef.current = { rowId: first.id, top: row.getBoundingClientRect().top - viewport.getBoundingClientRect().top }
+  }, [resolvedRows])
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current
+    if (!anchor) return
+    const viewport = viewportRef.current
+    const row = viewport?.querySelector(`[data-message-id="${CSS.escape(anchor.rowId)}"]`)
+    if (!viewport || !row) return
+    // Still the first row: nothing landed above it yet, keep waiting.
+    if (resolvedRows[0]?.id === anchor.rowId) return
+    prependAnchorRef.current = null
+    const top = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+    viewport.scrollTop += top - anchor.top
+  }, [resolvedRows])
+
   const handleLoadOlderClick = useCallback(() => {
+    captureFirstRow()
     void onLoadOlderMessages?.()
-  }, [onLoadOlderMessages])
+  }, [captureFirstRow, onLoadOlderMessages])
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
     if (target.trigger !== "contextmenu") {
@@ -849,13 +882,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     [transcriptPaddingBottom]
   )
 
-  // How many turns sit before the window, for the button's label.
-  const olderTurnCount = useMemo(() => {
-    if (!hasOlderMessages || !transcriptOutline) return 0
-    const loadedIds = new Set(loadedTurns.map((turn) => turn.id))
-    return transcriptOutline.filter((entry) => !loadedIds.has(entry.id)).length
-  }, [hasOlderMessages, loadedTurns, transcriptOutline])
-
   const listHeader = (
     <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }}>
       {hasOlderMessages ? (
@@ -869,11 +895,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
             disabled={isLoadingOlderMessages}
             className="rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
           >
-            {isLoadingOlderMessages
-              ? "Loading…"
-              : olderTurnCount > 0
-                ? `Load earlier messages (${olderTurnCount} earlier ${olderTurnCount === 1 ? "turn" : "turns"})`
-                : "Load earlier messages"}
+            {isLoadingOlderMessages ? "Loading…" : "Load More"}
           </button>
         </div>
       ) : null}
