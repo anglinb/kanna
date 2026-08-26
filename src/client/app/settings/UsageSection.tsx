@@ -125,11 +125,13 @@ const WINDOW_ROW_GRID = "grid grid-cols-[minmax(0,1fr)_5rem_minmax(4rem,1.4fr)_2
 /**
  * Same grid for a collapsed card's header, minus the reset column on narrow
  * screens — the provider name plus a meter is all that fits on a phone, and the
- * reset time is one tap away in the expanded rows.
+ * reset time is one tap away in the expanded rows. The meter column is 30%
+ * narrower than a window row's (1fr, not 1.4fr) so the name and plan pill
+ * keep their room; the identity column truncates instead of overlapping.
  */
 const COLLAPSED_HEADER_GRID = cn(
-  "grid grid-cols-[minmax(0,1fr)_minmax(4rem,1.4fr)_2.375rem] items-center gap-3",
-  "md:grid-cols-[minmax(0,1fr)_5rem_minmax(4rem,1.4fr)_2.375rem]",
+  "grid grid-cols-[minmax(0,1fr)_minmax(4rem,1fr)_2.375rem] items-center gap-3",
+  "md:grid-cols-[minmax(0,1fr)_5rem_minmax(4rem,1fr)_2.375rem]",
 )
 
 function WindowRow({ window }: { window: UsageLimitWindow }) {
@@ -221,11 +223,11 @@ export function ProviderCard({
       ) : (
         <Icon className="h-4 w-4 shrink-0 text-foreground" />
       )}
-      <span className="truncate text-sm font-semibold text-foreground">
+      <span className="min-w-0 truncate text-sm font-semibold text-foreground">
         {providerLabel(snapshot.provider)}
       </span>
       {planBadgeText ? (
-        <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
+        <span className="min-w-0 shrink truncate rounded-full border border-border px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
           {planBadgeText}
         </span>
       ) : null}
