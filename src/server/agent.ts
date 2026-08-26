@@ -18,6 +18,7 @@ import { normalizeToolCall } from "../shared/tools"
 import type { ClientCommand } from "../shared/protocol"
 import { AsyncQueue } from "./async-queue"
 import { EventStore } from "./event-store"
+import { STRUCTURED_RESULT_TOOL_KINDS } from "./events"
 import type { AnalyticsReporter } from "./analytics"
 import { NoopAnalyticsReporter } from "./analytics"
 import { CodexAppServerManager } from "./codex-app-server"
@@ -419,12 +420,21 @@ function getClaudeAssistantMessageUsageId(message: any): string | null {
   return null
 }
 
-export function normalizeClaudeStreamMessage(message: any): TranscriptEntry[] {
-  // Raw SDK JSON is kept only where the client actually consumes it: the
-  // system_init raw view and tool_use_result extraction on tool_result
-  // entries. Stamping it on every entry doubled transcript size on disk
-  // and on every snapshot push — so serialize lazily, inside only the
-  // branches that keep it, never on streaming deltas.
+export function normalizeClaudeStreamMessage(
+  message: any,
+  options?: {
+    /**
+     * Ids of earlier tool calls whose kind renders `tool_use_result`
+     * (`STRUCTURED_RESULT_TOOL_KINDS`). Only their results keep that field;
+     * for every other tool it duplicates `content`.
+     */
+    structuredToolIds?: ReadonlySet<string>
+  }
+): TranscriptEntry[] {
+  // Raw SDK JSON is kept only on system_init, for the raw JSON view. Tool
+  // results used to carry it too, so `tool_use_result` could be lifted out
+  // later; that copy held every screenshot twice and grew chats past 100 MB
+  // on disk. Now the one field is stored on its own, and only where read.
   const messageId = typeof message.uuid === "string" ? message.uuid : undefined
 
   if (message.type === "system" && message.subtype === "init") {
@@ -472,17 +482,18 @@ export function normalizeClaudeStreamMessage(message: any): TranscriptEntry[] {
 
   if (message.type === "user" && Array.isArray(message.message?.content)) {
     const entries: TranscriptEntry[] = []
-    let debugRaw: string | undefined
     for (const content of message.message.content) {
       if (content.type === "tool_result" && typeof content.tool_use_id === "string") {
-        debugRaw ??= JSON.stringify(message)
+        const structured = options?.structuredToolIds?.has(content.tool_use_id)
+          ? message.tool_use_result
+          : undefined
         entries.push(timestamped({
           kind: "tool_result",
           messageId,
           toolId: content.tool_use_id,
           content: content.content,
           isError: Boolean(content.is_error),
-          debugRaw,
+          ...(structured !== undefined ? { structuredResult: structured } : {}),
         }))
       }
       if (message.message.role === "user" && typeof message.message.content === "string") {
@@ -547,6 +558,9 @@ async function* createClaudeHarnessStream(
   let seenAssistantUsageIds = new Set<string>()
   let latestUsageSnapshot: ContextWindowUsageSnapshot | null = null
   let lastKnownContextWindow: number | undefined
+  // The call always streams before its result, so by the time the result
+  // arrives this says whether its `tool_use_result` is worth keeping.
+  const structuredToolIds = new Set<string>()
 
   for await (const sdkMessage of q as AsyncIterable<any>) {
     const sessionToken = typeof sdkMessage.session_id === "string" ? sdkMessage.session_id : null
@@ -650,7 +664,10 @@ async function* createClaudeHarnessStream(
       latestUsageSnapshot = null
     }
 
-    for (const entry of normalizeClaudeStreamMessage(sdkMessage)) {
+    for (const entry of normalizeClaudeStreamMessage(sdkMessage, { structuredToolIds })) {
+      if (entry.kind === "tool_call" && STRUCTURED_RESULT_TOOL_KINDS.has(entry.tool.toolKind)) {
+        structuredToolIds.add(entry.tool.toolId)
+      }
       yield { type: "transcript", entry }
     }
   }

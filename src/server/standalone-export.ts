@@ -43,6 +43,12 @@ export interface WriteStandaloneTranscriptExportArgs {
   theme: StandaloneTranscriptTheme
   attachmentMode: StandaloneTranscriptAttachmentMode
   messages: TranscriptEntry[]
+  /**
+   * Absolute path behind a transcript media URL (images the store moved out
+   * of tool results), or null when the URL is not one. Without it those
+   * images are exported as metadata only.
+   */
+  resolveMediaPath?: (url: string) => string | null
 }
 
 export interface StandaloneExportDeps {
@@ -110,6 +116,7 @@ export async function writeStandaloneTranscriptExport(
     copyFile: copyFileImpl,
     mkdir: ensureDir,
     pathExists,
+    resolveMediaPath: args.resolveMediaPath ?? (() => null),
   })
 
   const bundle: StandaloneTranscriptBundle = {
@@ -177,6 +184,7 @@ async function prepareStandaloneMessages(
     copyFile: typeof copyFile
     mkdir: typeof mkdir
     pathExists: (targetPath: string) => Promise<boolean>
+    resolveMediaPath: (url: string) => string | null
   },
 ): Promise<PreparedMessagesResult> {
   const preparedMessages = structuredClone(messages)
@@ -185,6 +193,32 @@ async function prepareStandaloneMessages(
   let attachmentsDirCreated = false
 
   for (const message of preparedMessages) {
+    // Tool result images are files beside the transcript; bundle them like
+    // attachments, or blank the URL so the viewer draws nothing rather than
+    // a request against a server that is not there.
+    if (message.kind === "tool_result" && Array.isArray(message.content)) {
+      for (const block of message.content as Array<{ type?: unknown; url?: unknown }>) {
+        if (!block || typeof block !== "object" || block.type !== "image" || typeof block.url !== "string" || !block.url) {
+          continue
+        }
+        totalAttachmentCount += 1
+        const sourcePath = args.attachmentMode === "metadata" ? null : args.resolveMediaPath(block.url)
+        if (!sourcePath || !(await args.pathExists(sourcePath))) {
+          block.url = ""
+          continue
+        }
+        if (!attachmentsDirCreated) {
+          await args.mkdir(args.attachmentsDir, { recursive: true })
+          attachmentsDirCreated = true
+        }
+        const exportedFileName = sanitizeFileNameSegment(path.basename(sourcePath))
+        await args.copyFile(sourcePath, path.join(args.attachmentsDir, exportedFileName))
+        bundledAttachmentCount += 1
+        block.url = `./attachments/${exportedFileName}`
+      }
+      continue
+    }
+
     if (message.kind !== "user_prompt" || !message.attachments?.length) {
       continue
     }

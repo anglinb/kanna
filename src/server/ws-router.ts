@@ -1497,6 +1497,7 @@ export function createWsRouter({
             theme: command.theme,
             attachmentMode: command.attachmentMode,
             messages: store.getMessages(command.chatId),
+            resolveMediaPath: (url) => store.resolveTranscriptMediaPath(url),
           })
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return

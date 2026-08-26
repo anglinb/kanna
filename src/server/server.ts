@@ -149,6 +149,12 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   await store.initialize()
   await diffStore.initialize()
   await store.migrateLegacyTranscripts(options.onMigrationProgress)
+  // Not awaited: this streams every transcript once per data dir, which on a
+  // machine with a few 100 MB chats takes longer than a boot should. The
+  // store queues each rewrite behind appends, so serving can start now.
+  void store.slimTranscripts({ onProgress: options.onMigrationProgress }).catch((error) => {
+    console.warn(`${LOG_PREFIX} transcript slim failed:`, error)
+  })
   let discoveredProjects: DiscoveredProject[] = []
 
   async function refreshDiscovery() {
@@ -574,6 +580,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(attachmentContentResponse)
           }
 
+          const transcriptMediaResponse = await handleTranscriptMediaContent(req, url, store)
+          if (transcriptMediaResponse) {
+            return withOriginAgentCluster(transcriptMediaResponse)
+          }
+
           const projectFileContentResponse = await handleProjectFileContent(req, url, store)
           if (projectFileContentResponse) {
             return withOriginAgentCluster(projectFileContentResponse)
@@ -789,6 +800,44 @@ async function handleAttachmentContent(req: Request, url: URL, store: EventStore
   return new Response(file, {
     headers: {
       "Content-Type": inferAttachmentContentType(storedName, file.type),
+    },
+  })
+}
+
+/**
+ * Images the store moved out of tool results (`transcript-media.ts`). The
+ * name embeds the entry id and never changes, so the browser may cache it
+ * for as long as it likes.
+ */
+async function handleTranscriptMediaContent(req: Request, url: URL, store: EventStore) {
+  const match = url.pathname.match(/^\/api\/chats\/([^/]+)\/media\/([^/]+)$/)
+  if (!match) {
+    return null
+  }
+
+  if (req.method !== "GET") {
+    return new Response(null, { status: 405, headers: { Allow: "GET" } })
+  }
+
+  const filePath = store.resolveTranscriptMediaPath(url.pathname)
+  if (!filePath) {
+    return Response.json({ error: "Media not found" }, { status: 404 })
+  }
+
+  const file = Bun.file(filePath)
+  try {
+    const info = await stat(filePath)
+    if (!info.isFile()) {
+      return Response.json({ error: "Media not found" }, { status: 404 })
+    }
+  } catch {
+    return Response.json({ error: "Media not found" }, { status: 404 })
+  }
+
+  return new Response(file, {
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      "Cache-Control": "private, max-age=31536000, immutable",
     },
   })
 }

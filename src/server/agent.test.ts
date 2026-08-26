@@ -160,11 +160,12 @@ describe("normalizeClaudeStreamMessage", () => {
     })).toBe(1_000_000)
   })
 
-  // debugRaw contract: raw SDK JSON is stamped ONLY where the client reads it
-  // (KannaTranscript's first-system-message raw view and parseTranscript's
-  // tool_use_result extraction). Stamping more doubles transcript size; stamping
-  // less breaks those two read paths. This test pins the exact set.
-  test("stamps debugRaw on exactly system_init and tool_result entries", () => {
+  // debugRaw contract: raw SDK JSON is stamped ONLY on system_init, the one
+  // entry with a raw JSON view. Tool results get `structuredResult` instead,
+  // and only for the kinds that render it. Stamping more doubled transcript
+  // size on disk (a screenshot read held its base64 twice). This test pins
+  // the exact set.
+  test("stamps debugRaw on system_init only and structuredResult on structured tool results", () => {
     const systemInit = {
       type: "system",
       subtype: "init",
@@ -200,31 +201,33 @@ describe("normalizeClaudeStreamMessage", () => {
     const status = { type: "system", subtype: "status", status: "compacting" }
     const compactBoundary = { type: "system", subtype: "compact_boundary" }
 
-    const stamped = [
-      ...normalizeClaudeStreamMessage(systemInit),
-      ...normalizeClaudeStreamMessage(toolResult),
-    ]
+    const stamped = normalizeClaudeStreamMessage(systemInit)
     const unstamped = [
       ...normalizeClaudeStreamMessage(assistant),
+      ...normalizeClaudeStreamMessage(toolResult),
       ...normalizeClaudeStreamMessage(result),
       ...normalizeClaudeStreamMessage(status),
       ...normalizeClaudeStreamMessage(compactBoundary),
     ]
 
-    expect(stamped.map((entry) => entry.kind)).toEqual(["system_init", "tool_result"])
-    for (const entry of stamped) {
-      expect((entry as { debugRaw?: string }).debugRaw).toBeString()
-    }
-    // The stamped payload must round-trip to the exact raw SDK message: the
-    // client JSON.parses it to pull tool_use_result.
-    const parsedToolResultRaw = JSON.parse((stamped[1] as { debugRaw: string }).debugRaw)
-    expect(parsedToolResultRaw).toEqual(toolResult)
-    expect(parsedToolResultRaw.tool_use_result).toEqual({ stdout: "/tmp" })
+    expect(stamped.map((entry) => entry.kind)).toEqual(["system_init"])
+    expect(JSON.parse((stamped[0] as { debugRaw: string }).debugRaw)).toEqual(systemInit)
 
-    expect(unstamped.map((entry) => entry.kind)).toEqual(["assistant_text", "tool_call", "result", "status", "compact_boundary"])
+    expect(unstamped.map((entry) => entry.kind)).toEqual(["assistant_text", "tool_call", "tool_result", "result", "status", "compact_boundary"])
     for (const entry of unstamped) {
       expect(entry).not.toHaveProperty("debugRaw")
     }
+    // A Bash result is not a structured kind: its tool_use_result duplicates
+    // content and is dropped.
+    expect(unstamped[2]).not.toHaveProperty("structuredResult")
+
+    // A result whose call was recorded as structured keeps just that field.
+    const [structured] = normalizeClaudeStreamMessage(
+      { ...toolResult, tool_use_result: { approved: true } },
+      { structuredToolIds: new Set(["tool-1"]) }
+    )
+    expect(structured).toMatchObject({ kind: "tool_result", structuredResult: { approved: true } })
+    expect(structured).not.toHaveProperty("debugRaw")
   })
 })
 

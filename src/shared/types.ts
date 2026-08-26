@@ -1431,13 +1431,14 @@ interface TranscriptEntryBase {
   hidden?: boolean
   debugRaw?: string
   /**
-   * Set only when this entry was reduced for the wire: its unbounded tool
-   * payload fields were left on the server, to be fetched with
-   * `chat.getToolEntries` if the row is opened.
+   * Set when this entry is in header form: its unbounded tool payload fields
+   * are in the server's payload sidecar (`server/transcript-payloads.ts`), to
+   * be fetched with `chat.getToolEntries` if the row is opened.
    *
-   * Never present on disk, in `getMessages()` results, or in export bundles —
-   * those keep full fidelity. Absent also means "nothing was dropped", so a
-   * reader can treat presence as "fetching will reveal more".
+   * This is how the entry sits in the transcript file and on the wire. Never
+   * present in `getMessages()` results or in export bundles, which merge the
+   * payload back. Absent also means "nothing was dropped", so a reader can
+   * treat presence as "fetching will reveal more".
    */
   trimmed?: true
 }
@@ -1519,13 +1520,15 @@ export interface ToolResultEntry extends TranscriptEntryBase {
   content: unknown
   isError?: boolean
   /**
-   * `tool_use_result` lifted out of the provider's raw payload, present only
-   * for the tool kinds that need it (`ask_user_question`, `exit_plan_mode`).
+   * `tool_use_result` from the provider, present only for the tool kinds that
+   * render it (`ask_user_question`, `exit_plan_mode`).
    *
-   * Derived server-side when a page is built so the client never receives
-   * `debugRaw` — which is the whole raw provider message and duplicates
-   * `content`, accounting for ~66% of a typical chat snapshot. Not persisted;
-   * `debugRaw` remains on disk and is fetched on demand by the raw JSON view.
+   * Persisted at write time. Tool results used to carry the whole raw
+   * provider message in `debugRaw` just so this one field could be lifted
+   * out of it. That copy duplicated `content`, and for a screenshot read it
+   * duplicated 600 KB of base64, which is how chats grew past 100 MB on disk.
+   * Older transcripts still hold `debugRaw` here until `slimTranscripts`
+   * rewrites them; the wire clone lifts from either.
    */
   structuredResult?: unknown
 }
@@ -1925,9 +1928,11 @@ export interface ReadFileTextBlock {
   text: string
 }
 
+/** Inline base64 (`data`) or a file stored beside the transcript (`url`). */
 export interface ReadFileImageBlock {
   type: "image"
-  data: string
+  data?: string
+  url?: string
   mimeType?: string
 }
 

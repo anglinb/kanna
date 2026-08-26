@@ -16,9 +16,11 @@ import { useToolPayload } from "./tool-payload-context"
  * subtree once expanded, so the cost now follows the click.
  */
 
+/** Inline base64 (`data`) or a server-stored file (`url`); one of the two. */
 type ReadImageBlock = {
   type: "image"
-  data: string
+  data?: string
+  url?: string
   mimeType?: string
 }
 
@@ -34,9 +36,17 @@ function extractReadImageBlocks(value: unknown): ReadImageBlock[] {
       ? value
       : []
 
-  return blocks.flatMap((block) => {
+  return blocks.flatMap((block): ReadImageBlock[] => {
     if (!block || typeof block !== "object" || !("type" in block) || block.type !== "image") {
       return []
+    }
+
+    if ("url" in block && typeof block.url === "string" && block.url) {
+      return [{
+        type: "image",
+        url: block.url,
+        mimeType: typeof block.mimeType === "string" ? block.mimeType : undefined,
+      } satisfies ReadImageBlock]
     }
 
     if ("data" in block && typeof block.data === "string") {
@@ -104,7 +114,8 @@ export function ReadResultImages({ images }: { images: ReadonlyArray<ReadImageBl
         return (
           <div key={`${mimeType}:${index}`} className="overflow-hidden rounded-lg border border-border bg-muted/20">
             <img
-              src={`data:${mimeType};base64,${image.data}`}
+              src={image.url ?? `data:${mimeType};base64,${image.data ?? ""}`}
+              loading="lazy"
               alt={`Read result ${index + 1}`}
               className="max-h-[50vh] w-full object-contain bg-background"
             />

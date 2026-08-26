@@ -82,6 +82,7 @@ export interface CliRuntimeDeps {
   readCloudIdentityImpl?: (warn: (message: string) => void) => Promise<CloudIdentity | null>
   createCloudRuntimeImpl?: (identity: CloudIdentity) => CloudRuntime
   probeExistingInstanceImpl?: (port: number) => Promise<ExistingInstance | null>
+  slimTranscriptsImpl?: (log: (message: string) => void) => Promise<SlimTranscriptsStats>
 }
 
 export interface UpdateInstallAttemptResult {
@@ -94,8 +95,29 @@ export interface UpdateInstallAttemptResult {
 type ParsedArgs =
   | { kind: "run"; options: CliOptions }
   | { kind: "pair"; args: PairCommandArgs }
+  | { kind: "slim-transcripts" }
   | { kind: "help" }
   | { kind: "version" }
+
+export interface SlimTranscriptsStats {
+  chats: number
+  rewritten: number
+  bytesBefore: number
+  bytesAfter: number
+}
+
+/**
+ * `kanna slim-transcripts`: rewrite every transcript on disk without the raw
+ * provider payload on tool results. The server does this once on its own at
+ * boot; the command exists to run it again by hand, for example on a data
+ * dir copied in from another machine.
+ */
+async function slimTranscripts(log: (message: string) => void): Promise<SlimTranscriptsStats> {
+  const { EventStore } = await import("./event-store")
+  const store = new EventStore()
+  await store.initialize()
+  return await store.slimTranscripts({ force: true, onProgress: log })
+}
 
 const MINIMUM_BUN_VERSION = "1.3.5"
 
@@ -111,6 +133,8 @@ Usage:
   ${CLI_COMMAND} pair          Claim this machine on kanna.sh (prints a link + QR) and start
   ${CLI_COMMAND} pair <code>   Same, using a code from https://kanna.sh/machines
   ${CLI_COMMAND} pair --status|--disable|--enable|--remove
+  ${CLI_COMMAND} slim-transcripts
+                       Rewrite stored transcripts without raw tool payloads (stop ${CLI_COMMAND} first)
 
 Options:
   --port <number>      Port to listen on (default: ${PROD_SERVER_PORT})
@@ -157,6 +181,10 @@ function parsePairArgs(argv: string[]): ParsedArgs {
 export function parseArgs(argv: string[]): ParsedArgs {
   if (argv[0] === "pair") {
     return parsePairArgs(argv.slice(1))
+  }
+  if (argv[0] === "slim-transcripts") {
+    if (argv.length > 1) throw new Error(`Unexpected argument for ${CLI_COMMAND} slim-transcripts: ${argv[1]}`)
+    return { kind: "slim-transcripts" }
   }
 
   let port = PROD_SERVER_PORT
@@ -352,6 +380,26 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // connects. From then on any plain `kanna` does the same (sticky).
     deps.log(`${LOG_PREFIX} starting ${CLI_COMMAND}…`)
     parsedArgs = parseArgs([])
+  }
+
+  if (parsedArgs.kind === "slim-transcripts") {
+    // A running server appends to the same files and caches them parsed.
+    // Its own boot sweep already covered this data dir, so refusing costs
+    // nothing; the check only sees the default port, so a dev instance on
+    // another port is on the user.
+    const running = await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(PROD_SERVER_PORT)
+    if (running) {
+      deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} is running at ${running.localUrl}; stop it before slimming transcripts`)
+      return { kind: "exited", code: 1 }
+    }
+    const stats = await (deps.slimTranscriptsImpl ?? slimTranscripts)(deps.log)
+    const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    deps.log(
+      stats.rewritten > 0
+        ? `${LOG_PREFIX} rewrote ${stats.rewritten}/${stats.chats} transcripts: ${megabytes(stats.bytesBefore)} → ${megabytes(stats.bytesAfter)}`
+        : `${LOG_PREFIX} ${stats.chats} transcripts checked, nothing to slim`
+    )
+    return { kind: "exited", code: 0 }
   }
 
   if (parsedArgs.kind !== "run") {

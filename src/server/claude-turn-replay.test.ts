@@ -52,16 +52,18 @@ describe("recorded Claude turn replay", () => {
     expect(results[0].isError).toBe(false)
   })
 
-  test("normalization stamps debugRaw on exactly system_init and tool_result entries", () => {
+  test("normalization stamps debugRaw on system_init entries only", () => {
     expect(entries.length).toBeGreaterThan(0)
     for (const entry of entries) {
       const debugRaw = (entry as { debugRaw?: string }).debugRaw
-      if (entry.kind === "system_init" || entry.kind === "tool_result") {
+      if (entry.kind === "system_init") {
         expect(debugRaw).toBeString()
-        // The stamp must round-trip to the raw SDK message so the client can
-        // re-parse it (raw JSON view / tool_use_result extraction).
+        // The stamp must round-trip to the raw SDK message so the raw JSON
+        // view can show it.
         expect(rawMessages).toContainEqual(JSON.parse(debugRaw as string))
       } else {
+        // Tool results in particular: their raw message duplicated `content`
+        // and is what pushed transcripts past 100 MB.
         expect(entry).not.toHaveProperty("debugRaw")
       }
     }

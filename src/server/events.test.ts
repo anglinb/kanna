@@ -110,6 +110,19 @@ describe("cloneTranscriptEntriesForClient", () => {
     expect(asResult(result!).content).toBe("ok")
   })
 
+  test("uses a persisted structuredResult without touching debugRaw", () => {
+    const [, result] = call([
+      toolCall("exit_plan_mode", { plan: "do it" }),
+      toolResult("exit_plan_mode", "ok", {
+        structuredResult: { approved: false },
+        debugRaw: JSON.stringify({ tool_use_result: { approved: true } }),
+      }),
+    ])
+
+    expect(asResult(result!).structuredResult).toEqual({ approved: false })
+    expect(result!.debugRaw).toBeUndefined()
+  })
+
   test("survives corrupt debugRaw rather than failing the transcript", () => {
     const [, result] = call([
       toolCall("ask_user_question", { questions: [] }),

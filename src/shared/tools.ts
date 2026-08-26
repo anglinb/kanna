@@ -208,9 +208,14 @@ type ReadStructuredTextBlock = {
   text: string
 }
 
+/**
+ * Either inline base64 (`data`) or a file the server stored beside the
+ * transcript (`url`, see server/transcript-media.ts). Exactly one is set.
+ */
 type ReadStructuredImageBlock = {
   type: "image"
-  data: string
+  data?: string
+  url?: string
   mimeType?: string
 }
 
@@ -239,6 +244,15 @@ function normalizeReadBlocks(value: unknown): Array<ReadStructuredTextBlock | Re
     }
 
     if (block.type === "image") {
+      if ("url" in block && typeof block.url === "string" && block.url) {
+        normalized.push({
+          type: "image",
+          url: block.url,
+          mimeType: typeof block.mimeType === "string" ? block.mimeType : undefined,
+        })
+        continue
+      }
+
       if ("data" in block && typeof block.data === "string") {
         normalized.push({
           type: "image",

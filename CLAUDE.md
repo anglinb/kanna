@@ -37,8 +37,17 @@ React client (src/client)
   `agent.ts` directly; codex/cursor/pi produce `HarnessTurn`s.
 - Transcripts are append-only JSONL per chat (`transcripts/<chatId>.jsonl`)
   with a small LRU cache in the EventStore. `debugRaw` (raw provider JSON) is
-  stamped only on `system_init` and Claude `tool_result` entries — the only
-  places the client reads it.
+  stamped only on `system_init` — the one entry with a raw JSON view. Tool
+  results keep `tool_use_result` as `structuredResult` instead, and only for
+  `ask_user_question` / `exit_plan_mode`.
+- The transcript file holds entries in header form. Tool bodies (file
+  contents, edits, command output) live in `transcripts/<chatId>.payloads.jsonl`
+  and are read by byte offset when a row is opened (`transcript-payloads.ts`).
+  Images in tool results are files under `media/<chatId>/`, referenced by URL
+  (`transcript-media.ts`). `getMessages()` merges everything back for export,
+  handoff and fork. `slimTranscripts` rewrites older transcripts to this shape
+  once per data dir (`kanna slim-transcripts` forces it). Agents handed a
+  transcript path see headers only.
 
 ## Conventions
 

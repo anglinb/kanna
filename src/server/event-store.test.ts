@@ -1353,6 +1353,177 @@ describe("on-demand tool payloads", () => {
   })
 })
 
+describe("payload sidecar", () => {
+  test("appends headers to the transcript and bodies to the sidecar, and merges them back on demand", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "sidecar")
+    const chat = await store.createChat(project.id)
+    const body = "x".repeat(10_000)
+
+    await store.appendMessage(chat.id, {
+      _id: "call-1", createdAt: 1, kind: "tool_call",
+      tool: { kind: "tool", toolKind: "write_file", toolName: "Write", toolId: "t1", input: { filePath: "a.ts", content: body } },
+    } as unknown as TranscriptEntry)
+    await store.appendMessage(chat.id, { _id: "result-1", createdAt: 2, kind: "tool_result", toolId: "t1", content: "written" } as unknown as TranscriptEntry)
+    await store.appendMessage(chat.id, {
+      _id: "call-2", createdAt: 3, kind: "tool_call",
+      tool: { kind: "tool", toolKind: "todo_write", toolName: "TodoWrite", toolId: "t2", input: { todos: [] } },
+    } as unknown as TranscriptEntry)
+    await store.appendMessage(chat.id, { _id: "result-2", createdAt: 4, kind: "tool_result", toolId: "t2", content: { ok: true } } as unknown as TranscriptEntry)
+
+    const transcript = await readFile(store.getTranscriptPath(chat.id), "utf8")
+    expect(transcript).not.toContain(body)
+    expect(transcript).not.toContain("written")
+    // Inline kinds keep their content in the header: there is no row to open.
+    expect(transcript).toContain('"content":{"ok":true}')
+    const sidecar = await readFile(join(dataDir, "transcripts", `${chat.id}.payloads.jsonl`), "utf8")
+    expect(sidecar.split("\n").filter(Boolean)).toHaveLength(2)
+    expect(sidecar).toContain(body)
+
+    // The wire sees headers, expansion sees bodies, export sees everything.
+    const wire = store.getClientTranscript(chat.id).messages
+    expect((wire[0] as unknown as { tool: { input: Record<string, unknown> } }).tool.input).toEqual({ filePath: "a.ts" })
+    expect(wire[1]!.trimmed).toBe(true)
+    const [call, result] = store.getEntriesById(chat.id, ["call-1", "result-1"])
+    expect((call as unknown as { tool: { input: Record<string, unknown> } }).tool.input.content).toBe(body)
+    expect(call!.trimmed).toBeUndefined()
+    expect((result as unknown as { content: unknown }).content).toBe("written")
+    const full = store.getMessages(chat.id)
+    expect((full[0] as unknown as { tool: { input: Record<string, unknown> } }).tool.input.content).toBe(body)
+    expect((full[1] as unknown as { content: unknown }).content).toBe("written")
+    expect((full[3] as unknown as { content: unknown }).content).toEqual({ ok: true })
+
+    // A cold store rebuilds the index from the sidecar alone.
+    const reopened = new EventStore(dataDir)
+    await reopened.initialize()
+    expect((reopened.getEntriesById(chat.id, ["result-1"])[0] as unknown as { content: unknown }).content).toBe("written")
+
+    // A fork carries the bodies with it.
+    await reopened.setChatProvider(chat.id, "claude")
+    await reopened.setSessionToken(chat.id, "session-1")
+    const fork = await reopened.forkChat(chat.id)
+    expect((reopened.getMessages(fork.id)[1] as unknown as { content: unknown }).content).toBe("written")
+  })
+
+  test("the slim sweep splits a transcript written before the sidecar", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "legacy")
+    const chat = await store.createChat(project.id)
+    const legacy = [
+      { _id: "call-1", createdAt: 1, kind: "tool_call", tool: { kind: "tool", toolKind: "bash", toolName: "Bash", toolId: "t1", input: { command: "ls" } } },
+      { _id: "result-1", createdAt: 2, kind: "tool_result", toolId: "t1", content: "a\nb\nc", debugRaw: "{}" },
+    ]
+    await writeFile(store.getTranscriptPath(chat.id), legacy.map((entry) => JSON.stringify(entry)).join("\n") + "\n")
+
+    const stats = await store.slimTranscripts({ force: true })
+    expect(stats.rewritten).toBe(1)
+    const transcript = await readFile(store.getTranscriptPath(chat.id), "utf8")
+    expect(transcript).not.toContain("a\\nb\\nc")
+    expect(transcript).not.toContain("debugRaw")
+    expect((store.getClientTranscript(chat.id).messages[1] as { trimmed?: true }).trimmed).toBe(true)
+    expect((store.getEntriesById(chat.id, ["result-1"])[0] as unknown as { content: unknown }).content).toBe("a\nb\nc")
+  })
+})
+
+describe("tool result images", () => {
+  const PNG_BASE64 = Buffer.from("89504e470d0a1a0a", "hex").toString("base64")
+
+  test("appendMessage stores the bytes on disk and the transcript keeps a URL", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "media")
+    const chat = await store.createChat(project.id)
+
+    await store.appendMessage(chat.id, {
+      _id: "result-1",
+      createdAt: 2,
+      kind: "tool_result",
+      toolId: "t1",
+      content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: PNG_BASE64 } }],
+    } as unknown as TranscriptEntry)
+
+    const url = `/api/chats/${chat.id}/media/result-1-0.png`
+    const onDisk = await readFile(store.getTranscriptPath(chat.id), "utf8")
+    expect(onDisk).not.toContain(PNG_BASE64)
+    // The result body (now just a URL block) sits in the payload sidecar.
+    const sidecar = await readFile(join(dataDir, "transcripts", `${chat.id}.payloads.jsonl`), "utf8")
+    expect(sidecar).not.toContain(PNG_BASE64)
+    expect(sidecar).toContain(url)
+    expect((store.getMessages(chat.id)[0] as unknown as { content: unknown[] }).content).toEqual([
+      { type: "image", url, mimeType: "image/png" },
+    ])
+    const mediaPath = store.resolveTranscriptMediaPath(url)
+    expect(mediaPath).toBeString()
+    expect(existsSync(mediaPath!)).toBe(true)
+    expect(store.resolveTranscriptMediaPath("/api/chats/nope/media/x.png")).toBeNull()
+
+    // `deleteChat` is a soft delete that keeps the transcript, so the media
+    // stays with it; both go together in the prune sweeps.
+    await store.deleteChat(chat.id)
+    expect(existsSync(mediaPath!)).toBe(true)
+  })
+})
+
+describe("slimTranscripts", () => {
+  test("rewrites tool results on disk, drops the cache, and runs once", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "slim")
+    const chat = await store.createChat(project.id)
+
+    await store.appendMessage(chat.id, {
+      _id: "call-1",
+      createdAt: 1,
+      kind: "tool_call",
+      tool: { kind: "tool", toolKind: "exit_plan_mode", toolName: "ExitPlanMode", toolId: "t1", input: { plan: "p" } },
+    } as unknown as TranscriptEntry)
+    await store.appendMessage(chat.id, {
+      _id: "result-1",
+      createdAt: 2,
+      kind: "tool_result",
+      toolId: "t1",
+      content: "ok",
+      debugRaw: JSON.stringify({ tool_use_result: { approved: true } }),
+    } as unknown as TranscriptEntry)
+    await store.appendMessage(chat.id, {
+      _id: "result-2",
+      createdAt: 3,
+      kind: "tool_result",
+      toolId: "t9",
+      content: [{ type: "image", data: Buffer.from("89504e470d0a1a0a", "hex").toString("base64"), mimeType: "image/png" }],
+    } as unknown as TranscriptEntry)
+    // Warm the cache so the drop after the rewrite is what gets exercised.
+    expect(store.getMessages(chat.id)[1]?.debugRaw).toBeString()
+
+    const stats = await store.slimTranscripts()
+    expect(stats.rewritten).toBe(1)
+    expect(stats.bytesAfter).toBeLessThan(stats.bytesBefore)
+
+    const reread = store.getMessages(chat.id)
+    const cached = reread[1] as unknown as { debugRaw?: string; structuredResult?: unknown }
+    expect(cached.debugRaw).toBeUndefined()
+    expect(cached.structuredResult).toEqual({ approved: true })
+    // The image appended above was already externalized at write time, so
+    // the sweep leaves it alone; it stays a URL block.
+    expect((reread[2] as unknown as { content: Array<{ url?: string }> }).content[0]?.url).toContain("/media/result-2-0.png")
+
+    const onDisk = (await readFile(store.getTranscriptPath(chat.id), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    expect(onDisk[1]).not.toHaveProperty("debugRaw")
+    expect(onDisk[1].structuredResult).toEqual({ approved: true })
+    expect(existsSync(join(dataDir, "transcripts-slim.json"))).toBe(true)
+
+    // The marker makes the boot sweep a no-op; `force` repeats it.
+    expect((await store.slimTranscripts()).chats).toBe(0)
+    expect((await store.slimTranscripts({ force: true })).chats).toBe(1)
+  })
+})
+
 describe("stale empty chat pruning", () => {
   test("keeps a cached chat that actually has messages", async () => {
     // The prune sweep only deletes chats it believes are empty. `hasMessages`

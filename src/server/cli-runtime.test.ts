@@ -577,6 +577,13 @@ describe("runCli", () => {
   })
 })
 
+describe("parseArgs slim-transcripts subcommand", () => {
+  test("parses the bare command and rejects arguments", () => {
+    expect(parseArgs(["slim-transcripts"])).toEqual({ kind: "slim-transcripts" })
+    expect(() => parseArgs(["slim-transcripts", "--force"])).toThrow("Unexpected argument")
+  })
+})
+
 describe("parseArgs pair subcommand", () => {
   test("pair with a code", () => {
     expect(parseArgs(["pair", "ABC123XYZ"])).toEqual({

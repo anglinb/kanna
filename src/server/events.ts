@@ -387,14 +387,27 @@ export function cloneTranscriptEntries(entries: TranscriptEntry[]): TranscriptEn
 }
 
 /** Tool kinds whose rendered result comes from `tool_use_result`, not `content`. */
-const STRUCTURED_RESULT_TOOL_KINDS = new Set(["ask_user_question", "exit_plan_mode"])
+export const STRUCTURED_RESULT_TOOL_KINDS: ReadonlySet<string> = new Set(["ask_user_question", "exit_plan_mode"])
 
 /**
  * Tool kinds that render inline and interactively, so their payloads have to
  * travel with the transcript rather than being fetched when a row is opened —
  * there is no row to open. Superset of the structured-result kinds.
  */
-const INLINE_TOOL_KINDS = new Set([...STRUCTURED_RESULT_TOOL_KINDS, "todo_write"])
+export const INLINE_TOOL_KINDS: ReadonlySet<string> = new Set([...STRUCTURED_RESULT_TOOL_KINDS, "todo_write"])
+
+/**
+ * Tool call input fields that can grow without bound, by kind. The other
+ * kinds are already header-sized (a path, a pattern, a query) and travel
+ * whole.
+ */
+export const UNBOUNDED_TOOL_INPUT_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  write_file: ["content"],
+  delete_file: ["content"],
+  edit_file: ["oldString", "newString"],
+  mcp_generic: ["payload"],
+  unknown_tool: ["payload"],
+}
 
 /** Strip the raw provider payload; it duplicates `content` and dwarfs it. */
 function withoutDebugRaw<TEntry extends TranscriptEntry>(entry: TEntry) {
@@ -407,23 +420,12 @@ function withoutDebugRaw<TEntry extends TranscriptEntry>(entry: TEntry) {
  * row draws. Returns the entry unchanged when there was nothing to drop, so
  * the `trimmed` marker always means "fetching will reveal more".
  */
-function trimToolCallEntry(entry: Extract<TranscriptEntry, { kind: "tool_call" }>) {
+export function trimToolCallEntry(entry: Extract<TranscriptEntry, { kind: "tool_call" }>) {
   const { rawInput, ...tool } = entry.tool
   let input = tool.input as Record<string, unknown>
   let dropped = rawInput !== undefined
 
-  // Only these five kinds carry input that can grow without bound. The other
-  // ten are already header-sized — a path, a pattern, a query — and travel
-  // whole.
-  const unbounded: Record<string, readonly string[]> = {
-    write_file: ["content"],
-    delete_file: ["content"],
-    edit_file: ["oldString", "newString"],
-    mcp_generic: ["payload"],
-    unknown_tool: ["payload"],
-  }
-
-  for (const field of unbounded[tool.toolKind] ?? []) {
+  for (const field of UNBOUNDED_TOOL_INPUT_FIELDS[tool.toolKind] ?? []) {
     if (input[field] === undefined) continue
     if (!dropped || input === tool.input) input = { ...input }
     delete input[field]
@@ -475,7 +477,7 @@ export function cloneTranscriptEntriesForClient(entries: TranscriptEntry[]): Tra
 
     if (entry.kind === "tool_result") {
       const structured = structuredToolIds.has(entry.toolId)
-        ? readStructuredResult(entry.debugRaw)
+        ? entry.structuredResult ?? readStructuredResult(entry.debugRaw)
         : undefined
       const stripped = withoutDebugRaw(entry)
       if (inlineToolIds.has(stripped.toolId)) {
@@ -491,7 +493,12 @@ export function cloneTranscriptEntriesForClient(entries: TranscriptEntry[]): Tra
   })
 }
 
-function readStructuredResult(debugRaw: string | undefined): unknown {
+/**
+ * `tool_use_result` from a raw provider message. Only transcripts written
+ * before `structuredResult` was persisted still need this; new tool results
+ * carry the field directly and no `debugRaw` at all.
+ */
+export function readStructuredResult(debugRaw: string | undefined): unknown {
   if (debugRaw === undefined) return undefined
   try {
     return (JSON.parse(debugRaw) as { tool_use_result?: unknown }).tool_use_result
