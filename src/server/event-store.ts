@@ -229,7 +229,7 @@ function getReplayEventPriority(event: StoreEvent) {
  * Bump when the slim sweep learns a new rewrite, so data dirs swept by an
  * older build get the new pass on their next boot.
  */
-const SLIM_SWEEP_VERSION = 2
+const SLIM_SWEEP_VERSION = 3
 
 function formatMegabytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`

@@ -14,7 +14,7 @@ import { STRUCTURED_RESULT_TOOL_KINDS, readStructuredResult } from "./events"
  * except the lift of `tool_use_result` for `ask_user_question` and
  * `exit_plan_mode`, so the rewrite keeps that one field as `structuredResult`
  * and drops the rest. `system_init` keeps its `debugRaw`: the raw JSON view
- * shows it, and it is a few KB. Inline images move to disk in the same pass
+ * shows it, and it is a few KB. Every other kind loses the field. Inline images move to disk in the same pass
  * (see `transcript-media.ts`), through the `transform` hook.
  *
  * The file is streamed line by line and never held whole: the point is to
@@ -42,10 +42,13 @@ export function slimTranscriptEntry(entry: TranscriptEntry, structuredToolIds: S
     }
     return entry
   }
-  if (entry.kind !== "tool_result" || entry.debugRaw === undefined) return entry
+  if (entry.kind === "system_init" || entry.debugRaw === undefined) return entry
 
   const { debugRaw, ...rest } = entry
-  if (!structuredToolIds.has(entry.toolId) || rest.structuredResult !== undefined) {
+  // Older builds stamped other kinds too (assistant text, results); nothing
+  // reads those, so they just go.
+  if (rest.kind !== "tool_result") return rest
+  if (!structuredToolIds.has(rest.toolId) || rest.structuredResult !== undefined) {
     return rest
   }
   const structured = readStructuredResult(debugRaw)

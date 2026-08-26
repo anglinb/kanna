@@ -37,6 +37,12 @@ describe("slimTranscriptEntry", () => {
     expect(slimTranscriptEntry(plain, ids)).toBe(plain)
   })
 
+  test("drops debugRaw stamped on other kinds by older builds", () => {
+    const ids = new Set<string>()
+    const text = { _id: "a", createdAt: 1, kind: "assistant_text", text: "hi", debugRaw: "{}" } as unknown as TranscriptEntry
+    expect(slimTranscriptEntry(text, ids)).toEqual({ _id: "a", createdAt: 1, kind: "assistant_text", text: "hi" } as unknown as TranscriptEntry)
+  })
+
   test("drops debugRaw from a plain result and lifts it for a structured one", () => {
     const ids = new Set<string>()
     slimTranscriptEntry(readCall as unknown as TranscriptEntry, ids)
