@@ -12,7 +12,7 @@
  */
 
 import { constants } from "node:fs"
-import { access, chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { access, chmod, lstat, mkdir, open, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import { getGlobalSecretsDir, PROJECT_SECRETS_DIR_RELATIVE } from "../shared/branding"
@@ -135,13 +135,46 @@ export async function writeSecret(args: WriteSecretArgs): Promise<WriteSecretRes
 
   const dir = getSecretsDir(scope, projectPath)
   await mkdir(dir, { recursive: true, mode: SECRET_DIR_MODE })
+
+  // `mkdir` is satisfied by a symlink that happens to point at a directory,
+  // so confirm what we actually got. Anything but a real directory here means
+  // someone pre-staged the path to redirect the write.
+  const dirStats = await lstat(dir)
+  if (!dirStats.isDirectory()) {
+    throw new Error(`Refusing to write a secret: ${dir} is not a directory`)
+  }
+
   // mkdir's mode is masked by umask on creation and skipped entirely when the
   // directory already exists, so the permissions are set explicitly.
   await chmod(dir, SECRET_DIR_MODE)
 
   const filePath = path.join(dir, secretFileName(name))
-  await writeFile(filePath, formatSecretEnvFile(name, value), { encoding: "utf8", mode: SECRET_FILE_MODE })
-  await chmod(filePath, SECRET_FILE_MODE)
+
+  // O_NOFOLLOW fails with ELOOP rather than following a symlink at the final
+  // component — otherwise a pre-created `<NAME>.env` link would send the
+  // credential wherever it pointed. Writing through the handle keeps the
+  // check and the write on the same file, with no window between them.
+  let handle
+  try {
+    handle = await open(
+      filePath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+      SECRET_FILE_MODE,
+    )
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+      throw new Error(`Refusing to write a secret: ${filePath} is a symbolic link`)
+    }
+    throw error
+  }
+
+  try {
+    // An existing file keeps its old mode through O_CREAT, so set it here.
+    await handle.chmod(SECRET_FILE_MODE)
+    await handle.writeFile(formatSecretEnvFile(name, value), "utf8")
+  } finally {
+    await handle.close()
+  }
 
   const gitignoreUpdated = scope === "project" && projectPath
     ? await ensureSecretsIgnored(projectPath)

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
@@ -193,5 +193,53 @@ describe("deleteSecret", () => {
     expect(await deleteSecret("project", "TOKEN", project)).toBe(true)
     expect(await deleteSecret("project", "TOKEN", project)).toBe(false)
     expect(await findExistingSecret("TOKEN", project)).toBeNull()
+  })
+})
+
+describe("writeSecret symlink safety", () => {
+  test("refuses when the secrets directory is a symlink", async () => {
+    const elsewhere = path.join(project, "elsewhere")
+    await mkdir(elsewhere, { recursive: true })
+    await mkdir(path.join(project, ".kanna"), { recursive: true })
+    await symlink(elsewhere, getProjectSecretsDir(project))
+
+    await expect(writeSecret({
+      scope: "project",
+      name: "TOKEN",
+      value: "sk-live",
+      projectPath: project,
+    })).rejects.toThrow(/not a directory/)
+
+    // The redirect target must not have received the value.
+    await expect(readFile(path.join(elsewhere, "TOKEN.env"), "utf8")).rejects.toThrow()
+  })
+
+  test("refuses when the secret file itself is a symlink", async () => {
+    const victim = path.join(project, "victim.txt")
+    await writeFile(victim, "original", "utf8")
+
+    const dir = getProjectSecretsDir(project)
+    await mkdir(dir, { recursive: true })
+    await symlink(victim, path.join(dir, "TOKEN.env"))
+
+    await expect(writeSecret({
+      scope: "project",
+      name: "TOKEN",
+      value: "sk-live",
+      projectPath: project,
+    })).rejects.toThrow(/symbolic link/)
+
+    expect(await readFile(victim, "utf8")).toBe("original")
+  })
+
+  test("still overwrites a real file in place", async () => {
+    await writeSecret({ scope: "project", name: "TOKEN", value: "first", projectPath: project })
+    await writeSecret({ scope: "project", name: "TOKEN", value: "second", projectPath: project })
+
+    const filePath = resolveSecretFilePath("project", "TOKEN", project)
+    const contents = await readFile(filePath, "utf8")
+    expect(contents).toContain("second")
+    expect(contents).not.toContain("first")
+    expect((await stat(filePath)).mode & 0o777).toBe(0o600)
   })
 })
