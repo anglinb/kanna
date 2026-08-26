@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { SECRETS_API_PATH_PREFIX, SECRETS_API_TOKEN_HEADER } from "../shared/secrets"
 import { SecretRequestStore } from "./secret-requests"
-import { createSecretsApi, resolveProjectFromCwd } from "./secrets-api"
+import { createSecretsApi, resolveAskingChat, resolveProjectFromCwd } from "./secrets-api"
 import { writeSecret } from "./secrets"
 
 const TOKEN = "test-token-0123456789"
@@ -241,5 +241,70 @@ describe("resolveProjectFromCwd", () => {
 
   test("returns null when nothing contains the cwd", () => {
     expect(resolveProjectFromCwd("/elsewhere", projects)).toBeNull()
+  })
+})
+
+describe("resolveAskingChat", () => {
+  const roots: Record<string, string> = {
+    "chat-outer": "/repos/outer",
+    "chat-nested": "/repos/outer/nested",
+    "chat-other": "/repos/other",
+  }
+  const chatLocalPath = (chatId: string) => roots[chatId] ?? null
+
+  test("a claimed chat id wins outright", () => {
+    expect(resolveAskingChat({
+      cwd: "/somewhere/unrelated",
+      claimedChatId: "chat-from-env",
+      runningChatIds: [],
+      chatLocalPath,
+    })).toBe("chat-from-env")
+  })
+
+  test("falls back to the running chat whose project contains the cwd", () => {
+    expect(resolveAskingChat({
+      cwd: "/repos/other/src",
+      claimedChatId: null,
+      runningChatIds: ["chat-outer", "chat-other"],
+      chatLocalPath,
+    })).toBe("chat-other")
+  })
+
+  test("prefers the deepest root when projects nest", () => {
+    expect(resolveAskingChat({
+      cwd: "/repos/outer/nested/src",
+      claimedChatId: null,
+      runningChatIds: ["chat-outer", "chat-nested"],
+      chatLocalPath,
+    })).toBe("chat-nested")
+  })
+
+  test("ignores chats that are not running", () => {
+    expect(resolveAskingChat({
+      cwd: "/repos/other/src",
+      claimedChatId: null,
+      runningChatIds: ["chat-outer"],
+      chatLocalPath,
+    })).toBeNull()
+  })
+
+  test("gives up rather than guess between two chats in the same project", () => {
+    expect(resolveAskingChat({
+      cwd: "/repos/outer/src",
+      claimedChatId: null,
+      runningChatIds: ["chat-outer", "chat-outer-twin"],
+      chatLocalPath: (chatId) => (
+        chatId === "chat-outer-twin" ? "/repos/outer" : chatLocalPath(chatId)
+      ),
+    })).toBeNull()
+  })
+
+  test("does not match a sibling with a shared prefix", () => {
+    expect(resolveAskingChat({
+      cwd: "/repos/outer-other/src",
+      claimedChatId: null,
+      runningChatIds: ["chat-outer"],
+      chatLocalPath,
+    })).toBeNull()
   })
 })

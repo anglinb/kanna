@@ -861,6 +861,12 @@ export interface SidebarChatRow {
   title: string
   status: KannaStatus
   unread: boolean
+  /**
+   * The GitHub pull request this chat references, with the latest watched
+   * state. Absent unless someone linked one; the sidebar draws a status badge
+   * from it, left of the trailing detail label.
+   */
+  linkedPullRequest?: LinkedPullRequest
   /** User marked the chat done (board Done column). Cleared when a new turn starts. */
   done?: boolean
   /** When the chat was marked done. Set iff `done` is true. */
@@ -1780,6 +1786,18 @@ export interface ContextClearedEntry extends TranscriptEntryBase {
   kind: "context_cleared"
 }
 
+/**
+ * How an agent's ask-for-secret prompt ended. Records the name and outcome
+ * only — never the value, which is the whole point of the mechanism.
+ */
+export interface SecretNoticeEntry extends TranscriptEntryBase {
+  kind: "secret_notice"
+  secretName: string
+  outcome: "saved" | "declined" | "expired"
+  /** Present only when saved. */
+  scope?: "project" | "global"
+}
+
 export interface InterruptedEntry extends TranscriptEntryBase {
   kind: "interrupted"
 }
@@ -1828,6 +1846,7 @@ export type TranscriptEntry =
   | CompactBoundaryEntry
   | CompactSummaryEntry
   | ContextClearedEntry
+  | SecretNoticeEntry
   | InterruptedEntry
   | HandoffBoundaryEntry
   | SessionRestoredEntry
@@ -1940,6 +1959,7 @@ export type HydratedTranscriptMessage =
   | ({ kind: "compact_boundary"; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "compact_summary"; summary: string; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "context_cleared"; id: string; messageId?: string; timestamp: string; hidden?: boolean })
+  | ({ kind: "secret_notice"; secretName: string; outcome: SecretNoticeEntry["outcome"]; scope?: SecretNoticeEntry["scope"]; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "handoff_boundary"; fromProvider: AgentProvider; toProvider: AgentProvider; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "session_restored"; provider: AgentProvider; stats?: HandoffBoundaryEntry["stats"]; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "interrupted"; id: string; messageId?: string; timestamp: string; hidden?: boolean })

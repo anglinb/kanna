@@ -34,6 +34,12 @@ export interface SecretsApiDeps {
   token: string
   /** Map the CLI's cwd onto a known Kanna project, if it sits inside one. */
   resolveProject: (cwd: string) => ResolvedProject | null
+  /**
+   * Which chat the asking agent belongs to, for the transcript notice.
+   * Returns null when it cannot be pinned down, in which case the secret is
+   * still saved — only the notice is skipped.
+   */
+  resolveChat?: (args: { cwd: string; claimedChatId: string | null }) => string | null
 }
 
 function tokenMatches(provided: string | null, expected: string): boolean {
@@ -69,6 +75,50 @@ export function resolveProjectFromCwd(
   }
 
   return best
+}
+
+/**
+ * Which chat raised an `ask-secret` prompt.
+ *
+ * Kanna sets `KANNA_CHAT_ID` on the environments it controls, and that claim
+ * wins outright — it comes from a process Kanna spawned, over a loopback
+ * surface that already required the instance token.
+ *
+ * Providers Kanna does not spawn with a per-chat environment fall back to the
+ * cwd: of the chats currently mid-turn, take the one whose project root
+ * contains it, deepest root first. Only an unambiguous single match counts —
+ * two chats running in the same project cannot be told apart this way, and
+ * guessing would file a notice in the wrong transcript.
+ */
+export function resolveAskingChat(args: {
+  cwd: string
+  claimedChatId: string | null
+  runningChatIds: string[]
+  chatLocalPath: (chatId: string) => string | null
+}): string | null {
+  if (args.claimedChatId) return args.claimedChatId
+
+  const resolved = path.resolve(args.cwd)
+  let best: { chatId: string; rootLength: number } | null = null
+  let bestIsAmbiguous = false
+
+  for (const chatId of args.runningChatIds) {
+    const localPath = args.chatLocalPath(chatId)
+    if (!localPath) continue
+
+    const root = path.resolve(localPath)
+    if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) continue
+
+    if (!best || root.length > best.rootLength) {
+      best = { chatId, rootLength: root.length }
+      bestIsAmbiguous = false
+      continue
+    }
+    if (root.length === best.rootLength) bestIsAmbiguous = true
+  }
+
+  if (!best || bestIsAmbiguous) return null
+  return best.chatId
 }
 
 /**
@@ -141,6 +191,7 @@ async function handleCreate(req: Request, deps: SecretsApiDeps): Promise<Respons
   const suggestedScope: SecretScope | null =
     body.scope === "project" || body.scope === "global" ? body.scope : null
 
+  const claimedChatId = typeof body.chatId === "string" && body.chatId.trim() ? body.chatId.trim() : null
   const project = deps.resolveProject(cwd)
 
   // Already stored? Hand back the load command without interrupting anyone —
@@ -165,6 +216,7 @@ async function handleCreate(req: Request, deps: SecretsApiDeps): Promise<Respons
     projectPath: project?.path ?? null,
     projectTitle: project?.title ?? null,
     suggestedScope,
+    chatId: deps.resolveChat?.({ cwd, claimedChatId }) ?? null,
   })
 
   return Response.json({ status: "pending", requestId: request.id })

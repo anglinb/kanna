@@ -28,3 +28,32 @@ export function ContextClearedMessage() {
     </div>
   )
 }
+
+/**
+ * Outcome of an ask-for-secret prompt. Carries the name and what happened —
+ * never the value, which is the point of the whole mechanism.
+ */
+export function SecretNoticeMessage({
+  message,
+}: {
+  message: Extract<
+    import("../../../shared/types").HydratedTranscriptMessage,
+    { kind: "secret_notice" }
+  >
+}) {
+  const label = message.outcome === "saved"
+    ? `${message.secretName} saved${message.scope ? ` · ${message.scope}` : ""}`
+    : message.outcome === "declined"
+      ? `${message.secretName} declined`
+      : `${message.secretName} expired`
+
+  return (
+    <div className="flex items-center gap-3">
+      <ZigZagLine />
+      <span className="flex-shrink-0 text-[11px] uppercase tracking-widest text-muted-foreground">
+        {label}
+      </span>
+      <ZigZagLine />
+    </div>
+  )
+}

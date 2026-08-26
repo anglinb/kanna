@@ -137,6 +137,17 @@ function blockFromEntry(entry: TranscriptEntry): Omit<HandoffBlock, "elided"> | 
       }
     case "interrupted":
       return { entry, header: "--- turn interrupted by user ---", body: "", elidableBody: false }
+    case "secret_notice":
+      // Worth carrying: the incoming agent needs to know the credential
+      // exists and is loadable. The value is not here and never was.
+      return {
+        entry,
+        header: entry.outcome === "saved"
+          ? `--- secret ${entry.secretName} saved (${entry.scope ?? "project"} scope) ---`
+          : `--- secret ${entry.secretName} ${entry.outcome} ---`,
+        body: "",
+        elidableBody: false,
+      }
     case "handoff_boundary":
       return {
         entry,

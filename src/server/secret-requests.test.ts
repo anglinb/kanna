@@ -7,6 +7,7 @@ import {
 import type { writeSecret } from "./secrets"
 
 function createStore(options: { now?: () => number } = {}) {
+  const settled: Array<{ chatId: string; name: string; outcome: string; scope?: string }> = []
   const written: Array<{ scope: string; name: string; value: string; projectPath?: string | null }> = []
   const fakeWrite: typeof writeSecret = async (args) => {
     written.push({ ...args })
@@ -21,7 +22,12 @@ function createStore(options: { now?: () => number } = {}) {
 
   return {
     written,
-    store: new SecretRequestStore({ writeSecret: fakeWrite, now: options.now }),
+    settled,
+    store: new SecretRequestStore({
+      writeSecret: fakeWrite,
+      now: options.now,
+      onSettled: (event) => settled.push({ ...event }),
+    }),
   }
 }
 
@@ -194,5 +200,68 @@ describe("onChange", () => {
     unsubscribe()
     store.create({ ...baseArgs, cwd: "/tmp/three" })
     expect(calls).toBe(4)
+  })
+})
+
+describe("settle notices", () => {
+  const chatArgs = { ...baseArgs, chatId: "chat-1" }
+
+  test("announces a save with the scope it landed in", async () => {
+    const { store, settled } = createStore()
+    const request = store.create(chatArgs)
+
+    await store.submit(request.id, { scope: "global", value: "sk-value" })
+
+    expect(settled).toEqual([
+      { chatId: "chat-1", name: "OPENAI_API_KEY", outcome: "saved", scope: "global" },
+    ])
+  })
+
+  test("announces a decline", () => {
+    const { store, settled } = createStore()
+    const request = store.create(chatArgs)
+
+    store.cancel(request.id)
+
+    expect(settled).toEqual([{ chatId: "chat-1", name: "OPENAI_API_KEY", outcome: "declined" }])
+  })
+
+  test("announces an expiry", () => {
+    let now = 1_000
+    const { store, settled } = createStore({ now: () => now })
+    store.create(chatArgs)
+
+    now += SECRET_REQUEST_TTL_MS
+    store.sweep()
+
+    expect(settled).toEqual([{ chatId: "chat-1", name: "OPENAI_API_KEY", outcome: "expired" }])
+  })
+
+  test("stays quiet when the request has no chat to announce into", async () => {
+    const { store, settled } = createStore()
+    const request = store.create(baseArgs)
+
+    await store.submit(request.id, { scope: "project", value: "sk-value" })
+
+    expect(settled).toEqual([])
+    expect(store.resolutionFor(request.id).status).toBe("saved")
+  })
+
+  test("announces once, not again on a repeat settle", () => {
+    const { store, settled } = createStore()
+    const request = store.create(chatArgs)
+
+    expect(store.cancel(request.id)).toBe(true)
+    expect(store.cancel(request.id)).toBe(false)
+    expect(settled).toHaveLength(1)
+  })
+
+  test("never carries the value", async () => {
+    const { store, settled } = createStore()
+    const request = store.create(chatArgs)
+
+    await store.submit(request.id, { scope: "project", value: "sk-super-secret" })
+
+    expect(JSON.stringify(settled)).not.toContain("sk-super-secret")
   })
 })

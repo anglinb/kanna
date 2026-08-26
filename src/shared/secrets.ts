@@ -24,6 +24,13 @@ export const SECRET_REASON_MAX_LENGTH = 500
 export const SECRETS_API_PATH_PREFIX = "/__local/secrets"
 /** Header carrying the instance token minted at server start. */
 export const SECRETS_API_TOKEN_HEADER = "x-kanna-token"
+/**
+ * Set on the environment of a spawned harness so `ask-secret` can name the
+ * chat it was run from. Absent for providers Kanna does not spawn with a
+ * per-chat environment, where the server falls back to matching the running
+ * turn against the CLI's cwd.
+ */
+export const SECRET_CHAT_ID_ENV_VAR = "KANNA_CHAT_ID"
 
 export interface PendingSecretRequest {
   id: string
@@ -35,6 +42,11 @@ export interface PendingSecretRequest {
   projectTitle: string | null
   /** Directory the agent ran the CLI from. */
   cwd: string
+  /**
+   * Chat the asking agent is running in, when it could be determined. Drives
+   * the transcript notice written when the prompt settles.
+   */
+  chatId: string | null
   /** The agent's suggestion; the user still picks in the dialog. */
   suggestedScope: SecretScope | null
   createdAt: number
