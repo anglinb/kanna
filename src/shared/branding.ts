@@ -72,6 +72,26 @@ export function getCloudFilePathDisplay(env: RuntimeEnv = getRuntimeEnv()) {
   return `${getDataRootDirDisplay(env)}/cloud.json`
 }
 
+/** Global (cross-project) secrets, one `<NAME>.env` file each. */
+export function getGlobalSecretsDir(homeDir: string, env: RuntimeEnv = getRuntimeEnv()) {
+  return `${getDataRootDir(homeDir, env)}/secrets`
+}
+
+export function getGlobalSecretsDirDisplay(env: RuntimeEnv = getRuntimeEnv()) {
+  return `${getDataRootDirDisplay(env)}/secrets`
+}
+
+/**
+ * Where a running server advertises its port and loopback token so `kanna`
+ * subcommands (ask-secret) can find it without a session cookie.
+ */
+export function getInstanceFilePath(homeDir: string, env: RuntimeEnv = getRuntimeEnv()) {
+  return `${getDataRootDir(homeDir, env)}/instance.json`
+}
+
+/** Project-scoped secrets live beside uploads/exports under the repo's `.kanna/`. */
+export const PROJECT_SECRETS_DIR_RELATIVE = ".kanna/secrets"
+
 export function getCliInvocation(arg?: string) {
   return arg ? `${CLI_COMMAND} ${arg}` : CLI_COMMAND
 }

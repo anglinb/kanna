@@ -866,3 +866,43 @@ describe("runCli single-instance guard + hosted open", () => {
   })
 })
 
+
+describe("ask-secret subcommand", () => {
+  test("parses the name and flags", () => {
+    expect(parseArgs(["ask-secret", "OPENAI_API_KEY", "--reason", "call the API"])).toEqual({
+      kind: "ask-secret",
+      args: {
+        name: "OPENAI_API_KEY",
+        reason: "call the API",
+        scope: null,
+        timeoutMs: 300_000,
+        force: false,
+      },
+    })
+  })
+
+  test("rejects a name that could not be sourced into a shell", () => {
+    expect(() => parseArgs(["ask-secret", "MY-KEY"])).toThrow("Invalid secret name")
+  })
+
+  test("runs against the existing server and never starts one", async () => {
+    const seen: unknown[] = []
+    const { calls, deps } = createDeps({
+      runAskSecretCommandImpl: async (args) => {
+        seen.push(args)
+        return 0
+      },
+    })
+
+    const result = await runCli(["ask-secret", "TOKEN", "--reason", "deploy"], deps)
+
+    expect(result).toEqual({ kind: "exited", code: 0 })
+    expect(calls.startServer).toEqual([])
+    expect(seen).toHaveLength(1)
+  })
+
+  test("propagates the command's exit code so the agent can read it", async () => {
+    const { deps } = createDeps({ runAskSecretCommandImpl: async () => 3 })
+    expect(await runCli(["ask-secret", "TOKEN"], deps)).toEqual({ kind: "exited", code: 3 })
+  })
+})

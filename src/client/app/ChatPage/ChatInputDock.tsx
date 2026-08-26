@@ -1,5 +1,6 @@
 import { memo, type RefObject } from "react"
 import { ChatInput, type ChatInputHandle } from "../../components/chat-ui/ChatInput"
+import { SecretRequestCard } from "../../components/secrets/SecretRequestCard"
 import type { ContextWindowSnapshot } from "../../lib/contextWindow"
 import type { KannaState } from "../useKannaState"
 import type { AgentProvider, ChatSkillsSnapshot } from "../../../shared/types"
@@ -20,6 +21,7 @@ interface ChatInputDockProps {
   activeProvider: AgentProvider | null
   availableProviders: KannaState["availableProviders"]
   contextWindowSnapshot: ContextWindowSnapshot | null
+  secretRequests: KannaState["secretRequests"]
   onSubmit: KannaState["handleSend"]
   onCancel: () => void
   onEditModels: () => void
@@ -42,6 +44,7 @@ export const ChatInputDock = memo(function ChatInputDock({
   activeProvider,
   availableProviders,
   contextWindowSnapshot,
+  secretRequests,
   onSubmit,
   onCancel,
   onEditModels,
@@ -57,6 +60,15 @@ export const ChatInputDock = memo(function ChatInputDock({
             stays full width so the composer inside it remains centred on the
             card, not on the card minus the gutter. */}
         <div className="absolute inset-y-0 left-0 right-[var(--transcript-scrollbar-w,0px)] bg-gradient-to-t from-background via-background to-background/10 md:to-background/0 pointer-events-none" />
+        {/* Sits above the composer inside the dock so it rides the same wash
+            and stays pinned while the transcript scrolls behind it. */}
+        <div className="relative">
+          <SecretRequestCard
+            request={secretRequests.activeRequest}
+            onSubmit={secretRequests.submit}
+            onCancel={secretRequests.cancel}
+          />
+        </div>
         <div className="relative">
           <ChatInput
             ref={chatInputRef}

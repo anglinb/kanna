@@ -24,6 +24,7 @@ import { useAppDialog } from "../components/ui/app-dialog"
 import { useTheme } from "../hooks/useTheme"
 import { processTranscriptMessages } from "../lib/parseTranscript"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
+import { useSecretRequests, type SecretRequestsState } from "./useSecretRequests"
 import {
   getActiveChatSnapshot,
   getMostRecentlyActiveProjectId,
@@ -157,6 +158,8 @@ function useKannaSocket() {
 
 export interface KannaState {
   socket: KannaSocket
+  /** Agent-raised credential prompts, rendered inline above the composer. */
+  secretRequests: SecretRequestsState
   activeChatId: string | null
   activeProjectId: string | null
   localProjects: LocalProjectsSnapshot | null
@@ -263,6 +266,7 @@ export interface KannaState {
 export function useKannaState(activeChatId: string | null): KannaState {
   const navigate = useNavigate()
   const socket = useKannaSocket()
+  const secretRequests = useSecretRequests(socket)
   const dialog = useAppDialog()
   const { resolvedTheme } = useTheme()
 
@@ -940,6 +944,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
   return {
     socket,
+    secretRequests,
     activeChatId,
     activeProjectId,
     localProjects,

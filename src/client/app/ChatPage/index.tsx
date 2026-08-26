@@ -1074,6 +1074,7 @@ export function ChatPage() {
         activeProvider={state.runtime?.provider ?? null}
         availableProviders={state.availableProviders}
         contextWindowSnapshot={contextWindowSnapshot}
+        secretRequests={state.secretRequests}
         onSubmit={handleChatSubmit}
         onCancel={handleCancel}
         onEditModels={() => setDefaultModelsDialogOpen(true)}

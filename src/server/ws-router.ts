@@ -22,6 +22,7 @@ import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
 import type { ProviderAuthManager } from "./provider-auth"
+import type { SecretRequestStore } from "./secret-requests"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
 import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
@@ -99,6 +100,7 @@ interface CreateWsRouterArgs {
     | "exchangeOpenRouterCode"
     | "onChange"
   > | null
+  secretRequests?: Pick<SecretRequestStore, "list" | "submit" | "cancel" | "onChange"> | null
 }
 
 interface SnapshotBroadcastFilter {
@@ -109,6 +111,7 @@ interface SnapshotBroadcastFilter {
   includeAppSettings?: boolean
   includeUsageLimits?: boolean
   includeProviderAuth?: boolean
+  includeSecretRequests?: boolean
   chatIds?: Set<string>
   projectIds?: Set<string>
   terminalIds?: Set<string>
@@ -176,6 +179,7 @@ export function createWsRouter({
   updateManager,
   usageLimits,
   providerAuth,
+  secretRequests,
 }: CreateWsRouterArgs) {
   const sockets = new Set<ServerWebSocket<ClientState>>()
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
@@ -264,6 +268,9 @@ export function createWsRouter({
     }
     if (topic.type === "provider-auth") {
       return Boolean(filter.includeProviderAuth)
+    }
+    if (topic.type === "secret-requests") {
+      return Boolean(filter.includeSecretRequests)
     }
     if (topic.type === "chat") {
       return filter.chatIds?.has(topic.chatId) ?? false
@@ -394,6 +401,18 @@ export function createWsRouter({
         snapshot: {
           type: "provider-auth",
           data: providerAuth?.getSnapshot() ?? { services: [] },
+        },
+      }
+    }
+
+    if (topic.type === "secret-requests") {
+      return {
+        v: PROTOCOL_VERSION,
+        type: "snapshot",
+        id,
+        snapshot: {
+          type: "secret-requests",
+          data: { requests: secretRequests?.list() ?? [] },
         },
       }
     }
@@ -852,6 +871,21 @@ export function createWsRouter({
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
         if (topic.type !== "provider-auth") continue
+        const envelope = createEnvelope(id, topic)
+        if (envelope.type !== "snapshot") continue
+        const signature = JSON.stringify(envelope.snapshot)
+        if (snapshotSignatures.get(id) === signature) continue
+        snapshotSignatures.set(id, signature)
+        send(ws, envelope)
+      }
+    }
+  }) ?? (() => {})
+
+  const disposeSecretRequestEvents = secretRequests?.onChange(() => {
+    for (const ws of sockets) {
+      const snapshotSignatures = ensureSnapshotSignatures(ws)
+      for (const [id, topic] of ws.data.subscriptions.entries()) {
+        if (topic.type !== "secret-requests") continue
         const envelope = createEnvelope(id, topic)
         if (envelope.type !== "snapshot") continue
         const signature = JSON.stringify(envelope.snapshot)
@@ -1663,6 +1697,38 @@ export function createWsRouter({
           pushTerminalSnapshot(command.terminalId, { force: true })
           return
         }
+
+        case "secret.submit": {
+          if (!secretRequests) {
+            throw new Error("Secret requests are not available")
+          }
+          // The value dies here: submit() writes it to disk and the ack
+          // carries only where it landed. Nothing about it is broadcast.
+          const resolution = await secretRequests.submit(command.requestId, {
+            scope: command.scope,
+            value: command.value,
+          })
+          send(ws, {
+            v: PROTOCOL_VERSION,
+            type: "ack",
+            id,
+            result: {
+              path: resolution.path,
+              scope: resolution.scope,
+              gitignoreUpdated: resolution.gitignoreUpdated ?? false,
+            },
+          })
+          return
+        }
+
+        case "secret.cancel": {
+          if (!secretRequests) {
+            throw new Error("Secret requests are not available")
+          }
+          secretRequests.cancel(command.requestId)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          return
+        }
       }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error)
@@ -1765,6 +1831,7 @@ export function createWsRouter({
       disposeUpdateEvents()
       disposeUsageLimitsEvents()
       disposeProviderAuthEvents()
+      disposeSecretRequestEvents()
     },
   }
 }

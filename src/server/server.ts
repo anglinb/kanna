@@ -38,6 +38,9 @@ import { UpdateManager } from "./update-manager"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import type { NightlyInstallResult } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
+import { SecretRequestStore } from "./secret-requests"
+import { createSecretsApi, resolveProjectFromCwd } from "./secrets-api"
+import { mintInstanceToken, removeInstanceFile, writeInstanceFile } from "./instance-file"
 import { instanceFingerprint } from "./instance"
 import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileContentType, persistProjectUpload } from "./uploads"
 import { getProjectUploadDir } from "./paths"
@@ -202,6 +205,19 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     void turnFiles.endTurn(chatId).finally(() => worktreeProbe.refreshForChat(chatId))
   }
   const terminals = new TerminalManager()
+
+  // Ask-for-secret. The store holds prompts waiting on a human; the API is
+  // the loopback-only door the `kanna ask-secret` CLI knocks on.
+  const secretRequests = new SecretRequestStore()
+  const instanceToken = mintInstanceToken()
+  const handleSecretsRequest = createSecretsApi({
+    requests: secretRequests,
+    token: instanceToken,
+    resolveProject: (cwd) => resolveProjectFromCwd(
+      cwd,
+      store.listProjects().map((project) => ({ path: project.localPath, title: project.title })),
+    ),
+  })
   const keybindings = new KeybindingsManager()
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
@@ -277,6 +293,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     worktreeProbe,
     agent,
     terminals,
+    secretRequests,
     keybindings,
     appSettings,
     analytics,
@@ -464,6 +481,14 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(new Response("Not found", { status: 404 }))
           }
 
+          // Ask-for-secret, before the password gate: the CLI presents the
+          // instance token instead of a browser session. Local requests only
+          // — never the proxy, never the raw tunnel.
+          if (requestClass === "local") {
+            const secretsResponse = await handleSecretsRequest(req, url)
+            if (secretsResponse) return secretsResponse
+          }
+
           if (url.pathname === "/auth/status") {
             return withOriginAgentCluster(auth
               ? auth.handleStatus(req)
@@ -622,6 +647,20 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     }
   }
 
+  // Advertise where we are and how to authenticate, so `kanna ask-secret`
+  // (run by an agent, with no browser session) can find this process. 0600,
+  // and the token dies with the server.
+  void writeInstanceFile({
+    port: actualPort,
+    url: `http://127.0.0.1:${actualPort}`,
+    token: instanceToken,
+    pid: process.pid,
+    instance: instanceFingerprint(store.dataDir),
+    startedAt: Date.now(),
+  }).catch((error: unknown) => {
+    console.warn(`${LOG_PREFIX} could not write instance file: ${(error as Error).message}`)
+  })
+
   analytics.trackLaunch({
     port: actualPort,
     host: hostname,
@@ -650,6 +689,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     appSettings.dispose()
     keybindings.dispose()
     terminals.closeAll()
+    secretRequests.dispose()
+    await removeInstanceFile()
     await store.compact()
     server.stop(true)
   }

@@ -21,6 +21,8 @@ import type {
   EditorPreset,
 } from "./types"
 
+import type { SecretRequestsSnapshot, SecretScope } from "./secrets"
+
 export type { EditorPreset }
 
 export interface EditorOpenSettings {
@@ -52,6 +54,7 @@ export type SubscriptionTopic =
   | { type: "app-settings" }
   | { type: "usage-limits" }
   | { type: "provider-auth" }
+  | { type: "secret-requests" }
   | {
     type: "chat"
     chatId: string
@@ -294,6 +297,13 @@ export type ClientCommand =
   | { type: "terminal.input"; terminalId: string; data: string }
   | { type: "terminal.resize"; terminalId: string; cols: number; rows: number }
   | { type: "terminal.close"; terminalId: string }
+  /**
+   * Answer an agent's ask-for-secret prompt. `value` is the only place a
+   * secret crosses the socket: the server writes it straight to disk and it
+   * never appears in a snapshot, a transcript, or an ack.
+   */
+  | { type: "secret.submit"; requestId: string; scope: SecretScope; value: string }
+  | { type: "secret.cancel"; requestId: string }
 
 export type OpenExternalAction = Extract<ClientCommand, { type: "system.openExternal" }>["action"]
 
@@ -311,6 +321,7 @@ export type ServerSnapshot =
   | { type: "usage-limits"; data: UsageLimitsSnapshot }
   | { type: "provider-auth"; data: ProviderAuthSnapshot }
   | { type: "llm-provider"; data: LlmProviderSnapshot }
+  | { type: "secret-requests"; data: SecretRequestsSnapshot }
   | { type: "chat"; data: ChatSnapshot | null }
   | { type: "project-git"; data: ChatDiffSnapshot | null }
   | { type: "terminal"; data: TerminalSnapshot | null }
