@@ -165,6 +165,15 @@ export function processTranscriptMessages(entries: TranscriptEntry[]): HydratedT
           kind: "context_cleared",
         })
         break
+      case "secret_notice":
+        messages.push({
+          ...createBaseMessage(entry),
+          kind: "secret_notice",
+          secretName: entry.secretName,
+          outcome: entry.outcome,
+          scope: entry.scope,
+        })
+        break
       case "handoff_boundary":
         messages.push({
           ...createBaseMessage(entry),

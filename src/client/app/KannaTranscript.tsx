@@ -12,7 +12,7 @@ import { TodoWriteMessage } from "../components/messages/TodoWriteMessage"
 import { ToolCallMessage } from "../components/messages/ToolCallMessage"
 import { ResultMessage } from "../components/messages/ResultMessage"
 import { InterruptedMessage } from "../components/messages/InterruptedMessage"
-import { CompactBoundaryMessage, ContextClearedMessage } from "../components/messages/CompactBoundaryMessage"
+import { CompactBoundaryMessage, ContextClearedMessage, SecretNoticeMessage } from "../components/messages/CompactBoundaryMessage"
 import { CompactSummaryMessage } from "../components/messages/CompactSummaryMessage"
 import { StatusMessage } from "../components/messages/StatusMessage"
 import { CollapsedToolGroup } from "../components/messages/CollapsedToolGroup"
@@ -368,6 +368,11 @@ function sameMessage(left: HydratedTranscriptMessage, right: HydratedTranscriptM
     case "context_cleared":
     case "interrupted":
       return true
+    case "secret_notice":
+      return right.kind === "secret_notice"
+        && left.secretName === right.secretName
+        && left.outcome === right.outcome
+        && left.scope === right.scope
     case "handoff_boundary":
       return right.kind === "handoff_boundary"
         && left.fromProvider === right.fromProvider
@@ -570,6 +575,9 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
         break
       case "context_cleared":
         rendered = <ContextClearedMessage key={message.id} />
+        break
+      case "secret_notice":
+        rendered = <SecretNoticeMessage key={message.id} message={message} />
         break
       case "compact_summary":
         rendered = <CompactSummaryMessage key={message.id} message={message} />

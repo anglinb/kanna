@@ -39,7 +39,8 @@ import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import type { NightlyInstallResult } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { SecretRequestStore } from "./secret-requests"
-import { createSecretsApi, resolveProjectFromCwd } from "./secrets-api"
+import { createSecretsApi, resolveAskingChat, resolveProjectFromCwd } from "./secrets-api"
+import { timestamped } from "./transcript"
 import { mintInstanceToken, removeInstanceFile, writeInstanceFile } from "./instance-file"
 import { instanceFingerprint } from "./instance"
 import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileContentType, persistProjectUpload } from "./uploads"
@@ -208,7 +209,24 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
 
   // Ask-for-secret. The store holds prompts waiting on a human; the API is
   // the loopback-only door the `kanna ask-secret` CLI knocks on.
-  const secretRequests = new SecretRequestStore()
+  const secretRequests = new SecretRequestStore({
+    // A settled prompt leaves a note in the chat that raised it. Best-effort:
+    // the secret is already on disk by this point, so a failure here must not
+    // surface as a failed save.
+    onSettled: (event) => {
+      void store
+        .appendMessage(event.chatId, timestamped({
+          kind: "secret_notice",
+          secretName: event.name,
+          outcome: event.outcome,
+          ...(event.scope ? { scope: event.scope } : {}),
+        }))
+        .then(() => router.broadcastChatStateImmediately(event.chatId))
+        .catch((error: unknown) => {
+          console.warn(`${LOG_PREFIX} could not record secret notice: ${(error as Error).message}`)
+        })
+    },
+  })
   const instanceToken = mintInstanceToken()
   const handleSecretsRequest = createSecretsApi({
     requests: secretRequests,
@@ -217,6 +235,16 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       cwd,
       store.listProjects().map((project) => ({ path: project.localPath, title: project.title })),
     ),
+    resolveChat: ({ cwd, claimedChatId }) => resolveAskingChat({
+      cwd,
+      claimedChatId,
+      runningChatIds: [...agent.getActiveStatuses().keys()],
+      chatLocalPath: (chatId) => {
+        const chat = store.getChat(chatId)
+        if (!chat) return null
+        return store.getProject(chat.projectId)?.localPath ?? null
+      },
+    }),
   })
   const keybindings = new KeybindingsManager()
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is

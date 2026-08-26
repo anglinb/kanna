@@ -14,6 +14,7 @@ import { homedir } from "node:os"
 import { CLI_COMMAND } from "../shared/branding"
 import {
   isValidSecretName,
+  SECRET_CHAT_ID_ENV_VAR,
   SECRETS_API_PATH_PREFIX,
   SECRETS_API_TOKEN_HEADER,
   type SecretRequestResolution,
@@ -161,6 +162,9 @@ export async function runAskSecretCommand(
         cwd,
         scope: args.scope,
         force: args.force,
+        // Only set when Kanna spawned this agent with a per-chat environment;
+        // the server falls back to cwd matching when it is absent.
+        chatId: env[SECRET_CHAT_ID_ENV_VAR] ?? null,
       }),
     })
     created = (await response.json()) as CreateResponse

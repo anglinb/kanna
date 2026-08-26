@@ -232,7 +232,20 @@ describe("runAskSecretCommand", () => {
       cwd: "/tmp/proj",
       scope: "global",
       force: true,
+      chatId: null,
     })
+  })
+
+  test("forwards the chat id when the harness environment carries one", async () => {
+    const { deps, calls } = harness([
+      { status: "saved", scope: "global", path: "/p/T.env", loadCommand: "load" },
+    ])
+
+    await runAskSecretCommand(baseArgs, {
+      ...deps,
+      env: { ...deps.env, KANNA_CHAT_ID: "chat-42" },
+    })
+    expect(JSON.parse(calls[0].body!).chatId).toBe("chat-42")
   })
 
   test("environment overrides win over the instance file", async () => {

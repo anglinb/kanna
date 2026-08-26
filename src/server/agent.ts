@@ -60,6 +60,7 @@ import { fallbackTitleFromMessage } from "./generate-title"
 import { asNumber, asRecord } from "../shared/json"
 import { buildHandoffContext, buildHandoffMessageContent, type HandoffContext } from "./handoff"
 import { buildAskSecretInstructions } from "./secret-instructions"
+import { SECRET_CHAT_ID_ENV_VAR } from "../shared/secrets"
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
 
@@ -195,6 +196,7 @@ interface AgentCoordinatorArgs {
   resolvePiConnection?: () => Promise<import("./pi-agent").PiConnection | null>
   generateTitle?: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
   startClaudeSession?: (args: {
+    chatId: string
     localPath: string
     model: string
     effort?: string
@@ -676,6 +678,7 @@ async function* createClaudeHarnessStream(
 
 
 async function startClaudeSession(args: {
+  chatId: string
   localPath: string
   model: string
   effort?: string
@@ -773,7 +776,12 @@ async function startClaudeSession(args: {
       // enabling it while the UI shows "Standard".
       settings: { enableWorkflows: true, fastMode: args.serviceTier === "fast" },
       pathToClaudeCodeExecutable: process.env.CLAUDE_EXECUTABLE?.replace(/^~(?=\/|$)/, homedir()) || undefined,
-      env: (() => { const { CLAUDECODE: _, ...env } = process.env; return env })(),
+      // KANNA_CHAT_ID lets `kanna ask-secret`, spawned somewhere under this
+      // session's Bash tool, name the chat it belongs to.
+      env: (() => {
+        const { CLAUDECODE: _, ...env } = process.env
+        return { ...env, [SECRET_CHAT_ID_ENV_VAR]: args.chatId }
+      })(),
     },
   })
 
@@ -903,6 +911,8 @@ export class AgentCoordinator {
     let probe: ClaudeSessionHandle | null = null
     try {
       probe = await this.startClaudeSessionFn({
+        // Not a chat session — a throwaway probe for the usage read.
+        chatId: "",
         localPath: homedir(),
         // Model choice is irrelevant for the usage read; use the catalog default.
         model: "sonnet",
@@ -1578,6 +1588,7 @@ export class AgentCoordinator {
       }
 
       const started = await this.startClaudeSessionFn({
+        chatId: args.chatId,
         localPath: args.localPath,
         model: args.model,
         effort: args.effort,

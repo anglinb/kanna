@@ -40,11 +40,26 @@ export interface CreateSecretRequestArgs {
   projectPath: string | null
   projectTitle: string | null
   suggestedScope: SecretScope | null
+  chatId?: string | null
+}
+
+/** Emitted once per request when it settles, for the transcript notice. */
+export interface SecretSettledEvent {
+  chatId: string
+  name: string
+  outcome: "saved" | "declined" | "expired"
+  scope?: SecretScope
 }
 
 export interface SecretRequestStoreOptions {
   writeSecret?: typeof writeSecretToDisk
   now?: () => number
+  /**
+   * Called when a request settles and it belongs to a known chat. Failures
+   * are the caller's problem — a notice that cannot be written must never
+   * take down the save that just succeeded.
+   */
+  onSettled?: (event: SecretSettledEvent) => void
 }
 
 export class SecretRequestStore {
@@ -52,10 +67,18 @@ export class SecretRequestStore {
   private readonly listeners = new Set<() => void>()
   private readonly writeSecret: typeof writeSecretToDisk
   private readonly now: () => number
+  private readonly onSettled: (event: SecretSettledEvent) => void
 
   constructor(options: SecretRequestStoreOptions = {}) {
     this.writeSecret = options.writeSecret ?? writeSecretToDisk
     this.now = options.now ?? (() => Date.now())
+    this.onSettled = options.onSettled ?? (() => {})
+  }
+
+  /** No chat, no notice — the request still settles normally. */
+  private announce(request: PendingSecretRequest, event: Omit<SecretSettledEvent, "chatId" | "name">) {
+    if (!request.chatId) return
+    this.onSettled({ chatId: request.chatId, name: request.name, ...event })
   }
 
   onChange(listener: () => void): () => void {
@@ -90,6 +113,7 @@ export class SecretRequestStore {
       projectPath: args.projectPath,
       projectTitle: args.projectTitle,
       suggestedScope: args.suggestedScope,
+      chatId: args.chatId ?? null,
       createdAt: this.now(),
     }
 
@@ -155,6 +179,7 @@ export class SecretRequestStore {
       gitignoreUpdated: written.gitignoreUpdated,
     }
     tracked.settledAt = this.now()
+    this.announce(tracked.request, { outcome: "saved", scope: written.scope })
     this.emit()
     return tracked.resolution
   }
@@ -165,6 +190,7 @@ export class SecretRequestStore {
 
     tracked.resolution = { status: "cancelled" }
     tracked.settledAt = this.now()
+    this.announce(tracked.request, { outcome: "declined" })
     this.emit()
     return true
   }
@@ -179,6 +205,7 @@ export class SecretRequestStore {
         if (now - tracked.request.createdAt >= SECRET_REQUEST_TTL_MS) {
           tracked.resolution = { status: "expired" }
           tracked.settledAt = now
+          this.announce(tracked.request, { outcome: "expired" })
           changed = true
         }
         continue
