@@ -11,6 +11,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "../../comp
 import { actionMatchesEvent, getResolvedKeybindings } from "../../lib/keybindings"
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow"
 import { cn } from "../../lib/utils"
+import { snapshotDroppedFiles } from "../../lib/snapshotDroppedFiles"
 import {
   DEFAULT_RIGHT_SIDEBAR_SIZE,
   DEFAULT_RIGHT_SIDEBAR_VISIBILITY_STATE,
@@ -116,7 +117,9 @@ function usePageFileDrop(args: {
     event.preventDefault()
     pageFileDragDepthRef.current = 0
     setIsPageFileDragActive(false)
-    args.onFilesDropped([...event.dataTransfer.files])
+    // Read the bytes now, while the drop event is still live. See
+    // snapshotDroppedFiles for why a later read can come back empty on iOS.
+    void snapshotDroppedFiles([...event.dataTransfer.files]).then(args.onFilesDropped)
   }, [args, hasDraggedFiles])
 
   return {

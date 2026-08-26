@@ -28,6 +28,7 @@ import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
+import { handleTranscribe } from "./transcribe"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
@@ -570,6 +571,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(uploadResponse)
           }
 
+          const transcribeResponse = await handleTranscribe(req, url, readLlmProviderSnapshot)
+          if (transcribeResponse) {
+            return withOriginAgentCluster(transcribeResponse)
+          }
+
           const deleteUploadResponse = await handleProjectUploadDelete(req, url, store)
           if (deleteUploadResponse) {
             return withOriginAgentCluster(deleteUploadResponse)
@@ -683,8 +689,10 @@ async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
 
   // Parsing is its own failure mode, so it gets its own report. A drag-sourced
   // File on iOS is backed by a temporary drag-session file. If the system
-  // releases it before the body finishes streaming, the multipart body arrives
-  // shorter than its Content-Length and parsing throws here.
+  // releases it before the client reads it, Safari sends a multipart header
+  // with an empty body (Content-Length: 0) and parsing throws here. The
+  // client copies dropped files into memory during the drop event to avoid
+  // this; see src/client/lib/snapshotDroppedFiles.ts.
   let formData: FormData
   try {
     formData = await req.formData()

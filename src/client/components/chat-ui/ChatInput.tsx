@@ -1,5 +1,5 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, Check, Copy, Paperclip } from "lucide-react"
+import { ArrowUp, AudioLines, Check, Copy, Loader2, Paperclip, Trash2 } from "lucide-react"
 import {
   chatModeFromFlags,
   type AgentProvider,
@@ -17,6 +17,8 @@ import { ScrollArea } from "../ui/scroll-area"
 import { cn } from "../../lib/utils"
 import { useComposer } from "../../hooks/useComposer"
 import { useIsStandalone } from "../../hooks/useIsStandalone"
+import { useVoiceRecorder } from "../../hooks/useVoiceRecorder"
+import { RecordingWaveform } from "./RecordingWaveform"
 import { useChatInputStore } from "../../stores/chatInputStore"
 import { type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
@@ -364,6 +366,13 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const uploadedAttachments = attachments.filter((attachment) => attachment.status === "uploaded")
   const hasPendingUploads = attachments.some((attachment) => attachment.status === "uploading")
   const canSubmit = value.trim().length > 0 || uploadedAttachments.length > 0
+  const recorder = useVoiceRecorder()
+  const [transcribing, setTranscribing] = useState(false)
+  const recording = recorder.isRecording
+  // The mic only shows with an empty composer; with a draft the send
+  // button is the sole action, the same as iOS. Mid-turn it stays: the
+  // transcript queues behind the running turn.
+  const showMic = !canSubmit && !recording && !transcribing
   const orderedAttachments = [...attachments].sort((left, right) => {
     if (left.kind === right.kind) return 0
     return left.kind === "image" ? -1 : 1
@@ -661,14 +670,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     return () => window.removeEventListener(REQUEST_ATTACH_FILES_EVENT, handleAttachRequest)
   }, [])
 
-  async function handleSubmit() {
-    if (!canSubmit || hasPendingUploads) return
-
-    const nextValue = value
-    const previousAttachments = attachmentsRef.current
-    const previousSelectedAttachmentId = selectedAttachmentId
-    const previousUploadError = uploadError
-    const attachmentsForSubmit = uploadedAttachments.map(({ previewUrl: _previewUrl, status: _status, ...attachment }) => attachment)
+  /** The composer's current prefs, the way a send carries them. */
+  function buildSubmitOptions(attachmentsForSubmit: ChatAttachment[]) {
     let modelOptions: ModelOptions
     if (providerPrefs.provider === "claude") {
       modelOptions = { claude: { ...providerPrefs.modelOptions } }
@@ -679,7 +682,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     } else {
       modelOptions = { codex: { ...providerPrefs.modelOptions } }
     }
-    const submitOptions = {
+    return {
       provider: selectedProvider,
       model: providerPrefs.model,
       modelOptions,
@@ -687,6 +690,17 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       autoPlan: showModePicker ? providerPrefs.autoPlan : false,
       attachments: attachmentsForSubmit,
     }
+  }
+
+  async function handleSubmit() {
+    if (!canSubmit || hasPendingUploads) return
+
+    const nextValue = value
+    const previousAttachments = attachmentsRef.current
+    const previousSelectedAttachmentId = selectedAttachmentId
+    const previousUploadError = uploadError
+    const attachmentsForSubmit = uploadedAttachments.map(({ previewUrl: _previewUrl, status: _status, ...attachment }) => attachment)
+    const submitOptions = buildSubmitOptions(attachmentsForSubmit)
     setValue("")
     if (chatId) clearDraft(chatId)
     if (textareaRef.current) textareaRef.current.style.height = "auto"
@@ -705,6 +719,45 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       setAttachments(previousAttachments)
       setSelectedAttachmentId(previousSelectedAttachmentId)
       setUploadError(previousUploadError)
+    }
+  }
+
+  function discardRecording() {
+    recorder.cancelRecording()
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true })
+    })
+  }
+
+  // Same flow as the iOS app: finish the capture, POST the raw audio to
+  // /api/transcribe, then hand the transcript to the normal send path,
+  // which queues when a turn is already running, the same as Enter.
+  async function finishRecordingAndSend() {
+    if (transcribing) return
+    const recording = await recorder.finishRecording()
+    if (!recording) return
+    setTranscribing(true)
+    try {
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": recording.mimeType },
+        body: recording.blob,
+      })
+      if (!response.ok) {
+        const envelope = (await response.json().catch(() => null)) as { error?: { message?: string } } | null
+        throw new Error(envelope?.error?.message || "Transcription failed. Try again.")
+      }
+      const payload = (await response.json()) as { text?: string }
+      const text = (payload.text ?? "").trim()
+      if (!text) {
+        recorder.setErrorMessage("Didn't catch that. Try recording again.")
+        return
+      }
+      await onSubmit(text, buildSubmitOptions([]))
+    } catch (error) {
+      recorder.setErrorMessage(error instanceof Error ? error.message : "Transcription failed. Try again.")
+    } finally {
+      setTranscribing(false)
     }
   }
 
@@ -905,7 +958,15 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
             </ScrollArea>
           ) : null}
 
+          {recorder.errorMessage ? (
+            <div className="max-w-[840px] mx-auto px-4 pb-1.5 text-xs text-destructive">{recorder.errorMessage}</div>
+          ) : null}
           <div className="flex items-end max-w-[840px] mx-auto border dark:bg-card/40 backdrop-blur-lg border-border rounded-[29px] pr-1.5">
+            {recording ? (
+              <div className="flex min-w-0 flex-1 items-center px-4 py-[6px] md:py-[10px]">
+                <RecordingWaveform levels={recorder.levels} />
+              </div>
+            ) : (
             <Textarea
               ref={setTextareaRefs}
               placeholder={placeholder}
@@ -927,6 +988,52 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               disabled={disabled}
               className="min-w-0 flex-1 text-base p-3 md:p-4 !pr-2 md:pl-6 resize-none max-h-[200px] outline-none bg-transparent border-0 shadow-none placeholder:truncate"
             />
+            )}
+            {recording ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                title="Discard recording"
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  discardRecording()
+                }}
+                className="flex-shrink-0 rounded-full cursor-pointer h-10 w-10 md:h-11 md:w-11 mb-1 mr-1 md:mb-1.5 text-muted-foreground touch-manipulation"
+              >
+                <Trash2 className="h-5 w-5" />
+              </Button>
+            ) : null}
+            {showMic || recording || transcribing ? (
+              <Button
+                type="button"
+                variant={recording ? "default" : "ghost"}
+                size="icon"
+                title={recording ? "Transcribe and send" : transcribing ? "Transcribing..." : "Record voice message"}
+                disabled={disabled || transcribing}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  if (recording) void finishRecordingAndSend()
+                  else if (!transcribing) void recorder.startRecording()
+                }}
+                className={cn(
+                  "flex-shrink-0 rounded-full cursor-pointer h-10 w-10 md:h-11 md:w-11 mb-1 md:mb-1.5 touch-manipulation",
+                  recording
+                    ? "bg-slate-600 text-white dark:bg-white dark:text-slate-900 -mr-0.5 md:mr-0"
+                    : "text-muted-foreground",
+                  showMic && (canCancel ? "mr-1" : "-mr-0.5 md:mr-0"),
+                )}
+              >
+                {recording ? (
+                  <Check className="h-5 w-5 md:h-6 md:w-6" />
+                ) : transcribing ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <AudioLines className="h-5 w-5" />
+                )}
+              </Button>
+            ) : null}
+            {recording || transcribing || (showMic && !canCancel) ? null : (
             <Button
               type="button"
               onPointerDown={(event) => {
@@ -952,6 +1059,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <ArrowUp className="h-5 w-5 md:h-6 md:w-6" />
               )}
             </Button>
+            )}
           </div>
         </div>
 
