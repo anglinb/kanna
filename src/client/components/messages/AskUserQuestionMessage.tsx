@@ -1,8 +1,9 @@
 import { useState } from "react"
-import { Check, ChevronLeft, MessageCircleQuestion } from "lucide-react"
+import { ChevronLeft, MessageCircleQuestion } from "lucide-react"
 import type { ProcessedToolCall, AskUserQuestionItem, AskUserQuestionOption } from "./types"
 import type { AskUserQuestionAnswerMap } from "../../../shared/types"
 import { Button } from "../ui/button"
+import { ChoiceCheckbox, ChoiceRow } from "../ui/choice"
 import { cn } from "../../lib/utils"
 import { useTranscriptRenderOptions } from "./render-context"
 
@@ -60,44 +61,6 @@ function QuestionCard({
   )
 }
 
-function OptionContent({ label, description }: { label: string; description?: string }) {
-  return (
-    <>
-      <span className="text-foreground text-sm">{label}</span>
-      {description && (
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-      )}
-    </>
-  )
-}
-
-function Checkbox({
-  selected,
-  multiSelect,
-  onClick
-}: {
-  selected: boolean
-  multiSelect?: boolean
-  onClick?: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex-shrink-0 w-5 h-5 border-1 flex items-center justify-center",
-        multiSelect ? "rounded" : "rounded-full",
-        selected
-          ? "border-slate-500/0 bg-foreground"
-          : "border-muted-foreground/50 bg-background",
-        onClick && selected && "cursor-pointer"
-      )}
-    >
-      {selected && <Check strokeWidth={3} className="translate-y-[0.5px] h-3 w-3 text-white dark:text-background" />}
-    </button>
-  )
-}
-
 function OptionRow({
   option,
   selected,
@@ -111,29 +74,15 @@ function OptionRow({
   onClick?: () => void
   isLast?: boolean
 }) {
-  const baseClasses = "w-full text-left p-3 pt-2.5 pl-4 pr-5 bg-background"
-  const borderClass = !isLast ? "border-b border-border" : ""
-
-  if (onClick) {
-    return (
-      <button
-        onClick={onClick}
-        className={cn(baseClasses, borderClass, "transition-all cursor-pointer")}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <OptionContent label={option.label} description={option.description} />
-          </div>
-          <Checkbox selected={selected} multiSelect={multiSelect} />
-        </div>
-      </button>
-    )
-  }
-
   return (
-    <div className={cn(baseClasses, borderClass)}>
-      <OptionContent label={option.label} description={option.description} />
-    </div>
+    <ChoiceRow
+      label={option.label}
+      description={option.description}
+      selected={selected}
+      multiSelect={multiSelect}
+      onClick={onClick}
+      isLast={isLast}
+    />
   )
 }
 
@@ -373,7 +322,7 @@ export function AskUserQuestionMessage({ message, onSubmit, isLatest }: Props) {
               placeholder="Other..."
               className="flex-1 px-3 !py-1 pl-4 min-h-[55px] min-w-0 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground"
             />
-            <Checkbox
+            <ChoiceCheckbox
               selected={!!customInput}
               multiSelect={currentQuestion.multiSelect}
               onClick={currentQuestion.multiSelect && customInput ? () => clearCustomInput(currentQuestion) : undefined}

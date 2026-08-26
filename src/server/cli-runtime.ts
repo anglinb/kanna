@@ -14,6 +14,12 @@ import type { AnalyticsReporter } from "./analytics"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
 import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
 import { runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
+import {
+  askSecretHelpLines,
+  parseAskSecretArgs,
+  runAskSecretCommand,
+  type AskSecretArgs,
+} from "./ask-secret-command"
 
 export interface CliOptions {
   port: number
@@ -79,6 +85,7 @@ export interface CliRuntimeDeps {
   renderShareQr?: (url: string) => Promise<string>
   startShareTunnel?: (localUrl: string, shareMode: Exclude<ShareMode, false>) => Promise<StartedShareTunnel>
   runPairCommandImpl?: typeof runPairCommand
+  runAskSecretCommandImpl?: typeof runAskSecretCommand
   readCloudIdentityImpl?: (warn: (message: string) => void) => Promise<CloudIdentity | null>
   createCloudRuntimeImpl?: (identity: CloudIdentity) => CloudRuntime
   probeExistingInstanceImpl?: (port: number) => Promise<ExistingInstance | null>
@@ -94,6 +101,7 @@ export interface UpdateInstallAttemptResult {
 type ParsedArgs =
   | { kind: "run"; options: CliOptions }
   | { kind: "pair"; args: PairCommandArgs }
+  | { kind: "ask-secret"; args: AskSecretArgs }
   | { kind: "help" }
   | { kind: "version" }
 
@@ -111,6 +119,9 @@ Usage:
   ${CLI_COMMAND} pair          Claim this machine on kanna.sh (prints a link + QR) and start
   ${CLI_COMMAND} pair <code>   Same, using a code from https://kanna.sh/machines
   ${CLI_COMMAND} pair --status|--disable|--enable|--remove
+
+Agent commands:
+${askSecretHelpLines().join("\n")}
 
 Options:
   --port <number>      Port to listen on (default: ${PROD_SERVER_PORT})
@@ -157,6 +168,10 @@ function parsePairArgs(argv: string[]): ParsedArgs {
 export function parseArgs(argv: string[]): ParsedArgs {
   if (argv[0] === "pair") {
     return parsePairArgs(argv.slice(1))
+  }
+
+  if (argv[0] === "ask-secret") {
+    return { kind: "ask-secret", args: parseAskSecretArgs(argv.slice(1)) }
   }
 
   let port = PROD_SERVER_PORT
@@ -337,6 +352,15 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
   if (parsedArgs.kind === "help") {
     printHelp()
     return { kind: "exited", code: 0 }
+  }
+
+  // Runs against the server that is already up; never starts one.
+  if (parsedArgs.kind === "ask-secret") {
+    const code = await (deps.runAskSecretCommandImpl ?? runAskSecretCommand)(parsedArgs.args, {
+      log: deps.log,
+      warn: deps.warn,
+    })
+    return { kind: "exited", code }
   }
 
   if (parsedArgs.kind === "pair") {

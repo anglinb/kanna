@@ -15,6 +15,7 @@ import { useTheme } from "../hooks/useTheme"
 import { processTranscriptMessages } from "../lib/parseTranscript"
 import { formatProjectRepoBranch } from "../lib/project-label"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
+import { useSecretRequests, type SecretRequestsState } from "./useSecretRequests"
 import {
   applySidebarProjectOrder,
   getActiveChatSnapshot,
@@ -142,6 +143,8 @@ function useKannaSocket() {
 
 export interface KannaState {
   socket: KannaSocket
+  /** Agent-raised credential prompts, rendered inline above the composer. */
+  secretRequests: SecretRequestsState
   activeChatId: string | null
   activeProjectId: string | null
   sidebarData: SidebarData
@@ -244,6 +247,7 @@ export interface KannaState {
 export function useKannaState(activeChatId: string | null): KannaState {
   const navigate = useNavigate()
   const socket = useKannaSocket()
+  const secretRequests = useSecretRequests(socket)
   const dialog = useAppDialog()
   const { resolvedTheme } = useTheme()
 
@@ -909,6 +913,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
   return {
     socket,
+    secretRequests,
     activeChatId,
     activeProjectId,
     sidebarData: resolvedSidebarData,

@@ -18,6 +18,7 @@ import { normalizeToolCall } from "../shared/tools"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { AsyncQueue } from "./async-queue"
 import { buildKannaAgentCorrection, buildKannaAgentId, buildKannaAttributionInstructions } from "./attribution"
+import { buildAskSecretInstructions } from "./secret-instructions"
 import { appendSystemMessageBlock } from "./harness-skills"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
 import { timestamped } from "./transcript"
@@ -429,7 +430,10 @@ export class PiAgentManager {
       settingsManager,
       noExtensions: true,
       noThemes: true,
-      appendSystemPrompt: [buildKannaAttributionInstructions(buildKannaAgentId("pi", args.model))],
+      appendSystemPrompt: [
+        buildKannaAttributionInstructions(buildKannaAgentId("pi", args.model)),
+        buildAskSecretInstructions(),
+      ],
     })
     await resourceLoader.reload()
 
