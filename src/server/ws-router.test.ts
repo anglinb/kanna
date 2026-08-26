@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import type { AppSettingsSnapshot, KeybindingsSnapshot, LlmProviderSnapshot, UpdateSnapshot } from "../shared/types"
 import { PROTOCOL_VERSION } from "../shared/types"
+import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
 import {
   assertSafeSkillId,
@@ -91,6 +92,9 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
   editor: {
     preset: "cursor",
     commandTemplate: "cursor {path}",
+  },
+  transcript: {
+    windowAssistantMessages: 50,
   },
   defaultProvider: "last_used",
   providerDefaults: {
@@ -295,6 +299,9 @@ function createFakeStore(overrides: Record<string, unknown> = {}) {
     state: createEmptyState(),
     getSidebarProjectOrder: () => [],
     pruneStaleEmptyChats: async () => [],
+    // Whole transcript by default; the window tests override these.
+    getInitialTranscriptWindowStart: () => 0,
+    widenTranscriptWindowStart: (_chatId: string, current: number) => current,
     ...overrides,
   } as never
 }
@@ -337,6 +344,7 @@ function createFakeAppSettings(overrides: Partial<CreateWsRouterArgs["appSetting
         ...patch,
         terminal: { ...snapshot.terminal, ...patch.terminal },
         editor: { ...snapshot.editor, ...patch.editor },
+        transcript: { ...snapshot.transcript, ...patch.transcript },
         providerDefaults: snapshot.providerDefaults,
       } as AppSettingsSnapshot
       return snapshot
@@ -582,6 +590,7 @@ describe("ws-router", () => {
             defaultProvider: patch.defaultProvider ?? snapshot.defaultProvider,
             terminal: { ...snapshot.terminal, ...patch.terminal },
             editor: { ...snapshot.editor, ...patch.editor },
+        transcript: { ...snapshot.transcript, ...patch.transcript },
           }
           listener?.(snapshot)
           return snapshot
@@ -2319,5 +2328,105 @@ describe("ws-router provider auth", () => {
     expect(ws.sent).toEqual([
       { v: PROTOCOL_VERSION, type: "ack", id: "r1", result: { services: [] } },
     ])
+  })
+})
+
+describe("transcript windows", () => {
+  /** prompt, text, text: three entries, two assistant messages. */
+  function turn(n: number) {
+    return [
+      { _id: `p${n}`, createdAt: n, kind: "user_prompt", content: `question ${n}` },
+      { _id: `a${n}`, createdAt: n, kind: "assistant_text", text: "one" },
+      { _id: `b${n}`, createdAt: n, kind: "assistant_text", text: "two" },
+    ]
+  }
+
+  function createWindowedRouter(entries: Array<Record<string, unknown>>) {
+    const state = createEmptyState()
+    state.projectsById.set("project-1", { id: "project-1", localPath: "/tmp/project", title: "Project", createdAt: 1, updatedAt: 1 })
+    state.chatsById.set("chat-1", {
+      id: "chat-1", projectId: "project-1", title: "Chat", createdAt: 1, updatedAt: 1, unread: false,
+      provider: null, planMode: false, autoPlan: false, sessionToken: null, lastTurnOutcome: null,
+    })
+    // The store's own window methods are covered in event-store.test.ts;
+    // this fake mirrors them over the fixture so the router logic is what
+    // is under test here.
+    const typed = entries as never[]
+    const fake = createFakeStore({
+      state,
+      getChat: (chatId: string) => state.chatsById.get(chatId) ?? null,
+      getProject: (projectId: string) => state.projectsById.get(projectId) ?? null,
+      getClientTranscript: () => ({ messages: entries, startIndex: 0, readAnchor: null }),
+      getEntryIdAt: (_chatId: string, index: number) => (entries[index] as { _id?: string } | undefined)?._id ?? null,
+      getInitialTranscriptWindowStart: (_chatId: string, assistantMessages: number) =>
+        findTranscriptWindowStart(typed, { endExclusive: entries.length, assistantMessages }),
+      widenTranscriptWindowStart: (_chatId: string, current: number, options: { assistantMessages: number; untilMessageId?: string; all?: boolean }) => {
+        if (options.all) return 0
+        if (options.untilMessageId !== undefined) {
+          const index = entries.findIndex((item) => item._id === options.untilMessageId)
+          if (index < 0 || index >= current) return current
+          return findTranscriptWindowStart(typed, { endExclusive: current, assistantMessages: options.assistantMessages, mustIncludeIndex: index })
+        }
+        return findTranscriptWindowStart(typed, { endExclusive: current, assistantMessages: options.assistantMessages })
+      },
+    })
+    const settings = createFakeAppSettings({
+      getSnapshot: () => ({ ...DEFAULT_APP_SETTINGS_SNAPSHOT, transcript: { windowAssistantMessages: 2 } }),
+    })
+    return createTestRouter({ store: fake, appSettings: settings })
+  }
+
+  const chatData = (ws: FakeWebSocket, index: number) =>
+    (ws.sent[index] as { snapshot: { data: { messages: Array<{ _id: string }>; startIndex: number; incremental?: boolean; outline?: unknown[] } } }).snapshot.data
+
+  test("opens on the last window of assistant messages with the whole outline", async () => {
+    const router = createWindowedRouter([...turn(1), ...turn(2), ...turn(3)])
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "subscribe", id: "sub", topic: { type: "chat", chatId: "chat-1" } }))
+
+    const data = chatData(ws, 0)
+    expect(data.startIndex).toBe(6)
+    expect(data.messages.map((entry) => entry._id)).toEqual(["p3", "a3", "b3"])
+    expect(data.outline).toHaveLength(3)
+  })
+
+  test("loadOlder pushes the older slice as an incremental body in front, without the outline", async () => {
+    const router = createWindowedRouter([...turn(1), ...turn(2), ...turn(3)])
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "subscribe", id: "sub", topic: { type: "chat", chatId: "chat-1" } }))
+
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "command", id: "older", command: { type: "chat.loadOlder", chatId: "chat-1" } }))
+
+    const older = chatData(ws, 1)
+    expect(older.incremental).toBe(true)
+    expect(older.startIndex).toBe(3)
+    expect(older.messages.map((entry) => entry._id)).toEqual(["p2", "a2", "b2"])
+    expect(older.outline).toBeUndefined()
+    expect(ws.sent[2]).toEqual({ v: PROTOCOL_VERSION, type: "ack", id: "older", result: { startIndex: 3 } })
+
+    // Until a message: jumps straight to the window holding it.
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "command", id: "older-2", command: { type: "chat.loadOlder", chatId: "chat-1", untilMessageId: "p1" } }))
+    expect(chatData(ws, 3).messages.map((entry) => entry._id)).toEqual(["p1", "a1", "b1"])
+    expect(ws.sent[4]).toEqual({ v: PROTOCOL_VERSION, type: "ack", id: "older-2", result: { startIndex: 0 } })
+  })
+
+  test("a cached span reaching further back than the default keeps the client's window", async () => {
+    const router = createWindowedRouter([...turn(1), ...turn(2), ...turn(3)])
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "subscribe", id: "sub",
+      topic: { type: "chat", chatId: "chat-1", cachedSpan: { start: 3, end: 8, endEntryId: "a3" } },
+    }))
+
+    // Only the entry past the cache is sent, and the window start is the cache's.
+    const data = chatData(ws, 0)
+    expect(data.incremental).toBe(true)
+    expect(data.startIndex).toBe(8)
+    expect(data.messages.map((entry) => entry._id)).toEqual(["b3"])
   })
 })

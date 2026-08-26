@@ -17,7 +17,7 @@ import {
   useSidebarReady,
   useSidebarStore,
 } from "../stores/sidebarStore"
-import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData } from "../../shared/types"
+import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData, TranscriptOutlineEntry } from "../../shared/types"
 import type { AskUserQuestionItem } from "../components/messages/types"
 import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
@@ -46,9 +46,9 @@ import {
   cachedWindowToMessages,
   createTranscriptCacheWriter,
   readCachedWindow,
-  toCachedSpan,
   type CachedTranscriptWindow,
 } from "./chatTranscriptCache"
+import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES, trimTranscriptWindow } from "../../shared/transcript-window"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { KannaSocket, type SocketStatus } from "./socket"
 import { useAppSettingsSync } from "./useAppSettingsSync"
@@ -87,6 +87,7 @@ export {
 
 /** Stable identity so an empty transcript does not re-derive rows each render. */
 const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
+const EMPTY_OUTLINE: TranscriptOutlineEntry[] = []
 
 /**
  * How long to wait for the local transcript cache before subscribing without
@@ -165,6 +166,13 @@ export interface KannaState {
   readAnchorState: ChatReadAnchorState
   /** Report the message at the top of the viewport (throttled write). */
   reportReadAnchor: (messageId: string, atEnd: boolean) => void
+  /** Entries exist before the loaded window; "load earlier" has somewhere to go. */
+  hasOlderMessages: boolean
+  /** Every user prompt in the chat, loaded or not (see shared/transcript-window.ts). */
+  transcriptOutline: TranscriptOutlineEntry[]
+  /** Widen the window toward the start; the rows arrive on the subscription. */
+  loadOlderMessages: (options?: { untilMessageId?: string; all?: boolean }) => Promise<void>
+  isLoadingOlderMessages: boolean
   chatDiffSnapshot: ChatDiffSnapshot | null
   keybindings: KeybindingsSnapshot | null
   appSettings: AppSettingsSnapshot | null
@@ -332,6 +340,34 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleValidateLlmProvider,
   } = useAppSettingsSync({ socket, connectionStatus, setCommandError })
 
+  // Read through a ref by the chat subscription, which must not re-run (and
+  // re-send the transcript) every time settings change.
+  const transcriptWindowSizeRef = useRef(DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES)
+  transcriptWindowSizeRef.current = appSettings?.transcript?.windowAssistantMessages ?? DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES
+
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false)
+  /**
+   * Widen the open chat's window toward the start. The older slice arrives
+   * as a push on the subscription, not in the ack, so callers wait on the
+   * snapshot rather than on this promise for rows.
+   */
+  const loadOlderMessages = useCallback(async (options?: { untilMessageId?: string; all?: boolean }) => {
+    if (!activeChatId) return
+    setIsLoadingOlderMessages(true)
+    try {
+      await socket.command<{ startIndex: number }>({
+        type: "chat.loadOlder",
+        chatId: activeChatId,
+        ...(options?.untilMessageId !== undefined ? { untilMessageId: options.untilMessageId } : {}),
+        ...(options?.all ? { all: true } : {}),
+      })
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsLoadingOlderMessages(false)
+    }
+  }, [activeChatId, socket])
+
   useEffect(() => {
     if (!activeChatId) {
       setChatSnapshot(null)
@@ -365,11 +401,20 @@ export function useKannaState(activeChatId: string | null): KannaState {
     function subscribeToChat(cached: CachedTranscriptWindow | null) {
       if (cancelled || subscribed) return
       subscribed = true
-      const span = toCachedSpan(cached)
-      if (cached && span) base = cachedWindowToMessages(cached)
-      // No `recentLimit`: the server sizes the window to reach the stored read
-      // anchor and returns it inline. Passing one here would re-subscribe (and
-      // re-send the whole transcript) once the anchor resolved.
+      // A cache written before windows existed holds the whole chat. Cut it
+      // to the window a fresh open would get before painting from it, so a
+      // cached chat is not the one case that still mounts every row. The span
+      // sent to the server is the trimmed one, so it resumes from there.
+      const trimmed = cached
+        ? trimTranscriptWindow(cachedWindowToMessages(cached), transcriptWindowSizeRef.current)
+        : null
+      const lastEntryId = trimmed?.messages[trimmed.messages.length - 1]?._id
+      const span = trimmed && lastEntryId
+        ? { start: trimmed.startIndex, end: trimmed.startIndex + trimmed.messages.length, endEntryId: lastEntryId }
+        : null
+      if (trimmed && span) base = trimmed
+      // The server sizes the window (the transcript-window setting, widened
+      // to reach the stored read anchor) and returns the anchor inline.
       unsubscribe = socket.subscribe<ChatSnapshot | null>(
         { type: "chat", chatId, ...(span ? { cachedSpan: span } : {}) },
         handleSnapshot
@@ -902,6 +947,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
     chatSnapshot,
     readAnchorState,
     reportReadAnchor,
+    hasOlderMessages: (activeChatSnapshot?.startIndex ?? 0) > 0,
+    transcriptOutline: activeChatSnapshot?.outline ?? EMPTY_OUTLINE,
+    loadOlderMessages,
+    isLoadingOlderMessages,
     chatDiffSnapshot,
     keybindings,
     appSettings,

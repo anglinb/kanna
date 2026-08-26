@@ -16,6 +16,7 @@ import type { ProjectRepoLabel } from "./worktree-probe"
 import type { ChatRecord, StoreState, TouchedFile } from "./events"
 import { resolveLocalPath } from "./paths"
 import { SERVER_PROVIDERS } from "./provider-catalog"
+import { buildTranscriptOutline } from "../shared/transcript-window"
 
 const SIDEBAR_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000
 const SIDEBAR_FALLBACK_PREVIEW_LIMIT = 5
@@ -430,5 +431,9 @@ export function deriveChatSnapshot(
     startIndex: transcript.startIndex,
     availableProviders: [...SERVER_PROVIDERS],
     readAnchor: transcript.readAnchor,
+    // Built from the whole transcript here; the router cuts `messages` down
+    // to each socket's window afterwards, and the outline has to outlive
+    // that cut.
+    outline: buildTranscriptOutline(transcript.messages),
   }
 }

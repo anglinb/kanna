@@ -52,6 +52,18 @@ export interface ClientState {
    * span and therefore gets a full window.
    */
   chatEntrySpans?: Map<string, { start: number; end: number }>
+  /**
+   * Absolute index each chat subscription's window starts at. Set on
+   * subscribe from the transcript-window setting, moved back by
+   * `chat.loadOlder`, never forward. See shared/transcript-window.ts.
+   */
+  chatWindowStarts?: Map<string, number>
+  /**
+   * Outline length last sent per chat subscription. The outline rides only
+   * on pushes where it changed, so this is what "changed" is measured
+   * against.
+   */
+  chatOutlineCounts?: Map<string, number>
   protectedDraftChatIds?: Set<string>
 }
 
@@ -469,17 +481,63 @@ export function createWsRouter({
     return data
   }
 
+  function ensureChatWindowStarts(ws: ServerWebSocket<ClientState>) {
+    if (!ws.data.chatWindowStarts) {
+      ws.data.chatWindowStarts = new Map()
+    }
+    return ws.data.chatWindowStarts
+  }
+
+  function ensureChatOutlineCounts(ws: ServerWebSocket<ClientState>) {
+    if (!ws.data.chatOutlineCounts) {
+      ws.data.chatOutlineCounts = new Map()
+    }
+    return ws.data.chatOutlineCounts
+  }
+
+  function transcriptWindowAssistantMessages() {
+    return appSettings.getSnapshot().transcript.windowAssistantMessages
+  }
+
+  /** The socket's window start for a chat subscription, sizing it on first use. */
+  function getChatWindowStart(ws: ServerWebSocket<ClientState>, subscriptionId: string, chatId: string) {
+    const starts = ensureChatWindowStarts(ws)
+    const existing = starts.get(subscriptionId)
+    if (existing !== undefined) return existing
+    const start = store.getChat(chatId)
+      ? store.getInitialTranscriptWindowStart(chatId, transcriptWindowAssistantMessages())
+      : 0
+    starts.set(subscriptionId, start)
+    return start
+  }
+
+  /** Cut a full-transcript snapshot down to what starts at `windowStart`. */
+  function sliceChatWindow(data: ChatSnapshot, windowStart: number): ChatSnapshot {
+    const offset = Math.max(0, Math.min(windowStart - data.startIndex, data.messages.length))
+    if (offset === 0) return data
+    return { ...data, messages: data.messages.slice(offset), startIndex: data.startIndex + offset }
+  }
+
   /**
    * Narrow a chat snapshot to the entries a socket has not seen.
    *
-   * Only contiguous forward movement qualifies. If the window slid backwards
-   * (a widened read-anchor window) or forwards past the socket's position (a
-   * missed push), the client would end up with a hole it cannot detect, so the
-   * full window is sent instead.
+   * Two shapes qualify. Contiguous forward movement sends the new tail. A
+   * window that grew backwards while its end stayed put (`chat.loadOlder`)
+   * sends the older slice, which the client splices in front. Anything else
+   * (both at once, or a jump past the socket's position after a missed
+   * push) would leave the client with a hole it cannot detect, so the full
+   * window is sent instead.
    */
   function toSocketChatSnapshot(data: ChatSnapshot | null, previous: { start: number; end: number } | undefined) {
     if (!data || !previous) return data
     const end = data.startIndex + data.messages.length
+    if (data.startIndex < previous.start && end === previous.end) {
+      return {
+        ...data,
+        messages: data.messages.slice(0, previous.start - data.startIndex),
+        incremental: true,
+      }
+    }
     const isContiguous = data.startIndex >= previous.start
       && data.startIndex <= previous.end
       && previous.end <= end
@@ -520,6 +578,12 @@ export function createWsRouter({
     store.getClientTranscript(topic.chatId)
     if (store.getEntryIdAt(topic.chatId, span.end - 1) !== span.endEntryId) return
     ensureChatEntrySpans(ws).set(subscriptionId, { start: span.start, end: span.end })
+    // What the client already holds is its window; the server's default
+    // only applies when it reaches further back than the cache does.
+    const defaultStart = getChatWindowStart(ws, subscriptionId, topic.chatId)
+    if (span.start < defaultStart) {
+      ensureChatWindowStarts(ws).set(subscriptionId, span.start)
+    }
   }
 
   async function pushSnapshots(
@@ -557,19 +621,31 @@ export function createWsRouter({
         continue
       }
       if (topic.type === "chat") {
-        const data = getChatSnapshotData(topic.chatId, options?.cache)
+        const full = getChatSnapshotData(topic.chatId, options?.cache)
+        const data = full ? sliceChatWindow(full, getChatWindowStart(ws, id, topic.chatId)) : full
         const spans = ensureChatEntrySpans(ws)
-        const snapshotJson = JSON.stringify({ type: "chat", data: toSocketChatSnapshot(data, spans.get(id)) })
+        const outlineCounts = ensureChatOutlineCounts(ws)
+        let body = toSocketChatSnapshot(data, spans.get(id))
+        // The outline is a few KB and would otherwise ride every streamed
+        // push; an incremental body carries it only when a prompt was added.
+        const outlineCount = data?.outline?.length ?? 0
+        if (body?.incremental && outlineCounts.get(id) === outlineCount) {
+          const { outline, ...rest } = body
+          body = rest
+        }
+        const snapshotJson = JSON.stringify({ type: "chat", data: body })
         if (snapshotSignatures.get(id) === snapshotJson) {
           continue
         }
         snapshotSignatures.set(id, snapshotJson)
-        // Record the full span, not the slice that went out — it is what this
-        // socket now holds, and what the next push measures against.
+        // Record the whole window, not the slice that went out — it is what
+        // this socket now holds, and what the next push measures against.
         if (data) {
           spans.set(id, { start: data.startIndex, end: data.startIndex + data.messages.length })
+          outlineCounts.set(id, outlineCount)
         } else {
           spans.delete(id)
+          outlineCounts.delete(id)
         }
         sendSerializedSnapshot(ws, id, snapshotJson)
         continue
@@ -1312,6 +1388,29 @@ export function createWsRouter({
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
+        case "chat.loadOlder": {
+          // Per socket: only this socket's subscriptions on the chat widen,
+          // and each gets the older slice pushed to it alone.
+          if (!store.getChat(command.chatId)) {
+            throw new Error("Chat not found")
+          }
+          const starts = ensureChatWindowStarts(ws)
+          let startIndex = 0
+          for (const [subscriptionId, topic] of ws.data.subscriptions.entries()) {
+            if (topic.type !== "chat" || topic.chatId !== command.chatId) continue
+            const current = getChatWindowStart(ws, subscriptionId, command.chatId)
+            const next = store.widenTranscriptWindowStart(command.chatId, current, {
+              assistantMessages: transcriptWindowAssistantMessages(),
+              ...(command.untilMessageId !== undefined ? { untilMessageId: command.untilMessageId } : {}),
+              ...(command.all ? { all: true } : {}),
+            })
+            starts.set(subscriptionId, next)
+            startIndex = next
+            await pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: subscriptionId })
+          }
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { startIndex } })
+          return
+        }
         case "chat.setDraftProtection": {
           // Only adjusts this socket's prune protection — no snapshot changes.
           ws.data.protectedDraftChatIds = new Set(command.chatIds)
@@ -1611,6 +1710,8 @@ export function createWsRouter({
         snapshotSignatures.delete(parsed.id)
         // A (re)subscribe starts from nothing, so the next push sends a full window.
         ws.data.chatEntrySpans?.delete(parsed.id)
+        ws.data.chatWindowStarts?.delete(parsed.id)
+        ws.data.chatOutlineCounts?.delete(parsed.id)
         seedChatEntrySpanFromClient(ws, parsed.id, parsed.topic)
         if (parsed.topic.type === "local-projects") {
           void refreshDiscovery().then(() => {
@@ -1645,6 +1746,8 @@ export function createWsRouter({
         snapshotSignatures.delete(parsed.id)
         // A (re)subscribe starts from nothing, so the next push sends a full window.
         ws.data.chatEntrySpans?.delete(parsed.id)
+        ws.data.chatWindowStarts?.delete(parsed.id)
+        ws.data.chatOutlineCounts?.delete(parsed.id)
         send(ws, { v: PROTOCOL_VERSION, type: "ack", id: parsed.id })
         return
       }

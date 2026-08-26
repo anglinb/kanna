@@ -29,6 +29,11 @@ import {
   useTerminalPreferencesStore,
 } from "../../stores/terminalPreferencesStore"
 import { CHAT_SOUND_OPTIONS, useChatSoundPreferencesStore, type ChatSoundId, type ChatSoundPreference } from "../../stores/chatSoundPreferencesStore"
+import {
+  DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+  MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+  MIN_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+} from "../../../shared/transcript-window"
 import type { KannaState } from "../useKannaState"
 import {
   ENABLED_DISABLED_OPTIONS,
@@ -81,6 +86,8 @@ export function GeneralSection({
   const [editorCommandDraft, setEditorCommandDraft] = useState(editorCommandTemplate)
   const newProjectsDirectory = appSettings?.newProjectsDirectory ?? DEFAULT_NEW_PROJECTS_DIRECTORY
   const [newProjectsDirectoryDraft, setNewProjectsDirectoryDraft] = useState(newProjectsDirectory)
+  const transcriptWindow = appSettings?.transcript?.windowAssistantMessages ?? DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES
+  const [transcriptWindowDraft, setTranscriptWindowDraft] = useState(String(transcriptWindow))
   const [appSettingsError, setAppSettingsError] = useState<string | null>(null)
   const [analyticsDialogOpen, setAnalyticsDialogOpen] = useState(false)
 
@@ -113,6 +120,21 @@ export function GeneralSection({
   useEffect(() => {
     setNewProjectsDirectoryDraft(newProjectsDirectory)
   }, [newProjectsDirectory])
+
+  useEffect(() => {
+    setTranscriptWindowDraft(String(transcriptWindow))
+  }, [transcriptWindow])
+
+  function commitTranscriptWindow() {
+    const nextValue = Math.round(Number(transcriptWindowDraft))
+    if (!Number.isFinite(nextValue)) {
+      setTranscriptWindowDraft(String(transcriptWindow))
+      return
+    }
+    void handleWriteAppSettings({ transcript: { windowAssistantMessages: nextValue } }).catch((error) => {
+      setAppSettingsError(error instanceof Error ? error.message : "Unable to save transcript settings.")
+    })
+  }
 
   function commitScrollback() {
     const nextValue = Number(scrollbackDraft)
@@ -401,6 +423,26 @@ export function GeneralSection({
             <div className="text-left text-xs text-muted-foreground md:text-right">
               {MIN_TERMINAL_MIN_COLUMN_WIDTH}-{MAX_TERMINAL_MIN_COLUMN_WIDTH} px
               {minColumnWidth === DEFAULT_TERMINAL_MIN_COLUMN_WIDTH ? " (default)" : ""}
+            </div>
+          </div>
+        </SettingsRow>
+
+        <SettingsRow def={SETTINGS_ROWS.transcriptWindow}>
+          <div className="flex w-full min-w-0 flex-col items-stretch gap-2 md:w-auto md:items-end">
+            <Input
+              type="number"
+              min={MIN_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES}
+              max={MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES}
+              step={5}
+              value={transcriptWindowDraft}
+              onChange={(event) => setTranscriptWindowDraft(event.target.value)}
+              onBlur={commitTranscriptWindow}
+              onKeyDown={(event) => handleSettingsInputKeyDown(event, commitTranscriptWindow)}
+              className="hide-number-steppers w-full text-left font-mono md:w-28 md:text-right"
+            />
+            <div className="text-left text-xs text-muted-foreground md:text-right">
+              {MIN_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES}-{MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES} messages
+              {transcriptWindow === DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES ? " (default)" : ""}
             </div>
           </div>
         </SettingsRow>

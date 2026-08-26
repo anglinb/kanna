@@ -1040,6 +1040,10 @@ export function ChatPage() {
           onReportReadAnchor={state.reportReadAnchor}
           jumpRequest={jumpRequest}
           onJumpRequestHandled={onJumpRequestHandled}
+          hasOlderMessages={state.hasOlderMessages}
+          transcriptOutline={state.transcriptOutline}
+          onLoadOlderMessages={state.loadOlderMessages}
+          isLoadingOlderMessages={state.isLoadingOlderMessages}
           scrollToBottom={scrollToTranscriptEnd}
           typedEmptyStateText={typedEmptyStateText}
           isEmptyStateTypingComplete={isEmptyStateTypingComplete}

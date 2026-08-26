@@ -50,6 +50,7 @@ import {
   EMPTY_STATE_TEXT,
 } from "./utils"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
+import type { TranscriptOutlineEntry } from "../../../shared/types"
 import { isChromium } from "../../lib/browser"
 /**
  * How close to the bottom counts as "at the end", as a fraction of viewport
@@ -234,6 +235,16 @@ interface ChatTranscriptViewportProps {
   /** Fired once a jump request has been spent, so the sender can clear it. */
   onJumpRequestHandled?: (requestId: string) => void
   /**
+   * The transcript window (see shared/transcript-window.ts). `messages` is
+   * the loaded tail; the outline names every turn, loaded or not, so the
+   * minimap covers the whole chat and a click on an unloaded turn can ask
+   * for it.
+   */
+  hasOlderMessages?: boolean
+  transcriptOutline?: TranscriptOutlineEntry[]
+  onLoadOlderMessages?: (options?: { untilMessageId?: string; all?: boolean }) => Promise<void>
+  isLoadingOlderMessages?: boolean
+  /**
    * Where to publish `--transcript-scrollbar-w`. The chrome that overlays the
    * transcript — navbar wash, composer gradient — lives outside this component
    * but inside this element, and ends at the gutter so it stops dimming the
@@ -344,6 +355,10 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   onReportReadAnchor,
   jumpRequest = null,
   onJumpRequestHandled,
+  hasOlderMessages = false,
+  transcriptOutline,
+  onLoadOlderMessages,
+  isLoadingOlderMessages = false,
   scrollbarGutterHostRef,
 }: ChatTranscriptViewportProps) {
   const { scrollToEnd, scrollToMessage } = useMessageScroller()
@@ -380,7 +395,29 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     [resolvedRows]
   )
   const loadedTurns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
-  const turns = loadedTurns
+  // Turns before the window come from the outline. They have no rows, so
+  // they carry no reply or count; they exist so the map reaches the start
+  // of the chat and a click can load them.
+  const turns = useMemo(() => {
+    if (!hasOlderMessages || !transcriptOutline || transcriptOutline.length === 0) return loadedTurns
+    const loadedIds = new Set(loadedTurns.map((turn) => turn.id))
+    const unloaded: TranscriptTurn[] = transcriptOutline
+      .filter((entry) => !loadedIds.has(entry.id))
+      .map((entry) => ({
+        id: entry.id,
+        rowIndex: -1,
+        endRowIndex: -1,
+        replyRowId: null,
+        prompt: entry.preview,
+        response: null,
+        agentMessageCount: 0,
+        error: null,
+        timestamp: new Date(entry.createdAt).toISOString(),
+        durationMs: null,
+        loaded: false,
+      }))
+    return unloaded.length === 0 ? loadedTurns : [...unloaded, ...loadedTurns]
+  }, [hasOlderMessages, loadedTurns, transcriptOutline])
 
   /**
    * Rendered row window plus whether the list can scroll at all — together they
@@ -744,13 +781,41 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   // Same reasoning as the scroll-to-bottom button: the minimap sits outside the
   // scroll node, so it never trips the input listeners, but jumping to a turn is
   // as deliberate a read-position choice as scrolling there by hand.
+  /**
+   * A jump whose row is not loaded yet. Set when a click names a turn before
+   * the window; taken by the effect below once the rows include it.
+   */
+  const pendingUnloadedJumpRef = useRef<string | null>(null)
+
   const handleSelectTurn = useCallback((turn: TranscriptTurn, role: ChatJumpRole) => {
     hasUserScrolledRef.current = true
+    if (turn.loaded === false) {
+      // Load until that prompt is in the window; the jump lands when its
+      // row appears. "reply" has no row to name on an unloaded turn, so the
+      // prompt is the target either way.
+      pendingUnloadedJumpRef.current = turn.id
+      void onLoadOlderMessages?.({ untilMessageId: turn.id })
+      return
+    }
     // The same two ends the sidebar's card offers, resolved per turn rather
     // than per chat — and landing the same way: on the same message, with the
     // same lead-in above it.
     applyScrollTarget(prepareJumpToRow((role === "reply" ? turn.replyRowId : null) ?? turn.id))
-  }, [applyScrollTarget, prepareJumpToRow])
+  }, [applyScrollTarget, onLoadOlderMessages, prepareJumpToRow])
+
+  useEffect(() => {
+    const messageId = pendingUnloadedJumpRef.current
+    if (!messageId) return
+    const index = rowIndexByMessageId.get(messageId)
+    const rowId = index === undefined ? undefined : resolvedRows[index]?.id
+    if (rowId === undefined) return
+    pendingUnloadedJumpRef.current = null
+    applyScrollTarget(prepareJumpToRow(rowId))
+  }, [applyScrollTarget, prepareJumpToRow, resolvedRows, rowIndexByMessageId])
+
+  const handleLoadOlderClick = useCallback(() => {
+    void onLoadOlderMessages?.()
+  }, [onLoadOlderMessages])
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
     if (target.trigger !== "contextmenu") {
@@ -784,8 +849,35 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     [transcriptPaddingBottom]
   )
 
+  // How many turns sit before the window, for the button's label.
+  const olderTurnCount = useMemo(() => {
+    if (!hasOlderMessages || !transcriptOutline) return 0
+    const loadedIds = new Set(loadedTurns.map((turn) => turn.id))
+    return transcriptOutline.filter((entry) => !loadedIds.has(entry.id)).length
+  }, [hasOlderMessages, loadedTurns, transcriptOutline])
+
   const listHeader = (
-    <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }} />
+    <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }}>
+      {hasOlderMessages ? (
+        // Same box as a transcript row so the button lines up with the
+        // column below it. The scroller treats what lands above the first
+        // row as a prepend and keeps the reader's position.
+        <div className="flex justify-center px-2 pb-3 pt-1">
+          <button
+            type="button"
+            onClick={handleLoadOlderClick}
+            disabled={isLoadingOlderMessages}
+            className="rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+          >
+            {isLoadingOlderMessages
+              ? "Loading…"
+              : olderTurnCount > 0
+                ? `Load earlier messages (${olderTurnCount} earlier ${olderTurnCount === 1 ? "turn" : "turns"})`
+                : "Load earlier messages"}
+          </button>
+        </div>
+      ) : null}
+    </div>
   )
 
   // Same box geometry as a transcript row (816px wide, 8px of horizontal

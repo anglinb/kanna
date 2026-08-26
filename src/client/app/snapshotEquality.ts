@@ -167,8 +167,23 @@ export function applyIncrementalChatSnapshot(
   if (!incoming?.incremental) return incoming
   if (!current) return null
 
+  const incomingEnd = incoming.startIndex + incoming.messages.length
+
+  // A body that starts before the held window and reaches it: older entries
+  // arriving from "load earlier". What it overlaps, it replaces.
+  if (incoming.startIndex < current.startIndex) {
+    if (incomingEnd < current.startIndex) return null
+    const messages = [...incoming.messages, ...current.messages.slice(incomingEnd - current.startIndex)]
+    return {
+      ...incoming,
+      messages,
+      startIndex: incoming.startIndex,
+      incremental: false,
+    }
+  }
+
   const offset = incoming.startIndex - current.startIndex
-  if (offset < 0 || offset > current.messages.length) return null
+  if (offset > current.messages.length) return null
 
   const messages = current.messages.slice(0, offset)
   messages.push(...incoming.messages)
@@ -201,11 +216,16 @@ export function foldChatSnapshot(
   base: Pick<ChatSnapshot, "messages" | "startIndex"> | null,
   incoming: ChatSnapshot | null
 ): ChatSnapshot | null {
-  const next = applyIncrementalChatSnapshot(current ?? base, incoming)
+  let next = applyIncrementalChatSnapshot(current ?? base, incoming)
   if (next === null && incoming?.incremental) {
     // Unplaceable body — keep what is on screen rather than render a transcript
     // with a hole; the next full push repairs it.
     return current
+  }
+  // The outline travels only when it changed; an incremental push without
+  // one means "same as before".
+  if (next && next.outline === undefined && current?.outline) {
+    next = { ...next, outline: current.outline }
   }
   return sameChatSnapshotCore(current, next) ? current : next
 }

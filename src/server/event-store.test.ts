@@ -1353,6 +1353,39 @@ describe("on-demand tool payloads", () => {
   })
 })
 
+describe("transcript windows", () => {
+  test("sizes the first window by assistant messages, reaching the read anchor, and widens from there", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(dataDir, "windows")
+    const chat = await store.createChat(project.id)
+    // Three turns of prompt + two assistant messages: indexes 0..8.
+    for (let turn = 1; turn <= 3; turn += 1) {
+      await store.appendMessage(chat.id, { _id: `p${turn}`, createdAt: turn, kind: "user_prompt", content: `q${turn}` } as unknown as TranscriptEntry)
+      await store.appendMessage(chat.id, entry("assistant_text", turn * 10 + 1, { text: "one" }))
+      await store.appendMessage(chat.id, entry("assistant_text", turn * 10 + 2, { text: "two" }))
+    }
+
+    expect(store.getInitialTranscriptWindowStart(chat.id, 2)).toBe(6)
+    expect(store.getInitialTranscriptWindowStart(chat.id, 4)).toBe(3)
+    expect(store.getInitialTranscriptWindowStart(chat.id, 50)).toBe(0)
+
+    // A stored read position pulls the window back to it.
+    await store.setChatReadAnchor(chat.id, "p1", false)
+    expect(store.getInitialTranscriptWindowStart(chat.id, 2)).toBe(0)
+    await store.setChatReadAnchor(chat.id, "p3", true)
+    expect(store.getInitialTranscriptWindowStart(chat.id, 2)).toBe(6)
+
+    expect(store.widenTranscriptWindowStart(chat.id, 6, { assistantMessages: 2 })).toBe(3)
+    expect(store.widenTranscriptWindowStart(chat.id, 6, { assistantMessages: 2, untilMessageId: "p1" })).toBe(0)
+    // Already inside the window: nothing moves.
+    expect(store.widenTranscriptWindowStart(chat.id, 6, { assistantMessages: 2, untilMessageId: "p3" })).toBe(6)
+    expect(store.widenTranscriptWindowStart(chat.id, 6, { assistantMessages: 2, all: true })).toBe(0)
+    expect(store.widenTranscriptWindowStart(chat.id, 0, { assistantMessages: 2 })).toBe(0)
+  })
+})
+
 describe("payload sidecar", () => {
   test("appends headers to the transcript and bodies to the sidecar, and merges them back on demand", async () => {
     const dataDir = await createTempDataDir()

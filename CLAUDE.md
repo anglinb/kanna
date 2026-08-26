@@ -32,6 +32,12 @@ React client (src/client)
 - Snapshot pushes dedupe by signature: sidebar/chat use the serialized
   snapshot itself (built once per broadcast and shared across sockets),
   project-git uses a version counter. Keep that property when adding topics.
+- A chat subscription holds a window of the transcript, not all of it:
+  the last N assistant messages (`transcript.windowAssistantMessages`,
+  default 50), widened to reach the read anchor. `chat.loadOlder` moves the
+  window back and the older slice arrives as an incremental push that lands
+  in front. `outline` on the snapshot names every user prompt so the minimap
+  covers the whole chat. Logic in `src/shared/transcript-window.ts`.
 - Provider adapters normalize three different wire protocols into
   `HarnessEvent`s (`harness-types.ts`). Claude runs through the Agent SDK in
   `agent.ts` directly; codex/cursor/pi produce `HarnessTurn`s.

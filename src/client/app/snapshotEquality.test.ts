@@ -63,6 +63,26 @@ describe("applyIncrementalChatSnapshot", () => {
     expect(applyIncrementalChatSnapshot(current, snapshot(13, ["e"], true))).toBeNull()
   })
 
+  test("a body that ends where the held window starts is spliced in front", () => {
+    const current = snapshot(10, ["c", "d"])
+    const next = applyIncrementalChatSnapshot(current, snapshot(8, ["a", "b"], true))
+    expect(next?.startIndex).toBe(8)
+    expect(next?.messages.map((entry) => entry._id)).toEqual(["a", "b", "c", "d"])
+    expect(next?.incremental).toBe(false)
+  })
+
+  test("an older body that overlaps the held window replaces what it covers", () => {
+    const current = snapshot(10, ["c", "d"])
+    const next = applyIncrementalChatSnapshot(current, snapshot(9, ["b", "c2"], true))
+    expect(next?.startIndex).toBe(9)
+    expect(next?.messages.map((entry) => entry._id)).toEqual(["b", "c2", "d"])
+  })
+
+  test("an older body that does not reach the held window is refused", () => {
+    const current = snapshot(10, ["c", "d"])
+    expect(applyIncrementalChatSnapshot(current, snapshot(5, ["x"], true))).toBeNull()
+  })
+
   test("a body starting before the held window is refused", () => {
     const current = snapshot(10, ["a", "b"])
     expect(applyIncrementalChatSnapshot(current, snapshot(8, ["x"], true))).toBeNull()

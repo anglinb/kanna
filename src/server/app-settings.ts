@@ -4,6 +4,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import { getSettingsFilePath, LOG_PREFIX } from "../shared/branding"
+import {
+  DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+  MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+  MIN_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+} from "../shared/transcript-window"
 import { formatDisplayPath } from "./paths"
 import {
   mergeProviderDefaultsPatch,
@@ -36,6 +41,9 @@ interface AppSettingsFile {
   editor?: {
     preset?: unknown
     commandTemplate?: unknown
+  }
+  transcript?: {
+    windowAssistantMessages?: unknown
   }
   defaultProvider?: unknown
   providerDefaults?: {
@@ -149,6 +157,7 @@ function toFilePayload(state: AppSettingsState) {
     chatSoundId: state.chatSoundId,
     terminal: state.terminal,
     editor: state.editor,
+    transcript: state.transcript,
     defaultProvider: state.defaultProvider,
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
@@ -169,6 +178,7 @@ function toSnapshot(state: AppSettingsState, devbox = false): AppSettingsSnapsho
     chatSoundId: state.chatSoundId,
     terminal: state.terminal,
     editor: state.editor,
+    transcript: state.transcript,
     defaultProvider: state.defaultProvider,
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
@@ -241,6 +251,14 @@ function normalizeAppSettings(
       preset: editorPreset,
       commandTemplate: normalizeEditorCommandTemplate(source?.editor?.commandTemplate, editorPreset),
     },
+    transcript: {
+      windowAssistantMessages: clampNumber(
+        source?.transcript?.windowAssistantMessages,
+        DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+        MIN_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+        MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES
+      ),
+    },
     defaultProvider: normalizeDefaultProvider(source?.defaultProvider),
     providerDefaults: normalizeProviderDefaults(source?.providerDefaults),
     newSidebarEnabled,
@@ -276,6 +294,7 @@ function toComparablePayload(source: AppSettingsFile) {
     chatSoundId: source.chatSoundId,
     terminal: source.terminal,
     editor: source.editor,
+    transcript: source.transcript,
     defaultProvider: source.defaultProvider,
     providerDefaults: source.providerDefaults,
     newSidebarEnabled: source.newSidebarEnabled,
@@ -299,6 +318,10 @@ function applyPatch(state: AppSettingsState, patch: AppSettingsPatch): AppSettin
     editor: {
       ...state.editor,
       ...patch.editor,
+    },
+    transcript: {
+      ...state.transcript,
+      ...patch.transcript,
     },
     providerDefaults: mergeProviderDefaultsPatch(state.providerDefaults, patch.providerDefaults),
   }, state.filePathDisplay).payload

@@ -42,6 +42,12 @@ export interface TranscriptTurn {
    */
   agentMessageCount: number
   /**
+   * False for a turn known only from the outline: its rows are before the
+   * loaded window, so `rowIndex` is -1 and a jump to it has to load first.
+   * Absent (undefined) means loaded, which is every turn this file builds.
+   */
+  loaded?: boolean
+  /**
    * Failure text, when the turn ended in an error result.
    *
    * A failed turn usually emits no assistant text at all — the provider dies

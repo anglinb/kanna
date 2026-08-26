@@ -126,6 +126,12 @@ export const SETTINGS_ROWS = defineRows({
     title: "Terminal Min Column Width",
     description: "Minimum width for each terminal pane",
   },
+  transcriptWindow: {
+    sectionId: "general",
+    title: "Transcript Window",
+    description: "Assistant messages a chat opens with, and how many each \"load earlier\" adds",
+    keywords: ["chat", "history", "load earlier", "messages", "performance", "window"],
+  },
   anonymousAnalytics: {
     sectionId: "general",
     title: "Anonymous Analytics",

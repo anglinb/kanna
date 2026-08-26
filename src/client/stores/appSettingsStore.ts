@@ -23,6 +23,10 @@ export function mergeAppSettingsPatch(
       ...settings.editor,
       ...patch.editor,
     },
+    transcript: {
+      ...settings.transcript,
+      ...patch.transcript,
+    },
     // Same deep-merge the server applies in app-settings.ts applyPatch, so the
     // optimistic snapshot matches what the ack will confirm.
     providerDefaults: mergeProviderDefaultsPatch(settings.providerDefaults, patch.providerDefaults),

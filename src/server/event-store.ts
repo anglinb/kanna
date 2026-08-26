@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
 import { toMessagePreview } from "../shared/message-preview"
+import { findTranscriptWindowStart } from "../shared/transcript-window"
 import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
@@ -1532,6 +1533,50 @@ export class EventStore {
       ...(anchor.transcriptWidth != null ? { transcriptWidth: anchor.transcriptWidth } : {}),
       ...(anchor.offsetFromMessage != null ? { offsetFromMessage: anchor.offsetFromMessage } : {}),
     }
+  }
+
+  /**
+   * Where a socket's window on this chat should start when it opens: the
+   * last `assistantMessages` assistant texts, widened to reach the stored
+   * read anchor so restoring a position never lands outside the window.
+   */
+  getInitialTranscriptWindowStart(chatId: string, assistantMessages: number): number {
+    const entries = this.getTranscriptEntries(chatId)
+    const anchor = this.getChatReadAnchor(chatId)
+    const anchorIndex = anchor && !anchor.atEnd
+      ? entries.findIndex((entry) => entry._id === anchor.messageId)
+      : -1
+    return findTranscriptWindowStart(entries, {
+      endExclusive: entries.length,
+      assistantMessages,
+      ...(anchorIndex >= 0 ? { mustIncludeIndex: anchorIndex } : {}),
+    })
+  }
+
+  /**
+   * A window start further back than `currentStart`: one more window of
+   * assistant messages, or far enough to include `untilMessageId`, or 0 for
+   * everything. Never moves forward; a target already inside the window
+   * leaves it alone.
+   */
+  widenTranscriptWindowStart(
+    chatId: string,
+    currentStart: number,
+    options: { assistantMessages: number; untilMessageId?: string; all?: boolean }
+  ): number {
+    if (options.all) return 0
+    const entries = this.getTranscriptEntries(chatId)
+    const start = Math.max(0, Math.min(currentStart, entries.length))
+    if (options.untilMessageId !== undefined) {
+      const index = entries.findIndex((entry) => entry._id === options.untilMessageId)
+      if (index < 0 || index >= start) return start
+      return findTranscriptWindowStart(entries, {
+        endExclusive: start,
+        assistantMessages: options.assistantMessages,
+        mustIncludeIndex: index,
+      })
+    }
+    return findTranscriptWindowStart(entries, { endExclusive: start, assistantMessages: options.assistantMessages })
   }
 
   /**

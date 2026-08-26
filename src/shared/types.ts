@@ -1082,6 +1082,14 @@ export interface AppSettingsSnapshot {
     preset: EditorPreset
     commandTemplate: string
   }
+  transcript: {
+    /**
+     * How many assistant messages a chat opens on, and how many each "load
+     * earlier" adds. See shared/transcript-window.ts for why it is counted
+     * this way.
+     */
+    windowAssistantMessages: number
+  }
   defaultProvider: DefaultProviderPreference
   providerDefaults: ChatProviderPreferences
   /** Labs: the tabbed Chats/Projects "New Sidebar". On by default; false opts back into the legacy sidebar. */
@@ -1119,6 +1127,7 @@ export interface AppSettingsPatch {
   setupDismissed?: boolean
   terminal?: Partial<AppSettingsSnapshot["terminal"]>
   editor?: Partial<AppSettingsSnapshot["editor"]>
+  transcript?: Partial<AppSettingsSnapshot["transcript"]>
   defaultProvider?: DefaultProviderPreference
   providerDefaults?: {
     claude?: Partial<Omit<ProviderPreference<ClaudeModelOptions>, "modelOptions">> & {
@@ -2014,6 +2023,24 @@ export interface ChatSnapshot {
    * anchored entry no longer exists.
    */
   readAnchor: ResolvedChatReadAnchor | null
+  /**
+   * Every user prompt in the transcript, loaded or not, so the minimap and
+   * jump targets cover the whole chat while `messages` holds only a window
+   * (see shared/transcript-window.ts). Present on a full snapshot and on
+   * any push where it changed; absent means "same as last time".
+   */
+  outline?: TranscriptOutlineEntry[]
+}
+
+/** One turn of a chat, as the outline names it. */
+export interface TranscriptOutlineEntry {
+  /** `TranscriptEntry._id` of the user prompt. */
+  id: string
+  /** Absolute index of that prompt in the transcript. */
+  index: number
+  /** The prompt, cut to a preview. */
+  preview: string
+  createdAt: number
 }
 
 /**

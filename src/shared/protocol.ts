@@ -205,6 +205,14 @@ export type ClientCommand =
    * group wants every member at once. Result: TranscriptEntry[].
    */
   | { type: "chat.getToolEntries"; chatId: string; entryIds: string[] }
+  /**
+   * Widen this socket's window on a chat toward the start of the transcript.
+   * By one more window of assistant messages by default; far enough to
+   * include `untilMessageId` when jumping to a turn that is not loaded; the
+   * whole transcript with `all`. The widened slice arrives as an incremental
+   * push that lands before what the client holds. Result: `{ startIndex }`.
+   */
+  | { type: "chat.loadOlder"; chatId: string; untilMessageId?: string; all?: boolean }
   | {
       type: "chat.send"
       chatId?: string
