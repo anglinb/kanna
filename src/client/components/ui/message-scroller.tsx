@@ -97,18 +97,15 @@ function MessageScrollerItem({
     <MessageScrollerPrimitive.Item
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
-      // No `content-visibility: auto` here, and no `contain-intrinsic-size`
-      // guess with it. Together they size every off-screen row from the guess
-      // until that row renders once. A tool row is ~40px and a long answer is
-      // many hundreds, so a guess is always wrong for some rows. Scrolling up
-      // then resized the rows above the reader and slid the text under their
-      // finger. Safari has no scroll anchoring to correct that.
-      //
-      // Tried again on Chromium alone, where scroll anchoring hides the
-      // resize: every row crossing the viewport edge flipped its render
-      // state, which re-layerized and repainted on nearly every scroll frame
-      // (paint work tripled in a profile) and dropped tiles long enough to
-      // flash the whole page. A full render is what keeps scrolling honest.
+      // No `content-visibility: auto` here. With a `contain-intrinsic-size`
+      // guess it sizes every off-screen row from the guess until that row
+      // renders once. A tool row is ~40px and a long answer is many hundreds,
+      // so a guess is always wrong for some rows. Scrolling up then resized
+      // the rows above the reader and slid the text under their finger.
+      // Safari has no scroll anchoring to correct that. Chromium does, so the
+      // transcript opts in there alone through `data-content-visibility` on
+      // the content element (see index.css); everywhere else a full render
+      // is what keeps scrolling honest.
       className={cn(
         "min-w-0 shrink-0",
         className
