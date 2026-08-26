@@ -50,6 +50,7 @@ import {
   EMPTY_STATE_TEXT,
 } from "./utils"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
+import { isChromium } from "../../lib/browser"
 /**
  * How close to the bottom counts as "at the end", as a fraction of viewport
  * height.
@@ -63,6 +64,13 @@ import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../..
  * never true and following never engaged.
  */
 const AT_END_THRESHOLD_PX = 48
+
+/**
+ * Off-screen rows skip layout and paint on Chromium (see the rule in
+ * index.css for why not elsewhere). Decided once: the browser does not change
+ * under a running page.
+ */
+const CONTENT_VISIBILITY = isChromium() ? "auto" : undefined
 
 /**
  * How long a pin keeps correcting itself as the transcript settles.
@@ -816,7 +824,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
             className="h-full overflow-x-hidden overscroll-y-contain px-3"
             style={{ scrollPaddingTop: headerOffsetPx }}
           >
-            <MessageScrollerContent style={contentContainerStyle}>
+            <MessageScrollerContent style={contentContainerStyle} data-content-visibility={CONTENT_VISIBILITY}>
               {listHeader}
               {resolvedRows.map((row) => (
                 <MessageScrollerItem

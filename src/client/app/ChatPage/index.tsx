@@ -1009,6 +1009,11 @@ export function ChatPage() {
         <TranscriptRenderOptionsProvider value={transcriptRenderOptions}>
         <ToolPayloadProvider store={toolPayloadStore}>
         <ChatTranscriptViewport
+          // Keyed by chat so a switch replaces the whole list in one
+          // `removeChild`. Reusing the list container meant React removed
+          // the old chat's rows one by one: 168 ms of pure DOM removal on
+          // an 800-row chat before the new one could mount.
+          key={state.activeChatId ?? "none"}
           activeChatId={state.activeChatId}
           listRef={transcriptListRef}
           messages={state.messages}

@@ -564,6 +564,22 @@
     }
   }
 
+  /*
+   * Transcript rows skip layout and paint while off screen, on Chromium only
+   * (the attribute is set from `lib/browser.ts`). Opening an 800-row chat
+   * spent ~440 ms in first layout and paint of rows nobody was looking at.
+   *
+   * `auto` in `contain-intrinsic-size` means a row that has rendered once
+   * keeps its real height while skipped; only never-rendered rows use the
+   * 96px guess. Chromium's scroll anchoring absorbs the correction when one
+   * of those first renders. Safari has no scroll anchoring, which is why it
+   * is left out: there the correction slid text under the reader's finger.
+   */
+  [data-content-visibility="auto"] > [data-slot="message-scroller-item"] {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 96px;
+  }
+
   @keyframes kanna-empty-state-flower-in {
     from {
       opacity: 0;
