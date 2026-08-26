@@ -174,7 +174,6 @@ export interface KannaState {
   localProjectsReady: boolean
   commandError: string | null
   startingLocalPath: string | null
-  sidebarOpen: boolean
   sidebarCollapsed: boolean
   messages: ReturnType<typeof processTranscriptMessages>
   queuedMessages: QueuedChatMessage[]
@@ -199,7 +198,6 @@ export interface KannaState {
   editorLabel: string
   hasSelectedProject: boolean
   openSidebar: () => void
-  closeSidebar: () => void
   collapseSidebar: () => void
   expandSidebar: () => void
   handleCreateChat: (projectId: string) => Promise<void>
@@ -269,7 +267,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const [localProjectsReady, setLocalProjectsReady] = useState(false)
   const [chatReady, setChatReady] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [commandError, setCommandError] = useState<string | null>(null)
   const [startingLocalPath, setStartingLocalPath] = useState<string | null>(null)
@@ -616,7 +613,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     setSelectedProjectId(projectId)
     setPendingChatId(result.chatId)
     navigate(`/chat/${result.chatId}`)
-    setSidebarOpen(false)
     setCommandError(null)
   }, [activeChatId, navigate, socket])
 
@@ -680,7 +676,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
       })
       setPendingChatId(result.chatId)
       navigate(`/chat/${result.chatId}`)
-      setSidebarOpen(false)
       setCommandError(null)
     } catch (error) {
       setCommandError(error instanceof Error ? error.message : String(error))
@@ -892,8 +887,9 @@ export function useKannaState(activeChatId: string | null): KannaState {
     navigate("/")
   }, [fallbackLocalProjectPath, navigate, selectedProjectId, startChatFromIntent])
 
-  const openSidebar = useCallback(() => setSidebarOpen(true), [])
-  const closeSidebar = useCallback(() => setSidebarOpen(false), [])
+  // On mobile the sidebar is the `/` page rather than an overlay, so "open"
+  // means navigate there. Desktop always shows it and never calls this.
+  const openSidebar = useCallback(() => navigate("/"), [navigate])
   const collapseSidebar = useCallback(() => setSidebarCollapsed(true), [])
   const expandSidebar = useCallback(() => setSidebarCollapsed(false), [])
 
@@ -915,7 +911,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     localProjectsReady,
     commandError,
     startingLocalPath,
-    sidebarOpen,
     sidebarCollapsed,
     messages,
     queuedMessages,
@@ -935,7 +930,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     editorLabel,
     hasSelectedProject,
     openSidebar,
-    closeSidebar,
     collapseSidebar,
     expandSidebar,
     handleCreateChat,

@@ -363,7 +363,6 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const uploadedAttachments = attachments.filter((attachment) => attachment.status === "uploaded")
   const hasPendingUploads = attachments.some((attachment) => attachment.status === "uploading")
-  const hasTextToSend = value.trim().length > 0
   const canSubmit = value.trim().length > 0 || uploadedAttachments.length > 0
   const orderedAttachments = [...attachments].sort((left, right) => {
     if (left.kind === right.kind) return 0
@@ -766,7 +765,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     }
 
     const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0
-    if (event.key === "Enter" && !event.shiftKey && !isTouchDevice && !disabled && hasTextToSend && !hasPendingUploads) {
+    if (event.key === "Enter" && !event.shiftKey && !isTouchDevice && !disabled && canSubmit && !hasPendingUploads) {
       event.preventDefault()
       void handleSubmit()
     }
@@ -932,19 +931,20 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               type="button"
               onPointerDown={(event) => {
                 event.preventDefault()
-                if (!disabled && hasTextToSend && !hasPendingUploads) {
+                // Anything sendable (text or attachments alone) wins over
+                // cancel, so a file-only message queues instead of stopping
+                // the running turn.
+                if (!disabled && canSubmit && !hasPendingUploads) {
                   void handleSubmit()
                 } else if (canCancel) {
                   onCancel?.()
-                } else if (!disabled && canSubmit && !hasPendingUploads) {
-                  void handleSubmit()
                 }
               }}
               disabled={disabled || (!canCancel && !canSubmit) || hasPendingUploads}
               size="icon"
               className="flex-shrink-0 bg-slate-600 text-white dark:bg-white dark:text-slate-900 rounded-full cursor-pointer h-10 w-10 md:h-11 md:w-11 mb-1 -mr-0.5 md:mr-0 md:mb-1.5 touch-manipulation disabled:bg-white/60 disabled:text-slate-700"
             >
-              {hasTextToSend ? (
+              {canSubmit ? (
                 <ArrowUp className="h-5 w-5 md:h-6 md:w-6" />
               ) : canCancel ? (
                 <div className="w-3 h-3 md:w-4 md:h-4 rounded-xs bg-current" />

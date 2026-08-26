@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
+  ArrowLeft,
   Code,
   Info,
   Loader2,
-  Menu,
   LogOut,
 } from "lucide-react"
 import { useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom"
@@ -215,10 +215,10 @@ export function SettingsPage() {
                   type="button"
                   onClick={state.openSidebar}
                   className="flex shrink-0 items-center p-2 text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                  aria-label="Open sidebar"
-                  title="Open sidebar"
+                  aria-label="Back"
+                  title="Back"
                 >
-                  <Menu className="h-[20px] w-[20px] shrink-0" />
+                  <ArrowLeft className="h-[20px] w-[20px] shrink-0" />
                 </button>
                 </div>
                 {sidebarItems.map((item) => (

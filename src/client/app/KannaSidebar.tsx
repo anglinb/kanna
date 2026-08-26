@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
-import { Flower, House, Loader2, PanelLeft, Search, X, Menu, Plus, Settings, SquarePen, Terminal } from "lucide-react"
+import { ArrowLeft, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
@@ -72,11 +72,9 @@ interface KannaSidebarProps {
   activeChatId: string | null
   connectionStatus: SocketStatus
   ready: boolean
-  open: boolean
   collapsed: boolean
-  showMobileOpenButton: boolean
-  onOpen: () => void
-  onClose: () => void
+  /** Mobile only: a floating back-to-`/` button for pages with no header. */
+  showMobileBackButton: boolean
   onCollapse: () => void
   onExpand: () => void
   onCreateChat: (projectId: string) => void
@@ -107,11 +105,8 @@ function KannaSidebarImpl({
   activeChatId,
   connectionStatus,
   ready,
-  open,
   collapsed,
-  showMobileOpenButton,
-  onOpen,
-  onClose,
+  showMobileBackButton,
   onCollapse,
   onExpand,
   onCreateChat,
@@ -265,16 +260,14 @@ function KannaSidebarImpl({
 
   const selectChat = useCallback((chatId: string) => {
     navigate(`/chat/${chatId}`)
-    onClose()
-  }, [navigate, onClose])
+  }, [navigate])
 
   // Same navigation with a landing spot attached. Always navigates, even to the
   // chat already open: the pathname wouldn't change, but the request id does,
   // which is what moves the viewport a second time.
   const selectChatMessage = useCallback((chatId: string, role: ChatJumpRole) => {
     navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) })
-    onClose()
-  }, [navigate, onClose])
+  }, [navigate])
 
   const renderChatRow = useCallback((chat: SidebarChatRow) => {
     const thread = threadByChatId.get(chat.chatId)
@@ -336,7 +329,6 @@ function KannaSidebarImpl({
 
       if (isSidebarModifierShortcut(resolvedKeybindings, "openAddProject", event)) {
         event.preventDefault()
-        onClose()
         openCommandPalette("add-project")
         return
       }
@@ -365,7 +357,6 @@ function KannaSidebarImpl({
 
       event.preventDefault()
       navigate(`/chat/${targetChat.chatId}`)
-      onClose()
     }
 
     function handleKeyUp(event: KeyboardEvent) {
@@ -385,7 +376,7 @@ function KannaSidebarImpl({
       window.removeEventListener("keyup", handleKeyUp)
       window.removeEventListener("blur", clearHints)
     }
-  }, [currentProjectId, navigate, onClose, onCreateChat, resolvedKeybindings])
+  }, [currentProjectId, navigate, onCreateChat, resolvedKeybindings])
 
   useEffect(() => {
     if (!activeChatId || !scrollContainerRef.current) return
@@ -445,7 +436,10 @@ function KannaSidebarImpl({
   }, [isResizingSidebar])
 
   const hasVisibleChats = activeVisibleCount > 0
-  const isLocalProjectsActive = location.pathname === "/"
+  // `/` is the sidebar itself on mobile; the projects page lives at `/home`
+  // there. On desktop both paths show the projects page.
+  const isRootActive = location.pathname === "/"
+  const isLocalProjectsActive = isRootActive || location.pathname === "/home"
   const newSidebarEnabled = useAppSettingsStore((s) => s.settings?.newSidebarEnabled !== false)
   const devbox = useAppSettingsStore((s) => s.settings?.devbox === true)
   const newSidebarProjectsView = newSidebarEnabled && sidebarView === "projects"
@@ -490,14 +484,15 @@ function KannaSidebarImpl({
 
   return (
     <>
-      {!open && showMobileOpenButton && (
+      {showMobileBackButton && (
         <Button
           variant="ghost"
           size="icon"
           className="fixed top-3 left-3 z-50 md:hidden"
-          onClick={onOpen}
+          onClick={() => navigate("/")}
+          title="Back"
         >
-          <Menu className="h-5 w-5" />
+          <ArrowLeft className="h-5 w-5" />
         </Button>
       )}
 
@@ -522,33 +517,21 @@ function KannaSidebarImpl({
         className={cn(
           "fixed inset-0 z-50 bg-background dark:bg-card flex flex-col h-[100dvh] select-none",
           "md:relative md:inset-auto md:w-[var(--sidebar-width)] md:mr-0 md:h-[calc(100dvh-16px)] md:my-2 md:ml-2 md:border md:border-border md:rounded-2xl",
-          open ? "flex" : "hidden md:flex",
+          isRootActive ? "flex" : "hidden md:flex",
           collapsed && "md:hidden"
         )}
         style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       >
         <div className="px-2.5 h-[64px] md:h-auto md:py-1 border-b grid grid-cols-[84px_minmax(0,1fr)_84px] items-center md:pl-3 md:pr-1 md:flex md:justify-between">
-          <div className="md:hidden grid grid-cols-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="w-[42px] rounded-lg hover:!border-border/0 !border-0"
-              onClick={onClose}
-              title="Close sidebar"
-            >
-              <X className="h-5 w-5" />
-            </Button>
+          <div className="md:hidden flex">
             <Button
               variant="ghost"
               size="icon"
               className={cn(
-                "w-[42px] rounded-lg hover:!border-border/0 !border-0 -translate-x-[1px]",
+                "w-[42px] rounded-lg hover:!border-border/0 !border-0",
                 isSettingsActive ? "text-foreground" : "text-muted-foreground"
               )}
-              onClick={() => {
-                navigate("/settings/general")
-                onClose()
-              }}
+              onClick={() => navigate("/settings/general")}
               title="Settings"
             >
               <Settings className="h-5 w-5" />
@@ -582,12 +565,7 @@ function KannaSidebarImpl({
             <Button
               variant="ghost"
               size="icon"
-              onClick={newSidebarEnabled
-                ? () => openCommandPalette()
-                : () => {
-                  navigate("/")
-                  onClose()
-                }}
+              onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
               className="size-10 rounded-lg hover:!border-border/0 md:hidden"
               title={newSidebarEnabled ? "Search" : "New project"}
             >
@@ -597,10 +575,7 @@ function KannaSidebarImpl({
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => {
-                  navigate("/")
-                  onClose()
-                }}
+                onClick={() => navigate("/home")}
                 className={cn(
                   "size-10 rounded-lg hover:!border-border/0 md:hidden",
                   isLocalProjectsActive ? "text-foreground" : "text-muted-foreground"
@@ -633,12 +608,7 @@ function KannaSidebarImpl({
             <Button
               variant="ghost"
               size="icon"
-              onClick={newSidebarEnabled
-                ? () => openCommandPalette()
-                : () => {
-                  navigate("/")
-                  onClose()
-                }}
+              onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
               className="hidden md:inline-flex h-10 w-auto rounded-lg px-1.5 pl-2 hover:!border-border/0"
               title={newSidebarEnabled ? "Search" : "New project"}
             >
@@ -648,10 +618,7 @@ function KannaSidebarImpl({
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => {
-                  navigate("/")
-                  onClose()
-                }}
+                onClick={() => navigate("/home")}
                 className={cn(
                   "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0",
                   isLocalProjectsActive ? "text-foreground" : "text-muted-foreground"
@@ -718,10 +685,7 @@ function KannaSidebarImpl({
                 {newSidebarEnabled && devbox ? (
                   <button
                     type="button"
-                    onClick={() => {
-                      navigate("/terminal")
-                      onClose()
-                    }}
+                    onClick={() => navigate("/terminal")}
                     className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
                   >
                     <Terminal className="h-4 w-4 shrink-0" />
@@ -829,10 +793,7 @@ function KannaSidebarImpl({
         <div className={cn("hidden md:block border-t border-border p-2", isStandalone && "pb-[55px]")}>
           <button
             type="button"
-            onClick={() => {
-              navigate("/settings/general")
-              onClose()
-            }}
+            onClick={() => navigate("/settings/general")}
             className={cn(
               "w-full rounded-xl rounded-t-md border px-3 py-2 text-left transition-colors",
               isSettingsActive
@@ -918,7 +879,6 @@ function KannaSidebarImpl({
                   onClick={() => {
                     onOpenArchivedChat(chat.chatId)
                     setArchivedProjectId(null)
-                    onClose()
                   }}
                 >
                   <span className="min-w-0 truncate text-sm">{chat.title}</span>
@@ -933,8 +893,6 @@ function KannaSidebarImpl({
           </DialogBody>
         </DialogContent>
       </Dialog>
-
-      {open ? <div className="fixed inset-0 bg-black/40 z-40 md:hidden" onClick={onClose} /> : null}
     </>
   )
 }

@@ -247,7 +247,8 @@ function KannaLayout() {
 
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
-  const showMobileOpenButton = location.pathname === "/" || location.pathname === "/terminal"
+  // Pages with no header of their own get a floating back button on mobile.
+  const showMobileBackButton = location.pathname === "/home" || location.pathname === "/terminal"
   // Selected as the finished string rather than derived from the snapshot: the
   // title changes when a chat is renamed or a badge count moves, and this hook
   // should not re-render the layout for anything else the sidebar carries.
@@ -317,11 +318,8 @@ function KannaLayout() {
       activeChatId={state.activeChatId}
       connectionStatus={state.connectionStatus}
       ready={state.sidebarReady}
-      open={state.sidebarOpen}
       collapsed={state.sidebarCollapsed}
-      showMobileOpenButton={showMobileOpenButton}
-      onOpen={state.openSidebar}
-      onClose={state.closeSidebar}
+      showMobileBackButton={showMobileBackButton}
       onCollapse={state.collapseSidebar}
       onExpand={state.expandSidebar}
       onCreateChat={handleSidebarCreateChat}
@@ -434,7 +432,11 @@ export function App() {
           {/* Rendered outside the layout: opened as a bare OAuth popup. */}
           <Route path="/oauth/openrouter/callback" element={<OpenRouterCallbackPage />} />
           <Route element={<KannaLayout />}>
-            <Route path="/" element={<LocalProjectsPage />} />
+            {/* On mobile the sidebar fills the screen at `/` (see
+                KannaSidebar), so the projects page hides there and lives at
+                `/home` instead. Desktop shows it at both paths. */}
+            <Route path="/" element={<div className="hidden md:contents"><LocalProjectsPage /></div>} />
+            <Route path="/home" element={<LocalProjectsPage />} />
             <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
             <Route path="/settings/:sectionId" element={<SettingsPage />} />
             <Route path="/chat/:chatId" element={<ChatPage />} />
