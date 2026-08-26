@@ -260,3 +260,36 @@ describe("runAskSecretCommand", () => {
     expect(calls[0].token).toBe("env-token")
   })
 })
+
+describe("instance token handling", () => {
+  test("does not send the instance token to an overridden KANNA_URL", async () => {
+    const { deps, calls } = harness([
+      { status: "saved", scope: "global", path: "/p/T.env", loadCommand: "load" },
+    ])
+    const warns: string[] = []
+
+    const code = await runAskSecretCommand(baseArgs, {
+      ...deps,
+      warn: (message) => warns.push(message),
+      env: { ...deps.env, KANNA_URL: "https://not-your-machine.example" },
+    })
+
+    expect(code).toBe(1)
+    expect(calls).toHaveLength(0)
+    expect(warns.join("\n")).toContain("KANNA_TOKEN")
+  })
+
+  test("allows an overridden URL when its own token is supplied", async () => {
+    const { deps, calls } = harness([
+      { status: "saved", scope: "global", path: "/p/T.env", loadCommand: "load" },
+    ])
+
+    const code = await runAskSecretCommand(baseArgs, {
+      ...deps,
+      env: { ...deps.env, KANNA_URL: "http://127.0.0.1:9999", KANNA_TOKEN: "explicit" },
+    })
+
+    expect(code).toBe(0)
+    expect(calls[0].token).toBe("explicit")
+  })
+})

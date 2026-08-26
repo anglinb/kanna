@@ -134,8 +134,24 @@ export async function runAskSecretCommand(
   const env = deps.env ?? process.env
 
   const instance = await (deps.readInstance ?? readInstanceFile)()
-  const baseUrl = env.KANNA_URL ?? instance?.url
-  const token = env.KANNA_TOKEN ?? instance?.token
+  const overrideUrl = env.KANNA_URL?.trim() || null
+  const overrideToken = env.KANNA_TOKEN?.trim() || null
+
+  // The instance token is only ever presented to the instance that minted it.
+  // An agent controls its own environment, so pairing these matters: letting
+  // an overridden KANNA_URL borrow the token from ~/.kanna/instance.json
+  // would hand the capability to enumerate secrets and queue prompts to
+  // whatever endpoint the agent named.
+  const baseUrl = overrideUrl ?? instance?.url
+  const token = overrideUrl ? overrideToken : overrideToken ?? instance?.token
+
+  if (overrideUrl && !overrideToken) {
+    deps.warn(
+      "KANNA_URL is set without KANNA_TOKEN. The token from ~/.kanna/instance.json is not sent "
+      + "to an overridden URL — set KANNA_TOKEN explicitly if that endpoint is really yours.",
+    )
+    return 1
+  }
 
   if (!baseUrl || !token) {
     deps.warn(
