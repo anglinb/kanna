@@ -16,6 +16,14 @@ export function getMachineNameOverridePath() {
   return path.join(homedir(), ".kanna", "machine-name")
 }
 
+export function normalizeMachineHostname(rawHostname: string) {
+  return rawHostname.trim().replace(/\.local$|\.lan$/i, "") || "This Machine"
+}
+
+export function getMachineHostname() {
+  return normalizeMachineHostname(hostname())
+}
+
 /**
  * ~/.kanna/machine-name — explicit display-name override (first non-empty
  * line). Written by environments whose hostname is meaningless, e.g. deploy
@@ -66,6 +74,5 @@ export function getMachineDisplayName(identityPath?: string, overridePath?: stri
     }
   }
 
-  const rawHostname = hostname().trim()
-  return rawHostname.replace(/\.local$|\.lan$/i, "") || "This Machine"
+  return getMachineHostname()
 }

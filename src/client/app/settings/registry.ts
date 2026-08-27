@@ -92,6 +92,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Choose between light, dark, or system appearance",
     keywords: ["appearance", "dark mode", "light mode"],
   },
+  machineName: {
+    sectionId: "general",
+    title: "Machine Name",
+    description: "Show this device's hostname beside Kanna at the top of the sidebar",
+    keywords: ["hostname", "computer", "device", "sidebar"],
+  },
   chatSounds: {
     sectionId: "general",
     title: "Chat Sounds",

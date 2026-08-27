@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { getMachineDisplayName, readDevboxSubdomain, readMachineNameOverride } from "./machine-name"
+import { getMachineDisplayName, normalizeMachineHostname, readDevboxSubdomain, readMachineNameOverride } from "./machine-name"
 
 let tempDir: string | null = null
 const MISSING = "/nonexistent/never-here"
@@ -30,6 +30,17 @@ describe("machine-name override file", () => {
   test("missing or blank override files fall through", () => {
     expect(readMachineNameOverride(MISSING)).toBeNull()
     expect(readMachineNameOverride(tempFile("machine-name", "\n \n"))).toBeNull()
+  })
+})
+
+describe("machine hostname", () => {
+  test("normalizes local network suffixes", () => {
+    expect(normalizeMachineHostname("arpanet.local\n")).toBe("arpanet")
+    expect(normalizeMachineHostname("workstation.lan")).toBe("workstation")
+  })
+
+  test("falls back when the hostname is blank", () => {
+    expect(normalizeMachineHostname("  ")).toBe("This Machine")
   })
 })
 

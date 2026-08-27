@@ -1027,6 +1027,7 @@ export interface LocalProjectsSnapshot {
   machine: {
     id: "local"
     displayName: string
+    hostname: string
     platform: NodeJS.Platform
   }
   projects: LocalProjectSummary[]
@@ -1106,6 +1107,8 @@ export interface AppSettingsSnapshot {
   }
   defaultProvider: DefaultProviderPreference
   providerDefaults: ChatProviderPreferences
+  /** Show this machine's hostname beside the Kanna wordmark in the sidebar header. */
+  showMachineName: boolean
   /** Labs: the tabbed Chats/Projects "New Sidebar". On by default; false opts back into the legacy sidebar. */
   newSidebarEnabled: boolean
   /** Base directory where cloned and newly created projects are placed. */
@@ -1134,6 +1137,7 @@ export interface AppSettingsPatch {
   theme?: AppThemePreference
   chatSoundPreference?: ChatSoundPreference
   chatSoundId?: ChatSoundId
+  showMachineName?: boolean
   newSidebarEnabled?: boolean
   newProjectsDirectory?: string
   setupShown?: boolean

@@ -52,6 +52,7 @@ interface AppSettingsFile {
     cursor?: ProviderPreferenceInput
     pi?: ProviderPreferenceInput
   }
+  showMachineName?: unknown
   newSidebarEnabled?: unknown
   newProjectsDirectory?: unknown
   setupShown?: unknown
@@ -160,6 +161,7 @@ function toFilePayload(state: AppSettingsState) {
     transcript: state.transcript,
     defaultProvider: state.defaultProvider,
     providerDefaults: state.providerDefaults,
+    showMachineName: state.showMachineName,
     newSidebarEnabled: state.newSidebarEnabled,
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
@@ -181,6 +183,7 @@ function toSnapshot(state: AppSettingsState, devbox = false): AppSettingsSnapsho
     transcript: state.transcript,
     defaultProvider: state.defaultProvider,
     providerDefaults: state.providerDefaults,
+    showMachineName: state.showMachineName,
     newSidebarEnabled: state.newSidebarEnabled,
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
@@ -226,6 +229,13 @@ function normalizeAppSettings(
     warnings.push("newSidebarEnabled must be a boolean")
   }
 
+  const showMachineName = typeof source?.showMachineName === "boolean"
+    ? source.showMachineName
+    : false
+  if (source?.showMachineName !== undefined && typeof source.showMachineName !== "boolean") {
+    warnings.push("showMachineName must be a boolean")
+  }
+
   const rawNewProjectsDirectory = typeof source?.newProjectsDirectory === "string"
     ? source.newProjectsDirectory.trim()
     : ""
@@ -261,6 +271,7 @@ function normalizeAppSettings(
     },
     defaultProvider: normalizeDefaultProvider(source?.defaultProvider),
     providerDefaults: normalizeProviderDefaults(source?.providerDefaults),
+    showMachineName,
     newSidebarEnabled,
     newProjectsDirectory,
     // Onboarding markers default to false so a machine that has never run the
@@ -297,6 +308,7 @@ function toComparablePayload(source: AppSettingsFile) {
     transcript: source.transcript,
     defaultProvider: source.defaultProvider,
     providerDefaults: source.providerDefaults,
+    showMachineName: source.showMachineName,
     newSidebarEnabled: source.newSidebarEnabled,
     newProjectsDirectory: typeof source.newProjectsDirectory === "string"
       ? source.newProjectsDirectory.trim()

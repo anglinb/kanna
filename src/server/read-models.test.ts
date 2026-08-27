@@ -20,8 +20,9 @@ describe("read models", () => {
         localPath: projectDir,
         title: "Project",
         modifiedAt: 1,
-      }], "Machine")
+      }], "Friendly Machine", "arpanet")
 
+      expect(snapshot.machine).toMatchObject({ displayName: "Friendly Machine", hostname: "arpanet" })
       expect(snapshot.projects[0]?.folderModifiedAt).toBe(modifiedAt.getTime())
     } finally {
       rmSync(tempRoot, { recursive: true, force: true })

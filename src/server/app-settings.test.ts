@@ -23,6 +23,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
     devbox: false,
     analyticsEnabled: true,
     browserSettingsMigrated: false,
+    showMachineName: false,
     setupShown: false,
     setupCompleted: false,
     setupDismissed: false,
@@ -166,6 +167,27 @@ describe("readAppSettingsSnapshot", () => {
     } finally {
       manager.dispose()
     }
+  })
+
+  test("showMachineName defaults off, persists, and rejects invalid values", async () => {
+    const filePath = await createTempFilePath()
+    const manager = new AppSettingsManager(filePath)
+    await manager.initialize()
+    try {
+      expect(manager.getSnapshot().showMachineName).toBe(false)
+
+      const enabled = await manager.writePatch({ showMachineName: true })
+      expect(enabled.showMachineName).toBe(true)
+      const raw = JSON.parse(await readFile(filePath, "utf8")) as { showMachineName: boolean }
+      expect(raw.showMachineName).toBe(true)
+    } finally {
+      manager.dispose()
+    }
+
+    await writeFile(filePath, JSON.stringify({ showMachineName: "yes" }), "utf8")
+    const invalid = await readAppSettingsSnapshot(filePath)
+    expect(invalid.showMachineName).toBe(false)
+    expect(invalid.warning).toContain("showMachineName")
   })
 })
 

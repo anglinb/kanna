@@ -69,6 +69,7 @@ function readStoredSidebarView(): SidebarView {
 }
 
 interface KannaSidebarProps {
+  machineName: string | null
   activeChatId: string | null
   connectionStatus: SocketStatus
   ready: boolean
@@ -104,6 +105,7 @@ interface KannaSidebarProps {
 }
 
 function KannaSidebarImpl({
+  machineName,
   activeChatId,
   connectionStatus,
   ready,
@@ -540,7 +542,7 @@ function KannaSidebarImpl({
               <Settings className="h-5 w-5" />
             </Button>
           </div>
-          <div className="flex items-center justify-self-center gap-2 md:justify-self-auto">
+          <div className="flex min-w-0 items-center justify-self-center gap-2 md:justify-self-auto">
             <button
               type="button"
               onClick={onCollapse}
@@ -551,7 +553,15 @@ function KannaSidebarImpl({
               <PanelLeft className="absolute inset-0 h-4 w-4 sm:h-6 sm:w-6 text-slate-500 dark:text-slate-400 transition-all duration-200 ease-out opacity-0 scale-0 group-hover/sidebar-collapse:opacity-100 group-hover/sidebar-collapse:scale-80 hover:opacity-50" />
             </button>
             <Flower className="h-5 w-5 sm:h-6 sm:w-6 text-logo md:hidden" />
-            <span className="font-logo text-base uppercase sm:text-md text-slate-600 dark:text-slate-100">{APP_NAME}</span>
+            <span className="shrink-0 font-logo text-base uppercase sm:text-md text-slate-600 dark:text-slate-100">{APP_NAME}</span>
+            {machineName ? (
+              <>
+                <span className="shrink-0 text-xs text-muted-foreground/50" aria-hidden>·</span>
+                <span className="min-w-0 truncate text-xs font-medium text-muted-foreground" title={machineName}>
+                  {machineName}
+                </span>
+              </>
+            ) : null}
           </div>
           <div className="flex items-center justify-self-end md:justify-self-auto">
             {!newSidebarEnabled ? (

@@ -78,6 +78,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
   devbox: false,
   analyticsEnabled: true,
   browserSettingsMigrated: false,
+  showMachineName: false,
   setupShown: false,
   setupCompleted: false,
   setupDismissed: false,

@@ -32,7 +32,7 @@ import { handleTranscribe } from "./transcribe"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
-import { getMachineDisplayName } from "./machine-name"
+import { getMachineDisplayName, getMachineHostname } from "./machine-name"
 import { TerminalManager } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
@@ -142,6 +142,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const store = new EventStore(options.dataDir)
   const diffStore = new DiffStore(store.dataDir)
   const machineDisplayName = getMachineDisplayName()
+  const machineHostname = getMachineHostname()
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
   // every request path below reads the current value.
   let cloud: CloudRuntime | null = options.cloud ?? null
@@ -289,6 +290,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     refreshDiscovery,
     getDiscoveredProjects: () => discoveredProjects,
     machineDisplayName,
+    machineHostname,
     updateManager,
     providerAuth,
   })

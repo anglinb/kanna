@@ -346,7 +346,8 @@ export function isCodexScratchWorkspacePath(localPath: string) {
 export function deriveLocalProjectsSnapshot(
   state: StoreState,
   discoveredProjects: Array<{ localPath: string; title: string; modifiedAt: number }>,
-  machineName: string
+  machineName: string,
+  machineHostname = machineName
 ): LocalProjectsSnapshot {
   const projects = new Map<string, LocalProjectsSnapshot["projects"][number]>()
 
@@ -385,6 +386,7 @@ export function deriveLocalProjectsSnapshot(
     machine: {
       id: "local",
       displayName: machineName,
+      hostname: machineHostname,
       platform: process.platform,
     },
     projects: [...projects.values()].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0)),

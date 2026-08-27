@@ -318,6 +318,9 @@ function KannaLayout() {
   // snapshot, which moved on every streamed token.
   const sidebarElement = (
     <KannaSidebar
+      machineName={state.appSettings?.showMachineName === true
+        ? state.localProjects?.machine.hostname ?? null
+        : null}
       activeChatId={state.activeChatId}
       connectionStatus={state.connectionStatus}
       ready={state.sidebarReady}

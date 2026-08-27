@@ -85,6 +85,7 @@ interface CreateWsRouterArgs {
   refreshDiscovery: () => Promise<DiscoveredProject[]>
   getDiscoveredProjects: () => DiscoveredProject[]
   machineDisplayName: string
+  machineHostname?: string
   updateManager: UpdateManager | null
   usageLimits?: Pick<UsageLimitsManager, "getSnapshot" | "refresh" | "onChange"> | null
   providerAuth?: Pick<
@@ -174,6 +175,7 @@ export function createWsRouter({
   refreshDiscovery,
   getDiscoveredProjects,
   machineDisplayName,
+  machineHostname,
   updateManager,
   usageLimits,
   providerAuth,
@@ -337,7 +339,12 @@ export function createWsRouter({
 
     if (topic.type === "local-projects") {
       const discoveredProjects = getDiscoveredProjects()
-      const data = deriveLocalProjectsSnapshot(store.state, discoveredProjects, machineDisplayName)
+      const data = deriveLocalProjectsSnapshot(
+        store.state,
+        discoveredProjects,
+        machineDisplayName,
+        machineHostname
+      )
 
       return {
         v: PROTOCOL_VERSION,

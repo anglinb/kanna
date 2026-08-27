@@ -233,11 +233,21 @@ export function GeneralSection({
     }
   }
 
+  async function handleMachineNamePreferenceChange(nextValue: "enabled" | "disabled") {
+    try {
+      setAppSettingsError(null)
+      await handleWriteAppSettings({ showMachineName: nextValue === "enabled" })
+    } catch (error) {
+      setAppSettingsError(error instanceof Error ? error.message : "Unable to save the machine name setting.")
+    }
+  }
+
   const customEditorPreview = editorCommandDraft
     .replaceAll("{path}", "/Users/jake/Projects/kanna/src/client/app/App.tsx")
     .replaceAll("{line}", "12")
     .replaceAll("{column}", "1")
   const analyticsSettingValue = appSettings?.analyticsEnabled === false ? "disabled" : "enabled"
+  const machineNameSettingValue = appSettings?.showMachineName === true ? "enabled" : "disabled"
 
   return (
     <>
@@ -276,6 +286,17 @@ export function GeneralSection({
             value={theme}
             onValueChange={handleThemeChange}
             options={themeOptions}
+            size="sm"
+          />
+        </SettingsRow>
+
+        <SettingsRow def={SETTINGS_ROWS.machineName}>
+          <SegmentedControl
+            value={machineNameSettingValue}
+            onValueChange={(value) => {
+              void handleMachineNamePreferenceChange(value)
+            }}
+            options={ENABLED_DISABLED_OPTIONS}
             size="sm"
           />
         </SettingsRow>
