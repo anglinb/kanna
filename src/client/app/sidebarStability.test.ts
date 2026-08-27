@@ -50,7 +50,7 @@ describe("stabilizeSidebarData", () => {
     const next = data([
       group({
         groupKey: "p1",
-        chats: [row({ chatId: "a" }), row({ chatId: "b", lastAgentMessagePreview: "hi" })],
+        chats: [row({ chatId: "a" }), row({ chatId: "b", turnCount: 7 })],
       }),
       group({ groupKey: "p2" }),
     ])
@@ -62,7 +62,7 @@ describe("stabilizeSidebarData", () => {
     expect(result.projectGroups[1]).toBe(previous.projectGroups[1])
     expect(result.projectGroups[0]).not.toBe(previous.projectGroups[0])
     expect(result.projectGroups[0]!.chats[0]).toBe(previous.projectGroups[0]!.chats[0])
-    expect(result.projectGroups[0]!.chats[1]!.lastAgentMessagePreview).toBe("hi")
+    expect(result.projectGroups[0]!.chats[1]!.turnCount).toBe(7)
   })
 
   test("keeps a group's chat array when only its archived list changed", () => {

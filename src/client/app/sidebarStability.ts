@@ -41,9 +41,6 @@ function sameChatRow(left: SidebarChatRow, right: SidebarChatRow): boolean {
     && left.lastTurnEndedAt === right.lastTurnEndedAt
     && left.turnCount === right.turnCount
     && left.lastAgentMessageAt === right.lastAgentMessageAt
-    && left.lastUserMessagePreview === right.lastUserMessagePreview
-    && left.lastAgentMessagePreview === right.lastAgentMessagePreview
-    && left.lastAgentMessagePreviewAt === right.lastAgentMessagePreviewAt
     && left.pendingToolKind === right.pendingToolKind
     && left.uncommittedWork === right.uncommittedWork
     && left.hasAutomation === right.hasAutomation

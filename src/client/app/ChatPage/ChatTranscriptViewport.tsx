@@ -6,7 +6,6 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
   useMessageScroller,
-  useMessageScrollerVisibility,
 } from "../../components/ui/message-scroller"
 import { ArrowDown, Flower, Upload } from "lucide-react"
 import { DrainingIndicator } from "../../components/messages/DrainingIndicator"
@@ -28,7 +27,7 @@ import {
 } from "../KannaTranscript"
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
-import type { ChatReadAnchorState, ReadAnchorLayout } from "../useChatReadAnchor"
+import type { ChatReadAnchorState, ReadAnchorLayout, ReadAnchorLayoutSource } from "../useChatReadAnchor"
 import {
   buildRowIndexByMessageId,
   getLatestUserPrompt,
@@ -216,7 +215,7 @@ interface ChatTranscriptViewportProps {
   /** Server-stored read position; restore waits for this to resolve. */
   readAnchorState?: ChatReadAnchorState
   /** Reports the message at the top of the viewport as the user scrolls. */
-  onReportReadAnchor?: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => void
+  onReportReadAnchor?: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayoutSource) => void
   /**
    * A message to land on instead of the stored read position — set when the
    * chat was opened by clicking a specific message in the sidebar hover card.
@@ -279,26 +278,17 @@ interface VisibleRowRange {
  * anything to receive it.
  */
 const TranscriptMinimapOverlay = memo(function TranscriptMinimapOverlay({
-  rowIndexByRowId,
+  viewportRef,
+  rowCount,
   visibleRowRangeRef,
   ...minimapProps
 }: {
-  rowIndexByRowId: ReadonlyMap<string, number>
+  viewportRef: React.RefObject<HTMLDivElement | null>
+  /** Re-measures when rows are added or removed. */
+  rowCount: number
   visibleRowRangeRef: React.RefObject<VisibleRowRange | null>
 } & Omit<ComponentProps<typeof TranscriptMinimap>, "visibleStart" | "visibleEnd">) {
-  const { visibleMessageIds } = useMessageScrollerVisibility()
-
-  const visibleRowRange = useMemo(() => {
-    let start = Number.POSITIVE_INFINITY
-    let end = Number.NEGATIVE_INFINITY
-    for (const rowId of visibleMessageIds) {
-      const index = rowIndexByRowId.get(rowId)
-      if (index === undefined) continue
-      if (index < start) start = index
-      if (index > end) end = index
-    }
-    return Number.isFinite(start) ? { start, end } : null
-  }, [rowIndexByRowId, visibleMessageIds])
+  const visibleRowRange = useVisibleRowRange(viewportRef, rowCount, minimapProps.topPx)
 
   visibleRowRangeRef.current = visibleRowRange
 
@@ -310,6 +300,93 @@ const TranscriptMinimapOverlay = memo(function TranscriptMinimapOverlay({
     />
   )
 })
+
+/**
+ * Which rows are on screen, from scroll geometry rather than an
+ * IntersectionObserver.
+ *
+ * The scroller's observer watched every row at four thresholds, so Chromium
+ * recomputed every row's intersection each frame and the callback rebuilt the
+ * visible-id array on top. Here each row's top edge is read once per content
+ * resize (an `offsetTop` chain, no forced layout once the resize has settled),
+ * and a scroll is a binary search over those numbers. State changes only when
+ * the range does, which is when a row boundary crosses the viewport edge, not
+ * every frame.
+ */
+function useVisibleRowRange(
+  viewportRef: React.RefObject<HTMLDivElement | null>,
+  rowCount: number,
+  topInsetPx: number,
+): VisibleRowRange | null {
+  const [range, setRange] = useState<VisibleRowRange | null>(null)
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    const content = viewport?.querySelector<HTMLElement>('[data-slot="message-scroller-content"]')
+    if (!viewport || !content) return
+
+    let tops: number[] = []
+    let frame: number | null = null
+
+    const measure = () => {
+      const items = content.querySelectorAll<HTMLElement>(':scope > [data-slot="message-scroller-item"]')
+      tops = Array.from(items, (item) => {
+        let top = 0
+        let node: HTMLElement | null = item
+        while (node && node !== viewport) {
+          top += node.offsetTop
+          node = node.offsetParent as HTMLElement | null
+        }
+        return top
+      })
+    }
+
+    // First row whose bottom edge is past `y`: the row that contains `y`.
+    const rowAt = (y: number) => {
+      let low = 0
+      let high = tops.length - 1
+      while (low < high) {
+        const mid = (low + high + 1) >> 1
+        if (tops[mid]! <= y) low = mid
+        else high = mid - 1
+      }
+      return low
+    }
+
+    const compute = () => {
+      frame = null
+      if (tops.length === 0) {
+        setRange(null)
+        return
+      }
+      const start = rowAt(viewport.scrollTop + topInsetPx)
+      const end = rowAt(viewport.scrollTop + viewport.clientHeight - 1)
+      setRange((current) => (current && current.start === start && current.end === end ? current : { start, end }))
+    }
+
+    const schedule = () => {
+      if (frame === null) frame = window.requestAnimationFrame(compute)
+    }
+    const remeasure = () => {
+      measure()
+      schedule()
+    }
+
+    remeasure()
+    const observer = new ResizeObserver(remeasure)
+    observer.observe(content)
+    observer.observe(viewport)
+    viewport.addEventListener("scroll", schedule, { passive: true })
+
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      observer.disconnect()
+      viewport.removeEventListener("scroll", schedule)
+    }
+  }, [rowCount, topInsetPx, viewportRef])
+
+  return range
+}
 
 const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   activeChatId,
@@ -382,10 +459,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   }, [listRef, scrollToEnd])
 
   const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
-  const rowIndexByRowId = useMemo(
-    () => new Map(resolvedRows.map((row, index) => [row.id, index])),
-    [resolvedRows]
-  )
   const loadedTurns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
   // Turns before the window come from the outline. They have no rows, so
   // they carry no reply or count; they exist so the map reaches the start
@@ -699,7 +772,9 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     // Optimistic ids are client-local and will not resolve on another device.
     if (!messageId || isOptimisticMessageId(messageId)) return
 
-    onReportReadAnchor(messageId, isAtEnd, measureReadAnchorLayout(viewportRef.current, row.id, headerOffsetPx))
+    // Deferred: the hook writes at most once per interval, and the measure is
+    // a forced layout the scroll path does not need to pay on every event.
+    onReportReadAnchor(messageId, isAtEnd, () => measureReadAnchorLayout(viewportRef.current, row.id, headerOffsetPx))
   }, [headerOffsetPx, onReportReadAnchor])
 
   const handleScroll = useCallback(() => {
@@ -975,7 +1050,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
 
       {showEmptyState ? null : (
         <TranscriptMinimapOverlay
-          rowIndexByRowId={rowIndexByRowId}
+          viewportRef={viewportRef}
+          rowCount={resolvedRows.length}
           visibleRowRangeRef={visibleRowRangeRef}
           turns={turns}
           transcriptOverflows={transcriptOverflows}

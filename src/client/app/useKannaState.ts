@@ -53,7 +53,7 @@ import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shar
 import { KannaSocket, type SocketStatus } from "./socket"
 import { useAppSettingsSync } from "./useAppSettingsSync"
 import { useChatCommands } from "./useChatCommands"
-import { useChatReadAnchor, type ChatReadAnchorState } from "./useChatReadAnchor"
+import { useChatReadAnchor, type ChatReadAnchorState, type ReadAnchorLayoutSource } from "./useChatReadAnchor"
 import { useSendMessage } from "./useSendMessage"
 import { useShareExport } from "./useShareExport"
 import { useUpdateRestart } from "./useUpdateRestart"
@@ -169,7 +169,7 @@ export interface KannaState {
   /** Server-stored read position for the active chat; drives restore on open. */
   readAnchorState: ChatReadAnchorState
   /** Report the message at the top of the viewport (throttled write). */
-  reportReadAnchor: (messageId: string, atEnd: boolean) => void
+  reportReadAnchor: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayoutSource) => void
   /** Entries exist before the loaded window; "load earlier" has somewhere to go. */
   hasOlderMessages: boolean
   /** Every user prompt in the chat, loaded or not (see shared/transcript-window.ts). */
@@ -372,6 +372,23 @@ export function useKannaState(activeChatId: string | null): KannaState {
     }
   }, [activeChatId, socket])
 
+  // The span this client holds for the open chat, for resubscribing after a
+  // reconnect. Read from a ref: the subscription outlives any one render.
+  const heldChatSpanRef = useRef<{ chatId: string; span: { start: number; end: number; endEntryId: string } } | null>(null)
+  useEffect(() => {
+    const last = chatSnapshot?.messages[chatSnapshot.messages.length - 1]
+    heldChatSpanRef.current = chatSnapshot && activeChatId && last
+      ? {
+        chatId: activeChatId,
+        span: {
+          start: chatSnapshot.startIndex,
+          end: chatSnapshot.startIndex + chatSnapshot.messages.length,
+          endEntryId: last._id,
+        },
+      }
+      : null
+  }, [activeChatId, chatSnapshot])
+
   useEffect(() => {
     if (!activeChatId) {
       setChatSnapshot(null)
@@ -421,7 +438,19 @@ export function useKannaState(activeChatId: string | null): KannaState {
       // to reach the stored read anchor) and returns the anchor inline.
       unsubscribe = socket.subscribe<ChatSnapshot | null>(
         { type: "chat", chatId, ...(span ? { cachedSpan: span } : {}) },
-        handleSnapshot
+        handleSnapshot,
+        undefined,
+        {
+          // A reconnect used to resubscribe with the topic from the first
+          // open, so every socket drop cost a full window (20 KB on a long
+          // chat). Naming what is held by now makes it a tail, or nothing.
+          topicOnReconnect: () => {
+            const held = heldChatSpanRef.current
+            return held && held.chatId === chatId
+              ? { type: "chat", chatId, cachedSpan: held.span }
+              : { type: "chat", chatId }
+          },
+        }
       )
     }
 

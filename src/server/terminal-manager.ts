@@ -5,9 +5,16 @@ import defaultShell, { detectDefaultShell } from "default-shell"
 import { Terminal } from "@xterm/headless"
 import { SerializeAddon } from "@xterm/addon-serialize"
 import { Unicode11Addon } from "@xterm/addon-unicode11"
-import type { TerminalEvent, TerminalSnapshot } from "../shared/protocol"
+import type { TerminalEvent, TerminalSnapshot, TerminalTailResult } from "../shared/protocol"
 
 const DEFAULT_COLS = 80
+/**
+ * Characters of recent output kept per terminal for `terminal.tail`. A hidden
+ * pane that comes back within this much output gets only the gap; past it,
+ * the client falls back to a full `serializedState` replay. Max scrollback is
+ * 5,000 lines, so one screenful of history per line is more than enough.
+ */
+const OUTPUT_LOG_LIMIT = 1_000_000
 const DEFAULT_ROWS = 24
 const DEFAULT_SCROLLBACK = 1_000
 const MIN_SCROLLBACK = 500
@@ -45,8 +52,51 @@ interface TerminalSession {
    * multi-byte character straddling a read boundary into U+FFFD.
    */
   decoder: StringDecoder
+  output: TerminalOutputLog
   focusReportingEnabled: boolean
   modeSequenceTail: string
+}
+
+/**
+ * Recent PTY output, addressed by a version that only grows. The version is a
+ * running character count, so the client can check that a tail lines up with
+ * what it already wrote (`start === written`) instead of trusting order.
+ */
+export class TerminalOutputLog {
+  private chunks: Array<{ start: number; data: string }> = []
+  private retained = 0
+  /** Output count after the newest chunk. */
+  version = 0
+  /** Oldest version a tail can start from. */
+  private oldest = 0
+
+  constructor(private readonly limit = OUTPUT_LOG_LIMIT) {}
+
+  append(data: string) {
+    if (!data) return this.version
+    this.chunks.push({ start: this.version, data })
+    this.version += data.length
+    this.retained += data.length
+    while (this.retained > this.limit && this.chunks.length > 1) {
+      const dropped = this.chunks.shift()!
+      this.retained -= dropped.data.length
+      this.oldest = dropped.start + dropped.data.length
+    }
+    return this.version
+  }
+
+  /** Output after `sinceVersion`, or null when it is already gone or ahead of us. */
+  tailSince(sinceVersion: number): string | null {
+    if (!Number.isInteger(sinceVersion) || sinceVersion < this.oldest || sinceVersion > this.version) return null
+    if (sinceVersion === this.version) return ""
+    let out = ""
+    for (const chunk of this.chunks) {
+      const end = chunk.start + chunk.data.length
+      if (end <= sinceVersion) continue
+      out += chunk.start >= sinceVersion ? chunk.data : chunk.data.slice(sinceVersion - chunk.start)
+    }
+    return out
+  }
 }
 
 function clampScrollback(value: number) {
@@ -208,11 +258,21 @@ export class TerminalManager {
     const chunk = session.decoder.write(Buffer.from(data))
     if (!chunk) return
     updateFocusReportingState(session, chunk)
+    this.appendOutput(session, chunk)
+  }
+
+  /**
+   * Every byte the client may see goes through here, so the shadow terminal,
+   * the tail log and the event stream never disagree about the version.
+   */
+  private appendOutput(session: TerminalSession, chunk: string) {
     session.headless.write(chunk)
+    const version = session.output.append(chunk)
     this.emit({
       type: "terminal.output",
       terminalId: session.terminalId,
       data: chunk,
+      version,
     })
   }
 
@@ -274,6 +334,7 @@ export class TerminalManager {
       headless,
       serializeAddon,
       decoder,
+      output: new TerminalOutputLog(),
       focusReportingEnabled: false,
       modeSequenceTail: "",
     }
@@ -403,7 +464,23 @@ export class TerminalManager {
       serializedState: session.serializeAddon.serialize({ scrollback: session.scrollback }),
       status: session.status,
       exitCode: session.exitCode,
+      outputVersion: session.output.version,
     }
+  }
+
+  /**
+   * Output since `sinceVersion` for a pane that stopped listening while it was
+   * hidden. Falls back to a full snapshot when the gap has left the log, or
+   * when the client has no version to resume from.
+   */
+  getTail(terminalId: string, sinceVersion: number | null): TerminalTailResult | null {
+    const session = this.sessions.get(terminalId)
+    if (!session) return null
+    const tail = sinceVersion === null ? null : session.output.tailSince(sinceVersion)
+    if (tail === null) {
+      return { terminalId, tail: null, snapshot: this.snapshotOf(session) }
+    }
+    return { terminalId, tail: { data: tail, version: session.output.version }, snapshot: null }
   }
 
   private emit(event: TerminalEvent) {

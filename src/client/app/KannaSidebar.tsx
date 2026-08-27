@@ -19,7 +19,7 @@ import { SidebarViewSwitcher, type SidebarView } from "../components/chat-ui/sid
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
-import type { ChatTouchedFilesResult, KeybindingsSnapshot, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
+import type { ChatPreview, ChatTouchedFilesResult, KeybindingsSnapshot, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
 import type { SocketStatus } from "./socket"
 import {
   getSidebarJumpTargetIndex,
@@ -91,6 +91,8 @@ interface KannaSidebarProps {
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
   /** Fetches what a chat changed, for the hover card's file list. */
   onLoadTouchedFiles?: (chatId: string) => Promise<ChatTouchedFilesResult>
+  /** Fetches the hover card's prompt and reply text. */
+  onLoadPreview?: (chatId: string) => Promise<ChatPreview>
   /** Prompts to `git init` a chat's project — the hover card's "Setup Git". */
   onSetupGit: (chatId: string) => void
   onRenameProject: (projectId: string, sidebarTitle: string | undefined, realTitle: string) => void
@@ -122,6 +124,7 @@ function KannaSidebarImpl({
   onCopyPath,
   onOpenExternalPath,
   onLoadTouchedFiles,
+  onLoadPreview,
   onSetupGit,
   onRenameProject,
   onHideProject,
@@ -786,6 +789,7 @@ function KannaSidebarImpl({
           onOpenArchivedChat={onOpenArchivedChat}
           onSetupGit={onSetupGit}
           onLoadTouchedFiles={onLoadTouchedFiles}
+          onLoadPreview={onLoadPreview}
           onOpenExternalPath={onOpenExternalPath}
         />
 

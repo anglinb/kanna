@@ -35,7 +35,7 @@ export function renderChatStatusDot(chat: SidebarChatRow): ReactNode | null {
     <div className="relative flex size-4 shrink-0 items-center justify-center">
       <div
         className={cn(
-          "absolute size-2.5 rounded-full animate-ping",
+          "absolute size-2.5 rounded-full kanna-ping",
           color === "blue" ? "bg-blue-400/80" : "bg-emerald-400/80",
         )}
       />

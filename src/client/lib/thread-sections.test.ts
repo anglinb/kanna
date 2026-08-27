@@ -716,13 +716,13 @@ describe("stabilizeSidebarThreads", () => {
     const moved = makeSidebarData()
     moved.projectGroups[0]!.chats[0] = {
       ...moved.projectGroups[0]!.chats[0]!,
-      lastAgentMessagePreview: "still working",
+      turnCount: 99,
     }
     const result = stabilizeSidebarThreads(first, flattenStabilized(held, moved))
 
     expect(result).not.toBe(first)
     const changed = result.find((thread) => thread.chatId === "chat-1")!
-    expect(changed.row.lastAgentMessagePreview).toBe("still working")
+    expect(changed.row.turnCount).toBe(99)
     for (const thread of result) {
       if (thread.chatId === "chat-1") continue
       expect(thread).toBe(first.find((item) => item.chatId === thread.chatId)!)

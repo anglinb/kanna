@@ -57,7 +57,7 @@ describe("renderChatStatusDot", () => {
     const html = renderDot({ ...baseChat, unread: true })
 
     expect(html).toContain("bg-emerald-400")
-    expect(html).toContain("animate-ping")
+    expect(html).toContain("kanna-ping")
   })
 
   test("awaiting the user outranks unread", () => {

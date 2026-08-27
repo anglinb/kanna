@@ -897,15 +897,16 @@ export interface SidebarChatRow {
    * compare it against millisecond timestamps expecting exact ordering.
    */
   lastAgentMessageAt?: number
-  /** One-line preview of the latest user prompt. */
-  lastUserMessagePreview?: string
-  /** One-line preview of the latest agent text message. */
-  lastAgentMessagePreview?: string
   /**
-   * When that preview was written. Distinct from `lastAgentMessageAt`, which
-   * tool calls advance too: this dates the *words*, so a reader can tell a
-   * reply to the latest prompt from one carried over from the turn before.
+   * @deprecated No longer sent. The previews live in `ChatPreview`, fetched by
+   * `chat.getPreview` when a hover card opens. Carrying them here changed the
+   * sidebar snapshot on every assistant message, which defeated the push
+   * dedupe and re-derived the whole sidebar for text only a hover card reads.
    */
+  lastUserMessagePreview?: string
+  /** @deprecated See `lastUserMessagePreview`. */
+  lastAgentMessagePreview?: string
+  /** @deprecated See `lastUserMessagePreview`. */
   lastAgentMessagePreviewAt?: number
   /** Tool kind the chat is waiting on when status is waiting_for_user (e.g. "ask_user_question"). */
   pendingToolKind?: string
@@ -944,6 +945,19 @@ export interface ChatTouchedFile {
    */
   additions?: number
   deletions?: number
+}
+
+/**
+ * The text a hover card shows for a chat, fetched when the card opens.
+ *
+ * `lastAgentMessagePreviewAt` dates the words. `lastAgentMessageAt` on the
+ * sidebar row is advanced by tool calls too, so the card needs this one to
+ * tell a reply to the latest prompt from one carried over from the turn before.
+ */
+export interface ChatPreview {
+  lastUserMessagePreview?: string
+  lastAgentMessagePreview?: string
+  lastAgentMessagePreviewAt?: number
 }
 
 export interface ChatTouchedFilesResult {

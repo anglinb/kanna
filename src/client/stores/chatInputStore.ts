@@ -1,8 +1,73 @@
 import { useMemo } from "react"
 import { create } from "zustand"
-import { persist } from "zustand/middleware"
+import { createJSONStorage, persist } from "zustand/middleware"
 import { useShallow } from "zustand/react/shallow"
 import type { ChatAttachment } from "../../shared/types"
+
+/**
+ * `localStorage.setItem` is synchronous, and the persisted blob is every draft
+ * in every chat. Writing it on each keystroke put a JSON.stringify plus a disk
+ * write on the typing path. Writes now settle for a moment first, and flush on
+ * `pagehide` so a closing tab keeps its last characters.
+ */
+const DRAFT_PERSIST_DELAY_MS = 300
+
+function createDebouncedStorage(delayMs: number): Storage {
+  const pending = new Map<string, string>()
+  let timer: number | null = null
+
+  const flush = () => {
+    if (timer !== null) {
+      window.clearTimeout(timer)
+      timer = null
+    }
+    for (const [key, value] of pending) {
+      try {
+        window.localStorage.setItem(key, value)
+      } catch {
+        // Quota or private mode: the draft stays in memory for this session.
+      }
+    }
+    pending.clear()
+  }
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", flush)
+  }
+
+  return {
+    get length() {
+      return window.localStorage.length
+    },
+    key: (index) => window.localStorage.key(index),
+    clear: () => {
+      pending.clear()
+      window.localStorage.clear()
+    },
+    getItem: (key) => pending.get(key) ?? window.localStorage.getItem(key),
+    removeItem: (key) => {
+      pending.delete(key)
+      window.localStorage.removeItem(key)
+    },
+    setItem: (key, value) => {
+      pending.set(key, value)
+      if (timer === null) {
+        timer = window.setTimeout(flush, delayMs)
+      }
+    },
+  }
+}
+
+let debouncedLocalStorage: Storage | null = null
+
+/** Throws where there is no `localStorage` (tests); `persist` then runs in memory. */
+function getDebouncedLocalStorage(): Storage {
+  if (typeof window === "undefined" || !("localStorage" in window)) {
+    throw new Error("localStorage unavailable")
+  }
+  debouncedLocalStorage ??= createDebouncedStorage(DRAFT_PERSIST_DELAY_MS)
+  return debouncedLocalStorage
+}
 
 interface ChatInputState {
   drafts: Record<string, string>
@@ -83,6 +148,7 @@ export const useChatInputStore = create<ChatInputState>()(
     }),
     {
       name: "chat-input-drafts",
+      storage: createJSONStorage(getDebouncedLocalStorage),
     }
   )
 )

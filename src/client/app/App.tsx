@@ -13,7 +13,7 @@ import { useChatSoundPreferencesStore } from "../stores/chatSoundPreferencesStor
 import type { ChatSoundPreference } from "../stores/chatSoundPreferencesStore"
 import { getSetupLaunchAction, useProviderAuthStore } from "../stores/providerAuthStore"
 import { SetupWizard } from "../components/auth/SetupWizard"
-import type { ChatTouchedFilesResult, ProviderAuthSnapshot } from "../../shared/types"
+import type { ChatPreview, ChatTouchedFilesResult, ProviderAuthSnapshot } from "../../shared/types"
 import { playChatNotificationSound, shouldPlayChatSound } from "../lib/chatSounds"
 import { getBrowserWindowTitle, getChatSoundBurstCount } from "./chatNotifications"
 import { KannaSidebar } from "./KannaSidebar"
@@ -297,6 +297,9 @@ function KannaLayout() {
   const handleLoadTouchedFiles = useCallback((chatId: string) => (
     state.socket.command<ChatTouchedFilesResult>({ type: "chat.touchedFiles", chatId })
   ), [state.socket])
+  const handleLoadPreview = useCallback((chatId: string) => (
+    state.socket.command<ChatPreview>({ type: "chat.getPreview", chatId })
+  ), [state.socket])
   const handleSidebarSetupGit = useCallback((chatId: string) => {
     void state.handleSetupGit(chatId)
   }, [state.handleSetupGit])
@@ -336,6 +339,7 @@ function KannaLayout() {
       onOpenExternalPath={handleSidebarOpenExternalPath}
       onSetupGit={handleSidebarSetupGit}
       onLoadTouchedFiles={handleLoadTouchedFiles}
+      onLoadPreview={handleLoadPreview}
       onRenameProject={handleSidebarRenameProject}
       onHideProject={handleSidebarHideProject}
       onReorderProjectGroups={handleSidebarReorderProjectGroups}

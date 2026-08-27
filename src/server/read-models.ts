@@ -267,11 +267,8 @@ export function deriveSidebarData(
           ...(chat.lastAgentMessageAt != null
             ? { lastAgentMessageAt: quantizeSidebarActivity(chat.lastAgentMessageAt) }
             : {}),
-          ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
-          ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
-          ...(chat.lastAgentMessagePreviewAt != null
-            ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
-            : {}),
+          // No message previews here: they change on every assistant message
+          // and only the hover card reads them (`chat.getPreview`).
           ...(pendingToolKind ? { pendingToolKind } : {}),
           ...(uncommittedWork ? { uncommittedWork: true } : {}),
           hasAutomation: false,

@@ -3,7 +3,7 @@ import * as PopoverPrimitive from "@radix-ui/react-popover"
 import { TURN_CARD_ROW_INSET, TurnCardMessage, TurnCardMetaRow, TurnCardTimingRow } from "../../ui/turn-card"
 import { GitBranch, PencilLine } from "lucide-react"
 import { getRepoUrlLabel } from "../../../../shared/git-url"
-import { PROVIDERS, type ChatTouchedFilesResult, type SidebarChatRow } from "../../../../shared/types"
+import { PROVIDERS, type ChatPreview, type ChatTouchedFilesResult, type SidebarChatRow } from "../../../../shared/types"
 import { resolveDiffFilePath } from "../../../app/ChatPage/utils"
 import { DiffFileStat } from "../git/shared"
 import { formatPromptTimestamp } from "../../messages/ResultMessage"
@@ -95,11 +95,11 @@ function getActiveTurnStartedAt(row: SidebarChatRow): number | null {
  * slightly generous fallback (tool calls advance it) but never a wrong pairing
  * for anything written since.
  */
-function getCurrentTurnReply(row: SidebarChatRow): string | null {
-  if (!row.lastAgentMessagePreview) return null
-  const repliedAt = row.lastAgentMessagePreviewAt ?? row.lastAgentMessageAt
+function getCurrentTurnReply(row: SidebarChatRow, preview: ChatPreview): string | null {
+  if (!preview.lastAgentMessagePreview) return null
+  const repliedAt = preview.lastAgentMessagePreviewAt ?? row.lastAgentMessageAt
   if (repliedAt == null) return null
-  return repliedAt >= (row.lastMessageAt ?? 0) ? row.lastAgentMessagePreview : null
+  return repliedAt >= (row.lastMessageAt ?? 0) ? preview.lastAgentMessagePreview : null
 }
 
 /**
@@ -248,11 +248,59 @@ function useChatTouchedFiles(
   return result
 }
 
+const previewCache = new Map<string, ChatPreview>()
+
+function getPreviewCacheKey(row: SidebarChatRow) {
+  return [row.chatId, row.lastMessageAt ?? 0, row.lastAgentMessageAt ?? 0].join("^")
+}
+
+/**
+ * The prompt and reply text for the card under the pointer.
+ *
+ * Fetched here rather than carried on the sidebar row: the reply changes on
+ * every assistant message, and having it on the row made every one of those
+ * a sidebar push that re-derived the whole list. Keyed by the row's activity
+ * fields so a re-hover on an unchanged chat is served from memory.
+ */
+function useChatPreview(
+  row: SidebarChatRow | null,
+  load?: (chatId: string) => Promise<ChatPreview>
+): ChatPreview | null {
+  const cacheKey = row ? getPreviewCacheKey(row) : null
+  const [result, setResult] = useState<ChatPreview | null>(
+    () => (cacheKey ? previewCache.get(cacheKey) ?? null : null)
+  )
+
+  useEffect(() => {
+    if (!row || !cacheKey || !load) return
+    const cached = previewCache.get(cacheKey)
+    if (cached) {
+      setResult(cached)
+      return
+    }
+    setResult(null)
+    let cancelled = false
+    void load(row.chatId).then((next) => {
+      if (previewCache.size >= TOUCHED_FILES_CACHE_LIMIT) {
+        previewCache.delete(previewCache.keys().next().value as string)
+      }
+      previewCache.set(cacheKey, next)
+      if (!cancelled) setResult(next)
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [cacheKey, load, row])
+
+  return result
+}
+
 /** Exported for tests: the card body, without the hover-card machinery around it. */
 export function ChatHoverCardContent({
   thread,
   draft = "",
   touchedFiles,
+  preview,
   onSelectMessage,
   onSelectChat,
   onOpenRepo,
@@ -263,6 +311,8 @@ export function ChatHoverCardContent({
   draft?: string
   /** What this chat changed; absent until the fetch lands (or if it fails). */
   touchedFiles?: ChatTouchedFilesResult | null
+  /** The prompt and reply text; absent until fetched. Falls back to the row. */
+  preview?: ChatPreview | null
   /** Absent when the card is read-only (archived rows). */
   onSelectMessage?: (role: ChatJumpRole) => void
   /** Opens the chat without aiming at a message — what the draft does. */
@@ -278,7 +328,10 @@ export function ChatHoverCardContent({
   const label = thread.projectLabel
   const HarnessIcon = row.provider ? PROVIDER_ICONS[row.provider] : null
   const turns = formatTurnCount(row)
-  const reply = getCurrentTurnReply(row)
+  // The row's own fields are the pre-fetch shape, kept so older servers and
+  // the export viewer still show something.
+  const effectivePreview: ChatPreview = preview ?? row
+  const reply = getCurrentTurnReply(row, effectivePreview)
   // When the turn landed, in the transcript's own format — "3:42 PM" today,
   // "Mon 3:42 PM" this week, the full date beyond that. Suppressed while a turn
   // is live: the only end time on hand then belongs to the *previous* turn.
@@ -367,7 +420,7 @@ export function ChatHoverCardContent({
             label="Jump to this prompt"
             onSelect={canJump ? () => onSelectMessage?.("prompt") : undefined}
           >
-            {toMessagePreview(row.lastUserMessagePreview || thread.title)}
+            {toMessagePreview(effectivePreview.lastUserMessagePreview || thread.title)}
           </TurnCardMessage>
         )}
         {/* Cut to a single line once a draft is here: what you were about to
@@ -465,6 +518,7 @@ function SidebarChatHoverCardImpl({
   onOpenArchivedChat,
   onSetupGit,
   onLoadTouchedFiles,
+  onLoadPreview,
   onOpenExternalPath,
 }: {
   /** The sidebar's scroll container — every chat row is somewhere beneath it. */
@@ -481,6 +535,7 @@ function SidebarChatHoverCardImpl({
   onSetupGit: (chatId: string) => void
   /** Fetches what a chat changed. Omitted = the card shows no file list. */
   onLoadTouchedFiles?: (chatId: string) => Promise<ChatTouchedFilesResult>
+  onLoadPreview?: (chatId: string) => Promise<ChatPreview>
   /** The row's own opener, reused to send a file to the editor. */
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
 }) {
@@ -511,6 +566,7 @@ function SidebarChatHoverCardImpl({
   const localPath = thread?.row.localPath
   const repoUrl = thread?.projectLabel.repoUrl
   const touchedFiles = useChatTouchedFiles(thread?.row ?? null, onLoadTouchedFiles)
+  const preview = useChatPreview(thread?.row ?? null, onLoadPreview)
 
   const setHovered = useCallback((nextChatId: string | null) => {
     if (hoveredChatIdRef.current === nextChatId) return
@@ -691,6 +747,7 @@ function SidebarChatHoverCardImpl({
             <ChatHoverCardBody
               thread={thread}
               touchedFiles={touchedFiles}
+              preview={preview}
               // An archived chat has nowhere to jump to and nothing to set up;
               // its card reads, and its one action reopens it.
               onSelectMessage={archived ? undefined : handleSelectMessage}

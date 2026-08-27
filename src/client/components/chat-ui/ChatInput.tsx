@@ -19,6 +19,7 @@ import { useComposer } from "../../hooks/useComposer"
 import { useIsStandalone } from "../../hooks/useIsStandalone"
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder"
 import { RecordingWaveform } from "./RecordingWaveform"
+import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
 import { type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
@@ -215,6 +216,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onEditModels,
   onListSkills,
 }, forwardedRef) {
+  // Actions only. Selecting the whole store re-rendered this component on
+  // every keystroke in any composer, and on every attachment change anywhere.
   const {
     getDraft,
     setDraft,
@@ -222,7 +225,14 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     getAttachmentDrafts,
     setAttachmentDrafts,
     clearAttachmentDrafts,
-  } = useChatInputStore()
+  } = useChatInputStore(useShallow((state) => ({
+    getDraft: state.getDraft,
+    setDraft: state.setDraft,
+    clearDraft: state.clearDraft,
+    getAttachmentDrafts: state.getAttachmentDrafts,
+    setAttachmentDrafts: state.setAttachmentDrafts,
+    clearAttachmentDrafts: state.clearAttachmentDrafts,
+  })))
   const initializeComposerForChat = useChatPreferencesStore((state) => state.initializeComposerForChat)
   // Canonical composer semantics (provider lock, model catalog, plan-mode
   // support) shared with the command palette — see lib/composer.ts.
@@ -848,7 +858,6 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       const nextCaretPosition = textarea.selectionStart + trimmedText.length
       setValue(nextValue)
       if (chatId) setDraft(chatId, nextValue)
-      autoResize()
       requestAnimationFrame(() => {
         textarea.selectionStart = nextCaretPosition
         textarea.selectionEnd = nextCaretPosition
@@ -983,7 +992,9 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 setValue(event.target.value)
                 setCaretPosition(event.target.selectionStart ?? event.target.value.length)
                 if (chatId) setDraft(chatId, event.target.value)
-                autoResize()
+                // No autoResize here: the layout effect on `value` runs it once
+                // the DOM has the new text. Calling it here too thrashed layout
+                // twice per keystroke.
               }}
               onSelect={(event) => {
                 setCaretPosition(event.currentTarget.selectionStart ?? 0)

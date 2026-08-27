@@ -66,7 +66,7 @@ describe("sidebarStore", () => {
     const held = useSidebarStore.getState().data
 
     setSnapshot(data([
-      group("p1", [row("a", { lastAgentMessagePreview: "working on it" })]),
+      group("p1", [row("a", { turnCount: 3 })]),
       group("p2"),
     ]))
 

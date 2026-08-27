@@ -30,6 +30,7 @@ import type {
   LlmProviderSnapshot,
   LlmProviderValidationResult,
   UsageLimitsSnapshot,
+  ChatPreview,
 } from "../shared/types"
 
 
@@ -1373,6 +1374,18 @@ export function createWsRouter({
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
+        case "chat.getPreview": {
+          const chat = store.getChat(command.chatId)
+          const result: ChatPreview = {
+            ...(chat?.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
+            ...(chat?.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
+            ...(chat?.lastAgentMessagePreviewAt != null
+              ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
+              : {}),
+          }
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
         case "chat.getEntryDebugRaw": {
           const result = store.getEntryDebugRaw(command.chatId, command.entryId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
@@ -1661,6 +1674,11 @@ export function createWsRouter({
           terminals.close(command.terminalId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           pushTerminalSnapshot(command.terminalId, { force: true })
+          return
+        }
+        case "terminal.tail": {
+          const result = terminals.getTail(command.terminalId, command.sinceVersion)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
       }

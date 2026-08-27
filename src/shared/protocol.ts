@@ -82,11 +82,29 @@ export interface TerminalSnapshot {
   status: "running" | "exited"
   exitCode: number | null
   signal?: number
+  /**
+   * Count of output characters the server has seen so far. `serializedState`
+   * reflects exactly this much output, so a client that replays it can then
+   * ask `terminal.tail` for everything after it.
+   */
+  outputVersion?: number
 }
 
 export type TerminalEvent =
-  | { type: "terminal.output"; terminalId: string; data: string }
+  /** `version` is the output count after `data`; `data` starts at `version - data.length`. */
+  | { type: "terminal.output"; terminalId: string; data: string; version?: number }
   | { type: "terminal.exit"; terminalId: string; exitCode: number; signal?: number }
+
+/**
+ * Answer to `terminal.tail`. `tail` holds output since the requested version
+ * when the server still has it; otherwise `snapshot` carries a full state to
+ * replay from scratch.
+ */
+export interface TerminalTailResult {
+  terminalId: string
+  tail: { data: string; version: number } | null
+  snapshot: TerminalSnapshot | null
+}
 
 export type ClientCommand =
   | { type: "project.open"; localPath: string }
@@ -192,6 +210,8 @@ export type ClientCommand =
   }
   /** Read back the stored anchor when opening a chat. Result: ResolvedChatReadAnchor | null. */
   | { type: "chat.getReadAnchor"; chatId: string }
+  /** The hover card's prompt and reply text; see `ChatPreview`. */
+  | { type: "chat.getPreview"; chatId: string }
   /**
    * Fetch one entry's raw provider payload. Snapshots omit `debugRaw` because
    * it duplicates `content` and dominates the transcript payload, so the raw
@@ -294,6 +314,8 @@ export type ClientCommand =
   | { type: "terminal.input"; terminalId: string; data: string }
   | { type: "terminal.resize"; terminalId: string; cols: number; rows: number }
   | { type: "terminal.close"; terminalId: string }
+  /** sinceVersion null → the client has no usable buffer; answer with a snapshot. */
+  | { type: "terminal.tail"; terminalId: string; sinceVersion: number | null }
 
 export type OpenExternalAction = Extract<ClientCommand, { type: "system.openExternal" }>["action"]
 

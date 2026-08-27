@@ -22,6 +22,12 @@ interface SubscriptionEntry<TSnapshot, TEvent = never> {
   topic: SubscriptionTopic
   listener: SnapshotListener<TSnapshot>
   eventListener?: EventListener<TEvent>
+  /**
+   * The topic to resend after a reconnect, in place of the original. A chat
+   * subscription uses it to name the span it holds by then, so the server
+   * resumes with a tail instead of the full window it sent the first time.
+   */
+  topicOnReconnect?: () => SubscriptionTopic
 }
 
 /**
@@ -109,13 +115,15 @@ export class KannaSocket {
   subscribe<TSnapshot, TEvent = never>(
     topic: SubscriptionTopic,
     listener: SnapshotListener<TSnapshot>,
-    eventListener?: EventListener<TEvent>
+    eventListener?: EventListener<TEvent>,
+    options?: { topicOnReconnect?: () => SubscriptionTopic }
   ) {
     const id = generateUUID()
     this.subscriptions.set(id, {
       topic,
       listener: listener as SnapshotListener<unknown>,
       eventListener: eventListener as EventListener<unknown> | undefined,
+      topicOnReconnect: options?.topicOnReconnect,
     })
     this.enqueue({ v: 1, type: "subscribe", id, topic })
     return () => {
@@ -215,7 +223,8 @@ export class KannaSocket {
       this.emitStatus("connected")
       this.startHeartbeat()
       for (const [id, subscription] of this.subscriptions.entries()) {
-        this.sendNow({ v: 1, type: "subscribe", id, topic: subscription.topic })
+        const topic = subscription.topicOnReconnect?.() ?? subscription.topic
+        this.sendNow({ v: 1, type: "subscribe", id, topic })
       }
       while (this.outboundQueue.length > 0) {
         const envelope = this.outboundQueue.shift()

@@ -19,6 +19,13 @@ export interface ReadAnchorLayout {
   offsetFromMessage: number
 }
 
+/**
+ * A layout, or a function that measures one. The measurement is a
+ * `querySelector` plus three rect reads, so callers on the scroll path hand
+ * over the function and only the write that actually goes out pays for it.
+ */
+export type ReadAnchorLayoutSource = ReadAnchorLayout | (() => ReadAnchorLayout | undefined)
+
 export interface ChatReadAnchorState {
   /**
    * False until the chat's first snapshot lands. Consumers must wait for this
@@ -35,7 +42,7 @@ export interface ChatReadAnchorSync {
    * Report the message currently at the top of the viewport. Safe to call on
    * every scroll event — writes are throttled and deduped.
    */
-  reportReadAnchor: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => void
+  reportReadAnchor: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayoutSource) => void
 }
 
 /**
@@ -79,7 +86,7 @@ export function useChatReadAnchor(
     chatId: string
     messageId: string
     atEnd: boolean
-    layout?: ReadAnchorLayout
+    layout?: ReadAnchorLayoutSource
   } | null>(null)
   const timerRef = useRef<number | null>(null)
   const lastWriteAtRef = useRef(0)
@@ -93,6 +100,7 @@ export function useChatReadAnchor(
     const pending = pendingRef.current
     pendingRef.current = null
     if (!pending) return
+    const layout = typeof pending.layout === "function" ? pending.layout() : pending.layout
 
     // While parked at the bottom the top-visible message churns with every
     // streamed chunk, but restore only needs to know "was at the end" — so all
@@ -102,7 +110,7 @@ export function useChatReadAnchor(
     // came into view.
     const key = pending.atEnd
       ? `${pending.chatId}:atEnd`
-      : `${pending.chatId}:${pending.messageId}:${pending.layout?.offsetFromMessage ?? ""}`
+      : `${pending.chatId}:${pending.messageId}:${layout?.offsetFromMessage ?? ""}`
     if (key === lastWrittenKeyRef.current) return
     lastWrittenKeyRef.current = key
     lastWriteAtRef.current = Date.now()
@@ -112,14 +120,14 @@ export function useChatReadAnchor(
       chatId: pending.chatId,
       messageId: pending.messageId,
       atEnd: pending.atEnd,
-      ...(pending.layout ?? {}),
+      ...(layout ?? {}),
     }).catch(() => {
       // Every pending command rejects with "Disconnected" on socket close even
       // though the envelope may still be delivered. Never surface this.
     })
   }, [socket])
 
-  const reportReadAnchor = useCallback((messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => {
+  const reportReadAnchor = useCallback((messageId: string, atEnd: boolean, layout?: ReadAnchorLayoutSource) => {
     if (!activeChatId) return
     pendingRef.current = { chatId: activeChatId, messageId, atEnd, layout }
     // Already scheduled — the newer position just replaces the pending one.

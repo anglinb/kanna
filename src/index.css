@@ -143,7 +143,19 @@
   contain: paint;
 }
 
-/* The track moves the fixed mask. The copy moves backward, so the text stays fixed. */
+/*
+ * The track moves the fixed mask. The copy moves backward, so the text stays
+ * fixed.
+ *
+ * Two rules keep this off the main thread. The keyframes use plain
+ * percentages: Chromium resolves `calc()` with `var()` inside keyframes on the
+ * main thread every tick, and a trace showed the page producing 115 frames a
+ * second at idle with no JS on the stack, all of it from these two animations
+ * on running chats. And the timing is `steps()`: a shimmer read as motion at
+ * a dozen updates a cycle, and a 120Hz display would otherwise composite 160.
+ * No `will-change`: a compositor-driven transform is promoted on its own, and
+ * a permanent layer per running row was the wrong trade.
+ */
 .kanna-shiny-track {
   -webkit-mask-image: linear-gradient(
     90deg,
@@ -161,38 +173,56 @@
   mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;
   mask-size: 100% 100%;
-  animation: kanna-shiny-track 1.33s linear infinite;
-  will-change: transform;
+  animation: kanna-shiny-track 1.33s steps(16) infinite;
 }
 
 .kanna-shiny-copy {
-  animation: kanna-shiny-copy 1.33s linear infinite;
-  will-change: transform;
+  animation: kanna-shiny-copy 1.33s steps(16) infinite;
 }
 
 @keyframes kanna-shiny-track {
   from {
-    transform: translateX(calc(-50% - var(--shiny-half-width)));
+    transform: translateX(-100%);
   }
 
   to {
-    transform: translateX(calc(50% + var(--shiny-half-width)));
+    transform: translateX(100%);
   }
 }
 
 @keyframes kanna-shiny-copy {
   from {
-    transform: translateX(calc(50% + var(--shiny-half-width)));
+    transform: translateX(100%);
   }
 
   to {
-    transform: translateX(calc(-50% - var(--shiny-half-width)));
+    transform: translateX(-100%);
+  }
+}
+
+/*
+ * Tailwind's `animate-ping` at 1s would cost a compositor frame per display
+ * refresh for every unread row. Six steps is the same pulse to the eye.
+ */
+.kanna-ping {
+  animation: kanna-ping 1s steps(6) infinite;
+}
+
+@keyframes kanna-ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .kanna-shiny-track {
     display: none;
+  }
+
+  .kanna-ping {
+    animation: none;
   }
 }
 

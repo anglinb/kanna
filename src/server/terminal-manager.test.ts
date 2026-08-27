@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { applyUtf8Locale, TerminalManager } from "./terminal-manager"
+import { applyUtf8Locale, TerminalManager, TerminalOutputLog } from "./terminal-manager"
 
 const SHELL_START_TIMEOUT_MS = 5_000
 const COMMAND_TIMEOUT_MS = 5_000
@@ -409,5 +409,46 @@ describe("applyUtf8Locale", () => {
     const env = applyUtf8Locale({ LC_ALL: "ja_JP.UTF-8", LANG: "C" })
     expect(env.LC_ALL).toBe("ja_JP.UTF-8")
     expect(env.LANG).toBe("C")
+  })
+})
+
+describe("TerminalOutputLog", () => {
+  test("versions are a running character count", () => {
+    const log = new TerminalOutputLog()
+    expect(log.append("abc")).toBe(3)
+    expect(log.append("")).toBe(3)
+    expect(log.append("de")).toBe(5)
+    expect(log.version).toBe(5)
+  })
+
+  test("a tail starts exactly where the client stopped, across chunks", () => {
+    const log = new TerminalOutputLog()
+    log.append("hello ")
+    log.append("world")
+    log.append("!")
+    expect(log.tailSince(0)).toBe("hello world!")
+    expect(log.tailSince(3)).toBe("lo world!")
+    expect(log.tailSince(6)).toBe("world!")
+    expect(log.tailSince(12)).toBe("")
+  })
+
+  test("a version outside what is held is refused rather than guessed", () => {
+    const log = new TerminalOutputLog()
+    log.append("abc")
+    expect(log.tailSince(4)).toBeNull()
+    expect(log.tailSince(-1)).toBeNull()
+    expect(log.tailSince(1.5)).toBeNull()
+  })
+
+  test("old output falls off the front once the limit is passed", () => {
+    const log = new TerminalOutputLog(10)
+    log.append("aaaa")
+    log.append("bbbb")
+    log.append("cccc")
+    // The first chunk is gone; a tail from inside it cannot be served.
+    expect(log.tailSince(0)).toBeNull()
+    expect(log.tailSince(3)).toBeNull()
+    expect(log.tailSince(4)).toBe("bbbbcccc")
+    expect(log.version).toBe(12)
   })
 })
