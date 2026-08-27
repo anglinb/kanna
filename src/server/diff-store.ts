@@ -291,9 +291,15 @@ async function getBranchName(repoRoot: string) {
   return undefined
 }
 
-async function hasUpstreamBranch(repoRoot: string) {
+/** Short upstream ref such as `origin/main`, or null when the branch has none. */
+async function getUpstreamRef(repoRoot: string) {
   const upstream = await runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], repoRoot)
-  return upstream.exitCode === 0 && upstream.stdout.trim().length > 0
+  const ref = upstream.exitCode === 0 ? upstream.stdout.trim() : ""
+  return ref.length > 0 ? ref : null
+}
+
+async function hasUpstreamBranch(repoRoot: string) {
+  return (await getUpstreamRef(repoRoot)) !== null
 }
 
 /**
@@ -310,8 +316,7 @@ async function resolveGitDir(repoRoot: string) {
   return gitDir.length > 0 ? path.resolve(repoRoot, gitDir) : null
 }
 
-async function getLastFetchedAt(repoRoot: string) {
-  const gitDir = await resolveGitDir(repoRoot)
+async function readLastFetchedAt(gitDir: string | null) {
   if (!gitDir) {
     return undefined
   }
@@ -1274,7 +1279,7 @@ async function computeCurrentFiles(
   repoRoot: string,
   baseCommit: string | null,
   lineCounts?: { cache: LineCountCache; nextCache: LineCountCache }
-): Promise<{ files: ChatDiffFile[]; scan: WorkingTreeScan }> {
+): Promise<{ files: ChatDiffFile[]; scan: WorkingTreeScan; dirtyEntries: DirtyPathEntry[] }> {
   const currentDirtyPaths = await listDirtyPaths(repoRoot)
   const trackedStatsByPath = await getTrackedDiffStats(repoRoot, baseCommit)
   const lineCountCache = lineCounts?.cache ?? new Map<string, LineCountCacheEntry>()
@@ -1347,6 +1352,7 @@ async function computeCurrentFiles(
   return {
     files: files.filter((file): file is ChatDiffFile => file !== null),
     scan: { dirty: currentDirtyPaths.length > 0, paths: toDirtyPaths(currentDirtyPaths) },
+    dirtyEntries: currentDirtyPaths,
   }
 }
 
@@ -1416,12 +1422,84 @@ export function appendGitIgnoreEntry(currentContents: string | null, entry: stri
   return `${prefix}${entry}\n`
 }
 
+/**
+ * What the last full refresh banked for a project, so the next poll can tell
+ * whether anything the snapshot reflects has moved before it spends the ~13
+ * git subprocesses of a full scan. `DiffStore.refreshFromGate` says what the
+ * stamp covers.
+ */
+interface RefreshGate {
+  repoRoot: string
+  gitDir: string
+  /** Paths the last refresh reported dirty. Their lstats are part of the stamp. */
+  dirtyPaths: string[]
+  /** Git-dir-relative ref files for the current branch and its upstream. */
+  refPaths: string[]
+  stamp: string
+  /** History as git reported it. Check badges come from a cache and are attached on read. */
+  branchHistory: ChatBranchHistorySnapshot
+  repoSlug: string | undefined
+  unpushedCount: number
+}
+
+/**
+ * Git-dir entries whose mtime moves on the events `git status` cannot see: a
+ * commit or reset (`index`, `logs/HEAD`), a checkout (`HEAD`), a fetch
+ * (`FETCH_HEAD`), a merge or rebase (`ORIG_HEAD`), a remote edit (`config`)
+ * and ref packing (`packed-refs`). The two directories move when a top-level
+ * branch or remote is created or deleted. The current branch and its upstream
+ * are stat'ed by name on top of these (see `refPathsFor`).
+ */
+const GIT_DIR_STAMP_PATHS = ["HEAD", "ORIG_HEAD", "FETCH_HEAD", "index", "packed-refs", "config", "logs/HEAD", "refs/heads", "refs/remotes"]
+
+function refPathsFor(branchName: string | undefined, upstreamRef: string | null) {
+  const refPaths: string[] = []
+  if (branchName) refPaths.push(`refs/heads/${branchName}`)
+  if (upstreamRef) refPaths.push(`refs/remotes/${upstreamRef}`)
+  return refPaths
+}
+
+/** Every field of a status entry, so a change in staging or rename source counts. */
+function statusKey(entries: DirtyPathEntry[]) {
+  return entries
+    .map((entry) => [entry.changeType, entry.isUntracked ? 1 : 0, entry.hasUnstagedChanges ? 1 : 0, entry.path, entry.previousPath ?? ""].join("\u001f"))
+    .join("\u001e")
+}
+
+async function readRepoStamp(args: {
+  repoRoot: string
+  gitDir: string
+  refPaths: readonly string[]
+  dirtyPaths: readonly string[]
+  status: string
+}) {
+  // Inode too: an editor that saves by rename gives the path a new file whose
+  // mtime and size can match the old one.
+  const stampOf = (info: { mtimeMs: number; size: number; ino: number }) => `${info.mtimeMs}:${info.size}:${info.ino}`
+  const [gitDirStamps, pathStamps] = await Promise.all([
+    Promise.all(
+      [...GIT_DIR_STAMP_PATHS, ...args.refPaths].map((entry) =>
+        stat(path.join(args.gitDir, entry)).then(stampOf).catch(() => "-")
+      )
+    ),
+    mapWithConcurrency([...args.dirtyPaths], FILE_SCAN_CONCURRENCY, (dirtyPath) =>
+      lstat(path.join(args.repoRoot, dirtyPath)).then(stampOf).catch(() => "-")
+    ),
+  ])
+  return [args.status, gitDirStamps.join("|"), pathStamps.join("|")].join("\n")
+}
+
 export class DiffStore {
   private readonly states = new Map<string, StoredChatDiffState>()
   private readonly snapshotVersions = new Map<string, number>()
   private readonly lineCountCaches = new Map<string, LineCountCache>()
   private readonly activeRefreshes = new Map<string, Promise<boolean>>()
   private readonly queuedRefreshes = new Map<string, Promise<boolean>>()
+  /** Projects whose queued follow-up refresh must run the full scan. */
+  private readonly forcedFollowUps = new Set<string>()
+  private readonly refreshGates = new Map<string, RefreshGate>()
+  /** True when the last completed refresh answered from the gate. Read by tests. */
+  lastRefreshSkipped = false
   /** PR numbers by "repoRoot\nlocalBranchName", recorded when a PR is checked out through Kanna. */
   private readonly prNumbersByBranch = new Map<string, number>()
   /**
@@ -1445,7 +1523,7 @@ export class DiffStore {
   }): Promise<BranchActionSuccess | BranchActionFailure> {
     const existingRepo = await resolveRepo(args.projectPath)
     if (existingRepo) {
-      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
       return {
         ok: true,
         branchName: await getBranchName(existingRepo.repoRoot),
@@ -1459,7 +1537,7 @@ export class DiffStore {
     }
 
     const repo = await resolveRepo(args.projectPath)
-    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
     return {
       ok: true,
       branchName: repo ? await getBranchName(repo.repoRoot) : undefined,
@@ -1629,7 +1707,7 @@ export class DiffStore {
       }
     }
 
-    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
     return {
       ok: true,
       branchName: await getBranchName(repo.repoRoot),
@@ -1707,13 +1785,18 @@ export class DiffStore {
    * scan is in flight. Callers that arrive while a refresh is running share a
    * follow-up run that starts after the current one, so post-mutation callers
    * always observe repository state from after their mutation.
+   *
+   * `force` runs the full scan even when the repo looks unchanged. Every
+   * mutation in this class passes it. The client's poll does not, and gets
+   * the cheap path in `refreshFromGate` when nothing has moved.
    */
-  async refreshSnapshot(projectId: string, projectPath: string): Promise<boolean> {
+  async refreshSnapshot(projectId: string, projectPath: string, options?: { force?: boolean }): Promise<boolean> {
+    const force = options?.force ?? false
     const active = this.activeRefreshes.get(projectId)
     if (!active) {
       const run = (async () => {
         try {
-          return await this.performRefresh(projectId, projectPath)
+          return await this.performRefresh(projectId, projectPath, force)
         } finally {
           this.activeRefreshes.delete(projectId)
         }
@@ -1722,6 +1805,9 @@ export class DiffStore {
       return run
     }
 
+    // A forced caller that lands behind an in-flight refresh shares the queued
+    // follow-up, so the flag has to travel with it.
+    if (force) this.forcedFollowUps.add(projectId)
     const queued = this.queuedRefreshes.get(projectId)
     if (queued) {
       return queued
@@ -1730,13 +1816,85 @@ export class DiffStore {
     const followUp = (async () => {
       await active.catch(() => undefined)
       this.queuedRefreshes.delete(projectId)
-      return this.refreshSnapshot(projectId, projectPath)
+      const forceFollowUp = this.forcedFollowUps.delete(projectId)
+      return this.refreshSnapshot(projectId, projectPath, { force: forceFollowUp })
     })()
     this.queuedRefreshes.set(projectId, followUp)
     return followUp
   }
 
-  private async performRefresh(projectId: string, projectPath: string) {
+  /**
+   * The cheap path for a poll: one `git status` plus a few dozen stats. When
+   * they match what the last full refresh banked, the stored state stands and
+   * the full scan does not run. The status runs with `--no-optional-locks` so
+   * it leaves the index alone; a poll must not look like a repo mutation.
+   *
+   * The invariant behind a skip: every input to the snapshot is in the stamp.
+   *
+   * - The status output covers the working tree as git sees it: an edit to a
+   *   clean tracked file, a new or deleted file, a rename, staging.
+   * - The git-dir mtimes (`GIT_DIR_STAMP_PATHS` plus the current branch and
+   *   upstream ref files) cover ref movement: commit, checkout, fetch, push,
+   *   merge, a remote edit.
+   * - The lstat of every path reported dirty covers what neither sees: a
+   *   second edit to a file that is already dirty. Untracked files are the
+   *   important case, since git holds no stat cache for them. Line counts and
+   *   the patch digest depend on this.
+   * - Check badges live outside the repo. They are re-attached from the cache
+   *   here, so a run that settles between polls still shows up.
+   *
+   * What the stamp cannot see: a ref another tool writes under a subdirectory
+   * of `refs/heads` or `refs/remotes` that is neither the current branch nor
+   * its upstream (only `defaultBranchName` fallback reads those); a git-dir
+   * change that lands while a full refresh is still running, since the stamp
+   * is banked after the scan; and an edit that leaves mtime, size and inode
+   * identical, which git misses too. Each shows up on the next stamp move or
+   * forced refresh.
+   *
+   * Returns null when a full refresh is due: no gate yet, the previous result
+   * was not `ready`, git status failed, or the stamp moved.
+   */
+  private async refreshFromGate(projectId: string): Promise<boolean | null> {
+    const gate = this.refreshGates.get(projectId)
+    const previous = this.states.get(projectId)
+    if (!gate || previous?.status !== "ready") return null
+
+    let dirtyEntries: DirtyPathEntry[]
+    try {
+      dirtyEntries = await listDirtyPaths(gate.repoRoot, { noOptionalLocks: true })
+    } catch {
+      return null
+    }
+    const stamp = await readRepoStamp({
+      repoRoot: gate.repoRoot,
+      gitDir: gate.gitDir,
+      refPaths: gate.refPaths,
+      dirtyPaths: gate.dirtyPaths,
+      status: statusKey(dirtyEntries),
+    })
+    if (stamp !== gate.stamp) return null
+
+    return this.commitState(projectId, {
+      ...previous,
+      branchHistory: attachCommitChecks({
+        history: gate.branchHistory,
+        repoSlug: gate.repoSlug,
+        unpushedCount: gate.unpushedCount,
+      }),
+    })
+  }
+
+  private async performRefresh(projectId: string, projectPath: string, force: boolean) {
+    if (!force) {
+      const gated = await this.refreshFromGate(projectId)
+      if (gated !== null) {
+        this.lastRefreshSkipped = true
+        return gated
+      }
+    }
+    this.lastRefreshSkipped = false
+    this.refreshGates.delete(projectId)
+
     const repo = await resolveRepo(projectPath)
     if (!repo) {
       this.lineCountCaches.delete(projectId)
@@ -1761,7 +1919,7 @@ export class DiffStore {
     const nextLineCountCache = new Map<string, LineCountCacheEntry>()
     // These are all read-only git queries — run them concurrently instead of
     // paying ~10 sequential subprocess round-trips per refresh.
-    const [currentFiles, branchName, defaultBranchName, originRemoteUrl, hasUpstream, lastFetchedAt] = await Promise.all([
+    const [currentFiles, branchName, defaultBranchName, originRemoteUrl, upstreamRef, gitDir] = await Promise.all([
       computeCurrentFiles(repo.repoRoot, repo.baseCommit, {
         cache: lineCountCache,
         nextCache: nextLineCountCache,
@@ -1769,9 +1927,11 @@ export class DiffStore {
       getBranchName(repo.repoRoot),
       resolveDefaultBranchName(repo.repoRoot),
       getOriginRemoteUrl(repo.repoRoot),
-      hasUpstreamBranch(repo.repoRoot),
-      getLastFetchedAt(repo.repoRoot),
+      getUpstreamRef(repo.repoRoot),
+      resolveGitDir(repo.repoRoot),
     ])
+    const hasUpstream = upstreamRef !== null
+    const lastFetchedAt = await readLastFetchedAt(gitDir)
     this.lineCountCaches.set(projectId, nextLineCountCache)
     const files = currentFiles.files
     this.onWorkingTreeProbe?.(projectId, currentFiles.scan)
@@ -1791,10 +1951,11 @@ export class DiffStore {
         : Promise.resolve({ entries: [] }),
     ])
     const { aheadCount, behindCount } = upstreamCounts
+    const unpushedCount = hasUpstream ? aheadCount ?? 0 : 0
     const historyWithChecks = attachCommitChecks({
       history: branchHistory,
       repoSlug: originRepoSlug,
-      unpushedCount: hasUpstream ? aheadCount ?? 0 : 0,
+      unpushedCount,
     })
     const nextState = {
       status: "ready",
@@ -1812,7 +1973,30 @@ export class DiffStore {
       files,
       branchHistory: historyWithChecks,
     } satisfies StoredChatDiffState
-    return this.commitState(projectId, nextState)
+    const changed = this.commitState(projectId, nextState)
+    if (gitDir) {
+      // Banked after every git call above has returned: the full `git status`
+      // may rewrite the index as a side effect, and a stamp read before that
+      // would make the next poll rescan a repo that has not moved.
+      const refPaths = refPathsFor(branchName, upstreamRef)
+      this.refreshGates.set(projectId, {
+        repoRoot: repo.repoRoot,
+        gitDir,
+        dirtyPaths: currentFiles.scan.paths,
+        refPaths,
+        stamp: await readRepoStamp({
+          repoRoot: repo.repoRoot,
+          gitDir,
+          refPaths,
+          dirtyPaths: currentFiles.scan.paths,
+          status: statusKey(currentFiles.dirtyEntries),
+        }),
+        branchHistory,
+        repoSlug: originRepoSlug,
+        unpushedCount,
+      })
+    }
+    return changed
   }
 
   async listBranches(args: {
@@ -2070,7 +2254,7 @@ export class DiffStore {
     const detail = formatGitFailure(mergeResult)
 
     if (mergeResult.exitCode !== 0) {
-      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
       const normalized = detail.toLowerCase()
       const title = normalized.includes("conflict")
         ? "Merge conflicts need resolution"
@@ -2086,7 +2270,7 @@ export class DiffStore {
       })
     }
 
-    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
     return {
       ok: true,
       branchName: await getBranchName(repo.repoRoot),
@@ -2175,7 +2359,7 @@ export class DiffStore {
       this.prNumbersByBranch.set(this.getPrBranchKey(repo.repoRoot, currentBranchName), args.branch.prNumber)
     }
 
-    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
     return {
       ok: true,
       branchName: currentBranchName,
@@ -2224,7 +2408,7 @@ export class DiffStore {
       return createBranchActionFailure("Create branch failed", formatGitFailure(switchResult), "Git could not create the branch.")
     }
 
-    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
     return {
       ok: true,
       branchName,
@@ -2266,7 +2450,7 @@ export class DiffStore {
         }
       }
 
-      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
       const branchName = await getBranchName(repo.repoRoot)
       const nextHasUpstream = await hasUpstreamBranch(repo.repoRoot)
       const { aheadCount, behindCount } = nextHasUpstream
@@ -2300,7 +2484,7 @@ export class DiffStore {
         return createSyncPushFailure(detail, false)
       }
 
-      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+      const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
       const branchName = await getBranchName(repo.repoRoot)
       const nextHasUpstream = await hasUpstreamBranch(repo.repoRoot)
       const { aheadCount, behindCount } = nextHasUpstream
@@ -2352,7 +2536,7 @@ export class DiffStore {
       }
     }
 
-    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
     const branchName = await getBranchName(repo.repoRoot)
     const nextHasUpstream = await hasUpstreamBranch(repo.repoRoot)
     const { aheadCount, behindCount } = nextHasUpstream
@@ -2477,7 +2661,7 @@ export class DiffStore {
     const committablePaths = normalizedPaths.filter((relativePath) => currentDirtyPathsByPath.has(relativePath))
     if (committablePaths.length === 0) {
       // Refresh so the sidebar catches up to what git actually has.
-      await this.refreshSnapshot(args.projectId, args.projectPath)
+      await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
       throw new Error(
         normalizedPaths.length === 1
           ? `Nothing to commit: ${normalizedPaths[0]} is no longer changed.`
@@ -2505,7 +2689,7 @@ export class DiffStore {
         { stdin: toPathspecStdin(trackedPaths) }
       )
       if (addTrackedResult.exitCode !== 0) {
-        await this.refreshSnapshot(args.projectId, args.projectPath)
+        await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
         return createCommitFailure(args.mode, formatGitFailure(addTrackedResult))
       }
     }
@@ -2518,7 +2702,7 @@ export class DiffStore {
         { stdin: toPathspecStdin(untrackedPaths) }
       )
       if (addUntrackedResult.exitCode !== 0) {
-        await this.refreshSnapshot(args.projectId, args.projectPath)
+        await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
         return createCommitFailure(args.mode, formatGitFailure(addUntrackedResult))
       }
     }
@@ -2539,11 +2723,11 @@ export class DiffStore {
 
     const commitResult = await runGit(commitArgs, repo.repoRoot, { stdin: toPathspecStdin(committablePaths) })
     if (commitResult.exitCode !== 0) {
-      await this.refreshSnapshot(args.projectId, args.projectPath)
+      await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
       return createCommitFailure(args.mode, formatGitFailure(commitResult))
     }
 
-    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const snapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
     const branchName = await getBranchName(repo.repoRoot)
     const skipped = skippedPaths.length > 0 ? { skippedPaths } : {}
 
@@ -2576,7 +2760,7 @@ export class DiffStore {
       return createPushFailure(args.mode, formatGitFailure(pushResult), snapshotChanged)
     }
 
-    const postPushSnapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath)
+    const postPushSnapshotChanged = await this.refreshSnapshot(args.projectId, args.projectPath, { force: true })
 
     return {
       ok: true,
@@ -2625,7 +2809,7 @@ export class DiffStore {
     }
 
     return {
-      snapshotChanged: await this.refreshSnapshot(args.projectId, args.projectPath),
+      snapshotChanged: await this.refreshSnapshot(args.projectId, args.projectPath, { force: true }),
     }
   }
 
@@ -2668,7 +2852,7 @@ export class DiffStore {
     }
 
     return {
-      snapshotChanged: await this.refreshSnapshot(args.projectId, args.projectPath),
+      snapshotChanged: await this.refreshSnapshot(args.projectId, args.projectPath, { force: true }),
     }
   }
 }

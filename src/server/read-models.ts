@@ -17,6 +17,7 @@ import type { ChatRecord, StoreState, TouchedFile } from "./events"
 import { resolveLocalPath } from "./paths"
 import { SERVER_PROVIDERS } from "./provider-catalog"
 import { buildTranscriptOutline } from "../shared/transcript-window"
+import type { TranscriptOutlineEntry } from "../shared/types"
 
 const SIDEBAR_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000
 const SIDEBAR_FALLBACK_PREVIEW_LIMIT = 5
@@ -396,7 +397,7 @@ export function deriveChatSnapshot(
   activeStatuses: Map<string, KannaStatus>,
   drainingChatIds: Set<string>,
   chatId: string,
-  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "readAnchor">
+  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "readAnchor"> & { outline?: TranscriptOutlineEntry[] }
 ): ChatSnapshot | null {
   const chat = state.chatsById.get(chatId)
   if (!chat || chat.deletedAt) return null
@@ -428,9 +429,9 @@ export function deriveChatSnapshot(
     startIndex: transcript.startIndex,
     availableProviders: [...SERVER_PROVIDERS],
     readAnchor: transcript.readAnchor,
-    // Built from the whole transcript here; the router cuts `messages` down
-    // to each socket's window afterwards, and the outline has to outlive
-    // that cut.
-    outline: buildTranscriptOutline(transcript.messages),
+    // The outline covers the whole chat even when `messages` starts at a
+    // window; the store caches it per transcript and only rebuilds when a
+    // prompt is appended.
+    outline: transcript.outline ?? buildTranscriptOutline(transcript.messages),
   }
 }

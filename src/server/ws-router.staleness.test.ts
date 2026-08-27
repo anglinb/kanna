@@ -177,6 +177,8 @@ function createWorld(options?: { projectPath?: string }) {
       if (!chat || (chat as { deletedAt?: number | null }).deletedAt) return null
       return chat
     },
+    getInitialTranscriptWindowStart: () => 0,
+    getEntryIdAt: () => undefined,
     getClientTranscript: (chatId: string) => ({
       messages: [...(messagesByChatId.get(chatId) ?? [])],
       startIndex: 0,
@@ -324,6 +326,8 @@ function createWorld(options?: { projectPath?: string }) {
     analyticsEnabled: true,
     theme: "system",
     newSidebarEnabled: false,
+    // The router sizes every chat window from this on subscribe.
+    transcript: { windowAssistantMessages: 50 },
   }
   const appSettings = {
     getSnapshot: () => appSettingsSnapshot,

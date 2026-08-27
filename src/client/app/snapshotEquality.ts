@@ -167,12 +167,7 @@ export function applyIncrementalChatSnapshot(
   if (incoming.startIndex < current.startIndex) {
     if (incomingEnd < current.startIndex) return null
     const messages = [...incoming.messages, ...current.messages.slice(incomingEnd - current.startIndex)]
-    return {
-      ...incoming,
-      messages,
-      startIndex: incoming.startIndex,
-      incremental: false,
-    }
+    return assembleFolded(current, incoming, messages, incoming.startIndex)
   }
 
   const offset = incoming.startIndex - current.startIndex
@@ -180,11 +175,50 @@ export function applyIncrementalChatSnapshot(
 
   const messages = current.messages.slice(0, offset)
   messages.push(...incoming.messages)
+  return assembleFolded(current, incoming, messages, current.startIndex)
+}
+
+/**
+ * The folded snapshot, keys in the order the server writes them. A folded
+ * state and a fresh full snapshot then serialize the same, which is what the
+ * router's staleness tests compare and what the local cache is keyed on.
+ */
+function assembleFolded(
+  current: Pick<ChatSnapshot, "messages" | "startIndex"> & Partial<Pick<ChatSnapshot, "availableProviders" | "readAnchor" | "outline">>,
+  incoming: ChatSnapshot,
+  messages: TranscriptEntry[],
+  startIndex: number,
+): ChatSnapshot {
+  const carried = carriedFields(current, incoming)
+  const { runtime, queuedMessages, availableProviders, readAnchor, outline, incremental, messages: _m, startIndex: _s, ...rest } = incoming
   return {
-    ...incoming,
+    ...rest,
+    runtime,
+    queuedMessages,
     messages,
-    startIndex: current.startIndex,
+    startIndex,
+    availableProviders: carried.availableProviders ?? availableProviders,
+    readAnchor: carried.readAnchor ?? null,
+    ...("outline" in carried ? { outline: carried.outline } : outline !== undefined ? { outline } : {}),
     incremental: false,
+  }
+}
+
+/**
+ * Fields an incremental body leaves out because they do not change mid-chat:
+ * the server strips them to keep a streamed push to its new entries. The
+ * held snapshot still has them, so they carry forward.
+ */
+function carriedFields(
+  current: Pick<ChatSnapshot, "messages" | "startIndex"> & Partial<Pick<ChatSnapshot, "availableProviders" | "readAnchor" | "outline">>,
+  incoming: ChatSnapshot,
+): Partial<Pick<ChatSnapshot, "availableProviders" | "readAnchor" | "outline">> {
+  return {
+    availableProviders: incoming.availableProviders ?? current.availableProviders,
+    readAnchor: incoming.readAnchor === undefined ? current.readAnchor ?? null : incoming.readAnchor,
+    // Omitted means "same as before"; the server sends it only when a
+    // prompt was added.
+    ...(incoming.outline === undefined && current.outline !== undefined ? { outline: current.outline } : {}),
   }
 }
 

@@ -585,6 +585,10 @@ export function useChatPageSidebarActions({
     }
 
     const intervalId = window.setInterval(() => {
+      // A hidden tab has nobody looking at the sidebar. The visibility effect
+      // below runs one refresh the moment the tab is visible again, so a long
+      // hidden stretch costs one refresh instead of one every tick.
+      if (document.visibilityState !== "visible") return
       refreshDiffs()
     }, DIFF_REFRESH_INTERVAL_MS)
 

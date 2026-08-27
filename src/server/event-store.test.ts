@@ -1584,3 +1584,30 @@ describe("stale empty chat pruning", () => {
     expect(store.getChat(chat.id)?.hasMessages).toBe(true)
   })
 })
+
+describe("getClientTranscript window and outline", () => {
+  test("clones from the requested index and keeps the outline whole", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(join(dataDir, "project"))
+    const chat = await store.createChat(project.id)
+    const at = Date.now()
+    await store.appendMessage(chat.id, { _id: "p1", createdAt: at, kind: "user_prompt", content: "first" } as TranscriptEntry)
+    await store.appendMessage(chat.id, { _id: "a1", createdAt: at + 1, kind: "assistant_text", text: "x" } as TranscriptEntry)
+    await store.appendMessage(chat.id, { _id: "p2", createdAt: at + 2, kind: "user_prompt", content: "second" } as TranscriptEntry)
+    await store.appendMessage(chat.id, { _id: "a2", createdAt: at + 3, kind: "assistant_text", text: "y" } as TranscriptEntry)
+
+    const windowed = store.getClientTranscript(chat.id, 2)
+    expect(windowed.startIndex).toBe(2)
+    expect(windowed.messages.map((entry) => entry._id)).toEqual(["p2", "a2"])
+    expect(windowed.outline.map((entry) => entry.index)).toEqual([0, 2])
+
+    const outlineBefore = windowed.outline
+    await store.appendMessage(chat.id, { _id: "a3", createdAt: at + 4, kind: "assistant_text", text: "z" } as TranscriptEntry)
+    expect(store.getClientTranscript(chat.id).outline).toBe(outlineBefore)
+    await store.appendMessage(chat.id, { _id: "p3", createdAt: at + 5, kind: "user_prompt", content: "third" } as TranscriptEntry)
+    expect(store.getClientTranscript(chat.id).outline.map((entry) => entry.id)).toEqual(["p1", "p2", "p3"])
+    await rm(dataDir, { recursive: true, force: true })
+  })
+})

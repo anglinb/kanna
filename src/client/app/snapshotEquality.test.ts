@@ -192,3 +192,18 @@ describe("foldChatSnapshot providers", () => {
     expect(next?.availableProviders[0]?.supportsPlanMode).toBe(true)
   })
 })
+
+describe("applyIncrementalChatSnapshot carried fields", () => {
+  test("an incremental body without providers or anchor keeps the held ones", () => {
+    const current = snapshot(0, ["a"])
+    current.availableProviders = [{ id: "claude" } as ChatSnapshot["availableProviders"][number]]
+    current.readAnchor = { messageId: "a", atEnd: false } as ChatSnapshot["readAnchor"]
+    const incoming = snapshot(1, ["b"], true)
+    delete (incoming as Partial<ChatSnapshot>).availableProviders
+    delete (incoming as Partial<ChatSnapshot>).readAnchor
+    const next = applyIncrementalChatSnapshot(current, incoming)
+    expect(next?.availableProviders).toBe(current.availableProviders)
+    expect(next?.readAnchor).toBe(current.readAnchor)
+    expect(ids(next)).toEqual(["a", "b"])
+  })
+})

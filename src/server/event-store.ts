@@ -4,7 +4,8 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
 import { toMessagePreview } from "../shared/message-preview"
-import { findTranscriptWindowStart } from "../shared/transcript-window"
+import { buildTranscriptOutline, findTranscriptWindowStart } from "../shared/transcript-window"
+import type { TranscriptOutlineEntry } from "../shared/types"
 import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
@@ -455,6 +456,7 @@ export class EventStore {
   }
 
   private resetState() {
+    this.stateVersion += 1
     this.state.projectsById.clear()
     this.state.projectIdsByPath.clear()
     this.state.chatsById.clear()
@@ -621,7 +623,15 @@ export class EventStore {
     return parsedEvents
   }
 
+  /**
+   * Bumped on every change that can move a sidebar row: applied events,
+   * transcript metadata, project order, a reset. Read models memoize on it,
+   * so a broadcast that changed nothing here skips the derive entirely.
+   */
+  stateVersion = 0
+
   private applyEvent(event: StoreEvent) {
+    this.stateVersion += 1
     switch (event.type) {
       case "project_opened": {
         const localPath = resolveLocalPath(event.localPath)
@@ -869,6 +879,7 @@ export class EventStore {
   }
 
   private applyMessageMetadata(chatId: string, entry: TranscriptEntry) {
+    this.stateVersion += 1
     const chat = this.state.chatsById.get(chatId)
     if (!chat) return
     chat.hasMessages = true
@@ -1094,6 +1105,7 @@ export class EventStore {
   }
 
   async setSidebarProjectOrder(projectIds: string[]) {
+    this.stateVersion += 1
     const validProjectIds = projectIds.filter((projectId) => {
       const project = this.state.projectsById.get(projectId)
       return Boolean(project && !project.deletedAt)
@@ -1905,12 +1917,51 @@ export class EventStore {
    * `startIndex` is always 0. It stays on the shape because streamed appends
    * are sent as slices positioned against it.
    */
-  getClientTranscript(chatId: string) {
+  /**
+   * The transcript as a client sees it, from `fromIndex` on.
+   *
+   * Cloning is per entry, so a push used to clone the whole chat and then
+   * throw away everything before the window. Callers pass the earliest index
+   * any subscriber holds. `startIndex` records where the clone begins so the
+   * router can still slice per socket.
+   */
+  getClientTranscript(chatId: string, fromIndex = 0) {
+    const entries = this.getTranscriptEntries(chatId)
+    const start = Math.max(0, Math.min(fromIndex, entries.length))
     return {
-      messages: cloneTranscriptEntriesForClient(this.getTranscriptEntries(chatId)),
-      startIndex: 0,
+      messages: cloneTranscriptEntriesForClient(start === 0 ? entries : entries.slice(start)),
+      startIndex: start,
       readAnchor: this.getChatReadAnchor(chatId),
+      outline: this.getTranscriptOutline(chatId, entries),
     }
+  }
+
+  /**
+   * Outline per cached transcript, rebuilt only when a prompt was appended.
+   * Keyed by the entries array, which appends grow in place and a reload
+   * replaces, so a stale array can never serve a stale outline. Between
+   * prompts only the appended tail is scanned.
+   */
+  private readonly outlineCache = new WeakMap<TranscriptEntry[], { length: number; outline: TranscriptOutlineEntry[] }>()
+
+  private getTranscriptOutline(chatId: string, entries: TranscriptEntry[]): TranscriptOutlineEntry[] {
+    const cached = this.outlineCache.get(entries)
+    if (cached && cached.length <= entries.length) {
+      let promptAppended = false
+      for (let index = cached.length; index < entries.length; index += 1) {
+        if (entries[index]!.kind === "user_prompt") {
+          promptAppended = true
+          break
+        }
+      }
+      if (!promptAppended) {
+        cached.length = entries.length
+        return cached.outline
+      }
+    }
+    const outline = buildTranscriptOutline(entries)
+    this.outlineCache.set(entries, { length: entries.length, outline })
+    return outline
   }
 
   listProjects() {

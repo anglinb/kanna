@@ -29,6 +29,7 @@ import { KeybindingsManager } from "./keybindings"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { handleTranscribe } from "./transcribe"
+import { handleChatWindow } from "./chat-window-route"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
@@ -596,9 +597,19 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(projectFileContentResponse)
           }
 
+          const chatWindowResponse = await handleChatWindow(req, url, { store, agent, appSettings })
+          if (chatWindowResponse) {
+            return withOriginAgentCluster(chatWindowResponse)
+          }
+
           return withOriginAgentCluster(serveStatic(distDir, url.pathname))
         },
         websocket: {
+          // Negotiated per connection: browsers opt in and get 8-12x smaller
+          // snapshots over the tunnel; the iOS app's URLSession never offers
+          // it and keeps raw frames. The router compresses only frames worth
+          // it (see `send` in ws-router.ts), so localhost pays close to nothing.
+          perMessageDeflate: true,
           open(ws) {
             router.handleOpen(ws)
           },
