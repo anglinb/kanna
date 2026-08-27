@@ -4,10 +4,12 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
 import { toMessagePreview } from "../shared/message-preview"
+import type { ChatReminder, ReminderSource } from "../shared/reminders"
 import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
   type ChatEvent,
+  type ChatRecord,
   type ProjectEvent,
   type QueuedMessageEvent,
   type SnapshotFile,
@@ -200,6 +202,8 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_read_anchor_set":
     case "chat_files_touched":
     case "chat_last_message_at_set":
+    case "chat_reminder_set":
+    case "chat_reminder_cleared":
       return 9
     case "chat_deleted":
     case "chat_archived":
@@ -741,6 +745,27 @@ export class EventStore {
         chat.updatedAt = event.timestamp
         break
       }
+      case "chat_reminder_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        chat.reminder = {
+          dueAt: event.dueAt,
+          createdAt: event.timestamp,
+          createdBy: event.createdBy,
+          ...(event.prompt ? { prompt: event.prompt } : {}),
+        }
+        // Deliberately does not bump `updatedAt`, for the same reason
+        // `chat_read_anchor_set` doesn't: scheduling something for later is not
+        // activity, and an old chat should not climb the sidebar because the
+        // user asked to be reminded of it.
+        break
+      }
+      case "chat_reminder_cleared": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        delete chat.reminder
+        break
+      }
       case "message_appended": {
         this.applyMessageMetadata(event.chatId, event.entry)
         const existing = this.legacyMessagesByChatId.get(event.chatId) ?? []
@@ -1171,6 +1196,8 @@ export class EventStore {
 
     for (const chat of this.state.chatsById.values()) {
       if (chat.deletedAt || chat.archivedAt || protectedChatIds.has(chat.id)) continue
+      // Even an empty chat is spoken for once a reminder is scheduled on it.
+      if (chat.reminder) continue
       if (now - chat.createdAt < maxAgeMs) continue
       if (chat.hasMessages) continue
       // Peek without inserting into the transcript cache — the prune sweep
@@ -1243,6 +1270,9 @@ export class EventStore {
 
     for (const chat of this.state.chatsById.values()) {
       if (chat.deletedAt || chat.archivedAt || protectedChatIds.has(chat.id)) continue
+      // A pending reminder means the chat is due to come back on its own.
+      // Archiving it first would hide it right up until it reappears.
+      if (chat.reminder) continue
       // Empty chats are the prune sweep's job (hard delete), not ours.
       if (!chat.hasMessages && chat.lastMessageAt == null) continue
       const lastActivityAt = chat.lastMessageAt ?? chat.createdAt
@@ -1285,6 +1315,9 @@ export class EventStore {
 
     for (const chat of this.state.chatsById.values()) {
       if (chat.deletedAt || protectedChatIds.has(chat.id)) continue
+      // A chat someone scheduled a reminder for is not idle — something is
+      // going to happen to it. Deleting it would silently drop the reminder.
+      if (chat.reminder) continue
       const lastActivityAt = chat.lastMessageAt ?? chat.createdAt
       if (reference - lastActivityAt < maxAgeMs) continue
 
@@ -1369,6 +1402,57 @@ export class EventStore {
       done,
     }
     await this.append(this.chatsLogPath, event)
+  }
+
+  /**
+   * Schedule a reminder, replacing any pending one. No no-op guard: setting the
+   * same time twice is a deliberate act (the user reaching for the menu again),
+   * and unlike a scroll anchor it is not written on a throttle.
+   */
+  async setChatReminder(chatId: string, args: {
+    dueAt: number
+    prompt?: string
+    createdBy: ReminderSource
+  }) {
+    this.requireChat(chatId)
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_reminder_set",
+      timestamp: Date.now(),
+      chatId,
+      dueAt: args.dueAt,
+      createdBy: args.createdBy,
+      ...(args.prompt ? { prompt: args.prompt } : {}),
+    }
+    await this.append(this.chatsLogPath, event)
+  }
+
+  /** Cancel or consume the pending reminder. Silent when there is none. */
+  async clearChatReminder(chatId: string) {
+    const chat = this.state.chatsById.get(chatId)
+    if (!chat?.reminder) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_reminder_cleared",
+      timestamp: Date.now(),
+      chatId,
+    }
+    await this.append(this.chatsLogPath, event)
+  }
+
+  /**
+   * Every chat with a pending reminder — the scheduler's work list.
+   *
+   * Rebuilt on each tick rather than held as timers, so reminders survive a
+   * restart: the schedule lives in the log, not in the process.
+   */
+  listChatsWithReminders(): Array<{ chat: ChatRecord; reminder: ChatReminder }> {
+    const rows: Array<{ chat: ChatRecord; reminder: ChatReminder }> = []
+    for (const chat of this.state.chatsById.values()) {
+      if (chat.deletedAt || !chat.reminder) continue
+      rows.push({ chat, reminder: chat.reminder })
+    }
+    return rows
   }
 
   /**

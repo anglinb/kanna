@@ -39,6 +39,8 @@ import type { NightlyInstallResult } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { SecretRequestStore } from "./secret-requests"
 import { createSecretsApi, resolveAskingChat, resolveProjectFromCwd } from "./secrets-api"
+import { createRemindersApi } from "./reminders-api"
+import { ReminderScheduler } from "./reminder-scheduler"
 import { timestamped } from "./transcript"
 import { mintInstanceToken, removeInstanceFile, writeInstanceFile } from "./instance-file"
 import { instanceFingerprint } from "./instance"
@@ -300,6 +302,50 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     },
   })
 
+  // Chat reminders. The schedule lives in the store, so the scheduler holds no
+  // state of its own and a reminder outlives the process that took it.
+  // `router` is referenced lazily — it is assigned just below.
+  const reminderScheduler = new ReminderScheduler({
+    listReminders: () => store.listChatsWithReminders(),
+    clearReminder: (chatId) => store.clearChatReminder(chatId),
+    markUnread: (chatId) => store.setChatReadState(chatId, true),
+    // The divider that explains the prompt landing underneath it. Awaited (not
+    // best-effort like the secret notice): it must be in the transcript before
+    // the prompt it introduces, or it reads as a reply to it.
+    recordNotice: async (chatId, notice) => {
+      await store.appendMessage(chatId, timestamped({
+        kind: "reminder_notice",
+        scheduledAt: notice.scheduledAt,
+        createdBy: notice.createdBy,
+        wokeAgent: notice.wokeAgent,
+      }))
+    },
+    // Same entry point as a typed message, so a busy chat queues it rather
+    // than racing the running turn — and an archived one comes back.
+    postPrompt: async (chatId, content) => {
+      await agent.send({ type: "chat.send", chatId, content })
+    },
+    onChanged: () => router.scheduleBroadcast(),
+  })
+  const handleRemindersRequest = createRemindersApi({
+    token: instanceToken,
+    setReminder: (chatId, reminderArgs) =>
+      store.setChatReminder(chatId, { ...reminderArgs, createdBy: "agent" }),
+    clearReminder: (chatId) => store.clearChatReminder(chatId),
+    onChanged: () => router.scheduleBroadcast(),
+    resolveChat: ({ cwd, claimedChatId }) => resolveAskingChat({
+      cwd,
+      claimedChatId,
+      runningChatIds: [...agent.getActiveStatuses().keys()],
+      chatLocalPath: (chatId) => {
+        const chat = store.getChat(chatId)
+        if (!chat) return null
+        return store.getProject(chat.projectId)?.localPath ?? null
+      },
+    }),
+  })
+  reminderScheduler.start()
+
   router = createWsRouter({
     store,
     diffStore,
@@ -488,6 +534,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           if (requestClass === "local") {
             const secretsResponse = await handleSecretsRequest(req, url)
             if (secretsResponse) return secretsResponse
+            const remindersResponse = await handleRemindersRequest(req, url)
+            if (remindersResponse) return remindersResponse
           }
 
           if (url.pathname === "/auth/status") {
@@ -681,6 +729,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     keybindings.dispose()
     terminals.closeAll()
     secretRequests.dispose()
+    reminderScheduler.stop()
     await removeInstanceFile()
     await store.compact()
     server.stop(true)

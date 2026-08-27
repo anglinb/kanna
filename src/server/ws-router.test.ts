@@ -1350,6 +1350,172 @@ describe("ws-router", () => {
     })
   })
 
+  function createReminderRouterState() {
+    const state = createEmptyState()
+    state.projectsById.set("project-1", {
+      id: "project-1",
+      localPath: "/tmp/project",
+      title: "Project",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    state.projectIdsByPath.set("/tmp/project", "project-1")
+    state.chatsById.set("chat-1", {
+      id: "chat-1",
+      projectId: "project-1",
+      title: "Chat",
+      createdAt: 1,
+      updatedAt: 1,
+      unread: false,
+      provider: null,
+      planMode: false,
+      autoPlan: false,
+      sessionToken: null,
+      lastTurnOutcome: null,
+    })
+    return state
+  }
+
+  async function sendCommand(
+    router: ReturnType<typeof createTestRouter>,
+    ws: FakeWebSocket,
+    id: string,
+    command: unknown,
+  ) {
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "command", id, command }))
+  }
+
+  test("sets the unread flag either way", async () => {
+    const state = createReminderRouterState()
+    const calls: Array<{ chatId: string; unread: boolean }> = []
+    const router = createTestRouter({
+      store: createFakeStore({
+        state,
+        async setChatReadState(chatId: string, unread: boolean) {
+          calls.push({ chatId, unread })
+          const chat = state.chatsById.get(chatId)
+          if (chat) chat.unread = unread
+        },
+      }),
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await sendCommand(router, ws, "unread-1", { type: "chat.setUnread", chatId: "chat-1", unread: true })
+    await sendCommand(router, ws, "unread-2", { type: "chat.setUnread", chatId: "chat-1", unread: false })
+
+    expect(calls).toEqual([
+      { chatId: "chat-1", unread: true },
+      { chatId: "chat-1", unread: false },
+    ])
+  })
+
+  test("schedules a reminder and puts its due time on the sidebar row", async () => {
+    const state = createReminderRouterState()
+    const calls: Array<Record<string, unknown>> = []
+    const router = createTestRouter({
+      store: createFakeStore({
+        state,
+        async setChatReminder(chatId: string, args: Record<string, unknown>) {
+          calls.push({ chatId, ...args })
+          const chat = state.chatsById.get(chatId)
+          if (chat) {
+            chat.reminder = {
+              dueAt: args.dueAt as number,
+              createdAt: 1,
+              createdBy: args.createdBy as "user" | "agent",
+              ...(args.prompt ? { prompt: args.prompt as string } : {}),
+            }
+          }
+        },
+      }),
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "subscribe", id: "sidebar", topic: { type: "sidebar" },
+    }))
+
+    const dueAt = Date.now() + 30 * 60_000
+    await sendCommand(router, ws, "remind-1", {
+      type: "chat.setReminder", chatId: "chat-1", dueAt, prompt: "  check metrics  ",
+    })
+
+    expect(calls).toEqual([{
+      chatId: "chat-1",
+      dueAt,
+      createdBy: "user",
+      prompt: "check metrics",
+    }])
+    const snapshot = ws.sent.at(-1) as { snapshot: { data: { projectGroups: Array<{ chats: Array<{ reminderAt?: number }> }> } } }
+    expect(snapshot.snapshot.data.projectGroups[0]?.chats[0]?.reminderAt).toBe(dueAt)
+  })
+
+  test("rejects a reminder in the past rather than scheduling one that never fires", async () => {
+    const state = createReminderRouterState()
+    const calls: unknown[] = []
+    const router = createTestRouter({
+      store: createFakeStore({
+        state,
+        async setChatReminder(...args: unknown[]) {
+          calls.push(args)
+        },
+      }),
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await sendCommand(router, ws, "remind-bad", {
+      type: "chat.setReminder", chatId: "chat-1", dueAt: Date.now() - 1_000,
+    })
+
+    expect(calls).toEqual([])
+    expect(ws.sent.at(-1)).toMatchObject({ type: "error", id: "remind-bad" })
+  })
+
+  test("omits the prompt when it is blank, so the reminder only resurfaces the chat", async () => {
+    const state = createReminderRouterState()
+    const calls: Array<Record<string, unknown>> = []
+    const router = createTestRouter({
+      store: createFakeStore({
+        state,
+        async setChatReminder(chatId: string, args: Record<string, unknown>) {
+          calls.push({ chatId, ...args })
+        },
+      }),
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await sendCommand(router, ws, "remind-2", {
+      type: "chat.setReminder", chatId: "chat-1", dueAt: Date.now() + 60_000, prompt: "   ",
+    })
+
+    expect(calls[0]).toEqual({ chatId: "chat-1", dueAt: calls[0]!.dueAt, createdBy: "user" })
+    expect("prompt" in calls[0]!).toBe(false)
+  })
+
+  test("clears a reminder", async () => {
+    const state = createReminderRouterState()
+    const cleared: string[] = []
+    const router = createTestRouter({
+      store: createFakeStore({
+        state,
+        async clearChatReminder(chatId: string) {
+          cleared.push(chatId)
+        },
+      }),
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await sendCommand(router, ws, "clear-1", { type: "chat.clearReminder", chatId: "chat-1" })
+
+    expect(cleared).toEqual(["chat-1"])
+    expect(ws.sent.some((message) => (message as { id?: string }).id === "clear-1"
+      && (message as { type?: string }).type === "ack")).toBe(true)
+  })
+
   test("marks chats read and rebroadcasts sidebar snapshots", async () => {
     const state = createEmptyState()
     state.projectsById.set("project-1", {

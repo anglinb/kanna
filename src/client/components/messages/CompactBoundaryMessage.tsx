@@ -57,3 +57,52 @@ export function SecretNoticeMessage({
     </div>
   )
 }
+
+/**
+ * A reminder fired and woke this chat.
+ *
+ * Reads as a divider rather than a message because that is its job: the prompt
+ * directly below it was posted by the schedule, not typed by the user, and
+ * without this line it reads as something they said and forgot.
+ */
+export function ReminderNoticeMessage({
+  message,
+}: {
+  message: Extract<
+    import("../../../shared/types").HydratedTranscriptMessage,
+    { kind: "reminder_notice" }
+  >
+}) {
+  const ago = formatScheduledAgo(message.scheduledAt, Date.parse(message.timestamp))
+  const who = message.createdBy === "agent" ? "scheduled follow-up" : "reminder"
+  const label = message.wokeAgent
+    ? `${who}${ago ? ` · set ${ago} ago` : ""}`
+    : `${who}${ago ? ` · set ${ago} ago` : ""} · no turn started`
+
+  return (
+    <div className="flex items-center gap-3">
+      <ZigZagLine />
+      <span className="flex-shrink-0 text-[11px] uppercase tracking-widest text-muted-foreground">
+        {label}
+      </span>
+      <ZigZagLine />
+    </div>
+  )
+}
+
+/**
+ * How long before firing the reminder was set. Coarse on purpose — "set 3h ago"
+ * is the useful fact; minutes of precision on a thing that already happened is
+ * noise. Returns null when the gap is under a minute or the timestamps are
+ * unusable, so the label simply omits the clause.
+ */
+function formatScheduledAgo(scheduledAt: number, firedAt: number): string | null {
+  if (!Number.isFinite(scheduledAt) || !Number.isFinite(firedAt)) return null
+  const elapsed = firedAt - scheduledAt
+  if (elapsed < 60_000) return null
+  const minutes = Math.round(elapsed / 60_000)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.round(elapsed / 3_600_000)
+  if (hours < 24) return `${hours}h`
+  return `${Math.round(hours / 24)}d`
+}

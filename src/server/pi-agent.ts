@@ -19,6 +19,7 @@ import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { AsyncQueue } from "./async-queue"
 import { buildKannaAgentCorrection, buildKannaAgentId, buildKannaAttributionInstructions } from "./attribution"
 import { buildAskSecretInstructions } from "./secret-instructions"
+import { reminderInstructionsBlock } from "./reminder-instructions"
 import { appendSystemMessageBlock } from "./harness-skills"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
 import { timestamped } from "./transcript"
@@ -433,7 +434,8 @@ export class PiAgentManager {
       appendSystemPrompt: [
         buildKannaAttributionInstructions(buildKannaAgentId("pi", args.model)),
         buildAskSecretInstructions(),
-      ],
+        reminderInstructionsBlock(args.chatId),
+      ].filter((block): block is string => block !== null),
     })
     await resourceLoader.reload()
 

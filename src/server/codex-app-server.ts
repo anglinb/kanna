@@ -14,6 +14,7 @@ import type { HarnessEvent, HarnessToolRequest, HarnessTurn } from "./harness-ty
 import { appendSystemMessageBlock, buildSkillSystemMessage } from "./harness-skills"
 import { buildKannaAgentId, buildKannaAttributionInstructions } from "./attribution"
 import { buildAskSecretInstructions } from "./secret-instructions"
+import { reminderInstructionsBlock } from "./reminder-instructions"
 import { AsyncQueue } from "./async-queue"
 import { asNumber, asRecord } from "../shared/json"
 import { timestamped } from "./transcript"
@@ -921,7 +922,8 @@ export class CodexAppServerManager {
             developer_instructions: [
               buildKannaAttributionInstructions(buildKannaAgentId("codex", args.model)),
               buildAskSecretInstructions(),
-            ].join("\n\n"),
+              reminderInstructionsBlock(args.chatId),
+            ].filter((block): block is string => block !== null).join("\n\n"),
           },
         },
       } satisfies TurnStartParams)

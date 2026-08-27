@@ -862,11 +862,12 @@ export interface SidebarChatRow {
   status: KannaStatus
   unread: boolean
   /**
-   * The GitHub pull request this chat references, with the latest watched
-   * state. Absent unless someone linked one; the sidebar draws a status badge
-   * from it, left of the trailing detail label.
+   * When this chat's pending reminder fires. Absent unless one is scheduled.
+   * Only the time rides the wire — the prompt behind it can be long, is read
+   * by nothing in the sidebar, and would put a chat message into a snapshot
+   * that fans out to every socket.
    */
-  linkedPullRequest?: LinkedPullRequest
+  reminderAt?: number
   /** User marked the chat done (board Done column). Cleared when a new turn starts. */
   done?: boolean
   /** When the chat was marked done. Set iff `done` is true. */
@@ -1798,6 +1799,24 @@ export interface SecretNoticeEntry extends TranscriptEntryBase {
   scope?: "project" | "global"
 }
 
+/**
+ * A reminder came due and woke this chat.
+ *
+ * Written when it *fires*, not when it is scheduled: a pending reminder is
+ * live state (the composer shows it, and it can still be cancelled), while a
+ * fired one is history. It earns its place in the transcript because firing
+ * posts a prompt the user never typed — without this marker that prompt is
+ * inexplicable.
+ */
+export interface ReminderNoticeEntry extends TranscriptEntryBase {
+  kind: "reminder_notice"
+  /** When the reminder was set, so the notice can say how long ago that was. */
+  scheduledAt: number
+  createdBy: "user" | "agent"
+  /** False for a reminder that only resurfaced the chat without a prompt. */
+  wokeAgent: boolean
+}
+
 export interface InterruptedEntry extends TranscriptEntryBase {
   kind: "interrupted"
 }
@@ -1847,6 +1866,7 @@ export type TranscriptEntry =
   | CompactSummaryEntry
   | ContextClearedEntry
   | SecretNoticeEntry
+  | ReminderNoticeEntry
   | InterruptedEntry
   | HandoffBoundaryEntry
   | SessionRestoredEntry
@@ -1960,6 +1980,7 @@ export type HydratedTranscriptMessage =
   | ({ kind: "compact_summary"; summary: string; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "context_cleared"; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "secret_notice"; secretName: string; outcome: SecretNoticeEntry["outcome"]; scope?: SecretNoticeEntry["scope"]; id: string; messageId?: string; timestamp: string; hidden?: boolean })
+  | ({ kind: "reminder_notice"; scheduledAt: number; createdBy: ReminderNoticeEntry["createdBy"]; wokeAgent: boolean; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "handoff_boundary"; fromProvider: AgentProvider; toProvider: AgentProvider; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "session_restored"; provider: AgentProvider; stats?: HandoffBoundaryEntry["stats"]; id: string; messageId?: string; timestamp: string; hidden?: boolean })
   | ({ kind: "interrupted"; id: string; messageId?: string; timestamp: string; hidden?: boolean })

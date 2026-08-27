@@ -59,6 +59,7 @@ import { fallbackTitleFromMessage } from "./generate-title"
 import { asNumber, asRecord } from "../shared/json"
 import { buildHandoffContext, buildHandoffMessageContent, type HandoffContext } from "./handoff"
 import { buildAskSecretInstructions } from "./secret-instructions"
+import { reminderInstructionsBlock } from "./reminder-instructions"
 import { SECRET_CHAT_ID_ENV_VAR } from "../shared/secrets"
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
@@ -751,7 +752,8 @@ async function startClaudeSession(args: {
         append: [
           buildKannaAttributionInstructions(buildKannaAgentId("claude", args.model)),
           buildAskSecretInstructions(),
-        ].join("\n\n"),
+          reminderInstructionsBlock(),
+        ].filter((block): block is string => block !== null).join("\n\n"),
       },
       // fastMode must go through the flag-settings layer: the CLI only allows
       // fast mode in Agent SDK sessions when flagSettings.fastMode is true,

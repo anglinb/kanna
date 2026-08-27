@@ -174,6 +174,15 @@ export function processTranscriptMessages(entries: TranscriptEntry[]): HydratedT
           scope: entry.scope,
         })
         break
+      case "reminder_notice":
+        messages.push({
+          ...createBaseMessage(entry),
+          kind: "reminder_notice",
+          scheduledAt: entry.scheduledAt,
+          createdBy: entry.createdBy,
+          wokeAgent: entry.wokeAgent,
+        })
+        break
       case "handoff_boundary":
         messages.push({
           ...createBaseMessage(entry),

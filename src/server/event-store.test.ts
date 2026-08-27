@@ -1353,6 +1353,158 @@ describe("on-demand tool payloads", () => {
   })
 })
 
+describe("chat reminders", () => {
+  test("stores a reminder and survives compaction and restart", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    expect(store.getChat(chat.id)?.reminder).toBeUndefined()
+
+    const dueAt = Date.now() + 30 * 60_000
+    await store.setChatReminder(chat.id, { dueAt, prompt: "check metrics", createdBy: "agent" })
+
+    expect(store.getChat(chat.id)?.reminder).toMatchObject({
+      dueAt,
+      prompt: "check metrics",
+      createdBy: "agent",
+    })
+
+    await store.compact()
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+
+    // The whole point: the schedule outlives the process that took it.
+    expect(reloaded.getChat(chat.id)?.reminder).toMatchObject({ dueAt, prompt: "check metrics" })
+  })
+
+  test("replays from the log without a snapshot", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    const dueAt = Date.now() + 60_000
+    await store.setChatReminder(chat.id, { dueAt, createdBy: "user" })
+
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.getChat(chat.id)?.reminder?.dueAt).toBe(dueAt)
+  })
+
+  test("setting a second reminder replaces the first", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+
+    await store.setChatReminder(chat.id, { dueAt: 1_000, prompt: "first", createdBy: "user" })
+    await store.setChatReminder(chat.id, { dueAt: 2_000, createdBy: "agent" })
+
+    const reminder = store.getChat(chat.id)?.reminder
+    expect(reminder?.dueAt).toBe(2_000)
+    // Replaced wholesale, not merged — the old prompt must not survive.
+    expect(reminder?.prompt).toBeUndefined()
+    expect(reminder?.createdBy).toBe("agent")
+  })
+
+  test("clearing removes it, and clearing again is silent", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    await store.setChatReminder(chat.id, { dueAt: Date.now() + 60_000, createdBy: "user" })
+
+    await store.clearChatReminder(chat.id)
+    expect(store.getChat(chat.id)?.reminder).toBeUndefined()
+    await store.clearChatReminder(chat.id)
+    expect(store.getChat(chat.id)?.reminder).toBeUndefined()
+  })
+
+  test("scheduling does not bump updatedAt — a reminder is not activity", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    const before = store.getChat(chat.id)!.updatedAt
+
+    await store.setChatReminder(chat.id, { dueAt: Date.now() + 60_000, createdBy: "user" })
+
+    expect(store.getChat(chat.id)?.updatedAt).toBe(before)
+  })
+
+  test("listChatsWithReminders is the scheduler's work list", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const withReminder = await store.createChat(project.id)
+    const without = await store.createChat(project.id)
+    const deleted = await store.createChat(project.id)
+
+    await store.setChatReminder(withReminder.id, { dueAt: 5_000, createdBy: "user" })
+    await store.setChatReminder(deleted.id, { dueAt: 5_000, createdBy: "user" })
+    await store.deleteChat(deleted.id)
+
+    const rows = store.listChatsWithReminders()
+    expect(rows.map((row) => row.chat.id)).toEqual([withReminder.id])
+    expect(rows[0]?.reminder.dueAt).toBe(5_000)
+    expect(store.getChat(without.id)?.reminder).toBeUndefined()
+  })
+
+  test("a pending reminder spares a chat from every staleness sweep", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const reminded = await store.createChat(project.id)
+    await store.appendMessage(reminded.id, entry("user_prompt", reminded.createdAt + 1, { content: "old" }))
+    const oldActivityAt = store.getChat(reminded.id)!.lastMessageAt!
+    await store.setChatReminder(reminded.id, {
+      dueAt: oldActivityAt + 200 * 24 * 60 * 60 * 1000,
+      createdBy: "user",
+    })
+
+    // A fresh chat drags the staleness reference far past both windows.
+    const fresh = await store.createChat(project.id)
+    const farFuture = oldActivityAt + 200 * 24 * 60 * 60 * 1000
+    await store.appendMessage(fresh.id, entry("user_prompt", farFuture, { content: "fresh" }))
+
+    expect(await store.deleteStaleChats({ now: farFuture + 1 })).toEqual([])
+    expect(await store.autoArchiveStaleChats({ now: farFuture + 1 })).toEqual([])
+    expect(store.getChat(reminded.id)?.archivedAt).toBeUndefined()
+    expect(store.getChat(reminded.id)).not.toBeNull()
+  })
+
+  test("a pending reminder spares an empty chat from the prune sweep", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const empty = await store.createChat(project.id)
+    await store.setChatReminder(empty.id, { dueAt: Date.now() + 60_000, createdBy: "agent" })
+
+    const pruned = await store.pruneStaleEmptyChats({
+      now: empty.createdAt + 10 * 60 * 1000,
+    })
+
+    expect(pruned).toEqual([])
+    expect(store.getChat(empty.id)).not.toBeNull()
+  })
+})
+
 describe("stale empty chat pruning", () => {
   test("keeps a cached chat that actually has messages", async () => {
     // The prune sweep only deletes chats it believes are empty. `hasMessages`

@@ -37,6 +37,9 @@ export function ThreadRow({
   onForkChat,
   onArchiveChat,
   onRestoreChat,
+  onSetChatUnread,
+  onSetChatReminder,
+  onClearChatReminder,
   onDeleteChat,
 }: {
   thread: SidebarThread
@@ -81,6 +84,14 @@ export function ThreadRow({
   onForkChat: (chat: SidebarThread["row"]) => void
   onArchiveChat: (chat: SidebarThread["row"]) => void
   onRestoreChat: (chatId: string) => void
+  /**
+   * Triage actions. Optional on the same terms as `onSelectMessage` above: a
+   * surface without a socket (the archived list, tests) shows no such items
+   * rather than items that would throw.
+   */
+  onSetChatUnread?: (chatId: string, unread: boolean) => void
+  onSetChatReminder?: (chatId: string, dueAt: number) => void
+  onClearChatReminder?: (chatId: string) => void
   onDeleteChat: (chat: SidebarThread["row"]) => void
 }) {
   // Read once here and handed to both the row and its card: the icon slot and
@@ -137,6 +148,17 @@ export function ThreadRow({
       archived={archived}
       editorLabel={editorLabel}
       repoUrl={thread.projectLabel.repoUrl}
+      unread={thread.row.unread}
+      reminderAt={thread.row.reminderAt}
+      onSetUnread={onSetChatUnread
+        ? (unread) => onSetChatUnread(thread.row.chatId, unread)
+        : undefined}
+      onSetReminder={onSetChatReminder
+        ? (dueAt) => onSetChatReminder(thread.row.chatId, dueAt)
+        : undefined}
+      onClearReminder={onClearChatReminder
+        ? () => onClearChatReminder(thread.row.chatId)
+        : undefined}
       onNewChat={() => onCreateChat(thread.projectId)}
       onRestore={archived ? () => onRestoreChat(thread.row.chatId) : undefined}
       onRename={() => onRenameChat(thread.row)}

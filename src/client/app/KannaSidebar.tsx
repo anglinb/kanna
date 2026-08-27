@@ -79,6 +79,9 @@ interface KannaSidebarProps {
   onOpenArchivedChat: (chatId: string) => void
   onRestoreChat: (chatId: string) => void
   onDeleteChat: (chat: SidebarChatRow) => void
+  onSetChatUnread: (chatId: string, unread: boolean) => void
+  onSetChatReminder: (chatId: string, dueAt: number) => void
+  onClearChatReminder: (chatId: string) => void
   onCopyPath: (localPath: string) => void
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
   /** Fetches what a chat changed, for the hover card's file list. */
@@ -115,6 +118,9 @@ function KannaSidebarImpl({
   onOpenArchivedChat,
   onRestoreChat,
   onDeleteChat,
+  onSetChatUnread,
+  onSetChatReminder,
+  onClearChatReminder,
   onCopyPath,
   onOpenExternalPath,
   onLoadTouchedFiles,
@@ -278,10 +284,13 @@ function KannaSidebarImpl({
         onForkChat={onForkChat}
         onArchiveChat={onArchiveChat}
         onRestoreChat={onRestoreChat}
+        onSetChatUnread={onSetChatUnread}
+        onSetChatReminder={onSetChatReminder}
+        onClearChatReminder={onClearChatReminder}
         onDeleteChat={onDeleteChat}
       />
     )
-  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onLoadTouchedFiles, onOpenExternalPath, onRenameChat, onRestoreChat, onSetupGit, onShareChat, resolvedKeybindings, selectChat, selectChatMessage, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
+  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onClearChatReminder, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onLoadTouchedFiles, onOpenExternalPath, onRenameChat, onRestoreChat, onSetChatReminder, onSetChatUnread, onSetupGit, onShareChat, resolvedKeybindings, selectChat, selectChatMessage, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -716,6 +725,9 @@ function KannaSidebarImpl({
                 onForkChat={onForkChat}
                 onArchiveChat={onArchiveChat}
                 onDeleteChat={onDeleteChat}
+                onSetChatUnread={onSetChatUnread}
+                onSetChatReminder={onSetChatReminder}
+                onClearChatReminder={onClearChatReminder}
                 onCopyPath={onCopyPath}
                 onOpenExternalPath={onOpenExternalPath}
               />

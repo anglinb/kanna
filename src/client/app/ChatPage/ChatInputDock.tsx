@@ -1,6 +1,7 @@
 import { memo, type RefObject } from "react"
 import { ChatInput, type ChatInputHandle } from "../../components/chat-ui/ChatInput"
 import { SecretRequestCard } from "../../components/secrets/SecretRequestCard"
+import { ReminderDockCard } from "../../components/reminders/ReminderDockCard"
 import type { ContextWindowSnapshot } from "../../lib/contextWindow"
 import type { KannaState } from "../useKannaState"
 import type { AgentProvider, ChatSkillsSnapshot } from "../../../shared/types"
@@ -22,6 +23,7 @@ interface ChatInputDockProps {
   availableProviders: KannaState["availableProviders"]
   contextWindowSnapshot: ContextWindowSnapshot | null
   secretRequests: KannaState["secretRequests"]
+  chatReminder: KannaState["chatReminder"]
   onSubmit: KannaState["handleSend"]
   onCancel: () => void
   onEditModels: () => void
@@ -45,6 +47,7 @@ export const ChatInputDock = memo(function ChatInputDock({
   availableProviders,
   contextWindowSnapshot,
   secretRequests,
+  chatReminder,
   onSubmit,
   onCancel,
   onEditModels,
@@ -67,6 +70,16 @@ export const ChatInputDock = memo(function ChatInputDock({
             request={secretRequests.activeRequest}
             onSubmit={secretRequests.submit}
             onCancel={secretRequests.cancel}
+          />
+        </div>
+        {/* Below the secret prompt and above the composer: a pending reminder
+            is ambient context, not an interruption, so it must never push a
+            prompt the agent is blocked on further from the eye. */}
+        <div className="relative">
+          <ReminderDockCard
+            dueAt={chatReminder.dueAt}
+            nowMs={chatReminder.nowMs}
+            onClear={chatReminder.clear}
           />
         </div>
         <div className="relative">

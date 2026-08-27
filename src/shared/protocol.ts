@@ -178,6 +178,19 @@ export type ClientCommand =
    */
   | { type: "chat.touchedFiles"; chatId: string }
   | { type: "chat.markRead"; chatId: string }
+  /**
+   * Set the unread flag either way. `chat.markRead` stays for the automatic
+   * read-on-navigate-away path, which only ever clears; this is the deliberate
+   * one, and marking a chat *unread* is a thing only a person does.
+   */
+  | { type: "chat.setUnread"; chatId: string; unread: boolean }
+  /**
+   * Schedule a reminder for a chat, replacing any pending one. `prompt` is
+   * posted into the chat when it fires; without one the reminder just brings
+   * the chat back as unread.
+   */
+  | { type: "chat.setReminder"; chatId: string; dueAt: number; prompt?: string }
+  | { type: "chat.clearReminder"; chatId: string }
   | { type: "chat.setDone"; chatId: string; done: boolean }
   /**
    * Persist where the user left off reading. Sent on a throttle while

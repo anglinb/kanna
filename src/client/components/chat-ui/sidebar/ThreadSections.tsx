@@ -124,6 +124,9 @@ interface Props {
   onForkChat: (chat: SidebarChatRow) => void
   onArchiveChat: (chat: SidebarChatRow) => void
   onDeleteChat: (chat: SidebarChatRow) => void
+  onSetChatUnread: (chatId: string, unread: boolean) => void
+  onSetChatReminder: (chatId: string, dueAt: number) => void
+  onClearChatReminder: (chatId: string) => void
   onCopyPath: (localPath: string) => void
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
 }
@@ -154,6 +157,9 @@ function ThreadSectionsImpl({
   onForkChat,
   onArchiveChat,
   onDeleteChat,
+  onSetChatUnread,
+  onSetChatReminder,
+  onClearChatReminder,
   onCopyPath,
   onOpenExternalPath,
 }: Props) {
@@ -214,6 +220,9 @@ function ThreadSectionsImpl({
       onForkChat={onForkChat}
       onArchiveChat={onArchiveChat}
       onRestoreChat={onRestoreChat}
+      onSetChatUnread={onSetChatUnread}
+      onSetChatReminder={onSetChatReminder}
+      onClearChatReminder={onClearChatReminder}
       onDeleteChat={onDeleteChat}
     />
   )

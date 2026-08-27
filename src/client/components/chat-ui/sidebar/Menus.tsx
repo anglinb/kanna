@@ -1,11 +1,15 @@
 import type { ReactNode } from "react"
-import { Archive, Code, Copy, EyeOff, FolderOpen, Github, Pencil, PencilOff, RotateCcw, Split, SquarePen, Trash2, UserRoundPlus } from "lucide-react"
+import { Archive, Clock, Code, Copy, EyeOff, FolderOpen, Github, Mail, MailOpen, Pencil, PencilOff, RotateCcw, Split, SquarePen, Trash2, UserRoundPlus } from "lucide-react"
 import { getRepoUrlLabel } from "../../../../shared/git-url"
+import { formatReminderDue, REMINDER_PRESETS } from "../../../lib/reminder-presets"
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "../../ui/context-menu"
 
@@ -130,6 +134,8 @@ export function ChatRowMenu({
   archived,
   editorLabel,
   repoUrl,
+  unread,
+  reminderAt,
   onNewChat,
   onRename,
   onShare,
@@ -140,6 +146,9 @@ export function ChatRowMenu({
   onArchive,
   onRestore,
   onClearDraft,
+  onSetUnread,
+  onSetReminder,
+  onClearReminder,
   onDelete,
   children,
 }: {
@@ -149,6 +158,10 @@ export function ChatRowMenu({
   editorLabel: string
   /** The project's forge page; absent when it has no browsable origin. */
   repoUrl?: string
+  /** Current unread state — decides whether the item reads "Unread" or "Read". */
+  unread?: boolean
+  /** When this chat's pending reminder fires, if it has one. */
+  reminderAt?: number
   /** Starts a fresh chat in this chat's project. */
   onNewChat: () => void
   onRename: () => void
@@ -165,6 +178,15 @@ export function ChatRowMenu({
    * clear beats a permanently greyed-out item in every menu.
    */
   onClearDraft?: () => void
+  /**
+   * Flip the unread flag. Absent on surfaces with no socket to send it (the
+   * archived list, tests), which simply get no item — same contract as
+   * `onClearDraft`.
+   */
+  onSetUnread?: (unread: boolean) => void
+  /** Schedule a reminder at an absolute time. Absent hides the submenu. */
+  onSetReminder?: (dueAt: number) => void
+  onClearReminder?: () => void
   onDelete: () => void
   children: ReactNode
 }) {
@@ -206,6 +228,60 @@ export function ChatRowMenu({
             <ContextMenuSeparator />
           </>
         ) : null}
+
+        {/* Triage: what you do to a row you are not opening right now. Leads
+            the chat actions because that is the common case for a right-click
+            on a row you just glanced at. */}
+        {onSetUnread ? (
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              onSetUnread(!unread)
+            }}
+          >
+            {unread ? <MailOpen className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}
+            <span className="text-xs font-medium">
+              {unread ? "Mark as Read" : "Mark as Unread"}
+            </span>
+          </ContextMenuItem>
+        ) : null}
+        {onSetReminder ? (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Clock className="h-3.5 w-3.5" />
+              <span className="text-xs font-medium">
+                {reminderAt ? `Reminder ${formatReminderDue(reminderAt, Date.now())}` : "Remind Me"}
+              </span>
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {REMINDER_PRESETS.map((preset) => (
+                <ContextMenuItem
+                  key={preset.label}
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    onSetReminder(preset.resolve(Date.now()))
+                  }}
+                >
+                  <span className="text-xs font-medium">{preset.label}</span>
+                </ContextMenuItem>
+              ))}
+              {reminderAt && onClearReminder ? (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault()
+                      onClearReminder()
+                    }}
+                  >
+                    <span className="text-xs font-medium">Cancel Reminder</span>
+                  </ContextMenuItem>
+                </>
+              ) : null}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : null}
+        {onSetUnread || onSetReminder ? <ContextMenuSeparator /> : null}
 
         {/* Chat actions */}
         <ContextMenuItem

@@ -1,6 +1,7 @@
 import type { ServerWebSocket } from "bun"
 import { homedir } from "node:os"
 import { PROTOCOL_VERSION } from "../shared/types"
+import { normalizeReminderPrompt, resolveReminderDueAt } from "../shared/reminders"
 import type { ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
 import { isClientEnvelope } from "../shared/protocol"
 import type { AgentCoordinator } from "./agent"
@@ -1288,6 +1289,31 @@ export function createWsRouter({
         }
         case "chat.markRead": {
           await store.setChatReadState(command.chatId, false)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          await broadcastChatAndSidebar(command.chatId)
+          return
+        }
+        case "chat.setUnread": {
+          await store.setChatReadState(command.chatId, command.unread)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          await broadcastChatAndSidebar(command.chatId)
+          return
+        }
+        case "chat.setReminder": {
+          const resolved = resolveReminderDueAt({ now: Date.now(), dueAt: command.dueAt })
+          if (!resolved.ok) throw new Error(resolved.error)
+          const prompt = normalizeReminderPrompt(command.prompt)
+          await store.setChatReminder(command.chatId, {
+            dueAt: resolved.dueAt,
+            createdBy: "user",
+            ...(prompt ? { prompt } : {}),
+          })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          await broadcastChatAndSidebar(command.chatId)
+          return
+        }
+        case "chat.clearReminder": {
+          await store.clearChatReminder(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           await broadcastChatAndSidebar(command.chatId)
           return

@@ -148,6 +148,17 @@ function blockFromEntry(entry: TranscriptEntry): Omit<HandoffBlock, "elided"> | 
         body: "",
         elidableBody: false,
       }
+    case "reminder_notice":
+      // Worth carrying: it explains why the prompt after it exists. Without it
+      // the incoming agent reads a scheduled wake-up as a user instruction.
+      return {
+        entry,
+        header: entry.wokeAgent
+          ? "--- scheduled reminder fired; the message below was posted by it, not typed ---"
+          : "--- scheduled reminder fired ---",
+        body: "",
+        elidableBody: false,
+      }
     case "handoff_boundary":
       return {
         entry,

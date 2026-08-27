@@ -20,6 +20,12 @@ import {
   runAskSecretCommand,
   type AskSecretArgs,
 } from "./ask-secret-command"
+import {
+  parseRemindArgs,
+  remindHelpLines,
+  runRemindCommand,
+  type RemindArgs,
+} from "./remind-command"
 
 export interface CliOptions {
   port: number
@@ -86,6 +92,7 @@ export interface CliRuntimeDeps {
   startShareTunnel?: (localUrl: string, shareMode: Exclude<ShareMode, false>) => Promise<StartedShareTunnel>
   runPairCommandImpl?: typeof runPairCommand
   runAskSecretCommandImpl?: typeof runAskSecretCommand
+  runRemindCommandImpl?: typeof runRemindCommand
   readCloudIdentityImpl?: (warn: (message: string) => void) => Promise<CloudIdentity | null>
   createCloudRuntimeImpl?: (identity: CloudIdentity) => CloudRuntime
   probeExistingInstanceImpl?: (port: number) => Promise<ExistingInstance | null>
@@ -102,6 +109,7 @@ type ParsedArgs =
   | { kind: "run"; options: CliOptions }
   | { kind: "pair"; args: PairCommandArgs }
   | { kind: "ask-secret"; args: AskSecretArgs }
+  | { kind: "remind"; args: RemindArgs }
   | { kind: "help" }
   | { kind: "version" }
 
@@ -122,6 +130,7 @@ Usage:
 
 Agent commands:
 ${askSecretHelpLines().join("\n")}
+${remindHelpLines().join("\n")}
 
 Options:
   --port <number>      Port to listen on (default: ${PROD_SERVER_PORT})
@@ -172,6 +181,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
   if (argv[0] === "ask-secret") {
     return { kind: "ask-secret", args: parseAskSecretArgs(argv.slice(1)) }
+  }
+
+
+  if (argv[0] === "remind") {
+    return { kind: "remind", args: parseRemindArgs(argv.slice(1)) }
   }
 
   let port = PROD_SERVER_PORT
@@ -357,6 +371,14 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
   // Runs against the server that is already up; never starts one.
   if (parsedArgs.kind === "ask-secret") {
     const code = await (deps.runAskSecretCommandImpl ?? runAskSecretCommand)(parsedArgs.args, {
+      log: deps.log,
+      warn: deps.warn,
+    })
+    return { kind: "exited", code }
+  }
+
+  if (parsedArgs.kind === "remind") {
+    const code = await (deps.runRemindCommandImpl ?? runRemindCommand)(parsedArgs.args, {
       log: deps.log,
       warn: deps.warn,
     })

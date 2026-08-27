@@ -1,3 +1,4 @@
+import type { ChatReminder, ReminderSource } from "../shared/reminders"
 import type { AgentProvider, ProjectSummary, QueuedChatMessage, TranscriptEntry } from "../shared/types"
 
 export interface ProjectRecord extends ProjectSummary {
@@ -47,6 +48,17 @@ export interface ChatRecord {
    * rather than pin to a message.
    */
   readAnchor?: ChatReadAnchor | null
+  /**
+   * The GitHub pull request this chat is working on, if any. At most one — a
+   * chat is a unit of work, and "which PR is this" should have one answer.
+   * Absent on every chat until someone links one.
+   */
+  /**
+   * A pending "come back to this later". At most one — setting a second
+   * replaces the first. Cleared the moment it fires, so its presence is
+   * exactly "something is still scheduled".
+   */
+  reminder?: ChatReminder
   provider: AgentProvider | null
   planMode: boolean
   /** "Auto Plan": the harness keeps its EnterPlanMode tool. Claude only. */
@@ -265,6 +277,31 @@ export type ChatEvent =
       timestamp: number
       chatId: string
       done: boolean
+    }
+  /**
+   * Schedule (or reschedule) this chat's reminder. Replaces any pending one —
+   * a chat has at most one.
+   */
+  | {
+      v: 2
+      type: "chat_reminder_set"
+      timestamp: number
+      chatId: string
+      dueAt: number
+      prompt?: string
+      createdBy: ReminderSource
+    }
+  /**
+   * The reminder is gone: either it fired, or someone cancelled it. Both write
+   * the same event — what happens *after* firing is a separate concern (an
+   * unread flag and possibly a posted prompt), and folding it in here would
+   * make replay re-run side effects.
+   */
+  | {
+      v: 2
+      type: "chat_reminder_cleared"
+      timestamp: number
+      chatId: string
     }
   | {
       v: 2

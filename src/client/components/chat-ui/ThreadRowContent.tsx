@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
-import { Loader2, MessageCircle, PencilLine } from "lucide-react"
+import { Clock, Loader2, MessageCircle, PencilLine } from "lucide-react"
 import type { SidebarChatRow } from "../../../shared/types"
+import { formatReminderDue } from "../../lib/reminder-presets"
 import type { SidebarThread } from "../../lib/thread-sections"
 import { cn } from "../../lib/utils"
 import { AnimatedShinyText } from "../ui/animated-shiny-text"
@@ -147,6 +148,10 @@ export function ThreadRowContent({
   // opted out of receding entirely.
   const needsAttention = thread.row.status !== "idle" || thread.row.unread
   const dimTitle = dimIdleTitles && !isActive && !hasUncommittedWork && !needsAttention
+  // Only one trailing element may claim the free space. The clock takes it when
+  // there is one, and the label then just sits next to it.
+  const reminderAt = thread.archived ? undefined : thread.row.reminderAt
+  const trailingMarginClass = reminderAt ? "ml-1" : "ml-auto"
   return (
     <>
       {statusDot ?? (HarnessIcon
@@ -170,12 +175,26 @@ export function ThreadRowContent({
         // of the parent gap so it hugs the title.
         <span className="-ml-1 min-w-0 flex-1 truncate text-xs text-muted-foreground">{previewText}</span>
       ) : null}
+      {/* Left of the trailing label and outside its hover-swap wrapper, so the
+          clock stays put while the hover actions are showing rather than fading
+          out with the age label. */}
+      {reminderAt ? (
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Clock
+            className="size-3 shrink-0 text-muted-foreground/70"
+            aria-label={`Reminder ${formatReminderDue(reminderAt, Date.now())}`}
+          />
+        </span>
+      ) : null}
       {hoverActions ? (
         // The label keeps its natural width and the title takes what's left —
         // but never less than half, because a `repo/branch` label is far longer
         // than the bare folder name this used to show. Proportional rather than
         // a fixed px cap: the sidebar is resizable.
-        <span className="ml-auto relative flex h-6 min-w-12 max-w-[50%] shrink-0 items-center justify-end pl-3 text-xs">
+        <span className={cn(
+          "relative flex h-6 min-w-12 max-w-[50%] shrink-0 items-center justify-end pl-3 text-xs",
+          trailingMarginClass,
+        )}>
           {/* z-10 + pointer-events-none on the label: while the label's opacity
               transition runs, opacity<1 creates a stacking context that would
               otherwise lift the later-DOM label above the icons and steal the
@@ -192,7 +211,7 @@ export function ThreadRowContent({
         </span>
       ) : (
         // See above: natural width, capped at half the row.
-        <span className="ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 pl-3 text-xs">
+        <span className={cn("flex max-w-[50%] shrink-0 items-center gap-1.5 pl-3 text-xs", trailingMarginClass)}>
           {detailLabel == null ? null : (
             <span className="min-w-0 truncate text-muted-foreground">{detailLabel}</span>
           )}

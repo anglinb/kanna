@@ -232,6 +232,7 @@ export function deriveSidebarData(
           title: chat.title,
           status: deriveStatus(chat, activeStatuses.get(chat.id)),
           unread: chat.unread,
+          ...(chat.reminder ? { reminderAt: chat.reminder.dueAt } : {}),
           ...(chat.doneAt ? { done: true, doneAt: chat.doneAt } : {}),
           localPath: project.localPath,
           provider: chat.provider,

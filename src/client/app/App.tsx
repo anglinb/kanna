@@ -281,6 +281,15 @@ function KannaLayout() {
   const handleSidebarDeleteChat = useCallback((chat: Parameters<typeof state.handleDeleteChat>[0]) => {
     void state.handleDeleteChat(chat)
   }, [state.handleDeleteChat])
+  const handleSidebarSetChatUnread = useCallback((chatId: string, unread: boolean) => {
+    void state.handleSetChatUnread(chatId, unread)
+  }, [state.handleSetChatUnread])
+  const handleSidebarSetChatReminder = useCallback((chatId: string, dueAt: number) => {
+    void state.handleSetChatReminder(chatId, dueAt)
+  }, [state.handleSetChatReminder])
+  const handleSidebarClearChatReminder = useCallback((chatId: string) => {
+    void state.handleClearChatReminder(chatId)
+  }, [state.handleClearChatReminder])
   const handleSidebarCopyPath = useCallback((localPath: string) => {
     void state.handleCopyPath(localPath)
   }, [state.handleCopyPath])
@@ -328,6 +337,9 @@ function KannaLayout() {
       onOpenArchivedChat={handleOpenArchivedChat}
       onRestoreChat={handleRestoreChat}
       onDeleteChat={handleSidebarDeleteChat}
+      onSetChatUnread={handleSidebarSetChatUnread}
+      onSetChatReminder={handleSidebarSetChatReminder}
+      onClearChatReminder={handleSidebarClearChatReminder}
       onCopyPath={handleSidebarCopyPath}
       onOpenExternalPath={handleSidebarOpenExternalPath}
       onSetupGit={handleSidebarSetupGit}
@@ -345,6 +357,9 @@ function KannaLayout() {
     handleSidebarCreateChat,
     handleSidebarArchiveChat,
     handleSidebarDeleteChat,
+    handleSidebarSetChatUnread,
+    handleSidebarSetChatReminder,
+    handleSidebarClearChatReminder,
     handleOpenArchivedChat,
     handleRestoreChat,
     handleSidebarForkChat,

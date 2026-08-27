@@ -16,6 +16,7 @@ import { processTranscriptMessages } from "../lib/parseTranscript"
 import { formatProjectRepoBranch } from "../lib/project-label"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
 import { useSecretRequests, type SecretRequestsState } from "./useSecretRequests"
+import { useChatReminder, type ChatReminderState } from "./useChatReminder"
 import {
   applySidebarProjectOrder,
   getActiveChatSnapshot,
@@ -51,6 +52,7 @@ import { useChatReadAnchor, type ChatReadAnchorState } from "./useChatReadAnchor
 import { useSendMessage } from "./useSendMessage"
 import { useShareExport } from "./useShareExport"
 import { useUpdateRestart } from "./useUpdateRestart"
+import { DEFAULT_REMINDER_PROMPT } from "../../shared/reminders"
 import type { EditorOpenSettings, OpenExternalAction } from "../../shared/protocol"
 
 export {
@@ -145,6 +147,8 @@ export interface KannaState {
   socket: KannaSocket
   /** Agent-raised credential prompts, rendered inline above the composer. */
   secretRequests: SecretRequestsState
+  /** The active chat's pending reminder, for the dock indicator. */
+  chatReminder: ChatReminderState
   activeChatId: string | null
   activeProjectId: string | null
   sidebarData: SidebarData
@@ -219,6 +223,9 @@ export interface KannaState {
   handleOpenArchivedChat: (chatId: string) => Promise<void>
   handleRestoreChat: (chatId: string) => Promise<void>
   handleDeleteChat: (chat: SidebarChatRow) => Promise<void>
+  handleSetChatUnread: (chatId: string, unread: boolean) => Promise<void>
+  handleSetChatReminder: (chatId: string, dueAt: number) => Promise<void>
+  handleClearChatReminder: (chatId: string) => Promise<void>
   handleSetupGit: (chatId: string) => Promise<void>
   handleHideProject: (projectId: string) => Promise<void>
   handleReorderProjectGroups: (projectIds: string[]) => Promise<void>
@@ -282,6 +289,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     () => applySidebarProjectOrder(sidebarData.projectGroups, optimisticSidebarProjectOrder),
     [optimisticSidebarProjectOrder, sidebarData.projectGroups]
   )
+  const chatReminder = useChatReminder(socket, activeChatId, sidebarProjectGroups)
   const resolvedSidebarData = useMemo(
     () => (
       sidebarProjectGroups === sidebarData.projectGroups
@@ -452,11 +460,19 @@ export function useKannaState(activeChatId: string | null): KannaState {
     sidebarGroupsRef.current = sidebarProjectGroups
   }, [sidebarProjectGroups])
 
+  // Chats the user deliberately marked unread while they were the active chat.
+  // Without this the effect below would clear the flag the instant they
+  // navigated away — which is precisely when "mark as unread" is supposed to
+  // start meaning something. One suppression per mark: leaving consumes it, so
+  // the next visit reads and clears as normal.
+  const deliberatelyUnreadRef = useRef(new Set<string>())
+
   const previousActiveChatIdRef = useRef<string | null>(null)
   useEffect(() => {
     const previousChatId = previousActiveChatIdRef.current
     previousActiveChatIdRef.current = activeChatId ?? null
     if (!previousChatId || previousChatId === activeChatId) return
+    if (deliberatelyUnreadRef.current.delete(previousChatId)) return
     const previousChat = sidebarGroupsRef.current
       .flatMap((group) => group.chats)
       .find((chat) => chat.chatId === previousChatId)
@@ -779,6 +795,49 @@ export function useKannaState(activeChatId: string | null): KannaState {
     }
   }, [activeChatId, navigate, sidebarProjectGroups, socket])
 
+  const handleSetChatUnread = useCallback(async (chatId: string, unread: boolean) => {
+    // Only the active chat needs shielding from the read-on-leave effect: it
+    // fires for the chat being left, so any other row is already safe. Marking
+    // read again drops the shield rather than leaving it to misfire later.
+    if (unread && chatId === activeChatId) {
+      deliberatelyUnreadRef.current.add(chatId)
+    } else {
+      deliberatelyUnreadRef.current.delete(chatId)
+    }
+    try {
+      await socket.command({ type: "chat.setUnread", chatId, unread })
+      setCommandError(null)
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : String(error))
+    }
+  }, [activeChatId, socket])
+
+  // The menu's presets carry the default prompt, so a sidebar reminder wakes
+  // the chat rather than only flagging it. Reminders with no prompt are the
+  // agent-facing path (`kanna remind` without a message).
+  const handleSetChatReminder = useCallback(async (chatId: string, dueAt: number) => {
+    try {
+      await socket.command({
+        type: "chat.setReminder",
+        chatId,
+        dueAt,
+        prompt: DEFAULT_REMINDER_PROMPT,
+      })
+      setCommandError(null)
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : String(error))
+    }
+  }, [socket])
+
+  const handleClearChatReminder = useCallback(async (chatId: string) => {
+    try {
+      await socket.command({ type: "chat.clearReminder", chatId })
+      setCommandError(null)
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : String(error))
+    }
+  }, [socket])
+
   // Viewing an archived chat is read-only navigation — it stays archived.
   // Restoring is explicit (context menu) or implicit via sending a message
   // (the server unarchives on chat.send).
@@ -914,6 +973,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   return {
     socket,
     secretRequests,
+    chatReminder,
     activeChatId,
     activeProjectId,
     sidebarData: resolvedSidebarData,
@@ -981,6 +1041,9 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleOpenArchivedChat,
     handleRestoreChat,
     handleDeleteChat,
+    handleSetChatUnread,
+    handleSetChatReminder,
+    handleClearChatReminder,
     handleSetupGit,
     handleHideProject,
     handleReorderProjectGroups,
