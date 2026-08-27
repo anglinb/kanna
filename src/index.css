@@ -147,14 +147,16 @@
  * The track moves the fixed mask. The copy moves backward, so the text stays
  * fixed.
  *
- * Two rules keep this off the main thread. The keyframes use plain
- * percentages: Chromium resolves `calc()` with `var()` inside keyframes on the
- * main thread every tick, and a trace showed the page producing 115 frames a
- * second at idle with no JS on the stack, all of it from these two animations
- * on running chats. And the timing is `steps()`: a shimmer read as motion at
- * a dozen updates a cycle, and a 120Hz display would otherwise composite 160.
- * No `will-change`: a compositor-driven transform is promoted on its own, and
- * a permanent layer per running row was the wrong trade.
+ * What keeps this off the main thread is the keyframes: plain percentages,
+ * no `calc()` with `var()`. Chromium resolved those on the main thread every
+ * tick, and a trace showed 115 frames a second at idle from these two
+ * animations alone. With fixed values the compositor runs them and a tick
+ * costs close to nothing. `steps(48)` over 2s is 24 fps, film rate: smooth to
+ * the eye, and the compositor skips the frames in between instead of
+ * producing 120 a second per running row. (16 steps read as stutter.) The
+ * sweep takes 60% of the cycle and then parks off screen, which is quieter
+ * to look at and idle for the rest. No `will-change`: a compositor-driven
+ * transform is promoted on its own.
  */
 .kanna-shiny-track {
   -webkit-mask-image: linear-gradient(
@@ -173,11 +175,11 @@
   mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;
   mask-size: 100% 100%;
-  animation: kanna-shiny-track 1.33s steps(16) infinite;
+  animation: kanna-shiny-track 2s steps(48) infinite;
 }
 
 .kanna-shiny-copy {
-  animation: kanna-shiny-copy 1.33s steps(16) infinite;
+  animation: kanna-shiny-copy 2s steps(48) infinite;
 }
 
 @keyframes kanna-shiny-track {
@@ -185,6 +187,7 @@
     transform: translateX(-100%);
   }
 
+  60%,
   to {
     transform: translateX(100%);
   }
@@ -195,6 +198,7 @@
     transform: translateX(100%);
   }
 
+  60%,
   to {
     transform: translateX(-100%);
   }
@@ -202,10 +206,11 @@
 
 /*
  * Tailwind's `animate-ping` at 1s would cost a compositor frame per display
- * refresh for every unread row. Six steps is the same pulse to the eye.
+ * refresh for every unread or waiting row. 24 steps is 24 fps, which reads
+ * the same and lets the compositor idle between frames.
  */
 .kanna-ping {
-  animation: kanna-ping 1s steps(6) infinite;
+  animation: kanna-ping 1s steps(24) infinite;
 }
 
 @keyframes kanna-ping {
