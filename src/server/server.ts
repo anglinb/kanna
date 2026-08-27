@@ -609,7 +609,16 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           // snapshots over the tunnel; the iOS app's URLSession never offers
           // it and keeps raw frames. The router compresses only frames worth
           // it (see `send` in ws-router.ts), so localhost pays close to nothing.
-          perMessageDeflate: true,
+          //
+          // Server-to-client only. With decompression on, in any mode, Safari
+          // never settled the socket while Chrome was fine: Bun cannot inflate
+          // the frames WebKit sends (the handshake was not the problem; the
+          // "dedicated" reply is a bare `permessage-deflate` and Safari still
+          // failed). Client frames are commands and pings, a few hundred
+          // bytes, so nothing is lost by taking them raw. "dedicated" rather
+          // than the shared compressor: one deflate context per socket, a few
+          // hundred KB each, and a reply Safari accepts.
+          perMessageDeflate: { compress: "dedicated", decompress: "disable" },
           open(ws) {
             router.handleOpen(ws)
           },
