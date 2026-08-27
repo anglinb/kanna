@@ -109,5 +109,8 @@
     "typescript": "5.8.3",
     "vite": "^6.0.0",
     "zustand": "^5.0.10"
+  },
+  "patchedDependencies": {
+    "@shadcn/react@0.2.1": "patches/@shadcn%2Freact@0.2.1.patch"
   }
 }

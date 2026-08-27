@@ -961,7 +961,12 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
           {recorder.errorMessage ? (
             <div className="max-w-[840px] mx-auto px-4 pb-1.5 text-xs text-destructive">{recorder.errorMessage}</div>
           ) : null}
-          <div className="flex items-end max-w-[840px] mx-auto border dark:bg-card/40 backdrop-blur-lg border-border rounded-[29px] pr-1.5">
+          {/*
+            Opaque on purpose. A backdrop blur here re-samples and re-blurs
+            everything under the composer on every transcript repaint, which
+            during a streaming turn is every frame.
+          */}
+          <div className="flex items-end max-w-[840px] mx-auto border bg-background dark:bg-card border-border rounded-[29px] pr-1.5">
             {recording ? (
               <div className="flex min-w-0 flex-1 items-center px-4 py-[6px] md:py-[10px]">
                 <RecordingWaveform levels={recorder.levels} />

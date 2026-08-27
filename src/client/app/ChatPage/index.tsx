@@ -22,6 +22,7 @@ import { useProjectRepoUrl } from "../../stores/sidebarStore"
 import { DEFAULT_PROJECT_TERMINAL_LAYOUT, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { shouldCloseTerminalPane } from "../terminalLayoutResize"
+import { disposeCachedTerminal } from "../../components/chat-ui/TerminalPane"
 import { TERMINAL_TOGGLE_ANIMATION_DURATION_MS } from "../terminalToggleAnimation"
 import { useRightSidebarToggleAnimation } from "../useRightSidebarToggleAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
@@ -50,6 +51,9 @@ export {
   hasFileDragTypes,
   shouldAutoFollowTranscriptResize,
 } from "./utils"
+
+/** Stable identity so a chat without a snapshot does not re-derive per render. */
+const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
 
 function useEmptyStateTyping(showEmptyState: boolean, activeChatId: string | null) {
   const [typedEmptyStateText, setTypedEmptyStateText] = useState("")
@@ -531,7 +535,7 @@ export function ChatPage() {
   const resolvedKeybindings = useMemo(() => getResolvedKeybindings(state.keybindings), [state.keybindings])
   const baseContextWindowSnapshotRef = useRef<ReturnType<typeof deriveLatestContextWindowSnapshot>>(null)
   const contextWindowSnapshot = useMemo(() => {
-    const derivedSnapshot = deriveLatestContextWindowSnapshot(state.chatSnapshot?.messages ?? [])
+    const derivedSnapshot = deriveLatestContextWindowSnapshot(state.chatSnapshot?.messages ?? EMPTY_TRANSCRIPT_ENTRIES)
     const previousSnapshot = baseContextWindowSnapshotRef.current
     if (sameContextWindowSnapshot(previousSnapshot, derivedSnapshot)) {
       return previousSnapshot
@@ -780,6 +784,7 @@ export function ChatPage() {
     // A split pane is unreachable once removed, so closing it does kill it.
     void state.socket.command({ type: "terminal.close", terminalId }).catch(() => {})
     removeTerminal(currentProjectId, terminalId)
+    disposeCachedTerminal(terminalId)
   }, [hideTerminals, removeTerminal, state.socket])
 
   const clearShowScrollTimeout = useCallback(() => {

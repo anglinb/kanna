@@ -227,7 +227,22 @@ export function foldChatSnapshot(
   if (next && next.outline === undefined && current?.outline) {
     next = { ...next, outline: current.outline }
   }
-  return sameChatSnapshotCore(current, next) ? current : next
+  if (sameChatSnapshotCore(current, next)) return current
+  if (!current || !next) return next
+  // The push changed something, usually the transcript. The parts it did not
+  // change keep their old identity, so consumers keyed on them (the command
+  // palette's action list, the composer's provider picker) do not rebuild on
+  // every push of a streaming turn.
+  return {
+    ...next,
+    runtime: sameRuntime(current.runtime, next.runtime) ? current.runtime : next.runtime,
+    queuedMessages: sameQueuedMessages(current.queuedMessages, next.queuedMessages)
+      ? current.queuedMessages
+      : next.queuedMessages,
+    availableProviders: sameProviders(current.availableProviders, next.availableProviders)
+      ? current.availableProviders
+      : next.availableProviders,
+  }
 }
 
 export function mergeTranscriptEntries(olderHistoryEntries: TranscriptEntry[], recentEntries: TranscriptEntry[]) {

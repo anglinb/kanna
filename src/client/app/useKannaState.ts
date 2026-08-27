@@ -17,7 +17,7 @@ import {
   useSidebarReady,
   useSidebarStore,
 } from "../stores/sidebarStore"
-import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData, TranscriptOutlineEntry } from "../../shared/types"
+import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, HydratedTranscriptMessage, LocalProjectsSnapshot, SidebarChatRow, SidebarData, TranscriptOutlineEntry } from "../../shared/types"
 import type { AskUserQuestionItem } from "../components/messages/types"
 import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
@@ -88,6 +88,10 @@ export {
 /** Stable identity so an empty transcript does not re-derive rows each render. */
 const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
 const EMPTY_OUTLINE: TranscriptOutlineEntry[] = []
+// `queuedMessages` is a prop of the memoized transcript viewport. A fresh `[]`
+// per render failed its shallow compare and re-rendered the whole viewport on
+// every push.
+const EMPTY_QUEUED_MESSAGES: ChatSnapshot["queuedMessages"] = []
 
 /**
  * How long to wait for the local transcript cache before subscribing without
@@ -567,11 +571,18 @@ export function useKannaState(activeChatId: string | null): KannaState {
     () => [...serverTranscriptEntries, ...optimisticTranscriptEntries],
     [optimisticTranscriptEntries, serverTranscriptEntries]
   )
-  const messages = useMemo(() => processTranscriptMessages(transcriptEntries), [transcriptEntries])
+  // Hands the previous result back in so a push that appended entries hydrates
+  // only the new ones. See `processTranscriptMessages` for the prefix rule.
+  const previousMessagesRef = useRef<HydratedTranscriptMessage[] | null>(null)
+  const messages = useMemo(() => {
+    const next = processTranscriptMessages(transcriptEntries, previousMessagesRef.current)
+    previousMessagesRef.current = next
+    return next
+  }, [transcriptEntries])
   const previousPrompt = useMemo(() => getPreviousPrompt(messages), [messages])
   const latestToolIds = useMemo(() => getLatestToolIds(messages), [messages])
   const runtime = activeChatSnapshot?.runtime ?? null
-  const queuedMessages = activeChatSnapshot?.queuedMessages ?? []
+  const queuedMessages = activeChatSnapshot?.queuedMessages ?? EMPTY_QUEUED_MESSAGES
   const optimisticRuntimeStatus = optimisticProcessing?.scopeId === optimisticScopeId && (!runtime || runtime.status === "idle")
     ? "starting"
     : null

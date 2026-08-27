@@ -18,6 +18,13 @@ import { cn } from "../../lib/utils"
  *
  * The behaviour we rely on lives in the primitive: scroll anchoring across
  * content growth, and follow-the-end while the reader is at the end.
+ *
+ * The primitive itself carries one local patch (`patches/@shadcn%2Freact`,
+ * applied by `bun install`): its content-height measure called
+ * `getBoundingClientRect` on every row, on every scroll event and every
+ * content resize. A streaming turn resizes the content on every push, so that
+ * sweep was a forced layout of the whole transcript per push. The patch
+ * measures the content box once instead. Re-check it on a version bump.
  */
 
 function MessageScrollerProvider(
@@ -97,15 +104,20 @@ function MessageScrollerItem({
     <MessageScrollerPrimitive.Item
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
-      // No `content-visibility: auto` here. With a `contain-intrinsic-size`
-      // guess it sizes every off-screen row from the guess until that row
-      // renders once. A tool row is ~40px and a long answer is many hundreds,
-      // so a guess is always wrong for some rows. Scrolling up then resized
-      // the rows above the reader and slid the text under their finger.
-      // Safari has no scroll anchoring to correct that. Chromium does, so the
-      // transcript opts in there alone through `data-content-visibility` on
-      // the content element (see index.css); everywhere else a full render
-      // is what keeps scrolling honest.
+      // No `content-visibility: auto` here, and no `contain-intrinsic-size`
+      // guess with it. Together they size every off-screen row from the guess
+      // until that row renders once. A tool row is ~40px and a long answer is
+      // many hundreds, so a guess is always wrong for some rows. Scrolling up
+      // then resized the rows above the reader and slid the text under their
+      // finger. Safari has no scroll anchoring to correct that.
+      //
+      // Tried twice on Chromium alone, where scroll anchoring hides the
+      // resize. Both times every row crossing the viewport edge flipped its
+      // render state, which re-layerized and repainted on nearly every frame
+      // (paint work tripled in a scroll profile; ~100 state flips per ten
+      // seconds of streaming in a second one). The reason it existed, an
+      // 800-row DOM on open, is gone now that a chat opens on a window of the
+      // transcript. A full render is what keeps scrolling honest.
       className={cn(
         "min-w-0 shrink-0",
         className

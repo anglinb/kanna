@@ -146,7 +146,8 @@ function EmptyProjectChatButton({
       // status glyph / harness icon, the trailing one for their min-w-12
       // label slot; without both, the title lands out of alignment.
       className={cn(
-        "group flex w-full items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base cursor-pointer hover:border-border hover:bg-muted/20 active:scale-[0.985] transition-all",
+        // `transition-transform`, not `transition-all`: see ThreadRow.
+        "group flex w-full items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base cursor-pointer hover:border-border hover:bg-muted/20 active:scale-[0.985] transition-transform",
         "border-border/0 dark:hover:border-slate-400/10",
         disabled && "cursor-not-allowed opacity-50 active:scale-100"
       )}

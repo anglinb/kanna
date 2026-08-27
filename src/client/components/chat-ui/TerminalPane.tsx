@@ -284,6 +284,64 @@ function syncTerminalSize(
   return nextSize
 }
 
+/**
+ * An xterm instance that outlives the pane that opened it.
+ *
+ * Switching to a chat in another project remounts the terminal panel group,
+ * and a fresh `Terminal` plus WebGL renderer (shader compile, canvas
+ * allocation, glyph atlas) ran 400-600 ms on the main thread per switch. So a
+ * pane parks its terminal here on unmount, DOM node and all, and the next
+ * pane for the same terminal id lifts it back into its container. Only a
+ * closed terminal, a renderer toggle, or the cache cap disposes one.
+ *
+ * `sendInput` is re-pointed on every mount because the key handler and
+ * `onData` are registered once, at creation, and must reach the live pane.
+ */
+interface CachedTerminal {
+  terminal: Terminal
+  host: HTMLDivElement
+  serializeAddon: SerializeAddon
+  webglAddon: WebglAddon | null
+  webglRenderer: boolean
+  mounted: boolean
+  lastUsedAt: number
+  sendInput: (data: string) => void
+}
+
+/** Browsers cap live WebGL contexts around 16; stay well under it. */
+const TERMINAL_CACHE_LIMIT = 8
+
+const terminalCache = new Map<string, CachedTerminal>()
+
+function disposeTerminal(cached: CachedTerminal) {
+  // Release the GL context before the terminal goes away; browsers cap the
+  // number of live contexts and won't reclaim it on their own.
+  cached.webglAddon?.dispose()
+  cached.webglAddon = null
+  cached.terminal.dispose()
+  cached.host.remove()
+}
+
+/** Drop a parked terminal for good. Call when its shell is closed. */
+export function disposeCachedTerminal(terminalId: string) {
+  const cached = terminalCache.get(terminalId)
+  if (!cached) return
+  terminalCache.delete(terminalId)
+  disposeTerminal(cached)
+}
+
+function evictParkedTerminals() {
+  if (terminalCache.size <= TERMINAL_CACHE_LIMIT) return
+  const parked = [...terminalCache.entries()]
+    .filter(([, cached]) => !cached.mounted)
+    .sort(([, left], [, right]) => left.lastUsedAt - right.lastUsedAt)
+  for (const [terminalId, cached] of parked) {
+    if (terminalCache.size <= TERMINAL_CACHE_LIMIT) return
+    terminalCache.delete(terminalId)
+    disposeTerminal(cached)
+  }
+}
+
 export function TerminalPane({
   projectId,
   terminalId,
@@ -356,33 +414,59 @@ export function TerminalPane({
   }, [initialCommand])
 
   useEffect(() => {
-    const terminal = new Terminal(getTerminalOptions(scrollback, withSurfaceBackground(terminalTheme, containerRef.current)))
-    const serializeAddon = new SerializeAddon()
-    terminal.loadAddon(serializeAddon)
-    terminal.loadAddon(new WebLinksAddon())
-    // Must match the shadow terminal on the server: xterm defaults to Unicode 6
-    // width tables, which measure astral emoji as one cell instead of two. If
-    // the two ends disagree, replayed snapshots land in the wrong columns.
-    terminal.loadAddon(new Unicode11Addon())
-    terminal.unicode.activeVersion = "11"
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown") return true
-
-      const sequence = getMacOptionInputSequence(event)
-      if (!sequence) return true
-
-      event.preventDefault()
-      sendInput(sequence)
-      return false
-    })
-
-    terminalRef.current = terminal
-
     const element = containerRef.current
-    let webglAddon: WebglAddon | null = null
+    const theme = withSurfaceBackground(terminalTheme, element)
 
-    if (element) {
-      terminal.open(element)
+    let cached = terminalCache.get(terminalId) ?? null
+    if (cached && cached.webglRenderer !== webglRenderer) {
+      // The renderer is chosen at creation; a toggle needs a fresh instance.
+      terminalCache.delete(terminalId)
+      disposeTerminal(cached)
+      cached = null
+    }
+
+    if (cached) {
+      cached.terminal.options.theme = theme
+      cached.terminal.options.scrollback = scrollback
+    } else {
+      const terminal = new Terminal(getTerminalOptions(scrollback, theme))
+      const serializeAddon = new SerializeAddon()
+      terminal.loadAddon(serializeAddon)
+      terminal.loadAddon(new WebLinksAddon())
+      // Must match the shadow terminal on the server: xterm defaults to Unicode 6
+      // width tables, which measure astral emoji as one cell instead of two. If
+      // the two ends disagree, replayed snapshots land in the wrong columns.
+      terminal.loadAddon(new Unicode11Addon())
+      terminal.unicode.activeVersion = "11"
+
+      const created: CachedTerminal = {
+        terminal,
+        host: document.createElement("div"),
+        serializeAddon,
+        webglAddon: null,
+        webglRenderer,
+        mounted: false,
+        lastUsedAt: Date.now(),
+        sendInput,
+      }
+      created.host.className = "h-full w-full"
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (event.type !== "keydown") return true
+
+        const sequence = getMacOptionInputSequence(event)
+        if (!sequence) return true
+
+        event.preventDefault()
+        created.sendInput(sequence)
+        return false
+      })
+      terminal.onData((data) => {
+        created.sendInput(data)
+      })
+
+      // xterm opens into the host, never into the pane's own container, so the
+      // host can move between containers as panes come and go.
+      terminal.open(created.host)
       // The WebGL renderer needs a live render service, so it can only be
       // attached after open(). Any failure (no GPU, blocklisted driver, lost
       // context) falls back to xterm's built-in DOM renderer rather than
@@ -392,26 +476,36 @@ export function TerminalPane({
           const addon = new WebglAddon()
           addon.onContextLoss(() => {
             addon.dispose()
-            if (webglAddon === addon) webglAddon = null
+            if (created.webglAddon === addon) created.webglAddon = null
           })
           terminal.loadAddon(addon)
-          webglAddon = addon
+          created.webglAddon = addon
         } catch (webglError) {
           console.warn("Terminal: WebGL renderer unavailable, using the DOM renderer.", webglError)
-          webglAddon = null
+          created.webglAddon = null
         }
       }
       if (replayStateRef.current) {
         terminal.write(replayStateRef.current)
       }
+      terminalCache.set(terminalId, created)
+      cached = created
+      evictParkedTerminals()
+    }
+
+    const live = cached
+    const { terminal, serializeAddon } = live
+    live.sendInput = sendInput
+    live.mounted = true
+    live.lastUsedAt = Date.now()
+    terminalRef.current = terminal
+
+    if (element) {
+      element.appendChild(live.host)
       syncTerminalSize(terminal, element, lastSizeRef, false, () => {})
       refreshTerminal(terminal)
       scheduleResizeSync()
     }
-
-    const dataDisposable = terminal.onData((data) => {
-      sendInput(data)
-    })
 
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       if (!hasCreatedRef.current) return
@@ -444,13 +538,12 @@ export function TerminalPane({
     return () => {
       observer.disconnect()
       resizeDisposable.dispose()
-      dataDisposable.dispose()
       replayStateRef.current = serializeAddon.serialize()
-      // Release the GL context before the terminal goes away; browsers cap the
-      // number of live contexts and won't reclaim it on their own.
-      webglAddon?.dispose()
-      webglAddon = null
-      terminal.dispose()
+      // Park, do not dispose. Input from a parked terminal has nowhere to go.
+      live.sendInput = () => {}
+      live.mounted = false
+      live.lastUsedAt = Date.now()
+      live.host.remove()
       terminalRef.current = null
     }
   }, [scrollback, socket, terminalId, terminalTheme, webglRenderer])

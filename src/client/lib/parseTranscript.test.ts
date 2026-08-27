@@ -418,3 +418,55 @@ describe("trimmed tool payloads", () => {
     expect(row?.resultTrimmed).toBeUndefined()
   })
 })
+
+describe("processTranscriptMessages incremental", () => {
+  const toolCall = (toolId: string) => entry({
+    kind: "tool_call",
+    tool: { kind: "tool", toolKind: "bash", toolName: "Bash", toolId, input: { command: "pwd" } },
+  })
+  const text = (value: string) => entry({ kind: "assistant_text", text: value })
+
+  test("reuses hydrated messages for the entries it already consumed", () => {
+    const first = [text("a"), toolCall("tool-1")]
+    const previous = processTranscriptMessages(first)
+    const next = processTranscriptMessages([...first, text("b")], previous)
+
+    expect(next).toHaveLength(3)
+    expect(next[0]).toBe(previous[0])
+    expect(next[1]).toBe(previous[1])
+    expect(next[2]?.kind).toBe("assistant_text")
+    expect(previous).toHaveLength(2)
+  })
+
+  test("returns the previous array when nothing was appended", () => {
+    const entries = [text("a")]
+    const previous = processTranscriptMessages(entries)
+    expect(processTranscriptMessages(entries, previous)).toBe(previous)
+  })
+
+  test("a late tool result replaces the call with a copy instead of mutating it", () => {
+    const call = toolCall("tool-1")
+    const previous = processTranscriptMessages([call])
+    const before = previous[0]
+    const next = processTranscriptMessages(
+      [call, entry({ kind: "tool_result", toolId: "tool-1", content: "/tmp\n" })],
+      previous,
+    )
+
+    expect(next).toHaveLength(1)
+    expect(next[0]).not.toBe(before)
+    if (next[0]?.kind !== "tool" || before?.kind !== "tool") throw new Error("unexpected message")
+    expect(next[0].result).toBe("/tmp\n")
+    expect(before.result).toBeUndefined()
+  })
+
+  test("rebuilds when the entries are not a pure append", () => {
+    const shared = text("a")
+    const previous = processTranscriptMessages([shared, text("optimistic")])
+    const next = processTranscriptMessages([shared, text("server"), text("c")], previous)
+
+    expect(next).toHaveLength(3)
+    expect(next[0]).not.toBe(previous[0])
+    expect(next.map((message) => message.kind === "assistant_text" ? message.text : "")).toEqual(["a", "server", "c"])
+  })
+})

@@ -154,3 +154,27 @@ describe("foldChatSnapshot", () => {
     expect(foldChatSnapshot(current, null, snapshot(0, ["a", "b"]))).toBe(current)
   })
 })
+
+describe("foldChatSnapshot identity", () => {
+  test("a push that only appends entries keeps the untouched parts by identity", () => {
+    const current = snapshot(0, ["a"])
+    const incoming = { ...snapshot(0, ["a", "b"]), availableProviders: [] }
+    const next = foldChatSnapshot(current, null, incoming)
+
+    expect(next).not.toBe(current)
+    expect(ids(next)).toEqual(["a", "b"])
+    expect(next?.runtime).toBe(current.runtime)
+    expect(next?.queuedMessages).toBe(current.queuedMessages)
+    expect(next?.availableProviders).toBe(current.availableProviders)
+  })
+
+  test("a changed runtime comes through with its new identity", () => {
+    const current = snapshot(0, ["a"])
+    const incoming = snapshot(0, ["a", "b"])
+    incoming.runtime = { ...incoming.runtime, status: "running" }
+    const next = foldChatSnapshot(current, null, incoming)
+
+    expect(next?.runtime).toBe(incoming.runtime)
+    expect(next?.runtime.status).toBe("running")
+  })
+})

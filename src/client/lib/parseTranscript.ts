@@ -48,11 +48,72 @@ function getStructuredToolResult(entry: Extract<TranscriptEntry, { kind: "tool_r
   }
 }
 
-export function processTranscriptMessages(entries: TranscriptEntry[]): HydratedTranscriptMessage[] {
-  const pendingToolCalls = new Map<string, { hydrated: HydratedToolCall; normalized: NormalizedToolCall }>()
-  const messages: HydratedTranscriptMessage[] = []
+/** A tool call still waiting for its result: where it sits, and its wire form. */
+interface PendingToolCall {
+  index: number
+  normalized: NormalizedToolCall
+}
 
-  for (const entry of entries) {
+/**
+ * What a hydration run leaves behind so the next one can pick up after it:
+ * the entries it consumed and the tool calls still open at the end.
+ */
+interface HydrationState {
+  entries: TranscriptEntry[]
+  pendingToolCalls: Map<string, PendingToolCall>
+}
+
+const hydrationStates = new WeakMap<HydratedTranscriptMessage[], HydrationState>()
+
+/**
+ * Do `entries` begin with exactly the entries the previous run consumed?
+ *
+ * Entry objects keep their identity across pushes (the fold splices arrays,
+ * it never copies entries), so a reference check is enough. An optimistic
+ * prompt that the server's copy replaces fails the check at that index and
+ * forces a full rebuild, which is the right answer for it.
+ */
+function isPrefix(previous: TranscriptEntry[], entries: TranscriptEntry[]): boolean {
+  if (previous.length > entries.length) return false
+  for (let index = 0; index < previous.length; index += 1) {
+    if (previous[index] !== entries[index]) return false
+  }
+  return true
+}
+
+/**
+ * Hydrate transcript entries into the messages the transcript renders.
+ *
+ * Pass the previous result back in and a push that only appended entries
+ * hydrates the new ones alone. A streaming turn pushes a few times a second,
+ * and rebuilding a few hundred messages (a `Date` each) on every push was a
+ * measurable slice of each React commit. Anything that is not a pure append
+ * (a chat switch, "load earlier", an optimistic prompt reconciled) falls back
+ * to a full rebuild.
+ *
+ * A tool result never mutates a message that an earlier run returned; it
+ * replaces that message with a copy. The row memos compare old and new
+ * message objects, and a mutation in place would hide the result from them.
+ */
+export function processTranscriptMessages(
+  entries: TranscriptEntry[],
+  previousMessages?: HydratedTranscriptMessage[] | null
+): HydratedTranscriptMessage[] {
+  const previousState = previousMessages ? hydrationStates.get(previousMessages) : undefined
+  const resume = previousMessages && previousState && isPrefix(previousState.entries, entries)
+    ? { messages: previousMessages, state: previousState }
+    : null
+
+  if (resume && resume.state.entries.length === entries.length) {
+    return resume.messages
+  }
+
+  const pendingToolCalls = new Map<string, PendingToolCall>(resume?.state.pendingToolCalls)
+  const messages: HydratedTranscriptMessage[] = resume ? resume.messages.slice() : []
+  const startIndex = resume ? resume.state.entries.length : 0
+
+  for (let entryIndex = startIndex; entryIndex < entries.length; entryIndex += 1) {
+    const entry = entries[entryIndex]!
     switch (entry.kind) {
       case "user_prompt":
         messages.push({
@@ -91,19 +152,19 @@ export function processTranscriptMessages(entries: TranscriptEntry[]): HydratedT
         })
         break
       case "tool_call": {
-        const toolCall = hydrateToolCall(entry)
-        pendingToolCalls.set(entry.tool.toolId, { hydrated: toolCall, normalized: entry.tool })
-        messages.push(toolCall)
+        pendingToolCalls.set(entry.tool.toolId, { index: messages.length, normalized: entry.tool })
+        messages.push(hydrateToolCall(entry))
         break
       }
       case "tool_result": {
         const pendingCall = pendingToolCalls.get(entry.toolId)
         if (pendingCall) {
+          const hydrated = { ...(messages[pendingCall.index] as HydratedToolCall) }
           // Recorded whether or not the body came with it: this is what marks
           // the call finished, and what the expanded view fetches by.
-          pendingCall.hydrated.isError = entry.isError
-          pendingCall.hydrated.resultEntryId = entry._id
-          pendingCall.hydrated.resultTrimmed = entry.trimmed
+          hydrated.isError = entry.isError
+          hydrated.resultEntryId = entry._id
+          hydrated.resultTrimmed = entry.trimmed
 
           // A trimmed result has no body to hydrate — the expanded view fetches
           // it and hydrates there, so nothing is derived from an absent payload.
@@ -115,9 +176,11 @@ export function processTranscriptMessages(entries: TranscriptEntry[]): HydratedT
               ? getStructuredToolResult(entry) ?? entry.content
               : entry.content
 
-            pendingCall.hydrated.result = hydrateToolResult(pendingCall.normalized, rawResult) as never
-            pendingCall.hydrated.rawResult = rawResult
+            hydrated.result = hydrateToolResult(pendingCall.normalized, rawResult) as never
+            hydrated.rawResult = rawResult
           }
+          messages[pendingCall.index] = hydrated
+          pendingToolCalls.delete(entry.toolId)
         }
         break
       }
@@ -196,5 +259,6 @@ export function processTranscriptMessages(entries: TranscriptEntry[]): HydratedT
     }
   }
 
+  hydrationStates.set(messages, { entries, pendingToolCalls })
   return messages
 }

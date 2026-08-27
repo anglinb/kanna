@@ -158,7 +158,11 @@ function ThreadRowImpl({
         // found first and the sidebar scrolls up to it.
         data-chat-id={normalizeChatId(thread.chatId)}
         className={cn(
-          "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-all",
+          // Not `transition-all`: that animated the four border colors and the
+          // background on every hover, five main-thread animations per row
+          // that Chromium cannot composite, and a style recalc plus layerize
+          // on every frame while the pointer moved over the list.
+          "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-transform",
           isActive
             ? "bg-muted hover:bg-muted border-border"
             : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
