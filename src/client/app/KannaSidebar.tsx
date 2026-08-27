@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
-import { ArrowLeft, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, SquarePen, Terminal } from "lucide-react"
+import { ArrowLeft, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, Settings2, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
@@ -551,7 +551,17 @@ function KannaSidebarImpl({
               <PanelLeft className="absolute inset-0 h-4 w-4 sm:h-6 sm:w-6 text-slate-500 dark:text-slate-400 transition-all duration-200 ease-out opacity-0 scale-0 group-hover/sidebar-collapse:opacity-100 group-hover/sidebar-collapse:scale-80 hover:opacity-50" />
             </button>
             <Flower className="h-5 w-5 sm:h-6 sm:w-6 text-logo md:hidden" />
-            <span className="font-logo text-base uppercase sm:text-md text-slate-600 dark:text-slate-100">{APP_NAME}</span>
+            {/* The flower collapses the sidebar, so the wordmark is what
+                takes you home on desktop (the House button lives only in
+                the mobile nav). */}
+            <button
+              type="button"
+              onClick={() => navigate("/home")}
+              title="Projects"
+              className="font-logo text-base uppercase sm:text-md text-slate-600 dark:text-slate-100"
+            >
+              {APP_NAME}
+            </button>
           </div>
           <div className="flex items-center justify-self-end md:justify-self-auto">
             {!newSidebarEnabled ? (
@@ -608,29 +618,29 @@ function KannaSidebarImpl({
                 UPDATE
               </Button>
             ) : null}
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
-              className="hidden md:inline-flex h-10 w-auto rounded-lg px-1.5 pl-2 hover:!border-border/0"
-              title={newSidebarEnabled ? "Search" : "New project"}
-            >
-              {newSidebarEnabled ? <Search className="size-4" /> : <Plus className="size-4" />}
-            </Button>
             {newSidebarEnabled ? (
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => navigate("/home")}
-                className={cn(
-                  "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0",
-                  isLocalProjectsActive ? "text-foreground" : "text-muted-foreground"
-                )}
-                title="Projects"
+                onClick={() => openCommandPalette("add-project")}
+                className="hidden md:inline-flex h-10 w-auto rounded-lg px-1.5 pl-2 hover:!border-border/0"
+                title="Add project"
               >
-                <House className="size-4" />
+                <Plus className="size-4" />
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
+              className={cn(
+                "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0",
+                !newSidebarEnabled && "pl-2"
+              )}
+              title={newSidebarEnabled ? "Search" : "New project"}
+            >
+              {newSidebarEnabled ? <Search className="size-4" /> : <Plus className="size-4" />}
+            </Button>
           </div>
         </div>
 
@@ -675,14 +685,6 @@ function KannaSidebarImpl({
                         <SidebarViewSwitcher view={sidebarView} onChange={changeSidebarView} />
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => openCommandPalette("add-project")}
-                      className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
-                    >
-                      <Plus className="h-4 w-4 shrink-0" />
-                      <span>Add Project</span>
-                    </button>
                   </>
                 ) : null}
                 {newSidebarEnabled && devbox ? (
@@ -807,7 +809,7 @@ function KannaSidebarImpl({
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Settings className="h-4 w-4 text-muted-foreground" />
+                <Settings2 className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm">Settings</span>
               </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">

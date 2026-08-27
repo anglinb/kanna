@@ -3,7 +3,25 @@ import path from "node:path"
 import { promisify } from "node:util"
 
 const execFileAsync = promisify(execFile)
+// macOS ships lsof only in /usr/sbin. A launchd agent gets a trimmed PATH that
+// often stops at /bin, so a bare "lsof" fails with ENOENT and discovery goes
+// silent. Try PATH first, then the known absolute path.
+const LSOF_CANDIDATES = ["lsof", "/usr/sbin/lsof"]
 const LOCAL_HTTP_SCAN_TIMEOUT_MS = 450
+
+async function execLsof(args: string[], options: { timeout: number; maxBuffer: number }) {
+  let lastError: unknown
+  for (const bin of LSOF_CANDIDATES) {
+    try {
+      return await execFileAsync(bin, args, options)
+    } catch (error) {
+      lastError = error
+      const code = (error as NodeJS.ErrnoException | undefined)?.code
+      if (code !== "ENOENT") throw error
+    }
+  }
+  throw lastError
+}
 const LOCAL_HTTP_CACHE_TTL_MS = 30_000
 
 interface LocalHttpServerCacheEntry {
@@ -102,7 +120,7 @@ export function filterLocalHttpServers(servers: LocalHttpServerInfo[]) {
 
 async function listListeningTcpEntries() {
   try {
-    const { stdout } = await execFileAsync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN"], {
+    const { stdout } = await execLsof(["-nP", "-iTCP", "-sTCP:LISTEN"], {
       timeout: 1_500,
       maxBuffer: 1024 * 1024,
     })
@@ -151,7 +169,7 @@ export async function killLocalHttpServer(port: number) {
 
 async function readProcessCwd(pid: number) {
   try {
-    const { stdout } = await execFileAsync("lsof", ["-p", String(pid), "-a", "-d", "cwd", "-Fn"], {
+    const { stdout } = await execLsof(["-p", String(pid), "-a", "-d", "cwd", "-Fn"], {
       timeout: 500,
       maxBuffer: 128 * 1024,
     })

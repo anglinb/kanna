@@ -1,4 +1,4 @@
-import { Folder, MessageCircle, Settings2 } from "lucide-react"
+import { Folder, ListFilter, MessageCircle } from "lucide-react"
 import { InputPopover, PopoverMenuItem } from "../ChatPreferenceControls"
 
 /** Which view the sidebar shows when the recent-chats Labs mode is enabled. */
@@ -43,7 +43,7 @@ export function SidebarViewSwitcher({
       // Right-edge trigger: hang the 16rem panel leftward, into the sidebar.
       align="end"
       triggerClassName="mr-px h-8 w-[34px] justify-center rounded-lg border border-border/0 p-0 hover:border-border hover:bg-muted"
-      trigger={<Settings2 className="size-4 shrink-0" />}
+      trigger={<ListFilter className="size-4 shrink-0" />}
     >
       {(close) => (
         <>
