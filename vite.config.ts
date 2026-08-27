@@ -2,6 +2,7 @@ import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
 import { getDefaultDevServerPort } from "./src/shared/dev-ports"
 import { DEV_CLIENT_PORT } from "./src/shared/ports"
+import { messageScrollerPatch } from "./vite-plugin-message-scroller"
 
 function getAllowedHosts() {
   const defaults = ["localhost", "127.0.0.1", "0.0.0.0"]
@@ -32,7 +33,7 @@ const backendTargetHost = getBackendTargetHost()
 const backendPort = getBackendPort()
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [messageScrollerPatch(), react()],
   server: {
     host: "0.0.0.0",
     port: DEV_CLIENT_PORT,

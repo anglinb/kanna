@@ -19,8 +19,8 @@ import { cn } from "../../lib/utils"
  * The behaviour we rely on lives in the primitive: scroll anchoring across
  * content growth, and follow-the-end while the reader is at the end.
  *
- * The primitive itself carries one local patch (`patches/@shadcn%2Freact`,
- * applied by `bun install`): its content-height measure called
+ * The primitive itself gets one patch at build time
+ * (`vite-plugin-message-scroller.ts`): its content-height measure called
  * `getBoundingClientRect` on every row, on every scroll event and every
  * content resize. A streaming turn resizes the content on every push, so that
  * sweep was a forced layout of the whole transcript per push. The patch
