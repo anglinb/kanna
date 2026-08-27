@@ -178,3 +178,17 @@ describe("foldChatSnapshot identity", () => {
     expect(next?.runtime.status).toBe("running")
   })
 })
+
+describe("foldChatSnapshot providers", () => {
+  test("a provider flag change that rides a transcript push is kept", () => {
+    const current = snapshot(0, ["a"])
+    current.availableProviders = [{
+      id: "claude", label: "Claude", defaultModel: "m", supportsPlanMode: false, supportsAutoPlanMode: false,
+      models: [{ id: "m", label: "M", supportsEffort: false }], efforts: [],
+    } as ChatSnapshot["availableProviders"][number]]
+    const incoming = snapshot(0, ["a", "b"])
+    incoming.availableProviders = [{ ...current.availableProviders[0]!, supportsPlanMode: true }]
+    const next = foldChatSnapshot(current, null, incoming)
+    expect(next?.availableProviders[0]?.supportsPlanMode).toBe(true)
+  })
+})

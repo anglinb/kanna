@@ -440,8 +440,16 @@ describe("TerminalOutputLog", () => {
     expect(log.tailSince(1.5)).toBeNull()
   })
 
+  test("small writes pack into segments instead of one object each", () => {
+    const log = new TerminalOutputLog(1_000, 100)
+    for (let i = 0; i < 500; i += 1) log.append("x")
+    expect(log.segmentCount).toBe(5)
+    expect(log.tailSince(0)).toBe("x".repeat(500))
+    expect(log.tailSince(150)).toBe("x".repeat(350))
+  })
+
   test("old output falls off the front once the limit is passed", () => {
-    const log = new TerminalOutputLog(10)
+    const log = new TerminalOutputLog(10, 4)
     log.append("aaaa")
     log.append("bbbb")
     log.append("cccc")

@@ -38,20 +38,13 @@ function sameProviders(left: ProviderCatalogEntry[] | null | undefined, right: P
   if (left === right) return true
   if (!left || !right) return false
   if (left.length !== right.length) return false
+  // Whole entries, not a field list: `foldChatSnapshot` keeps the old object
+  // whenever this says equal, so a field missing here would never reach the
+  // screen. The catalog is a few KB and changes about never; a stringify per
+  // push is cheaper than a stale picker.
   return left.every((provider, index) => {
     const other = right[index]
-    return Boolean(other)
-      && provider.id === other.id
-      && provider.label === other.label
-      && provider.defaultModel === other.defaultModel
-      && provider.models.length === other.models.length
-      && provider.models.every((model, modelIndex) => {
-        const otherModel = other.models[modelIndex]
-        return Boolean(otherModel)
-          && model.id === otherModel.id
-          && model.label === otherModel.label
-          && model.supportsEffort === otherModel.supportsEffort
-      })
+    return Boolean(other) && (provider === other || JSON.stringify(provider) === JSON.stringify(other))
   })
 }
 

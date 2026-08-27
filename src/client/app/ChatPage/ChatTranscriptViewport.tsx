@@ -330,18 +330,15 @@ function useVisibleRowRange(
 
     const measure = () => {
       const items = content.querySelectorAll<HTMLElement>(':scope > [data-slot="message-scroller-item"]')
-      tops = Array.from(items, (item) => {
-        let top = 0
-        let node: HTMLElement | null = item
-        while (node && node !== viewport) {
-          top += node.offsetTop
-          node = node.offsetParent as HTMLElement | null
-        }
-        return top
-      })
+      // Against the viewport's own rect, in scroll coordinates. An `offsetTop`
+      // walk never meets the viewport (it is not an offset parent) and summed
+      // up to the page, which put every row off by the viewport's page offset
+      // wherever the transcript does not start at the top of the window.
+      const origin = viewport.getBoundingClientRect().top - viewport.scrollTop
+      tops = Array.from(items, (item) => item.getBoundingClientRect().top - origin)
     }
 
-    // First row whose bottom edge is past `y`: the row that contains `y`.
+    // The last row whose top edge is at or above `y`: the row that contains `y`.
     const rowAt = (y: number) => {
       let low = 0
       let high = tops.length - 1

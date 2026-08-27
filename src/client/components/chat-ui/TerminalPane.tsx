@@ -705,6 +705,10 @@ export function TerminalPane({
       }).then((result) => {
         if (terminalRef.current !== terminal) return
         if (result?.tail) {
+          // A snapshot pushed while this request was out already painted
+          // past the tail's end; writing it again would show that span twice.
+          const written = writtenVersionRef.current
+          if (written != null && result.tail.version <= written) return
           if (result.tail.data) terminal.write(result.tail.data)
           writtenVersionRef.current = result.tail.version
         } else if (result?.snapshot) {
