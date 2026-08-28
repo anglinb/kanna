@@ -67,6 +67,14 @@ React client (src/client)
 - When tests need git, they create throwaway repos; in sandboxes set
   `GIT_CONFIG_GLOBAL` to a clean config so URL rewrites/identity don't leak in.
 
+## iOS app (`ios/`)
+
+- `ios/` is its own git repository (ignored by this one). Commit iOS
+  changes there.
+- After every change to `ios/`, commit it, then run `ios/share-build.sh`
+  and give Jake the build page link it prints. Do both every time, not
+  only when asked.
+
 ## Cloud contract
 
 - `src/shared/cloud-api.ts` is the wire contract with the hosted control
