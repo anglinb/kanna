@@ -162,12 +162,6 @@ function useKannaSocket() {
 export interface KannaState {
   socket: KannaSocket
   activeChatId: string | null
-  /**
-   * True while the active chat is one this client just created and its
-   * first snapshot has not arrived. The chat page uses it to keep showing
-   * the empty state through that gap instead of a blank transcript.
-   */
-  isPendingNewChat: boolean
   activeProjectId: string | null
   localProjects: LocalProjectsSnapshot | null
   updateSnapshot: UpdateSnapshot | null
@@ -987,7 +981,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
   return {
     socket,
     activeChatId,
-    isPendingNewChat: pendingChatId !== null && pendingChatId === activeChatId,
     activeProjectId,
     localProjects,
     updateSnapshot,

@@ -10,12 +10,6 @@ interface ChatInputDockProps {
   chatInputRef: RefObject<ChatInputHandle | null>
   chatInputElementRef: RefObject<HTMLTextAreaElement | null>
   activeChatId: string | null
-  /**
-   * Remount key for the composer. Usually the chat id; the page keeps it
-   * the same across two consecutive new chats so the composer does not
-   * flash when "New Chat in…" opens another empty chat.
-   */
-  composerKey: string
   previousPrompt: string | null
   hasSelectedProject: boolean
   runtimeStatus: string | null
@@ -38,7 +32,6 @@ export const ChatInputDock = memo(function ChatInputDock({
   chatInputRef,
   chatInputElementRef,
   activeChatId,
-  composerKey,
   previousPrompt,
   hasSelectedProject,
   runtimeStatus,
@@ -69,7 +62,7 @@ export const ChatInputDock = memo(function ChatInputDock({
             ref={chatInputRef}
             inputElementRef={chatInputElementRef}
             onLayoutChange={onLayoutChange}
-            key={composerKey}
+            key={activeChatId ?? "new-chat"}
             onSubmit={onSubmit}
             onCancel={onCancel}
             disabled={!hasSelectedProject}

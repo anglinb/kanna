@@ -55,10 +55,7 @@ export {
 /** Stable identity so a chat without a snapshot does not re-derive per render. */
 const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
 
-// Restarts only when the empty state comes back, not on every chat id. Picking
-// another project from a new chat lands on a second new chat, and the text
-// retyping there was the first thing that read as a page flicker.
-function useEmptyStateTyping(showEmptyState: boolean) {
+function useEmptyStateTyping(showEmptyState: boolean, activeChatId: string | null) {
   const [typedEmptyStateText, setTypedEmptyStateText] = useState("")
   const [isEmptyStateTypingComplete, setIsEmptyStateTypingComplete] = useState(false)
 
@@ -80,7 +77,7 @@ function useEmptyStateTyping(showEmptyState: boolean) {
     }, EMPTY_STATE_TYPING_INTERVAL_MS)
 
     return () => window.clearInterval(interval)
-  }, [showEmptyState])
+  }, [showEmptyState, activeChatId])
 
   return { typedEmptyStateText, isEmptyStateTypingComplete }
 }
@@ -514,33 +511,7 @@ export function ChatPage() {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [pendingTerminalCommands, setPendingTerminalCommands] = useState<Record<string, string>>({})
   const [defaultModelsDialogOpen, setDefaultModelsDialogOpen] = useState(false)
-  // A chat this client just created counts as empty before its snapshot
-  // lands. Otherwise the gap between navigating and the first push rendered
-  // a blank transcript, and the empty state then faded in a second time.
-  const showEmptyState = state.messages.length === 0
-    && (state.runtime?.title === "New Chat" || (!state.runtime && state.isPendingNewChat))
-  // The transcript and composer are keyed by chat so a switch replaces them
-  // in one go (see the viewport's key comment). The one switch that keeps
-  // the mounted tree is empty chat to empty chat: "New Chat in…" from a new
-  // chat opens another new chat, and remounting there showed the same view
-  // twice. `wasEmpty` is the state before the switch, so a chat that gained
-  // its first message still gets a fresh mount when the next one opens.
-  const chatViewKeyRef = useRef<{ chatId: string | null; key: string; wasEmpty: boolean }>({
-    chatId: state.activeChatId,
-    key: state.activeChatId ?? "none",
-    wasEmpty: showEmptyState,
-  })
-  if (chatViewKeyRef.current.chatId !== state.activeChatId) {
-    const previous = chatViewKeyRef.current
-    chatViewKeyRef.current = {
-      chatId: state.activeChatId,
-      key: previous.wasEmpty && showEmptyState ? previous.key : (state.activeChatId ?? "none"),
-      wasEmpty: showEmptyState,
-    }
-  } else {
-    chatViewKeyRef.current.wasEmpty = showEmptyState
-  }
-  const chatViewKey = chatViewKeyRef.current.key
+  const showEmptyState = state.messages.length === 0 && state.runtime?.title === "New Chat"
   const projectId = state.activeProjectId
   const projectTerminalLayout = useTerminalLayoutStore((store) => (projectId ? store.projects[projectId] : undefined))
   const storedTerminalLayout = projectTerminalLayout ?? DEFAULT_PROJECT_TERMINAL_LAYOUT
@@ -654,7 +625,7 @@ export function ChatPage() {
     showRightSidebar: showGitPanel,
   })
 
-  const { typedEmptyStateText, isEmptyStateTypingComplete } = useEmptyStateTyping(showEmptyState)
+  const { typedEmptyStateText, isEmptyStateTypingComplete } = useEmptyStateTyping(showEmptyState, state.activeChatId)
 
   // Read off the sidebar snapshot rather than the git one: the sidebar carries
   // a resolved forge URL for every project, while `project-git` only knows a
@@ -1047,7 +1018,7 @@ export function ChatPage() {
           // `removeChild`. Reusing the list container meant React removed
           // the old chat's rows one by one: 168 ms of pure DOM removal on
           // an 800-row chat before the new one could mount.
-          key={chatViewKey}
+          key={state.activeChatId ?? "none"}
           activeChatId={state.activeChatId}
           listRef={transcriptListRef}
           messages={state.messages}
@@ -1098,7 +1069,6 @@ export function ChatPage() {
         chatInputRef={chatInputRef}
         chatInputElementRef={chatInputElementRef}
         activeChatId={state.activeChatId}
-        composerKey={chatViewKey}
         previousPrompt={state.previousPrompt}
         hasSelectedProject={state.hasSelectedProject}
         runtimeStatus={state.runtimeStatus}
