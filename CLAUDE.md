@@ -71,9 +71,6 @@ React client (src/client)
 
 - `ios/` is its own git repository (ignored by this one). Commit iOS
   changes there.
-- After every change to `ios/`, commit it, then run `ios/share-build.sh`
-  and give Jake the build page link it prints. Do both every time, not
-  only when asked.
 
 ## Cloud contract
 
