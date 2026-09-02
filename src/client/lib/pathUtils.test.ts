@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test"
-import { formatPathWithTilde, parseLocalFileLink, shouldOpenLocalFileLinkInEditor } from "./pathUtils"
+import { abbreviatePathHead, formatPathWithTilde, parseLocalFileLink, shouldOpenLocalFileLinkInEditor } from "./pathUtils"
+
+describe("abbreviatePathHead", () => {
+  test("returns short paths unchanged", () => {
+    expect(abbreviatePathHead("~/Projects/kanna", 40)).toBe("~/Projects/kanna")
+  })
+
+  test("drops leading directories until the path fits", () => {
+    expect(abbreviatePathHead("~/Projects/clients/acme/apps/web", 20)).toBe("…/acme/apps/web")
+  })
+
+  test("keeps the last segment whole when nothing fits", () => {
+    expect(abbreviatePathHead("/a/b/a-very-long-directory-name", 10)).toBe("a-very-long-directory-name")
+  })
+})
 
 describe("formatPathWithTilde", () => {
   test("contracts a home subpath to ~", () => {

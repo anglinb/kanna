@@ -104,6 +104,24 @@ export function formatPathWithTilde(path: string) {
   return path
 }
 
+/**
+ * Drop leading directories until the path fits in `maxLength` characters.
+ * e.g., "~/Projects/clients/acme/apps/web" → "…/acme/apps/web"
+ * The tail is what identifies a project, so it survives; a single segment
+ * longer than the budget is returned whole rather than cut mid-word.
+ * Used where the path lands in a box that cannot clip it, like a textarea
+ * placeholder.
+ */
+export function abbreviatePathHead(path: string, maxLength: number) {
+  if (path.length <= maxLength) return path
+  const segments = path.split("/").filter((segment) => segment.length > 0)
+  for (let start = 1; start < segments.length; start += 1) {
+    const candidate = `…/${segments.slice(start).join("/")}`
+    if (candidate.length <= maxLength) return candidate
+  }
+  return segments[segments.length - 1] ?? path
+}
+
 export function shouldOpenLocalFileLinkInEditor(filePath: string) {
   const fileName = filePath.split(/[\\/]/).pop() ?? filePath
   if (EDITOR_OPEN_FILENAMES.has(fileName)) return true

@@ -23,7 +23,7 @@ import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
 import { type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
-import { formatPathWithTilde } from "../../lib/pathUtils"
+import { abbreviatePathHead, formatPathWithTilde } from "../../lib/pathUtils"
 import { copyTextToClipboard } from "../../lib/clipboard"
 import { buildUploadErrorReport, simpleUploadError, type UploadErrorReport } from "../../lib/uploadError"
 import { useUnauthenticatedHarnesses } from "../../stores/providerAuthStore"
@@ -283,7 +283,10 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const skillsFetchRef = useRef<{ provider: AgentProvider | null; pending: boolean }>({ provider: null, pending: false })
   const selectedSkillItemRef = useRef<HTMLButtonElement | null>(null)
 
-  const projectLabel = projectRepoLabel ?? (projectPath ? formatPathWithTilde(projectPath) : null)
+  // The label goes into a textarea placeholder, which browsers do not clip
+  // or ellipsize the way a span would: a long path runs past the pill. Keep
+  // the path short enough to fit the narrowest composer (a phone) instead.
+  const projectLabel = projectRepoLabel ?? (projectPath ? abbreviatePathHead(formatPathWithTilde(projectPath), 40) : null)
   const placeholder = projectLabel ? `Build in ${projectLabel}` : "Build something..."
 
   const activeContextWindow = useMemo(() => {
