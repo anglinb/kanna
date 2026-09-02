@@ -71,6 +71,9 @@ React client (src/client)
 
 - `ios/` is its own git repository (ignored by this one). Commit iOS
   changes there.
+- The web client and the iOS app share most screens (composer, sidebar,
+  chat). When a bug report or request does not say which one it is about,
+  ask before touching code. A fix on the wrong platform is wasted work.
 
 ## Cloud contract
 
