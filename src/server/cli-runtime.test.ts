@@ -147,6 +147,9 @@ describe("parseArgs", () => {
         strictPort: false,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -163,6 +166,9 @@ describe("parseArgs", () => {
         strictPort: true,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -179,6 +185,9 @@ describe("parseArgs", () => {
         strictPort: false,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -195,6 +204,9 @@ describe("parseArgs", () => {
         strictPort: false,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -211,6 +223,9 @@ describe("parseArgs", () => {
         strictPort: false,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -227,6 +242,9 @@ describe("parseArgs", () => {
         strictPort: false,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -253,6 +271,9 @@ describe("parseArgs", () => {
         strictPort: false,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -269,6 +290,9 @@ describe("parseArgs", () => {
         strictPort: false,
         noCloud: false,
         directCloud: false,
+        api: false,
+        apiKeys: [],
+        apiKeyFile: null,
       },
     })
   })
@@ -631,6 +655,64 @@ describe("parseArgs pair subcommand", () => {
     expect(() => parseArgs(["--cloud", "--cloudflared", "tok"])).toThrow("--cloudflared")
     expect(() => parseArgs(["--cloud", "--host", "10.0.0.5"])).toThrow("--host")
     expect(() => parseArgs(["--cloud", "--remote"])).toThrow("--remote")
+  })
+
+  test("--api collects inline keys in either flag form", () => {
+    const equals = parseArgs(["--api", "--api-key=alpha,bravo"])
+    expect(equals).toMatchObject({ kind: "run", options: { api: true, apiKeys: ["alpha", "bravo"], apiKeyFile: null } })
+
+    const spaced = parseArgs(["--api", "--api-key", "alpha,bravo"])
+    expect(spaced).toMatchObject({ kind: "run", options: { api: true, apiKeys: ["alpha", "bravo"] } })
+  })
+
+  test("repeating --api-key accumulates without duplicates", () => {
+    expect(parseArgs(["--api", "--api-key=alpha", "--api-key=bravo,alpha"])).toMatchObject({
+      kind: "run",
+      options: { apiKeys: ["alpha", "bravo"] },
+    })
+  })
+
+  test("--api-key-file is recorded for startup to read", () => {
+    expect(parseArgs(["--api", "--api-key-file=/tmp/keys.txt"])).toMatchObject({
+      kind: "run",
+      options: { api: true, apiKeys: [], apiKeyFile: "/tmp/keys.txt" },
+    })
+    expect(parseArgs(["--api", "--api-key-file", "/tmp/keys.txt"])).toMatchObject({
+      kind: "run",
+      options: { apiKeyFile: "/tmp/keys.txt" },
+    })
+  })
+
+  test("--api-key-file is not swallowed by --api-key", () => {
+    const parsed = parseArgs(["--api", "--api-key-file=/tmp/keys.txt"])
+    expect(parsed).toMatchObject({ kind: "run", options: { apiKeys: [], apiKeyFile: "/tmp/keys.txt" } })
+  })
+
+  test("--api without any key flag is refused", () => {
+    expect(() => parseArgs(["--api"])).toThrow("--api-key")
+  })
+
+  test("key flags without --api are refused", () => {
+    expect(() => parseArgs(["--api-key=alpha"])).toThrow("--api")
+    expect(() => parseArgs(["--api-key-file=/tmp/keys.txt"])).toThrow("--api")
+  })
+
+  test("key flags need a value", () => {
+    expect(() => parseArgs(["--api", "--api-key="])).toThrow("Missing value for --api-key")
+    expect(() => parseArgs(["--api", "--api-key"])).toThrow("Missing value for --api-key")
+    expect(() => parseArgs(["--api", "--api-key", "--no-open"])).toThrow("Missing value for --api-key")
+    expect(() => parseArgs(["--api", "--api-key-file"])).toThrow("Missing value for --api-key-file")
+  })
+
+  test("--api composes with --remote", () => {
+    expect(parseArgs(["--remote", "--api", "--api-key=alpha"])).toMatchObject({
+      kind: "run",
+      options: { host: "0.0.0.0", api: true, apiKeys: ["alpha"] },
+    })
+  })
+
+  test("a blank inline key list is treated as no keys", () => {
+    expect(() => parseArgs(["--api", "--api-key= , "])).toThrow("--api-key")
   })
 })
 

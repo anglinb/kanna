@@ -30,6 +30,8 @@ import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { handleTranscribe } from "./transcribe"
 import { handleChatWindow } from "./chat-window-route"
+import { createApiKeyVerifier } from "./api/keys"
+import { handleApiRequest, hasValidApiKey, isApiRoute } from "./api/routes"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
@@ -125,6 +127,13 @@ export interface StartKannaServerOptions {
    * through the app-settings snapshot to unlock dev-box-only UI.
    */
   directCloud?: boolean
+  /**
+   * Mount the remote REST API at /api/v1 (`kanna --api`). Requires `apiKeys`;
+   * with an empty list the API stays unmounted rather than serving openly.
+   */
+  api?: boolean
+  /** Keys accepted on /api/v1 as `Authorization: Bearer` or `X-Api-Key`. */
+  apiKeys?: string[]
   onMigrationProgress?: (message: string) => void
   update?: {
     version: string
@@ -140,6 +149,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const strictPort = options.strictPort ?? false
   const runtimeProfile = getRuntimeProfile()
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
+  // Null unless --api was passed with at least one key. Every /api/v1 request
+  // is checked against it, and nothing else on the server consults it.
+  const apiKeyVerifier = options.api && (options.apiKeys?.length ?? 0) > 0
+    ? createApiKeyVerifier(options.apiKeys ?? [])
+    : null
   const store = new EventStore(options.dataDir)
   const diffStore = new DiffStore(store.dataDir)
   const machineDisplayName = getMachineDisplayName()
@@ -505,7 +519,14 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
                   return withOriginAgentCluster(new Response("Unauthorized", { status: 401 }))
                 }
               }
-            } else if (url.pathname.startsWith("/api/") && !auth.isAuthenticated(req)) {
+            } else if (
+              url.pathname.startsWith("/api/") &&
+              !auth.isAuthenticated(req) &&
+              // A valid API key stands in for the browser session on /api/v1.
+              // The password gate is a cookie flow an API client cannot do,
+              // and the key is the stronger credential of the two.
+              !(isApiRoute(url) && hasValidApiKey(req, apiKeyVerifier))
+            ) {
               return withOriginAgentCluster(Response.json({ error: "Unauthorized" }, { status: 401 }))
             }
           }
@@ -565,6 +586,29 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             }
             const payload: CloudWsEndpointResponse = { wsUrl: null }
             return withOriginAgentCluster(Response.json(payload, { headers: { "Cache-Control": "no-store" } }))
+          }
+
+          if (isApiRoute(url)) {
+            // Claim the prefix whether or not the API is mounted: without
+            // this, an unmounted /api/v1 falls through to the SPA and answers
+            // index.html with a 200, which a client reads as success.
+            if (!apiKeyVerifier) {
+              return withOriginAgentCluster(Response.json({ error: "Not found" }, { status: 404 }))
+            }
+            const apiResponse = await handleApiRequest(req, url, {
+              store,
+              agent,
+              appSettings,
+              verifier: apiKeyVerifier,
+              // API writes are rare next to socket traffic, so a full
+              // broadcast is the safe choice: every topic an API call can
+              // touch gets refreshed without enumerating them here.
+              broadcast: () => router.broadcastSnapshots(),
+              version: options.update?.version ?? "0.0.0",
+            })
+            if (apiResponse) {
+              return withOriginAgentCluster(apiResponse)
+            }
           }
 
           const uploadResponse = await handleProjectUpload(req, url, store)
