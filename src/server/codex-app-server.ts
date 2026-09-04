@@ -101,12 +101,12 @@ interface PendingTurn {
   todoSequence: number
   pendingWebSearchResultToolId: string | null
   /**
-   * Last `error` notification codex said it would retry. Kept so a turn that
-   * ends up failing can name the problem that started it — codex reports the
-   * cause once, up front, and the terminal notification that follows can be
-   * empty.
+   * Most informative error from this turn's retry sequence, if it had one.
+   * Kept so a turn that ends up failing can still name the problem — codex
+   * reports the cause once, somewhere in the sequence, and the terminal
+   * notification that follows can be empty.
    */
-  lastRetryError: string | null
+  retryCause: CodexError | null
   resolved: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onApprovalRequest?: (
@@ -188,6 +188,10 @@ function errorMessage(value: unknown): string {
   return String(value)
 }
 
+function errorDetail(error: CodexError): string {
+  return typeof error.codexErrorInfo === "string" ? error.codexErrorInfo.trim() : ""
+}
+
 /**
  * codex splits an error across `message` and `codexErrorInfo`, and the message
  * on its own is often just a summary. Keep both when the detail adds anything,
@@ -196,9 +200,24 @@ function errorMessage(value: unknown): string {
 function formatCodexError(error: CodexError | null | undefined): string {
   if (!error) return ""
   const message = error.message?.trim() ?? ""
-  const detail = typeof error.codexErrorInfo === "string" ? error.codexErrorInfo.trim() : ""
+  const detail = errorDetail(error)
   if (!detail || message.includes(detail)) return message
   return message ? `${message}: ${detail}` : detail
+}
+
+/**
+ * Of the errors in one retry sequence, keep the one that explains the most.
+ * codex mixes a cause ("stream disconnected: unexpected EOF") in with bare
+ * progress notices ("Reconnecting... 2/5") and the order isn't guaranteed —
+ * the sequences in the wild open with a counter — so neither "first wins" nor
+ * "last wins" reliably holds the cause. Prefer whichever carries
+ * `codexErrorInfo`, and otherwise keep the first: letting a counter overwrite
+ * a real cause is the exact failure this fallback exists to prevent.
+ */
+function preferredRetryCause(current: CodexError | null, next: CodexError): CodexError {
+  if (!current) return next
+  if (errorDetail(next) && !errorDetail(current)) return next
+  return current
 }
 
 function parseJsonLine(line: string): unknown | null {
@@ -905,7 +924,7 @@ export class CodexAppServerManager {
       planTextByItemId: new Map(),
       todoSequence: 0,
       pendingWebSearchResultToolId: null,
-      lastRetryError: null,
+      retryCause: null,
       resolved: false,
       onToolRequest: args.onToolRequest,
       onApprovalRequest: args.onApprovalRequest,
@@ -1511,7 +1530,7 @@ export class CodexAppServerManager {
         durationMs: 0,
         result: isError
           ? formatCodexError(notification.turn.error)
-            || pendingTurn.lastRetryError
+            || formatCodexError(pendingTurn.retryCause)
             || "Codex turn failed"
           : formatCodexError(notification.turn.error),
       }),
@@ -1539,7 +1558,7 @@ export class CodexAppServerManager {
 
     const pendingTurn = context.pendingTurn
     if (!pendingTurn || pendingTurn.resolved) return
-    pendingTurn.lastRetryError = message
+    pendingTurn.retryCause = preferredRetryCause(pendingTurn.retryCause, notification.error)
     pendingTurn.queue.push({
       type: "transcript",
       entry: timestamped({ kind: "status", status: message }),
