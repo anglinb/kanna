@@ -48,7 +48,11 @@ jobs:
       # bundle, so it 503s on a checkout that has never been built.
       - run: bun run check
 
-      - run: bun test
+      # Everything except the terminal suite, which drives a real PTY and waits
+      # on the host shell's EOF behavior — it times out on GitHub's runners.
+      # Covered by `bun test` locally instead.
+      - name: Run the test suite
+        run: bun test $(git ls-files '*.test.ts' '*.test.tsx' | grep -v 'terminal-manager.test.ts' | tr '\n' ' ')
 
       - run: bun pm pack
 
