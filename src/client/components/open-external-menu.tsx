@@ -58,20 +58,29 @@ function terminalPresetFromValue(value: OpenAppValue) {
 }
 
 /**
- * One entry per installed emulator, in TERMINAL_PRESETS order. Before
- * detection reports (and on servers too old to send it) this is the single
- * "Terminal" entry that goes to whatever the machine opens by default —
- * exactly the behaviour the menu had before.
+ * One entry per installed emulator, in TERMINAL_PRESETS order, plus the
+ * generic entry that goes to whatever the machine opens by default.
+ *
+ * That generic entry is what the menu had before any of this, and it stays
+ * wherever the named list can't stand in for it: before detection reports (and
+ * on servers too old to send it), when nothing was detected at all, and always
+ * off macOS — the server opens GNOME Terminal, Konsole, Windows Terminal or
+ * cmd there through paths that have no preset to detect.
  */
-function getTerminalItems(installedTerminals: TerminalPreset[] | null): OpenAppItem[] {
-  if (!installedTerminals) return [{ value: "terminal", label: "Terminal", installed: true }]
-  return TERMINAL_PRESETS
+function getTerminalItems(installedTerminals: TerminalPreset[] | null, isMac: boolean): OpenAppItem[] {
+  const systemItem: OpenAppItem = { value: "terminal", label: "Terminal", installed: true }
+  if (!installedTerminals) return [systemItem]
+  const namedItems = TERMINAL_PRESETS
     .filter((preset) => installedTerminals.includes(preset))
     .map((preset) => ({
       value: `terminal:${preset}` as OpenAppValue,
       label: TERMINAL_SPECS[preset].label,
       installed: true,
     }))
+  // On macOS, Terminal.app is itself a preset and is always present, so the
+  // named list already covers the default.
+  if (isMac && namedItems.length > 0) return namedItems
+  return [systemItem, ...namedItems]
 }
 
 function isEditorInstalled(value: OpenAppValue, installedEditors: EditorPreset[] | null) {
@@ -273,7 +282,7 @@ export function getOpenAppItems({
     ...editorItems.filter((item) => item.value !== headValue && !item.installed),
   ]
   const app = (value: OpenAppValue, label: string): OpenAppItem => ({ value, label, installed: true })
-  const terminalItems = includeTerminal ? getTerminalItems(installedTerminals) : []
+  const terminalItems = includeTerminal ? getTerminalItems(installedTerminals, isMac) : []
   // Last in both orders. Every other entry opens the code on disk; the forge is
   // a different kind of destination, so it sits at the end rather than
   // interleaved with the apps.
@@ -434,7 +443,12 @@ export function OpenExternalSelect({
   )
 }
 
-export function OpenExternalContextMenuContent({
+/**
+ * The "Open in…" destinations as bare context-menu items, so a menu that
+ * already exists — the navbar's overflow on a narrow window, where the split
+ * button has no room — can carry them without nesting a second menu.
+ */
+export function OpenAppMenuItems({
   isMac,
   editorPreset,
   editorCommandTemplate,
@@ -443,6 +457,8 @@ export function OpenExternalContextMenuContent({
   includePreview = false,
   includeDefault = false,
   repoUrl,
+  menuKind,
+  itemClassName,
   onOpenExternal,
 }: {
   isMac: boolean
@@ -454,6 +470,9 @@ export function OpenExternalContextMenuContent({
   includeDefault?: boolean
   /** The project's forge page; omit and no repo item is offered. */
   repoUrl?: string
+  menuKind?: "context" | "navbar"
+  /** Extra classes per row — the navbar uses it to hide these above `md`. */
+  itemClassName?: string
   onOpenExternal: (action: OpenExternalAction, editor?: EditorOpenSettings, terminal?: TerminalPreset) => void
 }) {
   const installedEditors = useInstalledEditors()
@@ -468,15 +487,16 @@ export function OpenExternalContextMenuContent({
     includePreview,
     includeDefault,
     repoUrl,
+    menuKind,
   })
 
   return (
-    <ContextMenuContent className="rounded-lg p-1">
+    <>
       {items.map((item) => (
         <ContextMenuItem
           key={item.value}
           disabled={!item.installed}
-          className={`${OPEN_APP_MENU_ITEM_CLASS_NAME} ${OPEN_APP_CONTEXT_MENU_ITEM_CLASS_NAME}`}
+          className={`${OPEN_APP_MENU_ITEM_CLASS_NAME} ${OPEN_APP_CONTEXT_MENU_ITEM_CLASS_NAME}${itemClassName ? ` ${itemClassName}` : ""}`}
           onSelect={(event) => {
             event.preventDefault()
             openAppValue({ value: item.value, editorCommandTemplate, repoUrl, onOpenExternal })
@@ -485,6 +505,25 @@ export function OpenExternalContextMenuContent({
           <OpenAppMenuItemContent value={item.value} label={item.label} isMac={isMac} installed={item.installed} />
         </ContextMenuItem>
       ))}
+    </>
+  )
+}
+
+export function OpenExternalContextMenuContent(props: {
+  isMac: boolean
+  editorPreset: EditorPreset
+  editorCommandTemplate?: string
+  includeFinder?: boolean
+  includeTerminal?: boolean
+  includePreview?: boolean
+  includeDefault?: boolean
+  /** The project's forge page; omit and no repo item is offered. */
+  repoUrl?: string
+  onOpenExternal: (action: OpenExternalAction, editor?: EditorOpenSettings, terminal?: TerminalPreset) => void
+}) {
+  return (
+    <ContextMenuContent className="rounded-lg p-1">
+      <OpenAppMenuItems {...props} />
     </ContextMenuContent>
   )
 }

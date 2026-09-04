@@ -146,6 +146,13 @@ describe("buildTerminalCommand", () => {
       .toThrow("iTerm is only available on macOS")
   })
 
+  test("builds a Windows command for a named emulator", () => {
+    // The Windows open path has its own Windows Terminal / cmd fallback; a
+    // named choice has to beat it, or picking Alacritty opens something else.
+    expect(buildTerminalCommand({ preset: "alacritty", localPath: "C:\\repo", platform: "win32" }))
+      .toEqual({ command: "alacritty", args: ["--working-directory", "C:\\repo"] })
+  })
+
   test("defaults to Terminal.app on macOS when no emulator is named", () => {
     // The behaviour the menu had before terminals were detected at all.
     expect(buildTerminalCommand({ localPath: "/repo", platform: "darwin" }))

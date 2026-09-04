@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { accessSync, constants, statSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
+import process from "node:process"
 
 function formatSpawnError(command: string, error: unknown) {
   if (!(error instanceof Error)) {
@@ -58,8 +59,16 @@ function succeedsAsync(command: string, args: string[]) {
   })
 }
 
-/** `hasCommand` without blocking the event loop — for probes run in bulk. */
+/**
+ * `hasCommand` without blocking the event loop — for probes run in bulk.
+ *
+ * Windows has no `sh`, so asking it there would report every command missing
+ * and quietly grey out the whole menu; `where` is the equivalent lookup.
+ */
 export function commandExists(command: string) {
+  if (process.platform === "win32") {
+    return succeedsAsync("where", [command])
+  }
   return succeedsAsync("sh", ["-lc", `command -v ${command}`])
 }
 

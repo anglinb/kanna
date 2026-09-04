@@ -103,6 +103,13 @@ export async function openExternal(command: OpenExternalCommand) {
       return
     }
     if (command.action === "open_terminal") {
+      // A named emulator wins over the Windows Terminal / cmd fallback, the
+      // same way it does on Linux — the menu only offers one when it found it.
+      if (command.terminal) {
+        const named = buildTerminalCommand({ preset: command.terminal, localPath: resolvedPath, platform })
+        await spawnDetached(named.command, named.args)
+        return
+      }
       if (hasCommand("wt")) {
         await spawnDetached("wt", ["-d", resolvedPath])
         return

@@ -221,6 +221,35 @@ describe("getOpenAppItems terminals", () => {
       .some((item) => item.value === "terminal")).toBe(true)
   })
 
+  test("keeps the system entry off macOS, where the launchers have no preset", () => {
+    // The server opens GNOME Terminal / Konsole / Windows Terminal through
+    // paths detection can't name, so dropping this entry would lose a working
+    // action on a machine that only has its normal system terminal.
+    expect(getOpenAppItems({
+      editorPreset: "cursor",
+      isMac: false,
+      installedTerminals: [],
+      includeTerminal: true,
+    }).some((item) => item.value === "terminal")).toBe(true)
+
+    expect(getOpenAppItems({
+      editorPreset: "cursor",
+      isMac: false,
+      installedTerminals: ["kitty"],
+      includeTerminal: true,
+    }).filter((item) => item.value.startsWith("terminal")).map((item) => item.value))
+      .toEqual(["terminal", "terminal:kitty"])
+  })
+
+  test("falls back to the system entry when nothing was detected on macOS either", () => {
+    expect(getOpenAppItems({
+      editorPreset: "cursor",
+      isMac: true,
+      installedTerminals: [],
+      includeTerminal: true,
+    }).some((item) => item.value === "terminal")).toBe(true)
+  })
+
   test("offers no terminal at all when the menu didn't ask for one", () => {
     expect(getOpenAppItems({ editorPreset: "cursor", isMac: true, installedTerminals: ["terminal"] })
       .some((item) => item.value.startsWith("terminal"))).toBe(false)
