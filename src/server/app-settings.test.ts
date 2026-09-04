@@ -302,6 +302,23 @@ describe("AppSettingsManager", () => {
     manager.dispose()
   })
 
+  test("does not rewrite a settings file that already carries the composer default", async () => {
+    // Every field the file payload has must be in the comparison too, or the
+    // file is rewritten on every launch for no change.
+    const filePath = await createTempFilePath()
+    const first = new AppSettingsManager(filePath)
+    await first.initialize()
+    await first.writePatch({ submitWhileRunning: "steer" })
+    first.dispose()
+    const written = await readFile(filePath, "utf8")
+
+    const second = new AppSettingsManager(filePath)
+    await second.initialize()
+    second.dispose()
+
+    expect(await readFile(filePath, "utf8")).toBe(written)
+  })
+
   test("normalizes GPT-5.6 reasoning levels when settings are written", async () => {
     const filePath = await createTempFilePath()
     const manager = new AppSettingsManager(filePath)

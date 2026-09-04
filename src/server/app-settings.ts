@@ -304,6 +304,7 @@ function toComparablePayload(source: AppSettingsFile) {
     theme: source.theme,
     chatSoundPreference: source.chatSoundPreference,
     chatSoundId: source.chatSoundId,
+    submitWhileRunning: source.submitWhileRunning,
     terminal: source.terminal,
     editor: source.editor,
     transcript: source.transcript,

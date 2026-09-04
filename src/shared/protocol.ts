@@ -300,9 +300,9 @@ export type ClientCommand =
       autoPlan?: boolean
       /**
        * Interrupt the running turn and deliver this message now, instead of
-       * leaving it queued. Done here rather than as a follow-up `message.steer`
-       * so the turn can't finish and drain the queue in between, which would
-       * leave the steer with nothing to find.
+       * leaving it queued — the same as "Send now" on a queued message, folded
+       * into one command so the coordinator can absorb the turn ending in
+       * between (in which case the message has already started).
        */
       steer?: boolean
     }
