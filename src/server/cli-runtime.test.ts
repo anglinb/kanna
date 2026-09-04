@@ -151,6 +151,18 @@ describe("parseArgs", () => {
     })
   })
 
+  test("uses the isolated rc default port", () => {
+    process.env.KANNA_RUNTIME_PROFILE = "rc"
+
+    expect(parseArgs([])).toMatchObject({ kind: "run", options: { port: 3211 } })
+  })
+
+  test("parses chat import environments", () => {
+    expect(parseArgs(["import-chats", "dev"])).toEqual({ kind: "import-chats", source: "dev" })
+    expect(parseArgs(["import-chats", "rc"])).toEqual({ kind: "import-chats", source: "rc" })
+    expect(parseArgs(["import-chats", "prd"])).toEqual({ kind: "import-chats", source: "prod" })
+  })
+
   test("parses strict port mode", () => {
     expect(parseArgs(["--strict-port"])).toEqual({
       kind: "run",
@@ -364,6 +376,49 @@ describe("runCli", () => {
     await runCli(["--port", "4000", "--no-open"], deps)
 
     expect(calls.log).toContain("[kanna] data dir: ~/.kanna-dev/data")
+  })
+
+  test("imports chats into the active environment", async () => {
+    process.env.KANNA_RUNTIME_PROFILE = "rc"
+    const imports: unknown[] = []
+    const probedPorts: number[] = []
+    const { calls, deps } = createDeps({
+      probeExistingInstanceImpl: async (port) => {
+        probedPorts.push(port)
+        return null
+      },
+      importChatsImpl: async (options) => {
+        imports.push(options)
+        return { added: 3, updated: 2, projectsAdded: 1 }
+      },
+    })
+
+    const result = await runCli(["import-chats", "dev"], deps)
+
+    expect(result).toEqual({ kind: "exited", code: 0 })
+    expect(probedPorts).toEqual([3211, 5175])
+    expect(imports).toEqual([{ sourceProfile: "dev", targetProfile: "rc" }])
+    expect(calls.log).toContain("[kanna] imported chats dev → rc: 3 added, 2 updated, 1 projects added")
+    expect(calls.fetchLatestVersion).toEqual([])
+    expect(calls.startServer).toEqual([])
+  })
+
+  test("refuses to import while the destination is running", async () => {
+    process.env.KANNA_RUNTIME_PROFILE = "dev"
+    let imported = false
+    const { calls, deps } = createDeps({
+      probeExistingInstanceImpl: async (port) => ({ localUrl: `http://localhost:${port}`, port }),
+      importChatsImpl: async () => {
+        imported = true
+        return { added: 0, updated: 0, projectsAdded: 0 }
+      },
+    })
+
+    const result = await runCli(["import-chats", "prd"], deps)
+
+    expect(result).toEqual({ kind: "exited", code: 1 })
+    expect(imported).toBe(false)
+    expect(calls.warn.some((line) => line.includes("http://localhost:5175"))).toBe(true)
   })
 
   test("fails fast on unsupported Bun versions", async () => {
@@ -865,4 +920,3 @@ describe("runCli single-instance guard + hosted open", () => {
     if (result.kind === "started") await result.stop()
   })
 })
-
