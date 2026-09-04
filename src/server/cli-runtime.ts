@@ -321,29 +321,85 @@ function getProfileServerPort(profile: RuntimeProfile) {
   return profile === "dev" ? DEV_SERVER_PORT : getDefaultServerPort(profile)
 }
 
+/**
+ * Semver precedence: numeric release parts first, then prerelease tags, so
+ * "0.66.0-rc.1" < "0.66.0-rc.2" < "0.66.0". Release candidates depend on that
+ * ordering — comparing only the release part makes every candidate for a base
+ * version equal, so an RC would never see a newer RC as an update.
+ *
+ * Nightly builds are the deliberate exception. "<base>-nightly.<sha>" is cut
+ * from main *after* <base> shipped, so ranking it below <base> (as semver
+ * would) makes the stable updater reinstall over it on every launch. Treating
+ * a nightly as its base version keeps it in place until a later release
+ * genuinely supersedes it — the behavior nightly.ts already documents.
+ */
 export function compareVersions(currentVersion: string, latestVersion: string) {
-  const currentParts = normalizeVersion(currentVersion)
-  const latestParts = normalizeVersion(latestVersion)
-  const length = Math.max(currentParts.length, latestParts.length)
+  const current = parseVersion(currentVersion)
+  const latest = parseVersion(latestVersion)
+  const length = Math.max(current.release.length, latest.release.length)
 
   for (let index = 0; index < length; index += 1) {
-    const current = currentParts[index] ?? 0
-    const latest = latestParts[index] ?? 0
-    if (current === latest) continue
-    return current < latest ? -1 : 1
+    const currentPart = current.release[index] ?? 0
+    const latestPart = latest.release[index] ?? 0
+    if (currentPart === latestPart) continue
+    return currentPart < latestPart ? -1 : 1
   }
 
-  return 0
+  return comparePrerelease(current.prerelease, latest.prerelease)
 }
 
-function normalizeVersion(version: string) {
-  return version
-    .trim()
-    .replace(/^v/i, "")
-    .split("-")[0]
+interface ParsedVersion {
+  release: number[]
+  /** null for a plain release, and for nightly builds (see compareVersions). */
+  prerelease: string[] | null
+}
+
+function parseVersion(version: string): ParsedVersion {
+  // Build metadata ("+<sha>") never participates in precedence.
+  const withoutBuild = version.trim().replace(/^v/i, "").split("+")[0] ?? ""
+  const separator = withoutBuild.indexOf("-")
+  const releasePart = separator === -1 ? withoutBuild : withoutBuild.slice(0, separator)
+  const prereleasePart = separator === -1 ? "" : withoutBuild.slice(separator + 1)
+
+  const release = releasePart
     .split(".")
     .map((part) => Number.parseInt(part, 10))
     .filter((part) => Number.isFinite(part))
+  const identifiers = prereleasePart ? prereleasePart.split(".") : []
+
+  return {
+    release,
+    prerelease: identifiers.length === 0 || identifiers[0] === "nightly" ? null : identifiers,
+  }
+}
+
+function comparePrerelease(current: string[] | null, latest: string[] | null) {
+  if (current === null && latest === null) return 0
+  // A prerelease sorts below the release it leads up to.
+  if (current === null) return 1
+  if (latest === null) return -1
+
+  const length = Math.max(current.length, latest.length)
+  for (let index = 0; index < length; index += 1) {
+    const currentPart = current[index]
+    const latestPart = latest[index]
+    // A shorter identifier list sorts lower ("rc.1" < "rc.1.1").
+    if (currentPart === undefined) return -1
+    if (latestPart === undefined) return 1
+    if (currentPart === latestPart) continue
+
+    const currentNumeric = /^\d+$/.test(currentPart)
+    const latestNumeric = /^\d+$/.test(latestPart)
+    // Numeric identifiers compare numerically and rank below alphanumeric ones.
+    if (currentNumeric && latestNumeric) {
+      return Number(currentPart) < Number(latestPart) ? -1 : 1
+    }
+    if (currentNumeric) return -1
+    if (latestNumeric) return 1
+    return currentPart < latestPart ? -1 : 1
+  }
+
+  return 0
 }
 
 async function maybeSelfUpdate(_argv: string[], deps: CliRuntimeDeps) {

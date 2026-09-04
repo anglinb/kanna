@@ -316,6 +316,36 @@ describe("compareVersions", () => {
     expect(compareVersions("0.3.0", "0.3.1")).toBe(-1)
     expect(compareVersions("1.0.0", "0.9.9")).toBe(1)
   })
+
+  test("orders release candidates", () => {
+    expect(compareVersions("0.66.0-rc.1", "0.66.0-rc.2")).toBe(-1)
+    expect(compareVersions("0.66.0-rc.2", "0.66.0-rc.1")).toBe(1)
+    expect(compareVersions("0.66.0-rc.1", "0.66.0-rc.1")).toBe(0)
+    // Numerically, so rc.10 is newer than rc.9 rather than sorting as a string.
+    expect(compareVersions("0.66.0-rc.9", "0.66.0-rc.10")).toBe(-1)
+    // The release part still dominates the prerelease tag.
+    expect(compareVersions("0.66.0-rc.9", "0.66.1-rc.1")).toBe(-1)
+  })
+
+  test("ranks a prerelease below the release it leads up to", () => {
+    expect(compareVersions("0.66.0-rc.1", "0.66.0")).toBe(-1)
+    expect(compareVersions("0.66.0", "0.66.0-rc.1")).toBe(1)
+    // Fewer identifiers sort lower.
+    expect(compareVersions("0.66.0-rc.1", "0.66.0-rc.1.1")).toBe(-1)
+  })
+
+  test("keeps nightly builds level with their base version", () => {
+    // A nightly is cut from main *after* its base shipped. Ranking it below
+    // the base (as semver would) would make the stable updater reinstall over
+    // it on every launch; it should hold until a later release supersedes it.
+    expect(compareVersions("0.66.0-nightly.abc1234", "0.66.0")).toBe(0)
+    expect(compareVersions("0.66.0-nightly.abc1234", "0.66.1")).toBe(-1)
+    expect(compareVersions("0.66.0-nightly.abc1234", "0.65.9")).toBe(1)
+  })
+
+  test("ignores build metadata", () => {
+    expect(compareVersions("0.66.0+build.5", "0.66.0")).toBe(0)
+  })
 })
 
 describe("classifyInstallVersionFailure", () => {
