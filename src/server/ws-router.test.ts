@@ -84,6 +84,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
   theme: "system",
   chatSoundPreference: "always",
   chatSoundId: "funk",
+  submitWhileRunning: "queue",
   terminal: {
     scrollbackLines: 1_000,
     minColumnWidth: 450,
@@ -816,6 +817,54 @@ describe("ws-router", () => {
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
+  })
+
+  test("message.enqueue steers the message it just queued when asked", async () => {
+    // One command, not enqueue-then-steer from the client: between the two the
+    // turn could end and drain the queue, leaving the steer nothing to find.
+    const steered: Array<{ chatId: string; queuedMessageId: string }> = []
+    const router = createTestRouter({
+      agent: {
+        enqueue: async () => ({ queuedMessageId: "queued-7" }),
+        steer: async (command: { chatId: string; queuedMessageId: string }) => {
+          steered.push({ chatId: command.chatId, queuedMessageId: command.queuedMessageId })
+        },
+        getActiveStatuses: () => new Map(),
+        getDrainingChatIds: () => new Set(),
+      } as never,
+    })
+    const ws = new FakeWebSocket()
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1,
+      type: "command",
+      id: "enqueue-steer-1",
+      command: { type: "message.enqueue", chatId: "chat-1", content: "actually, stop", steer: true },
+    }))
+
+    expect(steered).toEqual([{ chatId: "chat-1", queuedMessageId: "queued-7" }])
+  })
+
+  test("message.enqueue leaves the message queued by default", async () => {
+    let steerCalls = 0
+    const router = createTestRouter({
+      agent: {
+        enqueue: async () => ({ queuedMessageId: "queued-8" }),
+        steer: async () => { steerCalls += 1 },
+        getActiveStatuses: () => new Map(),
+        getDrainingChatIds: () => new Set(),
+      } as never,
+    })
+    const ws = new FakeWebSocket()
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1,
+      type: "command",
+      id: "enqueue-plain-1",
+      command: { type: "message.enqueue", chatId: "chat-1", content: "after you're done" },
+    }))
+
+    expect(steerCalls).toBe(0)
   })
 
   test("project.create initializes the directory, acks the resolved path, and tracks analytics", async () => {

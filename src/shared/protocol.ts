@@ -298,6 +298,13 @@ export type ClientCommand =
       modelOptions?: ModelOptions
       planMode?: boolean
       autoPlan?: boolean
+      /**
+       * Interrupt the running turn and deliver this message now, instead of
+       * leaving it queued. Done here rather than as a follow-up `message.steer`
+       * so the turn can't finish and drain the queue in between, which would
+       * leave the steer with nothing to find.
+       */
+      steer?: boolean
     }
   | {
       type: "message.steer"

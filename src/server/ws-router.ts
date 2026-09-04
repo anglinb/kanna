@@ -1693,6 +1693,13 @@ export function createWsRouter({
         }
         case "message.enqueue": {
           const result = await agent.enqueue(command)
+          if (command.steer) {
+            await agent.steer({
+              type: "message.steer",
+              chatId: command.chatId,
+              queuedMessageId: result.queuedMessageId,
+            })
+          }
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           await broadcastChatAndSidebar(command.chatId)
           return
