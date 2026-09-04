@@ -20,6 +20,7 @@ import {
   type AccountRateLimitsUpdatedNotification,
   type CollabAgentToolCallItem,
   type ContextCompactedNotification,
+  type CodexError,
   type CodexRateLimitSnapshot,
   type CodexRequestId,
   type GetAccountRateLimitsResponse,
@@ -30,6 +31,7 @@ import {
   type CommandExecutionRequestApprovalResponse,
   type DynamicToolCallOutputContentItem,
   type DynamicToolCallResponse,
+  type ErrorNotification,
   type FileChangeApprovalDecision,
   type FileChangeRequestApprovalParams,
   type FileChangeRequestApprovalResponse,
@@ -98,6 +100,13 @@ interface PendingTurn {
   planTextByItemId: Map<string, string>
   todoSequence: number
   pendingWebSearchResultToolId: string | null
+  /**
+   * Last `error` notification codex said it would retry. Kept so a turn that
+   * ends up failing can name the problem that started it — codex reports the
+   * cause once, up front, and the terminal notification that follows can be
+   * empty.
+   */
+  lastRetryError: string | null
   resolved: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onApprovalRequest?: (
@@ -177,6 +186,19 @@ function codexSystemInitEntry(model: string): TranscriptEntry {
 function errorMessage(value: unknown): string {
   if (value instanceof Error) return value.message
   return String(value)
+}
+
+/**
+ * codex splits an error across `message` and `codexErrorInfo`, and the message
+ * on its own is often just a summary. Keep both when the detail adds anything,
+ * so a failed turn names the cause rather than the category.
+ */
+function formatCodexError(error: CodexError | null | undefined): string {
+  if (!error) return ""
+  const message = error.message?.trim() ?? ""
+  const detail = typeof error.codexErrorInfo === "string" ? error.codexErrorInfo.trim() : ""
+  if (!detail || message.includes(detail)) return message
+  return message ? `${message}: ${detail}` : detail
 }
 
 function parseJsonLine(line: string): unknown | null {
@@ -883,6 +905,7 @@ export class CodexAppServerManager {
       planTextByItemId: new Map(),
       todoSequence: 0,
       pendingWebSearchResultToolId: null,
+      lastRetryError: null,
       resolved: false,
       onToolRequest: args.onToolRequest,
       onApprovalRequest: args.onApprovalRequest,
@@ -1293,7 +1316,7 @@ export class CodexAppServerManager {
         this.handleContextCompacted(pendingTurn, notification.params)
         return
       case "error":
-        this.failContext(context, notification.params.error.message)
+        this.handleErrorNotification(context, notification.params)
         return
       default:
         return
@@ -1486,11 +1509,41 @@ export class CodexAppServerManager {
         subtype: isCancelled ? "cancelled" : isError ? "error" : "success",
         isError,
         durationMs: 0,
-        result: notification.turn.error?.message ?? "",
+        result: isError
+          ? formatCodexError(notification.turn.error)
+            || pendingTurn.lastRetryError
+            || "Codex turn failed"
+          : formatCodexError(notification.turn.error),
       }),
     })
     pendingTurn.queue.finish()
     context.pendingTurn = null
+  }
+
+  /**
+   * codex reports two different things through `error`. A dropped model stream
+   * arrives with `willRetry: true` and a message that is only a progress
+   * counter ("Reconnecting... 2/5") — the turn is still alive and codex retries
+   * on its own. Failing here killed turns that would have recovered a second
+   * later, and reported the counter as the outcome, which says nothing about
+   * what went wrong. Show it as a status line instead (the transcript renders
+   * only the last one, so it clears itself when the stream comes back) and let
+   * the turn run. Only `willRetry: false` is terminal.
+   */
+  private handleErrorNotification(context: SessionContext, notification: ErrorNotification) {
+    const message = formatCodexError(notification.error) || "Codex reported an error"
+    if (!notification.willRetry) {
+      this.failContext(context, message)
+      return
+    }
+
+    const pendingTurn = context.pendingTurn
+    if (!pendingTurn || pendingTurn.resolved) return
+    pendingTurn.lastRetryError = message
+    pendingTurn.queue.push({
+      type: "transcript",
+      entry: timestamped({ kind: "status", status: message }),
+    })
   }
 
   private failContext(context: SessionContext, message: string) {
