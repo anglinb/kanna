@@ -44,6 +44,30 @@ export function hasCommand(command: string) {
   return result.status === 0
 }
 
+function succeedsAsync(command: string, args: string[]) {
+  return new Promise<boolean>((resolve) => {
+    let child
+    try {
+      child = spawn(command, args, { stdio: "ignore" })
+    } catch {
+      resolve(false)
+      return
+    }
+    child.once("error", () => resolve(false))
+    child.once("close", (code) => resolve(code === 0))
+  })
+}
+
+/** `hasCommand` without blocking the event loop — for probes run in bulk. */
+export function commandExists(command: string) {
+  return succeedsAsync("sh", ["-lc", `command -v ${command}`])
+}
+
+/** `canOpenMacApp` without blocking the event loop. */
+export function macAppExists(appName: string) {
+  return succeedsAsync("open", ["-Ra", appName])
+}
+
 /**
  * Per-user bin dirs installers target without necessarily reaching the
  * sh login PATH: the native Claude Code installer uses ~/.local/bin but adds

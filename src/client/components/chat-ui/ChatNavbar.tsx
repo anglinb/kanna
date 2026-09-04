@@ -1,6 +1,6 @@
 import { memo } from "react"
 import { ArrowLeft, Check, Flower, GitBranch, Globe, Loader2, MoreHorizontal, PanelLeft, PanelRight, Search, SquarePen, Terminal, UserRoundPlus } from "lucide-react"
-import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
+import type { EditorOpenSettings, EditorPreset, OpenExternalAction, TerminalPreset } from "../../../shared/protocol"
 import { Button } from "../ui/button"
 import { CardHeader } from "../ui/card"
 import { HotkeyTooltip, HotkeyTooltipContent, HotkeyTooltipTrigger } from "../ui/tooltip"
@@ -90,7 +90,7 @@ interface Props {
   rightPanel?: "hidden" | "git" | "browser"
   onToggleGitPanel?: () => void
   onToggleBrowserPanel?: () => void
-  onOpenExternal?: (action: OpenExternalAction, editor?: EditorOpenSettings) => void
+  onOpenExternal?: (action: OpenExternalAction, editor?: EditorOpenSettings, terminal?: TerminalPreset) => void
   onExportTranscript?: () => void
   canExportTranscript?: boolean
   isExportingTranscript?: boolean
