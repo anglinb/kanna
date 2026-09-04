@@ -1,5 +1,5 @@
 import type { UpdateInstallResult, UpdateSnapshot } from "../shared/types"
-import { PACKAGE_NAME } from "../shared/branding"
+import { getPackageName } from "../shared/branding"
 import { compareVersions, type UpdateInstallAttemptResult } from "./cli-runtime"
 import type { NightlyInstallResult } from "./nightly"
 
@@ -270,7 +270,7 @@ export class UpdateManager {
 
     let latestVersion: string
     try {
-      latestVersion = await this.deps.fetchLatestVersion(PACKAGE_NAME)
+      latestVersion = await this.deps.fetchLatestVersion(getPackageName())
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.setSnapshot({
@@ -288,7 +288,7 @@ export class UpdateManager {
       }
     }
 
-    const installed = this.deps.installVersion(PACKAGE_NAME, latestVersion)
+    const installed = this.deps.installVersion(getPackageName(), latestVersion)
     if (!installed.ok) {
       this.setSnapshot({
         ...this.snapshot,
@@ -325,7 +325,7 @@ export class UpdateManager {
 
   private async runCheck() {
     try {
-      const latestVersion = await this.deps.fetchLatestVersion(PACKAGE_NAME)
+      const latestVersion = await this.deps.fetchLatestVersion(getPackageName())
       const updateAvailable = compareVersions(this.snapshot.currentVersion, latestVersion) < 0
       const nextSnapshot: UpdateSnapshot = {
         ...this.snapshot,
@@ -398,7 +398,7 @@ export class UpdateManager {
       }
     }
 
-    const installed = this.deps.installVersion(PACKAGE_NAME, targetVersion)
+    const installed = this.deps.installVersion(getPackageName(), targetVersion)
     if (!installed.ok) {
       this.setSnapshot({
         ...this.snapshot,

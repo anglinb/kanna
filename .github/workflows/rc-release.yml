@@ -1,0 +1,90 @@
+name: Release Candidate
+
+# Cuts a release candidate for the fork's own use.
+#
+# Unlike upstream's release.yml/publish.yml pair, nothing is published to npm:
+# this packs the built checkout as @anglinb/kanna-rc and attaches the tarball
+# to a prerelease GitHub Release. `kanna-rc` installs and self-updates straight
+# from that asset — the client half lives in src/server/rc-channel.ts.
+#
+# Cut one from any branch:
+#   gh workflow run rc-release.yml --repo anglinb/kanna --ref <branch>
+#
+# (workflow_dispatch only offers workflows that exist on the default branch, so
+# this file has to be on the fork's main even when releasing another branch.)
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Release notes (markdown)"
+        required: false
+        default: ""
+
+jobs:
+  release-candidate:
+    # Never run this if the file ever reaches another repo — RC builds are the
+    # fork's private channel, not something upstream should be publishing.
+    if: github.repository == 'anglinb/kanna'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+
+      # Ahead of the build on purpose: the client bundle embeds the version
+      # from package.json, so stamping afterwards would ship the wrong one.
+      - name: Stamp the release-candidate version
+        id: stamp
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun run ./scripts/rc-release.ts
+
+      # Typechecks and produces both production bundles. Ahead of the tests
+      # on purpose: the auth suite boots a real server and serves the client
+      # bundle, so it 503s on a checkout that has never been built.
+      - run: bun run check
+
+      - run: bun test
+
+      - run: bun pm pack
+
+      - name: Verify the packed tarball
+        env:
+          TARBALL: ${{ steps.stamp.outputs.tarball }}
+        run: test -f "$TARBALL"
+
+      - name: Publish the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.stamp.outputs.tag }}
+          VERSION: ${{ steps.stamp.outputs.version }}
+          TARBALL: ${{ steps.stamp.outputs.tarball }}
+          NOTES: ${{ inputs.notes }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          BODY="$(cat <<EOF
+          ${NOTES}
+
+          ---
+          Built from \`${REF_NAME}\` at \`${GITHUB_SHA}\`.
+
+          \`\`\`bash
+          bun install -g https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${TARBALL}
+          kanna-rc
+          \`\`\`
+
+          Runs on port 3211 with its own data dir (\`~/.kanna-rc\`), alongside a
+          normal \`kanna\`. Already installed? \`kanna-rc\` picks this up on its
+          next launch.
+          EOF
+          )"
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "$TAG" \
+            --notes "$BODY" \
+            "$TARBALL"

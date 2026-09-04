@@ -1,13 +1,9 @@
 import process from "node:process"
-import { LOG_PREFIX } from "../shared/branding"
-import {
-  fetchLatestPackageVersion,
-  installPackageVersion,
-  openUrl,
-  runCli,
-} from "./cli-runtime"
+import { getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
+import { openUrl, runCli } from "./cli-runtime"
 import { CLI_STARTUP_UPDATE_RESTART_EXIT_CODE, CLI_UI_UPDATE_RESTART_EXIT_CODE } from "./restart"
 import { installNightlyBuild } from "./nightly"
+import { getReleaseChannel } from "./rc-channel"
 import { startKannaServer } from "./server"
 
 // Read version from package.json at the package root
@@ -22,6 +18,13 @@ process.on("unhandledRejection", (reason) => {
 
 const argv = process.argv.slice(2)
 let resolveExitAction: ((action: "ui_restart" | "exit") => void) | null = null
+
+// Stable updates come from npm; rc builds come from the fork's GitHub
+// Releases. The nightly channel builds upstream's main, so it is offered only
+// on the stable profile — an rc build already *is* the fork's fast channel,
+// and installing a nightly over one would swap it for an upstream build.
+const isReleaseCandidate = getRuntimeProfile() === "rc"
+const releaseChannel = getReleaseChannel()
 
 const result = await runCli(argv, {
   version: VERSION,
@@ -38,9 +41,9 @@ const result = await runCli(argv, {
 
     return started
   },
-  fetchLatestVersion: fetchLatestPackageVersion,
-  installVersion: installPackageVersion,
-  installNightly: () => installNightlyBuild({ log: console.log }),
+  fetchLatestVersion: releaseChannel.fetchLatestVersion,
+  installVersion: releaseChannel.installVersion,
+  installNightly: isReleaseCandidate ? undefined : () => installNightlyBuild({ log: console.log }),
   openUrl,
   log: console.log,
   warn: console.warn,

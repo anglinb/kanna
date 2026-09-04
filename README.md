@@ -147,6 +147,35 @@ bun run rc -- --no-open
 This rebuilds the production client, disables package self-updates for the
 local run, and launches the normal supervised server on port `3211`.
 
+#### Installing a published RC
+
+RC builds are distributed from this fork's [GitHub
+Releases](https://github.com/anglinb/kanna/releases) as `@anglinb/kanna-rc` —
+they are never published to npm, so installing one leaves a normal `kanna`
+untouched:
+
+```bash
+bun install -g https://github.com/anglinb/kanna/releases/download/<tag>/anglinb-kanna-rc-<version>.tgz
+kanna-rc
+```
+
+Each release's notes carry its own copy of that command. From then on
+`kanna-rc` checks the fork's releases on launch and updates itself the same way
+`kanna` updates from npm — an RC only ever updates to another RC.
+
+#### Cutting an RC
+
+```bash
+gh workflow run rc-release.yml --repo anglinb/kanna --ref fork-main
+gh workflow run rc-release.yml --repo anglinb/kanna --ref fork-main -f notes="What changed"
+```
+
+`.github/workflows/rc-release.yml` runs the test suite and typecheck, builds
+both bundles, packs the checkout, and publishes it as a prerelease. Versions
+are `<package.json version>-rc.<n>` — the counter is computed at build time
+from the existing releases and restarts whenever the base version moves, so
+nothing about the RC version is committed to the repo.
+
 ### Import chat history
 
 Import all live chats from another environment into the command's environment:

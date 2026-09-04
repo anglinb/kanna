@@ -1,7 +1,7 @@
 import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { hasCommand, spawnDetached } from "./process-utils"
-import { APP_NAME, getCliCommand, getDataDirDisplay, getRuntimeProfile, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
+import { APP_NAME, getCliCommand, getDataDirDisplay, getPackageName, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
 import type { RuntimeProfile } from "../shared/branding"
 import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
@@ -478,9 +478,13 @@ async function maybeSelfUpdate(_argv: string[], deps: CliRuntimeDeps) {
 
   deps.log(`${LOG_PREFIX} checking for updates`)
 
+  // An rc build updates from the fork's own channel, never from the upstream
+  // npm package — see getPackageName / rc-channel.ts.
+  const packageName = getPackageName()
+
   let latestVersion: string
   try {
-    latestVersion = await deps.fetchLatestVersion(PACKAGE_NAME)
+    latestVersion = await deps.fetchLatestVersion(packageName)
   }
   catch (error) {
     deps.warn(`${LOG_PREFIX} update check failed, continuing current version`)
@@ -494,8 +498,8 @@ async function maybeSelfUpdate(_argv: string[], deps: CliRuntimeDeps) {
     return null
   }
 
-  deps.log(`${LOG_PREFIX} installing ${PACKAGE_NAME}@${latestVersion}`)
-  const installResult = deps.installVersion(PACKAGE_NAME, latestVersion)
+  deps.log(`${LOG_PREFIX} installing ${packageName}@${latestVersion}`)
+  const installResult = deps.installVersion(packageName, latestVersion)
   if (!installResult.ok) {
     deps.warn(`${LOG_PREFIX} update failed, continuing current version`)
     if (installResult.userMessage) {

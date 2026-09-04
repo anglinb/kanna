@@ -4,6 +4,14 @@ export const DATA_ROOT_NAME = ".kanna"
 export const DEV_DATA_ROOT_NAME = ".kanna-dev"
 export const RC_DATA_ROOT_NAME = ".kanna-rc"
 export const PACKAGE_NAME = "kanna-code"
+/**
+ * The fork's release-candidate builds ship as their own package. A global
+ * install is keyed by package name, so reusing `kanna-code` would mean
+ * installing an RC *replaces* the stable release (and takes over its `kanna`
+ * bin) — and, worse, the running RC would look up `kanna-code` on npm and
+ * quietly auto-update itself into an upstream build.
+ */
+export const RC_PACKAGE_NAME = "@anglinb/kanna-rc"
 export const RUNTIME_PROFILE_ENV_VAR = "KANNA_RUNTIME_PROFILE"
 // Read version from package.json — JSON import works in both Bun and Vite
 import pkg from "../../package.json"
@@ -40,6 +48,14 @@ export function getDataRootName(env: RuntimeEnv = getRuntimeEnv()) {
 
 export function getCliCommand(env: RuntimeEnv = getRuntimeEnv()) {
   return getRuntimeProfile(env) === "rc" ? "kanna-rc" : CLI_COMMAND
+}
+
+/**
+ * The package this build updates itself from. Dev shares prod's package —
+ * a dev checkout never self-updates anyway (`KANNA_DISABLE_SELF_UPDATE`).
+ */
+export function getPackageName(env: RuntimeEnv = getRuntimeEnv()) {
+  return getRuntimeProfile(env) === "rc" ? RC_PACKAGE_NAME : PACKAGE_NAME
 }
 
 export function getDataRootDir(homeDir: string, env: RuntimeEnv = getRuntimeEnv()) {

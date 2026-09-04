@@ -4,6 +4,8 @@ package-lock.json
 
 # build output
 dist/
+# `bun pm pack` output (release-candidate tarballs)
+*.tgz
 
 # environment / secrets
 .env

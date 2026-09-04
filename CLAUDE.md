@@ -121,6 +121,44 @@ React client (src/client)
   a restart when that instance has no API, and warns that this run's keys were
   not applied when it does.
 
+## Release-candidate channel (fork only)
+
+- RC builds are this fork's own distribution: `rc-release.yml` stamps the
+  checkout as `@anglinb/kanna-rc`, packs it, and attaches the tarball to a
+  prerelease GitHub Release. Nothing goes to npm. The client half is
+  `src/server/rc-channel.ts`, deliberately its own module so merges from
+  upstream stay conflict-free — prefer adding to it over threading `rc` cases
+  through `cli-runtime.ts`.
+- The separate package name is load-bearing twice over. A global install is
+  keyed by package name, so shipping RCs as `kanna-code` would replace a
+  teammate's stable install (and take over its `kanna` bin); and a running RC
+  looks up `getPackageName()`, so sharing the name would make it check npm and
+  quietly auto-update itself into an upstream build. `getPackageName()` is
+  what routes a build to its channel — `cli.ts` picks the matching
+  fetch/install pair via `getReleaseChannel()`.
+- **Bun cannot move a global entry from one tarball spec to another in place**
+  — it aborts with `DependencyLoop` and leaves the old build installed. Every
+  RC upgrade is tarball→tarball, so `installRcVersion` removes the global entry
+  before installing. That also means a failed install would leave the machine
+  with no `kanna-rc` at all, hence the rollback to the previously installed
+  version. Don't drop either step; the first install works fine without them
+  and every upgrade after it fails.
+- `compareVersions` understands prerelease precedence so `-rc.1` < `-rc.2`;
+  without it every candidate for a base version compares equal and RCs never
+  update. Nightly is the deliberate exception: `-nightly.<sha>` is cut from
+  main *after* its base shipped, so it stays level with the base rather than
+  ranking below it, or the stable updater would reinstall over a nightly on
+  every launch.
+- The RC version is computed at build time (`scripts/rc-release.ts`) and never
+  committed, so `package.json` keeps upstream's version verbatim and doesn't
+  conflict on every merge. The tag (`v<version>`) and asset name both follow
+  from the version, which is why installing needs no GitHub API round trip and
+  `installVersion` can stay synchronous.
+- Nightly is disabled on rc builds: it builds upstream's `main`, so installing
+  one from an RC would swap the fork out for an upstream build.
+- RC releases are cut from `fork-main`, the fork's integration branch, not from
+  `main` (which mirrors upstream verbatim).
+
 ## Cloud contract
 
 - `src/shared/cloud-api.ts` is the wire contract with the hosted control
