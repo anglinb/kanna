@@ -46,6 +46,12 @@ React client (src/client)
   wire-only "carry on" prompt (`resume-turns.ts`). A user-initiated cancel
   never sets the marker, and the marker is cleared before the attempt, so one
   shutdown earns one resume.
+- Chat titles are generated twice: once from the opening message
+  (`generate-title.ts`, optimistic fallback first), then once more after the
+  first turn finishes (`refine-title.ts`), where a small model may replace a
+  title too generic to find the chat by. `ChatRecord.titleSource` gates the
+  second pass — a rename with no source is a person typing, and nothing
+  automatic touches the title again.
 - Transcripts are append-only JSONL per chat (`transcripts/<chatId>.jsonl`)
   with a small LRU cache in the EventStore. `debugRaw` (raw provider JSON) is
   stamped only on `system_init` — the one entry with a raw JSON view. Tool
