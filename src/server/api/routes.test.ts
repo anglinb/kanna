@@ -5,6 +5,7 @@ import path from "node:path"
 import type { AppSettingsSnapshot, KannaStatus } from "../../shared/types"
 import type { ClientCommand } from "../../shared/protocol"
 import { createEmptyState, type ChatRecord, type ProjectRecord } from "../events"
+import { SERVER_PROVIDERS } from "../provider-catalog"
 import { createApiKeyVerifier } from "./keys"
 import { handleApiRequest, type ApiRouteDeps } from "./routes"
 
@@ -30,6 +31,7 @@ interface Calls {
   closes: string[]
   deletes: string[]
   broadcasts: number
+  events: string[]
 }
 
 function createDeps(options: { activeStatuses?: Map<string, KannaStatus> } = {}) {
@@ -47,7 +49,7 @@ function createDeps(options: { activeStatuses?: Map<string, KannaStatus> } = {})
   state.chatsById.set("chat-archived", chatRecord({ id: "chat-archived", projectId: "project-1", archivedAt: 3 }))
   state.chatsById.set("chat-deleted", chatRecord({ id: "chat-deleted", projectId: "project-1", deletedAt: 4 }))
 
-  const calls: Calls = { sends: [], cancels: [], closes: [], deletes: [], broadcasts: 0 }
+  const calls: Calls = { sends: [], cancels: [], closes: [], deletes: [], broadcasts: 0, events: [] }
   let created = 0
 
   const store = {
@@ -109,6 +111,11 @@ function createDeps(options: { activeStatuses?: Map<string, KannaStatus> } = {})
     verifier: createApiKeyVerifier([KEY]),
     broadcast: () => {
       calls.broadcasts += 1
+    },
+    analytics: {
+      track: (eventName: string) => {
+        calls.events.push(eventName)
+      },
     },
     version: "1.2.3",
   } as unknown as ApiRouteDeps
@@ -439,6 +446,128 @@ describe("sending a prompt", () => {
     const response = await call(deps, "/api/v1/chats/chat-1/messages", { method: "POST", body: { content: "hi" } })
     expect(response?.status).toBe(500)
     expect((await json(response)).error).toBe("provider is not configured")
+  })
+})
+
+describe("provider validation", () => {
+  // An unknown provider is only noticed when the turn is set up. For a prompt
+  // that queues behind a running turn that happens after the 202, in
+  // dequeueAndStartQueuedMessage, which removes the queued message before the
+  // catalog lookup throws — so an accepted prompt would vanish.
+  test("rejects an unknown provider instead of accepting the prompt", async () => {
+    const { deps, calls } = createDeps()
+    const response = await call(deps, "/api/v1/chats/chat-1/messages", {
+      method: "POST",
+      body: { content: "hi", provider: "bogus" },
+    })
+    expect(response?.status).toBe(400)
+    expect((await json(response)).error).toContain("bogus")
+    expect(calls.sends).toHaveLength(0)
+  })
+
+  test("names the providers it will accept", async () => {
+    const { deps } = createDeps()
+    const body = await json(await call(deps, "/api/v1/chats/chat-1/messages", {
+      method: "POST",
+      body: { content: "hi", provider: "bogus" },
+    }))
+    expect(body.error).toContain("claude")
+  })
+
+  test("rejects an unknown provider on create-and-prompt too", async () => {
+    const { deps, calls } = createDeps()
+    const response = await call(deps, "/api/v1/chats", {
+      method: "POST",
+      body: { projectId: "project-1", content: "hi", provider: "bogus" },
+    })
+    expect(response?.status).toBe(400)
+    expect(calls.sends).toHaveLength(0)
+  })
+
+  test("accepts every provider the server has a catalog entry for", async () => {
+    for (const provider of SERVER_PROVIDERS.map((entry) => entry.id)) {
+      const { deps, calls } = createDeps()
+      const response = await call(deps, "/api/v1/chats/chat-1/messages", {
+        method: "POST",
+        body: { content: "hi", provider },
+      })
+      expect(response?.status).toBe(202)
+      expect(calls.sends[0]).toMatchObject({ provider })
+    }
+  })
+
+  test("a missing provider stays undefined so the chat's own is used", async () => {
+    const { deps, calls } = createDeps()
+    await call(deps, "/api/v1/chats/chat-1/messages", { method: "POST", body: { content: "hi" } })
+    expect(calls.sends[0]?.provider).toBeUndefined()
+  })
+})
+
+describe("malformed paths", () => {
+  test("answers 400, not 500, on bad percent-encoding", async () => {
+    const { deps } = createDeps()
+    const response = await call(deps, "/api/v1/chats/%ZZ")
+    expect(response?.status).toBe(400)
+    expect((await json(response)).error).toContain("percent-encoding")
+  })
+
+  test("still decodes a legitimately encoded id", async () => {
+    const { deps, state } = createDeps()
+    state.chatsById.set("chat/with slash", chatRecord({ id: "chat/with slash", projectId: "project-1" }))
+    const response = await call(deps, `/api/v1/chats/${encodeURIComponent("chat/with slash")}`)
+    expect(response?.status).toBe(200)
+  })
+})
+
+describe("analytics", () => {
+  test("creating a chat reports chat_created", async () => {
+    const { deps, calls } = createDeps()
+    await call(deps, "/api/v1/chats", { method: "POST", body: { projectId: "project-1" } })
+    expect(calls.events).toEqual(["chat_created"])
+  })
+
+  test("create-and-prompt leaves the event to agent.send, so it is not doubled", async () => {
+    const { deps, calls } = createDeps()
+    await call(deps, "/api/v1/chats", { method: "POST", body: { projectId: "project-1", content: "hi" } })
+    expect(calls.events).toEqual([])
+  })
+
+  test("deleting a chat reports chat_deleted", async () => {
+    const { deps, calls } = createDeps()
+    await call(deps, "/api/v1/chats/chat-1", { method: "DELETE" })
+    expect(calls.events).toEqual(["chat_deleted"])
+  })
+
+  test("adding a new project reports project_opened", async () => {
+    const { deps, calls } = createDeps()
+    const dir = await mkdtemp(path.join(tmpdir(), "kanna-api-project-"))
+    try {
+      await call(deps, "/api/v1/projects", { method: "POST", body: { localPath: dir } })
+      expect(calls.events).toEqual(["project_opened"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("re-adding an already-open project reports nothing", async () => {
+    const { deps, calls } = createDeps()
+    const dir = await mkdtemp(path.join(tmpdir(), "kanna-api-project-"))
+    try {
+      await call(deps, "/api/v1/projects", { method: "POST", body: { localPath: dir } })
+      calls.events.length = 0
+      await call(deps, "/api/v1/projects", { method: "POST", body: { localPath: dir } })
+      expect(calls.events).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("reads report nothing", async () => {
+    const { deps, calls } = createDeps()
+    await call(deps, "/api/v1/chats")
+    await call(deps, "/api/v1/projects")
+    await call(deps, "/api/v1/chats/chat-1")
+    expect(calls.events).toEqual([])
   })
 })
 

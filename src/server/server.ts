@@ -540,7 +540,16 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             // data dir is already being served (single-instance guard). Only
             // exposed on local/proxied requests — the raw-tunnel /health
             // above stays minimal.
-            return withOriginAgentCluster(Response.json({ ok: true, port: actualPort, instance: instanceFingerprint(store.dataDir) }))
+            // `api` lets a second `kanna --api` invocation see whether the
+            // instance already running on this data dir serves /api/v1, so it
+            // can report that the flag needs a restart instead of exiting as
+            // though it had taken effect.
+            return withOriginAgentCluster(Response.json({
+              ok: true,
+              port: actualPort,
+              instance: instanceFingerprint(store.dataDir),
+              api: apiKeyVerifier !== null,
+            }))
           }
 
           if (url.pathname === CLOUD_PAIR_SESSION_PATH) {
@@ -604,6 +613,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               // broadcast is the safe choice: every topic an API call can
               // touch gets refreshed without enumerating them here.
               broadcast: () => router.broadcastSnapshots(),
+              analytics,
               version: options.update?.version ?? "0.0.0",
             })
             if (apiResponse) {

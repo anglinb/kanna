@@ -16,7 +16,9 @@ import type { AgentProvider, ChatSnapshot, KannaStatus, ModelOptions } from "../
 import type { ClientCommand } from "../../shared/protocol"
 import type { ChatRecord, ProjectRecord } from "../events"
 import type { EventStore } from "../event-store"
+import type { AnalyticsReporter } from "../analytics"
 import { initializeProjectDirectory } from "../paths"
+import { SERVER_PROVIDERS } from "../provider-catalog"
 import { deriveChatSnapshot, deriveStatus } from "../read-models"
 import { readChatWindow, type ChatWindowRouteDeps } from "../chat-window-route"
 import { extractApiKey, type ApiKeyVerifier } from "./keys"
@@ -38,6 +40,12 @@ export interface ApiRouteDeps extends ChatWindowRouteDeps {
   verifier: ApiKeyVerifier
   /** Push fresh snapshots to connected sockets after a write. */
   broadcast: () => Promise<void> | void
+  /**
+   * Same reporter the socket uses. API writes emit the same events as the
+   * equivalent `ClientCommand`, so metrics don't silently miss whatever is
+   * driven over HTTP.
+   */
+  analytics: Pick<AnalyticsReporter, "track">
   version: string
 }
 
@@ -125,6 +133,28 @@ function serializeChat(chat: ChatRecord, status: KannaStatus) {
 }
 
 /**
+ * Reject a provider the server has no catalog entry for.
+ *
+ * This has to happen before `agent.send`. A bad provider is only discovered
+ * when the turn is set up — and for a prompt that lands behind a running turn
+ * that is long after the 202, in `dequeueAndStartQueuedMessage`, which removes
+ * the queued message *before* the catalog lookup throws. The prompt would be
+ * acknowledged and then silently dropped. Validating against SERVER_PROVIDERS
+ * (rather than a hand-written list) keeps this in step with what
+ * `getProviderSettings` will actually accept.
+ */
+function readProvider(body: Record<string, unknown>): AgentProvider | undefined {
+  const value = optionalString(body, "provider")
+  if (value === undefined) return undefined
+  const entry = SERVER_PROVIDERS.find((candidate) => candidate.id === value)
+  if (!entry) {
+    const known = SERVER_PROVIDERS.map((candidate) => candidate.id).join(", ")
+    throw new ApiError(400, `Unknown provider "${value}". Expected one of: ${known}`)
+  }
+  return entry.id
+}
+
+/**
  * The prompt fields shared by "create a chat and send" and "send to an
  * existing chat". Kept in one place so the two routes can't drift.
  */
@@ -134,7 +164,7 @@ function readPromptFields(body: Record<string, unknown>) {
     throw new ApiError(400, '"modelOptions" must be an object')
   }
   return {
-    provider: optionalString(body, "provider") as AgentProvider | undefined,
+    provider: readProvider(body),
     model: optionalString(body, "model"),
     effort: optionalString(body, "effort"),
     modelOptions: modelOptions as ModelOptions | undefined,
@@ -206,7 +236,11 @@ async function handleCreateProject(req: Request, deps: ApiRouteDeps) {
     throw new ApiError(400, error instanceof Error ? error.message : "Could not open project directory")
   }
 
+  // Mirrors ws-router's `project.open`: only a path that wasn't already open
+  // counts as opening a project.
+  const alreadyOpen = deps.store.state.projectIdsByPath.get(resolvedPath)
   const project = await deps.store.openProject(resolvedPath, title)
+  if (!alreadyOpen) deps.analytics.track("project_opened")
   await deps.broadcast()
   return json({ project: serializeProject(project, 0) }, 201)
 }
@@ -259,7 +293,10 @@ async function handleCreateChat(req: Request, deps: ApiRouteDeps) {
     return json({ chat: serializeChat(chat, chatStatus(deps, chat)), queued: result.queued ?? false }, 202)
   }
 
+  // `agent.send` tracks this itself on the prompt path above, so it is only
+  // emitted here, where the chat is created on its own.
   const chat = await deps.store.createChat(projectId)
+  deps.analytics.track("chat_created")
   await deps.broadcast()
   return json({ chat: serializeChat(chat, chatStatus(deps, chat)) }, 201)
 }
@@ -320,6 +357,7 @@ async function handleDeleteChat(chatId: string, deps: ApiRouteDeps) {
   await deps.agent.cancel(chatId)
   await deps.agent.closeChat(chatId)
   await deps.store.deleteChat(chatId)
+  deps.analytics.track("chat_deleted")
   await deps.broadcast()
   return json({ chatId, deleted: true })
 }
@@ -343,7 +381,14 @@ export function hasValidApiKey(req: Request, verifier: ApiKeyVerifier | null) {
 
 async function route(req: Request, url: URL, deps: ApiRouteDeps): Promise<Response> {
   const rest = url.pathname.slice(API_ROUTE_PREFIX.length).replace(/^\/+|\/+$/g, "")
-  const segments = rest ? rest.split("/").map(decodeURIComponent) : []
+  let segments: string[]
+  try {
+    segments = rest ? rest.split("/").map(decodeURIComponent) : []
+  } catch {
+    // decodeURIComponent throws URIError on malformed input like `%ZZ`. That
+    // is a bad request, not a server fault, so it must not reach the 500 path.
+    throw new ApiError(400, "Malformed percent-encoding in path")
+  }
 
   if (segments.length === 0) {
     if (req.method !== "GET") return methodNotAllowed("GET")

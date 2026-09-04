@@ -526,6 +526,21 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
   // fingerprint (e.g. dev profile) keeps the try-next-port behavior.
   const existing = await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(runOptions.port)
   if (existing) {
+    // This run is not going to start a server, so its --api flags cannot take
+    // effect. Saying nothing would exit 0 and leave the caller believing the
+    // API is up: a script would go straight on to a /api/v1 request and get a
+    // 404 from an instance that never had the API mounted.
+    if (runOptions.api) {
+      if (!existing.api) {
+        deps.warn(`${LOG_PREFIX} kanna is already running at ${existing.localUrl} without the API`)
+        deps.warn(`${LOG_PREFIX} restart that instance with --api to serve ${API_ROUTE_PREFIX}`)
+        return { kind: "exited", code: 1 }
+      }
+      // It does serve the API, but with the key set it was started with —
+      // this run's keys were never loaded, so don't imply otherwise.
+      deps.warn(`${LOG_PREFIX} kanna is already running with the API enabled; it kept its own keys, and this run's --api-key was not applied`)
+    }
+
     const hostedUrl = identity?.enabled ? identity.appOrigin : null
     deps.log(`${LOG_PREFIX} kanna is already running at ${existing.localUrl}${hostedUrl ? ` (and ${hostedUrl})` : ""}`)
     if (hostedUrl) {

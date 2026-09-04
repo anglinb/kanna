@@ -913,6 +913,52 @@ describe("runCli single-instance guard + hosted open", () => {
     expect(calls.openUrl).toEqual([])
   })
 
+  // This run starts no server, so its --api flags cannot take effect. Exiting
+  // 0 would tell a script the API is up when the running instance has no
+  // /api/v1 at all.
+  test("--api against an instance without the API → exit 1, say to restart", async () => {
+    const { calls, deps } = createDeps({
+      probeExistingInstanceImpl: async () => ({ localUrl: "http://localhost:3210", port: 3210, api: false }),
+    })
+
+    const result = await runCli(["--api", "--api-key=alpha"], deps)
+
+    expect(result).toEqual({ kind: "exited", code: 1 })
+    expect(calls.startServer).toEqual([])
+    expect(calls.openUrl).toEqual([])
+    expect(calls.warn.some((line) => line.includes("without the API"))).toBe(true)
+    expect(calls.warn.some((line) => line.includes("--api"))).toBe(true)
+  })
+
+  test("an instance predating the health field is treated as having no API", async () => {
+    const { deps } = createDeps({
+      probeExistingInstanceImpl: async () => ({ localUrl: "http://localhost:3210", port: 3210 }),
+    })
+
+    expect(await runCli(["--api", "--api-key=alpha"], deps)).toEqual({ kind: "exited", code: 1 })
+  })
+
+  test("--api against an instance already serving it → exit 0, but say the keys were not applied", async () => {
+    const { calls, deps } = createDeps({
+      probeExistingInstanceImpl: async () => ({ localUrl: "http://localhost:3210", port: 3210, api: true }),
+    })
+
+    const result = await runCli(["--api", "--api-key=alpha", "--no-open"], deps)
+
+    expect(result).toEqual({ kind: "exited", code: 0 })
+    expect(calls.startServer).toEqual([])
+    expect(calls.warn.some((line) => line.includes("was not applied"))).toBe(true)
+  })
+
+  test("without --api an existing instance is unaffected by the new check", async () => {
+    const { calls, deps } = createDeps({
+      probeExistingInstanceImpl: async () => ({ localUrl: "http://localhost:3210", port: 3210, api: false }),
+    })
+
+    expect(await runCli(["--no-open"], deps)).toEqual({ kind: "exited", code: 0 })
+    expect(calls.warn).toEqual([])
+  })
+
   test("paired start opens the hosted URL when the tunnel connects (not localhost)", async () => {
     const fake = createFakeCloudRuntime()
     let capturedOnTunnelUp: ((kind: "started" | "recovered") => void) | undefined
