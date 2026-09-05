@@ -1,3 +1,6 @@
+import type { TerminalPreset } from "./terminal-presets"
+
+export type { TerminalPreset }
 export const STORE_VERSION = 2 as const
 export const PROTOCOL_VERSION = 1 as const
 
@@ -13,7 +16,7 @@ export type DefaultProviderPreference = "last_used" | AgentProvider
  * does the other one, so either is one keystroke away whatever the default.
  */
 export type SubmitWhileRunning = "queue" | "steer"
-export type EditorPreset = "cursor" | "vscode" | "xcode" | "windsurf" | "custom"
+export type EditorPreset = "cursor" | "vscode" | "zed" | "xcode" | "windsurf" | "custom"
 export const DEFAULT_OPENAI_SDK_MODEL = "gpt-5.4-mini"
 export const DEFAULT_OPENROUTER_SDK_MODEL = "moonshotai/kimi-k2.5:nitro"
 
@@ -1149,6 +1152,21 @@ export interface AppSettingsSnapshot {
    * like the full-screen home Terminal page.
    */
   devbox: boolean
+  /**
+   * Server-computed, never persisted: which editors are actually installed on
+   * this machine, so the "Open in…" menus can grey out the rest instead of
+   * offering a click that fails. `null` while detection is still running (and
+   * from servers too old to send it) — treat that as "assume everything
+   * works" rather than disabling the whole menu.
+   */
+  installedEditors: EditorPreset[] | null
+  /**
+   * Server-computed, never persisted: the terminal emulators found on this
+   * machine, so "Open in…" offers the one you actually use. `null` while
+   * detection runs, and from servers too old to send it — in which case the
+   * menu falls back to the single system-default Terminal entry.
+   */
+  installedTerminals: TerminalPreset[] | null
 }
 
 export interface AppSettingsPatch {

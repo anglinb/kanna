@@ -9,6 +9,7 @@ import {
   MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
   MIN_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
 } from "../shared/transcript-window"
+import { getDefaultEditorCommandTemplate, isEditorPreset } from "../shared/editor-presets"
 import { formatDisplayPath } from "./paths"
 import {
   mergeProviderDefaultsPatch,
@@ -25,6 +26,7 @@ import {
   type DefaultProviderPreference,
   type EditorPreset,
   type SubmitWhileRunning,
+  type TerminalPreset,
 } from "../shared/types"
 
 interface AppSettingsFile {
@@ -61,9 +63,15 @@ interface AppSettingsFile {
   setupDismissed?: unknown
 }
 
-// devbox is a server-runtime fact (the --cloud flag), not settings state.
-interface AppSettingsState extends Omit<AppSettingsSnapshot, "devbox"> {
+// devbox and the installed-app lists are server-runtime facts, not settings state.
+interface AppSettingsState extends Omit<AppSettingsSnapshot, "devbox" | "installedEditors" | "installedTerminals"> {
   analyticsUserId: string
+}
+
+interface SnapshotExtras {
+  devbox: boolean
+  installedEditors: EditorPreset[] | null
+  installedTerminals: TerminalPreset[] | null
 }
 
 interface NormalizedAppSettings {
@@ -87,21 +95,6 @@ const DEFAULT_SUBMIT_WHILE_RUNNING: SubmitWhileRunning = "queue"
 
 function createAnalyticsUserId() {
   return `anon_${randomUUID()}`
-}
-
-function getDefaultEditorCommandTemplate(preset: EditorPreset) {
-  switch (preset) {
-    case "vscode":
-      return "code {path}"
-    case "xcode":
-      return "xed {path}"
-    case "windsurf":
-      return "windsurf {path}"
-    case "custom":
-    case "cursor":
-    default:
-      return "cursor {path}"
-  }
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number) {
@@ -146,9 +139,7 @@ function normalizeDefaultProvider(value: unknown): DefaultProviderPreference {
 }
 
 function normalizeEditorPreset(value: unknown): EditorPreset {
-  return value === "vscode" || value === "xcode" || value === "windsurf" || value === "custom" || value === "cursor"
-    ? value
-    : DEFAULT_EDITOR_PRESET
+  return isEditorPreset(value) ? value : DEFAULT_EDITOR_PRESET
 }
 
 function normalizeEditorCommandTemplate(value: unknown, preset: EditorPreset) {
@@ -178,9 +169,14 @@ function toFilePayload(state: AppSettingsState) {
   }
 }
 
-function toSnapshot(state: AppSettingsState, devbox = false): AppSettingsSnapshot {
+function toSnapshot(
+  state: AppSettingsState,
+  extras: SnapshotExtras = { devbox: false, installedEditors: null, installedTerminals: null }
+): AppSettingsSnapshot {
   return {
-    devbox,
+    devbox: extras.devbox,
+    installedEditors: extras.installedEditors,
+    installedTerminals: extras.installedTerminals,
     analyticsEnabled: state.analyticsEnabled,
     browserSettingsMigrated: state.browserSettingsMigrated,
     theme: state.theme,
@@ -372,12 +368,12 @@ export class AppSettingsManager {
   private state: AppSettingsState
   private readonly listeners = new Set<(snapshot: AppSettingsSnapshot) => void>()
   /** Server-computed snapshot fields — never read from or written to the file. */
-  private readonly extras: { devbox: boolean }
+  private extras: SnapshotExtras
 
   constructor(filePath = getSettingsFilePath(homedir()), extras: { devbox?: boolean } = {}) {
     this.filePath = filePath
     this.state = normalizeAppSettings(undefined, filePath).payload
-    this.extras = { devbox: extras.devbox === true }
+    this.extras = { devbox: extras.devbox === true, installedEditors: null, installedTerminals: null }
   }
 
   async initialize() {
@@ -393,7 +389,29 @@ export class AppSettingsManager {
   }
 
   getSnapshot() {
-    return toSnapshot(this.state, this.extras.devbox)
+    return toSnapshot(this.state, this.extras)
+  }
+
+  /**
+   * Publish the editor-detection result. Notifies like any other change, so
+   * the menus ungrey themselves as soon as the probe lands; the snapshot
+   * dedupe upstream drops the push when the list is unchanged.
+   */
+  setInstalledEditors(installedEditors: EditorPreset[]) {
+    this.publishExtras({ installedEditors })
+  }
+
+  /** Publish the terminal-detection result; same shape as the editor one. */
+  setInstalledTerminals(installedTerminals: TerminalPreset[]) {
+    this.publishExtras({ installedTerminals })
+  }
+
+  private publishExtras(patch: Partial<SnapshotExtras>) {
+    this.extras = { ...this.extras, ...patch }
+    const snapshot = this.getSnapshot()
+    for (const listener of this.listeners) {
+      listener(snapshot)
+    }
   }
 
   getState() {
@@ -425,7 +443,7 @@ export class AppSettingsManager {
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await writeFile(this.filePath, `${JSON.stringify(toFilePayload(nextState), null, 2)}\n`, "utf8")
     this.setState(nextState)
-    return toSnapshot(nextState, this.extras.devbox)
+    return toSnapshot(nextState, this.extras)
   }
 
   private async readState(options?: { persistNormalized?: boolean }) {
@@ -460,7 +478,7 @@ export class AppSettingsManager {
 
   private setState(state: AppSettingsState) {
     this.state = state
-    const snapshot = toSnapshot(state, this.extras.devbox)
+    const snapshot = toSnapshot(state, this.extras)
     for (const listener of this.listeners) {
       listener(snapshot)
     }
