@@ -608,6 +608,22 @@ describe("parseArgs slim-transcripts subcommand", () => {
   })
 })
 
+describe("parseArgs mcp subcommand", () => {
+  test("takes exactly one credentials path", () => {
+    expect(parseArgs(["mcp", "/data/mcp/chat-1.json"])).toEqual({
+      kind: "mcp",
+      credentialsPath: "/data/mcp/chat-1.json",
+    })
+    expect(() => parseArgs(["mcp"])).toThrow("credentials-file")
+    expect(() => parseArgs(["mcp", "a", "b"])).toThrow("credentials-file")
+  })
+
+  test("does not shadow a normal run", () => {
+    expect(parseArgs([]).kind).toBe("run")
+    expect(parseArgs(["--port", "1234"]).kind).toBe("run")
+  })
+})
+
 describe("parseArgs pair subcommand", () => {
   test("pair with a code", () => {
     expect(parseArgs(["pair", "ABC123XYZ"])).toEqual({

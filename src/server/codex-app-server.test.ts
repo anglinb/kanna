@@ -2002,3 +2002,80 @@ describe("CodexAppServerManager", () => {
     expect(resultEvent?.entry.result).toContain("fatal: app-server crashed")
   })
 })
+
+describe("Kanna management tools", () => {
+  function respondToHandshake(message: any, child: FakeCodexProcess) {
+    if (message.method === "initialize") {
+      child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+    } else if (message.method === "thread/start") {
+      child.writeServerMessage({
+        id: message.id,
+        result: { thread: { id: "thread-1" }, model: "gpt-5.4", reasoningEffort: "high" },
+      })
+    }
+  }
+
+  test("the MCP overrides for this chat are passed to the spawn", async () => {
+    const process = new FakeCodexProcess(respondToHandshake)
+    const spawns: { cwd: string; extraArgs?: string[] }[] = []
+    const requested: string[] = []
+
+    const manager = new CodexAppServerManager({
+      spawnProcess: (cwd, extraArgs) => {
+        spawns.push({ cwd, extraArgs })
+        return process as never
+      },
+      resolveMcpArgs: async (chatId) => {
+        requested.push(chatId)
+        return ["-c", `mcp_servers.kanna.args=["cli.ts", "mcp", "/creds/${chatId}.json"]`]
+      },
+    })
+
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+
+    expect(requested).toEqual(["chat-1"])
+    expect(spawns[0]?.extraArgs).toEqual([
+      "-c",
+      'mcp_servers.kanna.args=["cli.ts", "mcp", "/creds/chat-1.json"]',
+    ])
+  })
+
+  test("a session still starts when the bridge cannot be prepared", async () => {
+    const process = new FakeCodexProcess(respondToHandshake)
+    const spawns: (string[] | undefined)[] = []
+
+    const manager = new CodexAppServerManager({
+      spawnProcess: (_cwd, extraArgs) => {
+        spawns.push(extraArgs)
+        return process as never
+      },
+      resolveMcpArgs: async () => {
+        throw new Error("data dir is read-only")
+      },
+    })
+
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+
+    // No tools, but the user's turn is not lost to a bridge problem.
+    expect(spawns[0]).toEqual([])
+  })
+
+  test("stopping a session releases its credentials", async () => {
+    const process = new FakeCodexProcess(respondToHandshake)
+    const released: string[] = []
+
+    const manager = new CodexAppServerManager({
+      spawnProcess: () => process as never,
+      resolveMcpArgs: async () => [],
+      releaseMcp: async (chatId) => {
+        released.push(chatId)
+      },
+    })
+
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+    manager.stopSession("chat-1")
+    await Bun.sleep(0)
+
+    expect(released).toEqual(["chat-1"])
+  })
+})

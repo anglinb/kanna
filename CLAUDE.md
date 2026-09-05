@@ -77,27 +77,48 @@ React client (src/client)
 
 ## Remote REST API (`src/server/api/`)
 
-- Off by default. `kanna --api --api-key=<k1,k2>` (or `--api-key-file=<path>`,
-  one key per line) mounts `/api/v1`. Pair with the existing `--remote` to
-  reach it off-loopback. `--api` without keys is a startup error — the API
-  has no session, origin check or login in front of it, so an unkeyed one
-  would be wide open.
-- `routes.ts` calls the same `EventStore` and `AgentCoordinator` the socket
-  does, then `broadcastSnapshots()`, so a chat created over HTTP shows up in
-  a connected browser straight away. It deliberately does *not* reuse
-  ws-router's `handleCommand`, which is bound to a socket — when you change
-  the semantics of `chat.send`, `chat.delete` or `project.open` there, check
-  whether the matching route needs the same change — including the analytics
-  event, which the routes emit to the same reporter.
+- Off by default *for people*. `kanna --api --api-key=<k1,k2>` (or
+  `--api-key-file=<path>`, one key per line) is what lets a human client use
+  `/api/v1`; pair with `--remote` to reach it off-loopback. `--api` without
+  keys is a startup error — the API has no session, origin check or login in
+  front of it, so an unkeyed one would be wide open.
+- The routes are *always* mounted for one caller: Kanna's own agent bridge,
+  holding a per-run key minted at startup (`kanna-mcp-bridge.ts`). That key is
+  accepted only on requests that came straight off loopback with no forwarding
+  headers (`api/local-request.ts`). Peer address alone is not enough —
+  cloudflared runs on this machine under `--share`, so every tunnelled request
+  looks like loopback; and `requestClass` alone is not enough either, since it
+  reports "local" for a LAN peer when no cloud runtime is attached. Without
+  `--api`, anything relayed still gets the JSON 404 as before.
+- `control.ts` holds the operations; `routes.ts` and the agent-facing MCP
+  tools are both thin shells over it, so HTTP and tools cannot drift. It calls
+  the same `EventStore` and `AgentCoordinator` the socket does, then
+  `broadcastSnapshots()`, so a chat created either way shows up in a connected
+  browser straight away. It deliberately does *not* reuse ws-router's
+  `handleCommand`, which is bound to a socket — when you change the semantics
+  of `chat.send`, `chat.delete` or `project.open` there, check whether
+  `control.ts` needs the same change.
 - Anything a request can name that the harness looks up later must be
-  validated at the route. `provider` in particular: an unknown one only
-  surfaces when the turn is set up, and for a queued prompt that is after the
-  202, in `dequeueAndStartQueuedMessage` — which removes the queued message
-  before the catalog lookup throws, so the prompt would be acknowledged and
-  then silently dropped.
+  validated in `control.ts`, not at the route — the agent-facing tools reach
+  the same functions. `provider` in particular: an unknown one only surfaces
+  when the turn is set up, and for a queued prompt that is after the 202, in
+  `dequeueAndStartQueuedMessage` — which removes the queued message before the
+  catalog lookup throws, so the prompt would be acknowledged and then silently
+  dropped.
 - Prompts are async: `POST /chats/:id/messages` answers 202 and the caller
   polls `GET /chats/:id`. A turn runs far longer than any HTTP client will
   wait. `queued: true` means it landed behind a running turn.
+- `POST /reload` re-reads the data dir into the running process, for editing
+  it underneath a live Kanna (moving a chat between projects, importing one)
+  without a restart. See `EventStore.reload` — it is deliberately *not*
+  `initialize()`: the boot path answers an unreadable snapshot or a foreign
+  store version by calling `clearStorage()`, which truncates every log, and
+  doing that to someone who was mid-edit would be unrecoverable. Everything is
+  validated first, a bad file is a 409 with the previous state still loaded,
+  and a `reloading` latch makes `clearStorage` throw rather than run. It also
+  goes through the write chain, so a turn appending mid-reload lands wholly
+  before or after. A chat that vanished from disk but still had a live harness
+  session is released (cancel + close) and named in `droppedChatIds`.
 - The route claims `/api/v1` even when the API is unmounted, answering a JSON
   404 — otherwise the SPA fallback returns index.html with a 200 and a client
   cannot tell the API is off (same reason `/__cloud` 404s explicitly).
@@ -109,6 +130,44 @@ React client (src/client)
   instance can tell that its flags will not take effect: it exits 1 asking for
   a restart when that instance has no API, and warns that this run's keys were
   not applied when it does.
+
+## Agents managing Kanna (`kanna-tools.ts` and friends)
+
+- Claude and Codex sessions get tools for Kanna itself: list/open projects,
+  list/read/create chats, send prompts, cancel turns, and `reload` (re-read
+  the data dir after editing it directly). `kanna-tools.ts` is the single
+  definition — names, descriptions and Zod shapes — and both transports read
+  from it, so the two agents see the same toolbox.
+- Two transports because the harnesses differ. Claude takes an in-process
+  server (`createSdkMcpServer`, in `kanna-mcp-claude.ts`) whose handlers call
+  `control.ts` directly: no HTTP, no child process, no key on disk. Codex has
+  no such hook, so its sessions spawn `kanna mcp <credentials>`
+  (`kanna-mcp-stdio.ts`) via `-c mcp_servers.kanna.*` overrides on
+  `codex app-server`, and that child calls back over `/api/v1`.
+- Schemas are Zod raw shapes because the Agent SDK's `tool()` rejects a plain
+  JSON Schema outright. The stdio bridge derives real JSON Schema from the
+  same shapes with `z.toJSONSchema`. Don't "simplify" one side into hand-
+  written JSON Schema; the SDK will throw at session start.
+- MCP tools are not filtered by the SDK's `tools` option — that selects
+  built-ins only — so nothing in `claudeToolset` gates these.
+- Credentials go in a 0600 file under `<dataDir>/mcp/`, one per chat, not in
+  argv or the environment: `ps` shows a child's command line to every user on
+  the machine, and codex passes its own environment to the servers it spawns.
+  `stopSession` deletes the file; shutdown removes the directory.
+- **Fan-out is bounded to one hop.** A chat an agent created carries
+  `ChatRecord.agentOrigin`, and a chat with it set may not create chats or
+  send messages (`assertMaySpawn`). An agent also cannot prompt its own chat.
+  The marker is persisted, not counted in memory, because boot resumes
+  interrupted turns and an in-memory depth would reset to zero; `forkChat`
+  copies it for the same reason.
+- `agentOrigin` is deliberately *not* a field on `ClientCommand` — it rides an
+  out-of-band options argument to `agent.send`, and over HTTP it comes from
+  `X-Kanna-Agent-Chat`, honoured only for the internal key. A browser must not
+  be able to label a chat it opened as agent work.
+- No delete tool, by design: removing a project or chat destroys work with no
+  undo in the UI. `DELETE /chats/:id` still exists for human API clients.
+- `kanna mcp` is not in `--help`. It takes a path to a file a running Kanna
+  wrote and is meaningless to type by hand.
 
 ## Cloud contract
 

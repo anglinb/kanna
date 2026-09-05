@@ -10,6 +10,7 @@ import type {
   TodoItem,
   TranscriptEntry,
 } from "../shared/types"
+import { LOG_PREFIX } from "../shared/branding"
 import type { HarnessEvent, HarnessToolRequest, HarnessTurn } from "./harness-types"
 import { appendSystemMessageBlock, buildSkillSystemMessage } from "./harness-skills"
 import { buildKannaAgentId, buildKannaAttributionInstructions } from "./attribution"
@@ -77,7 +78,12 @@ interface CodexAppServerProcess {
   once(event: "error", listener: (error: Error) => void): this
 }
 
-type SpawnCodexAppServer = (cwd: string) => CodexAppServerProcess
+/**
+ * @param extraArgs Leading `codex` arguments, before `app-server`. Used for
+ * the `-c mcp_servers.kanna.…` overrides that give the session Kanna's own
+ * management tools (see kanna-mcp-bridge.ts).
+ */
+type SpawnCodexAppServer = (cwd: string, extraArgs?: string[]) => CodexAppServerProcess
 
 interface PendingRequest<TResult> {
   method: string
@@ -697,9 +703,24 @@ export class CodexAppServerManager {
   private readonly spawnProcess: SpawnCodexAppServer
   private onRateLimits: ((snapshot: CodexRateLimitSnapshot) => void) | null = null
 
-  constructor(args: { spawnProcess?: SpawnCodexAppServer } = {}) {
-    this.spawnProcess = args.spawnProcess ?? ((cwd) =>
-      spawn("codex", ["app-server"], {
+  /**
+   * Resolves the `-c` overrides that attach Kanna's management MCP server to
+   * a chat's session, or null when the bridge is unavailable. Async because
+   * it writes the session's credentials file first.
+   */
+  private readonly resolveMcpArgs: ((chatId: string) => Promise<string[]>) | null
+  /** Drops a stopped session's MCP credentials file. */
+  private readonly releaseMcp: ((chatId: string) => Promise<void>) | null
+
+  constructor(args: {
+    spawnProcess?: SpawnCodexAppServer
+    resolveMcpArgs?: (chatId: string) => Promise<string[]>
+    releaseMcp?: (chatId: string) => Promise<void>
+  } = {}) {
+    this.resolveMcpArgs = args.resolveMcpArgs ?? null
+    this.releaseMcp = args.releaseMcp ?? null
+    this.spawnProcess = args.spawnProcess ?? ((cwd, extraArgs) =>
+      spawn("codex", [...(extraArgs ?? []), "app-server"], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         env: process.env,
@@ -778,7 +799,18 @@ export class CodexAppServerManager {
       this.stopSession(args.chatId)
     }
 
-    const child = this.spawnProcess(args.cwd)
+    // A bridge failure (unwritable data dir, say) must not cost the user their
+    // turn: the session starts without the management tools instead.
+    let mcpArgs: string[] = []
+    if (this.resolveMcpArgs) {
+      try {
+        mcpArgs = await this.resolveMcpArgs(args.chatId)
+      } catch (error) {
+        console.warn(`${LOG_PREFIX} codex: kanna tools unavailable for this session:`, error)
+      }
+    }
+
+    const child = this.spawnProcess(args.cwd, mcpArgs)
     const context: SessionContext = {
       chatId: args.chatId,
       cwd: args.cwd,
@@ -1030,6 +1062,10 @@ export class CodexAppServerManager {
     } catch {
       // ignore kill failures
     }
+    // The MCP child dies with its parent; its credentials file does not, so
+    // drop it here rather than leaving a live key on disk. Fire-and-forget:
+    // a failed unlink must not stop a session from closing.
+    void this.releaseMcp?.(chatId).catch(() => undefined)
   }
 
   stopAll() {

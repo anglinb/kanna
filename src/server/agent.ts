@@ -1,4 +1,4 @@
-import { query, type CanUseTool, type PermissionResult, type Query, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk"
+import { query, type CanUseTool, type McpServerConfig, type PermissionResult, type Query, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk"
 import { homedir } from "node:os"
 import type {
   AgentProvider,
@@ -22,6 +22,7 @@ import { STRUCTURED_RESULT_TOOL_KINDS } from "./events"
 import type { AnalyticsReporter } from "./analytics"
 import { NoopAnalyticsReporter } from "./analytics"
 import { CodexAppServerManager } from "./codex-app-server"
+import { KANNA_MCP_SERVER_NAME } from "./kanna-mcp-bridge"
 import { CursorCliManager } from "./cursor-cli"
 import { PiAgentManager, resolvePiConnection } from "./pi-agent"
 import { type GenerateChatTitleResult, generateTitleForChatDetailed } from "./generate-title"
@@ -204,6 +205,7 @@ interface AgentCoordinatorArgs {
     forkSession: boolean
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
     onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
+    mcpServers?: Record<string, McpServerConfig>
   }) => Promise<ClaudeSessionHandle>
   /**
    * Probe whether a provider's native session artifact still exists on disk.
@@ -685,6 +687,12 @@ async function startClaudeSession(args: {
   forkSession: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
+  /**
+   * Kanna's own management tools, as an in-process MCP server built for this
+   * chat (kanna-mcp-claude.ts). Absent when the coordinator has no control
+   * deps — tests, mostly — and the session simply doesn't get them.
+   */
+  mcpServers?: Record<string, McpServerConfig>
 }): Promise<ClaudeSessionHandle> {
   const canUseTool: CanUseTool = async (toolName, input, options) => {
     if (toolName !== "AskUserQuestion" && toolName !== "ExitPlanMode") {
@@ -755,6 +763,9 @@ async function startClaudeSession(args: {
       permissionMode: args.planMode ? "plan" : "acceptEdits",
       canUseTool,
       tools: claudeToolset(args.autoPlan),
+      // MCP tools are not filtered by `tools` above — that option selects
+      // built-ins only — so these arrive callable without an allowlist entry.
+      ...(args.mcpServers ? { mcpServers: args.mcpServers } : {}),
       settingSources: ["user", "project", "local"],
       // Append-only: the claude_code preset stays intact, Kanna's git
       // attribution rides on the end of it (see attribution.ts).
@@ -857,6 +868,16 @@ export class AgentCoordinator {
   private readonly checkSessionArtifactFn: NonNullable<AgentCoordinatorArgs["checkSessionArtifact"]>
   private reportBackgroundError: ((message: string) => void) | null = null
   private onClaudeRateLimit: ((info: ClaudeRateLimitInfoRaw) => void) | null = null
+  /**
+   * Builds the in-process MCP server that gives a Claude session Kanna's own
+   * management tools, scoped to the chat that will call them.
+   *
+   * Injected after construction rather than through the constructor because
+   * those tools need to call back into this coordinator — server.ts can only
+   * close the loop once both halves exist. Null in tests, where sessions
+   * simply don't get the tools.
+   */
+  private buildKannaMcpServer: ((chatId: string) => McpServerConfig | null) | null = null
   private cursorModelCatalogApplied = false
   readonly activeTurns = new Map<string, ActiveTurn>()
   readonly drainingStreams = new Map<string, { turn: HarnessTurn }>()
@@ -877,6 +898,15 @@ export class AgentCoordinator {
 
   setBackgroundErrorReporter(report: ((message: string) => void) | null) {
     this.reportBackgroundError = report
+  }
+
+  /**
+   * Attach Kanna's management tools to Claude sessions. See
+   * {@link buildKannaMcpServer}; the factory is called per session, so a chat
+   * only ever sees a server scoped to itself.
+   */
+  setKannaMcpServerFactory(factory: ((chatId: string) => McpServerConfig | null) | null) {
+    this.buildKannaMcpServer = factory
   }
 
   /** Register a sink for pushed Claude rate-limit events (usage page). */
@@ -1573,6 +1603,7 @@ export class AgentCoordinator {
         this.claudeSessions.delete(args.chatId)
       }
 
+      const kannaMcpServer = this.buildKannaMcpServer?.(args.chatId) ?? null
       const started = await this.startClaudeSessionFn({
         localPath: args.localPath,
         model: args.model,
@@ -1584,6 +1615,7 @@ export class AgentCoordinator {
         forkSession: args.forkSession,
         onToolRequest: args.onToolRequest,
         onRateLimitEvent: (info) => this.onClaudeRateLimit?.(info),
+        ...(kannaMcpServer ? { mcpServers: { [KANNA_MCP_SERVER_NAME]: kannaMcpServer } } : {}),
       })
       this.refreshClaudeModelCatalog(started)
 
@@ -1633,7 +1665,17 @@ export class AgentCoordinator {
     }
   }
 
-  async send(command: Extract<ClientCommand, { type: "chat.send" }>) {
+  /**
+   * @param options Server-side only, never off the wire. `agentOrigin` marks a
+   * chat this send is creating as agent-started, which is what stops that chat
+   * from starting more of them (see `assertMaySpawn` in api/control.ts). It is
+   * deliberately not a field on `ClientCommand`: a browser must not be able to
+   * label a chat it opened as agent work.
+   */
+  async send(
+    command: Extract<ClientCommand, { type: "chat.send" }>,
+    options?: { agentOrigin?: { chatId: string } }
+  ) {
     let chatId = command.chatId
 
 
@@ -1641,7 +1683,7 @@ export class AgentCoordinator {
       if (!command.projectId) {
         throw new Error("Missing projectId for new chat")
       }
-      const created = await this.store.createChat(command.projectId)
+      const created = await this.store.createChat(command.projectId, { agentOrigin: options?.agentOrigin })
       chatId = created.id
       this.analytics.track("chat_created")
     }

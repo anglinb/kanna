@@ -105,6 +105,12 @@ type ParsedArgs =
   | { kind: "run"; options: CliOptions }
   | { kind: "pair"; args: PairCommandArgs }
   | { kind: "slim-transcripts" }
+  /**
+   * `kanna mcp <credentials>` — the stdio MCP server a codex session spawns
+   * to reach Kanna's management tools. Not a command anyone types: the path
+   * points at a 0600 file a running Kanna wrote for one chat.
+   */
+  | { kind: "mcp"; credentialsPath: string }
   | { kind: "help" }
   | { kind: "version" }
 
@@ -221,6 +227,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (argv[0] === "slim-transcripts") {
     if (argv.length > 1) throw new Error(`Unexpected argument for ${CLI_COMMAND} slim-transcripts: ${argv[1]}`)
     return { kind: "slim-transcripts" }
+  }
+  if (argv[0] === "mcp") {
+    if (argv.length !== 2) throw new Error(`Usage: ${CLI_COMMAND} mcp <credentials-file>`)
+    return { kind: "mcp", credentialsPath: argv[1]! }
   }
 
   let port = PROD_SERVER_PORT
@@ -449,6 +459,25 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // connects. From then on any plain `kanna` does the same (sticky).
     deps.log(`${LOG_PREFIX} starting ${CLI_COMMAND}…`)
     parsedArgs = parseArgs([])
+  }
+
+  if (parsedArgs.kind === "mcp") {
+    // stdout is the MCP channel from here on: anything written to it that
+    // isn't a JSON-RPC message desynchronizes the client, so diagnostics go
+    // to stderr and nothing calls deps.log.
+    const { parseBridgeConfig, runMcpStdioServer } = await import("./kanna-mcp-stdio")
+    try {
+      const config = parseBridgeConfig(await Bun.file(parsedArgs.credentialsPath).text())
+      await runMcpStdioServer(config, {
+        input: Bun.stdin.stream(),
+        write: (line) => process.stdout.write(`${line}\n`),
+        warn: (message) => process.stderr.write(`${message}\n`),
+      })
+      return { kind: "exited", code: 0 }
+    } catch (error) {
+      process.stderr.write(`${LOG_PREFIX} mcp: ${error instanceof Error ? error.message : String(error)}\n`)
+      return { kind: "exited", code: 1 }
+    }
   }
 
   if (parsedArgs.kind === "slim-transcripts") {
