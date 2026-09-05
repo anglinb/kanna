@@ -166,8 +166,8 @@ Each release's notes carry its own copy of that command. From then on
 #### Cutting an RC
 
 ```bash
-gh workflow run rc-release.yml --repo anglinb/kanna --ref fork-main
-gh workflow run rc-release.yml --repo anglinb/kanna --ref fork-main -f notes="What changed"
+gh workflow run rc-release.yml --repo anglinb/kanna --ref <branch>
+gh workflow run rc-release.yml --repo anglinb/kanna --ref <branch> -f notes="What changed"
 ```
 
 `.github/workflows/rc-release.yml` runs the test suite and typecheck, builds
@@ -175,6 +175,10 @@ both bundles, packs the checkout, and publishes it as a prerelease. Versions
 are `<package.json version>-rc.<n>` — the counter is computed at build time
 from the existing releases and restarts whenever the base version moves, so
 nothing about the RC version is committed to the repo.
+
+Dispatch works from any branch, but `workflow_dispatch` only lists workflows
+that exist on the default branch, so the workflow file itself has to be on the
+fork's `main`.
 
 ### Import chat history
 

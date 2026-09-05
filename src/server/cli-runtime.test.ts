@@ -341,7 +341,7 @@ describe("compareVersions", () => {
     expect(compareVersions("1.0.0", "0.9.9")).toBe(1)
   })
 
-  test("orders release candidates", () => {
+  test("orders release candidates, which the rc channel depends on", () => {
     expect(compareVersions("0.66.0-rc.1", "0.66.0-rc.2")).toBe(-1)
     expect(compareVersions("0.66.0-rc.2", "0.66.0-rc.1")).toBe(1)
     expect(compareVersions("0.66.0-rc.1", "0.66.0-rc.1")).toBe(0)
@@ -690,6 +690,22 @@ describe("parseArgs slim-transcripts subcommand", () => {
   test("parses the bare command and rejects arguments", () => {
     expect(parseArgs(["slim-transcripts"])).toEqual({ kind: "slim-transcripts" })
     expect(() => parseArgs(["slim-transcripts", "--force"])).toThrow("Unexpected argument")
+  })
+})
+
+describe("parseArgs mcp subcommand", () => {
+  test("takes exactly one credentials path", () => {
+    expect(parseArgs(["mcp", "/data/mcp/chat-1.json"])).toEqual({
+      kind: "mcp",
+      credentialsPath: "/data/mcp/chat-1.json",
+    })
+    expect(() => parseArgs(["mcp"])).toThrow("credentials-file")
+    expect(() => parseArgs(["mcp", "a", "b"])).toThrow("credentials-file")
+  })
+
+  test("does not shadow a normal run", () => {
+    expect(parseArgs([]).kind).toBe("run")
+    expect(parseArgs(["--port", "1234"]).kind).toBe("run")
   })
 })
 

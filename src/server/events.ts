@@ -55,6 +55,17 @@ export interface ChatRecord {
    */
   readAnchor?: ChatReadAnchor | null
   provider: AgentProvider | null
+  /**
+   * Set when an agent created this chat through the Kanna management tools,
+   * naming the chat whose agent did it.
+   *
+   * Load-bearing rather than informational: a chat with this set is not
+   * allowed to create chats or send messages of its own, which is what bounds
+   * agent fan-out to a single hop (see `assertMaySpawn` in api/control.ts).
+   * Persisted so a restart — which resumes interrupted turns — can't reset the
+   * depth back to zero.
+   */
+  agentOrigin?: { chatId: string }
   planMode: boolean
   /** "Auto Plan": the harness keeps its EnterPlanMode tool. Claude only. */
   autoPlan: boolean
@@ -224,6 +235,12 @@ export type ChatEvent =
        * every plain chat_created, including old logs.
        */
       lastTurnEndedAt?: number
+      /**
+       * Set when an agent created this chat, naming the chat it was running
+       * in. Absent on every human-created chat, including old logs — which is
+       * the right default, since an unmarked chat is one that may spawn.
+       */
+      agentOrigin?: { chatId: string }
     }
   | {
       v: 2

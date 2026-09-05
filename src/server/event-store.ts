@@ -299,6 +299,8 @@ export class EventStore {
   readonly state: StoreState = createEmptyState()
   private writeChain = Promise.resolve()
   private storageReset = false
+  /** True while {@link reload} runs, which makes `clearStorage` refuse. */
+  private reloading = false
   private readonly snapshotPath: string
   private readonly projectsLogPath: string
   private readonly chatsLogPath: string
@@ -374,6 +376,125 @@ export class EventStore {
   }
 
   /**
+   * Re-read the whole store from disk, discarding in-memory state and caches.
+   *
+   * For editing the data dir underneath a running Kanna — moving a chat
+   * between projects, importing a transcript, fixing a record by hand — and
+   * then having the running process pick it up instead of restarting.
+   *
+   * Two things make this different from `initialize()`, and both matter:
+   *
+   * 1. **It cannot destroy anything.** The boot path treats an unreadable
+   *    snapshot or a log line from another store version as "this data dir is
+   *    unusable, start fresh", and `clearStorage()` truncates every log. That
+   *    is right on boot and catastrophic here — the whole point of this method
+   *    is that someone has been editing those files, so a mistake in one is
+   *    the expected failure, not an unthinkable one. Everything is validated
+   *    first and the reload is refused outright if anything is wrong, with the
+   *    live state left exactly as it was.
+   * 2. **It is serialized against writes.** The body runs on the write chain,
+   *    so a turn appending mid-reload lands wholly before or wholly after,
+   *    never interleaved with the rebuild.
+   *
+   * No compaction: this runs right after a person edited these files by hand,
+   * and rewriting them on the way out would be a poor way to repay that.
+   */
+  async reload(): Promise<{ projects: number; chats: number }> {
+    await this.assertReloadable()
+
+    // Latch: the validation above means no load path should reach
+    // `clearStorage`, and this makes sure a path that somehow does can't
+    // truncate the logs anyway. Belt and braces, because the failure mode is
+    // "every chat is gone" with no undo.
+    this.reloading = true
+    this.writeChain = this.writeChain.then(async () => {
+      this.resetState()
+      this.clearLegacyTranscriptState()
+      await this.loadSnapshot()
+      await this.replayLogs()
+      await this.hydrateChatMetadataFromTranscripts()
+      await this.loadSidebarProjectOrder()
+    }).finally(() => {
+      this.reloading = false
+    })
+    await this.writeChain
+
+    return {
+      projects: [...this.state.projectsById.values()].filter((project) => !project.deletedAt).length,
+      chats: [...this.state.chatsById.values()].filter((chat) => !chat.deletedAt).length,
+    }
+  }
+
+  /**
+   * Throws unless every file the reload will read is one this store version
+   * can load. Read-only: it exists so a bad file is a refusal rather than a
+   * reset. The tolerances match the boot path — an absent or empty file is
+   * fine, and so is a single corrupt line at the end of a log, which is what a
+   * process killed mid-append leaves behind.
+   */
+  private async assertReloadable() {
+    const snapshot = Bun.file(this.snapshotPath)
+    if (await snapshot.exists()) {
+      const text = await snapshot.text()
+      if (text.trim()) {
+        let parsed: SnapshotFile
+        try {
+          parsed = JSON.parse(text) as SnapshotFile
+        } catch (error) {
+          throw new Error(`snapshot.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        if (parsed.v !== STORE_VERSION) {
+          throw new Error(`snapshot.json is store version ${parsed.v}, this build reads ${STORE_VERSION}`)
+        }
+      }
+    }
+
+    for (const filePath of [
+      this.projectsLogPath,
+      this.chatsLogPath,
+      this.messagesLogPath,
+      this.queuedMessagesLogPath,
+      this.turnsLogPath,
+    ]) {
+      await this.assertLogReloadable(filePath)
+    }
+  }
+
+  private async assertLogReloadable(filePath: string) {
+    const file = Bun.file(filePath)
+    if (!(await file.exists())) return
+    const text = await file.text()
+    if (!text.trim()) return
+
+    const name = path.basename(filePath)
+    const lines = text.split("\n")
+    let lastNonEmpty = -1
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      if (lines[index].trim()) {
+        lastNonEmpty = index
+        break
+      }
+    }
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index].trim()
+      if (!line) continue
+      let event: Partial<StoreEvent>
+      try {
+        event = JSON.parse(line) as Partial<StoreEvent>
+      } catch (error) {
+        // A half-written last line is what a crash leaves; boot skips it, so
+        // this does too. Anywhere else it is an edit that went wrong.
+        if (index === lastNonEmpty) continue
+        throw new Error(`${name} line ${index + 1} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      if (event.v !== STORE_VERSION) {
+        throw new Error(`${name} line ${index + 1} is store version ${String(event.v)}, this build reads ${STORE_VERSION}`)
+      }
+    }
+  }
+
+  /**
    * Chat metadata derived from transcript entries (lastMessageAt, hasMessages,
    * message previews) is applied in memory on append and only persisted when a
    * snapshot compaction runs. Rebuild it from the transcript files on boot so
@@ -436,6 +557,12 @@ export class EventStore {
   }
 
   private async clearStorage() {
+    // A reload validated every file before starting, so nothing here should be
+    // reachable from one. If it ever is, the answer is to fail the reload, not
+    // to truncate history the user was in the middle of editing.
+    if (this.reloading) {
+      throw new Error("Refusing to reset local history during a reload")
+    }
     if (this.storageReset) return
     this.storageReset = true
     this.resetState()
@@ -734,6 +861,7 @@ export class EventStore {
           // Forks carry the source's turn-end timestamp on the create event
           // (they have no turn events of their own to replay).
           ...(event.lastTurnEndedAt != null ? { lastTurnEndedAt: event.lastTurnEndedAt } : {}),
+          ...(event.agentOrigin ? { agentOrigin: event.agentOrigin } : {}),
         }
         this.state.chatsById.set(chat.id, chat)
         break
@@ -1195,7 +1323,11 @@ export class EventStore {
     return this.writeChain
   }
 
-  async createChat(projectId: string) {
+  /**
+   * @param options `agentOrigin` marks the chat as created by the agent
+   * running in another chat. Server-side only — see `ChatRecord.agentOrigin`.
+   */
+  async createChat(projectId: string, options?: { agentOrigin?: { chatId: string } }) {
     const project = this.state.projectsById.get(projectId)
     if (!project || project.deletedAt) {
       throw new Error("Project not found")
@@ -1208,6 +1340,7 @@ export class EventStore {
       chatId,
       projectId,
       title: "New Chat",
+      ...(options?.agentOrigin ? { agentOrigin: options.agentOrigin } : {}),
     }
     await this.append(this.chatsLogPath, event)
     return this.state.chatsById.get(chatId)!
@@ -1269,6 +1402,10 @@ export class EventStore {
       // no turn events of its own it would otherwise read as brand new and sort
       // by creation time alone.
       ...(sourceChat.lastTurnEndedAt != null ? { lastTurnEndedAt: sourceChat.lastTurnEndedAt } : {}),
+      // The fan-out marker comes along too. Forking is a human action and no
+      // agent has a tool for it, but a fork that dropped the marker would be a
+      // way to launder an agent-started chat into one that may spawn again.
+      ...(sourceChat.agentOrigin ? { agentOrigin: sourceChat.agentOrigin } : {}),
     }
     await this.append(this.chatsLogPath, createEvent)
     // The fork carries the same conversation, so it carries the same claim on

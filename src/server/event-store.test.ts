@@ -1743,3 +1743,152 @@ describe("getClientTranscript window and outline", () => {
     await rm(dataDir, { recursive: true, force: true })
   })
 })
+
+describe("reload", () => {
+  test("picks up a chat another process appended", async () => {
+    const dir = await createTempDataDir()
+    const store = new EventStore(dir)
+    await store.initialize()
+    const project = await store.openProject(join(dir, "proj"))
+
+    // A second store on the same data dir stands in for whatever edited it.
+    const other = new EventStore(dir)
+    await other.initialize()
+    const added = await other.createChat(project.id)
+
+    expect(store.getChat(added.id)).toBeNull()
+    const result = await store.reload()
+
+    expect(store.getChat(added.id)?.projectId).toBe(project.id)
+    expect(result.chats).toBe(1)
+    expect(result.projects).toBe(1)
+  })
+
+  test("picks up a chat moved to another project on disk", async () => {
+    const dir = await createTempDataDir()
+    const store = new EventStore(dir)
+    await store.initialize()
+    const from = await store.openProject(join(dir, "from"))
+    const to = await store.openProject(join(dir, "to"))
+    const chat = await store.createChat(from.id)
+    // Compact so the move is a snapshot edit, which is how a person would do it.
+    await store.compact()
+
+    const snapshotPath = join(dir, "snapshot.json")
+    const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as SnapshotFile
+    snapshot.chats.find((entry) => entry.id === chat.id)!.projectId = to.id
+    await writeFile(snapshotPath, JSON.stringify(snapshot))
+
+    expect(store.getChat(chat.id)?.projectId).toBe(from.id)
+    await store.reload()
+    expect(store.getChat(chat.id)?.projectId).toBe(to.id)
+  })
+
+  test("drops a chat removed from disk", async () => {
+    const dir = await createTempDataDir()
+    const store = new EventStore(dir)
+    await store.initialize()
+    const project = await store.openProject(join(dir, "proj"))
+    const kept = await store.createChat(project.id)
+    const removed = await store.createChat(project.id)
+    await store.compact()
+
+    const snapshotPath = join(dir, "snapshot.json")
+    const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as SnapshotFile
+    snapshot.chats = snapshot.chats.filter((entry) => entry.id !== removed.id)
+    await writeFile(snapshotPath, JSON.stringify(snapshot))
+
+    await store.reload()
+    expect(store.getChat(kept.id)).not.toBeNull()
+    expect(store.getChat(removed.id)).toBeNull()
+  })
+
+  test("re-reads a transcript edited on disk rather than serving the cache", async () => {
+    const dir = await createTempDataDir()
+    const store = new EventStore(dir)
+    await store.initialize()
+    const project = await store.openProject(join(dir, "proj"))
+    const chat = await store.createChat(project.id)
+    await store.appendMessage(chat.id, entry("user_prompt", 1, { content: "before" }))
+    // Warm the transcript cache, so a stale read would show up here.
+    expect(store.getMessages(chat.id)).toHaveLength(1)
+
+    const transcriptPath = join(dir, "transcripts", `${chat.id}.jsonl`)
+    const edited = { _id: "user_prompt-1", createdAt: 1, kind: "user_prompt", content: "after" }
+    await writeFile(transcriptPath, `${JSON.stringify(edited)}\n`)
+
+    await store.reload()
+    const messages = store.getMessages(chat.id)
+    expect(messages).toHaveLength(1)
+    expect((messages[0] as { content: string }).content).toBe("after")
+  })
+
+  describe("refuses rather than resetting", () => {
+    async function storeWithOneChat() {
+      const dir = await createTempDataDir()
+      const store = new EventStore(dir)
+      await store.initialize()
+      const project = await store.openProject(join(dir, "proj"))
+      const chat = await store.createChat(project.id)
+      await store.compact()
+      return { dir, store, chat }
+    }
+
+    test("a corrupt snapshot leaves the loaded state alone", async () => {
+      const { dir, store, chat } = await storeWithOneChat()
+      await writeFile(join(dir, "snapshot.json"), "{ not json")
+
+      await expect(store.reload()).rejects.toThrow(/snapshot\.json is not valid JSON/)
+      // The whole point: history is still loaded, and nothing on disk was
+      // truncated on the way out — including the bad file, so it can be fixed.
+      expect(store.getChat(chat.id)).not.toBeNull()
+      expect(await readFile(join(dir, "snapshot.json"), "utf8")).toBe("{ not json")
+    })
+
+    test("a snapshot from another store version leaves the loaded state alone", async () => {
+      const { dir, store, chat } = await storeWithOneChat()
+      const snapshotPath = join(dir, "snapshot.json")
+      const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as SnapshotFile
+      await writeFile(snapshotPath, JSON.stringify({ ...snapshot, v: 1 }))
+
+      await expect(store.reload()).rejects.toThrow(/store version 1/)
+      expect(store.getChat(chat.id)).not.toBeNull()
+    })
+
+    test("a corrupt log line leaves the loaded state alone", async () => {
+      const { dir, store, chat } = await storeWithOneChat()
+      // Mid-file, so it is a bad edit rather than a torn final append.
+      await writeFile(join(dir, "chats.jsonl"), `{ not json\n${JSON.stringify({ v: 2, type: "noop", timestamp: 1 })}\n`)
+
+      await expect(store.reload()).rejects.toThrow(/chats\.jsonl line 1 is not valid JSON/)
+      expect(store.getChat(chat.id)).not.toBeNull()
+      // The snapshot still holds the chat: nothing was reset behind the error.
+      const snapshot = JSON.parse(await readFile(join(dir, "snapshot.json"), "utf8")) as SnapshotFile
+      expect(snapshot.chats.map((entry) => entry.id)).toContain(chat.id)
+    })
+
+    test("a torn final line is tolerated, the same as on boot", async () => {
+      const { dir, store } = await storeWithOneChat()
+      const chatsLog = join(dir, "chats.jsonl")
+      await writeFile(chatsLog, `${await readFile(chatsLog, "utf8")}{"v":2,"type":"chat_cre`)
+
+      await expect(store.reload()).resolves.toMatchObject({ chats: 1 })
+    })
+  })
+
+  test("is serialized against in-flight writes", async () => {
+    const dir = await createTempDataDir()
+    const store = new EventStore(dir)
+    await store.initialize()
+    const project = await store.openProject(join(dir, "proj"))
+    const chat = await store.createChat(project.id)
+
+    // Start an append and a reload without awaiting between them: both go
+    // through the write chain, so the append must land whole.
+    const append = store.appendMessage(chat.id, entry("user_prompt", 1, { content: "hello" }))
+    const reload = store.reload()
+    await Promise.all([append, reload])
+
+    expect(store.getMessages(chat.id)).toHaveLength(1)
+  })
+})

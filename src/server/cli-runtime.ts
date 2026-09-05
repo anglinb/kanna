@@ -108,6 +108,12 @@ type ParsedArgs =
   | { kind: "pair"; args: PairCommandArgs }
   | { kind: "slim-transcripts" }
   | { kind: "import-chats"; source: RuntimeProfile }
+  /**
+   * `kanna mcp <credentials>` — the stdio MCP server a codex session spawns
+   * to reach Kanna's management tools. Not a command anyone types: the path
+   * points at a 0600 file a running Kanna wrote for one chat.
+   */
+  | { kind: "mcp"; credentialsPath: string }
   | { kind: "help" }
   | { kind: "version" }
 
@@ -228,6 +234,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (argv[0] === "slim-transcripts") {
     if (argv.length > 1) throw new Error(`Unexpected argument for ${getCliCommand()} slim-transcripts: ${argv[1]}`)
     return { kind: "slim-transcripts" }
+  }
+  if (argv[0] === "mcp") {
+    if (argv.length !== 2) throw new Error(`Usage: ${getCliCommand()} mcp <credentials-file>`)
+    return { kind: "mcp", credentialsPath: argv[1]! }
   }
   if (argv[0] === "import-chats") {
     if (argv.length !== 2) throw new Error(`Usage: ${getCliCommand()} import-chats <dev|rc|prd>`)
@@ -392,9 +402,9 @@ function getProfileServerPort(profile: RuntimeProfile) {
 
 /**
  * Semver precedence: numeric release parts first, then prerelease tags, so
- * "0.66.0-rc.1" < "0.66.0-rc.2" < "0.66.0". Release candidates depend on that
- * ordering — comparing only the release part makes every candidate for a base
- * version equal, so an RC would never see a newer RC as an update.
+ * "0.66.0-rc.1" < "0.66.0-rc.2" < "0.66.0". The RC channel depends on that
+ * ordering — without it every release candidate for a given base version
+ * compares equal and an RC would never see a newer RC.
  *
  * Nightly builds are the deliberate exception. "<base>-nightly.<sha>" is cut
  * from main *after* <base> shipped, so ranking it below <base> (as semver
@@ -536,6 +546,25 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // connects. From then on any plain `kanna` does the same (sticky).
     deps.log(`${LOG_PREFIX} starting ${getCliCommand()}…`)
     parsedArgs = parseArgs([])
+  }
+
+  if (parsedArgs.kind === "mcp") {
+    // stdout is the MCP channel from here on: anything written to it that
+    // isn't a JSON-RPC message desynchronizes the client, so diagnostics go
+    // to stderr and nothing calls deps.log.
+    const { parseBridgeConfig, runMcpStdioServer } = await import("./kanna-mcp-stdio")
+    try {
+      const config = parseBridgeConfig(await Bun.file(parsedArgs.credentialsPath).text())
+      await runMcpStdioServer(config, {
+        input: Bun.stdin.stream(),
+        write: (line) => process.stdout.write(`${line}\n`),
+        warn: (message) => process.stderr.write(`${message}\n`),
+      })
+      return { kind: "exited", code: 0 }
+    } catch (error) {
+      process.stderr.write(`${LOG_PREFIX} mcp: ${error instanceof Error ? error.message : String(error)}\n`)
+      return { kind: "exited", code: 1 }
+    }
   }
 
   if (parsedArgs.kind === "slim-transcripts") {

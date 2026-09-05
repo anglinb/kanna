@@ -31,8 +31,12 @@ import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { handleTranscribe } from "./transcribe"
 import { handleChatWindow } from "./chat-window-route"
-import { createApiKeyVerifier } from "./api/keys"
+import { createApiKeyVerifier, extractApiKey } from "./api/keys"
 import { handleApiRequest, hasValidApiKey, isApiRoute } from "./api/routes"
+import { isDirectLocalRequest } from "./api/local-request"
+import type { ControlDeps } from "./api/control"
+import { createKannaMcpBridge } from "./kanna-mcp-bridge"
+import { createClaudeKannaMcpServer } from "./kanna-mcp-claude"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
@@ -150,9 +154,17 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const strictPort = options.strictPort ?? false
   const runtimeProfile = getRuntimeProfile()
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
-  // Null unless --api was passed with at least one key. Every /api/v1 request
-  // is checked against it, and nothing else on the server consults it.
-  const apiKeyVerifier = options.api && (options.apiKeys?.length ?? 0) > 0
+  // Two verifiers, because two very different callers hold keys.
+  //
+  // `remoteApiKeyVerifier` is the user's own `--api` keys, and is null without
+  // that flag — off the machine, no key means no API, exactly as before.
+  //
+  // `localApiKeyVerifier` additionally accepts the key Kanna mints for its own
+  // agent bridge, and is consulted only for requests that came straight off
+  // loopback with no forwarding headers (see api/local-request.ts). That is
+  // what lets `/api/v1` be always-on for the tools an agent uses without
+  // opening it to the network, a share tunnel, or a paired machine.
+  const remoteApiKeyVerifier = options.api && (options.apiKeys?.length ?? 0) > 0
     ? createApiKeyVerifier(options.apiKeys ?? [])
     : null
   const store = new EventStore(options.dataDir)
@@ -241,7 +253,30 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       trackEvent: analytics.track.bind(analytics),
     })
     : null
-  const codexManager = new CodexAppServerManager()
+  // Gives agent sessions Kanna's own management tools. Claude reaches them
+  // in-process; codex spawns `kanna mcp` per session, which is what needs the
+  // credentials file and the `-c` overrides below.
+  const mcpBridge = createKannaMcpBridge({
+    dataDir: store.dataDir,
+    // Read late, inside the closure: `actualPort` is only settled once
+    // Bun.serve has bound one, which is long before any session starts.
+    baseUrl: () => `http://127.0.0.1:${actualPort}`,
+  })
+  const codexManager = new CodexAppServerManager({
+    resolveMcpArgs: async (chatId) => mcpBridge.codexConfigArgs(await mcpBridge.ensureCredentials(chatId)),
+    releaseMcp: (chatId) => mcpBridge.release(chatId),
+  })
+  const localApiKeyVerifier = createApiKeyVerifier([
+    ...(remoteApiKeyVerifier ? options.apiKeys ?? [] : []),
+    mcpBridge.apiKey,
+  ])
+  /**
+   * Which keys count for this request. A request that came straight off
+   * loopback — the agent bridge, in practice — may also use the internal key;
+   * anything relayed, tunnelled or off the network is held to `--api`.
+   */
+  const apiKeyVerifierFor = (req: Request, peerAddress: string | null | undefined) =>
+    isDirectLocalRequest(req, peerAddress) ? localApiKeyVerifier : remoteApiKeyVerifier
   const agent = new AgentCoordinator({
     store,
     analytics,
@@ -308,6 +343,24 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     updateManager,
     providerAuth,
   })
+  // The operations the REST API and the agent-facing tools share. Built here
+  // rather than at either call site because it closes the loop between the
+  // store, the coordinator and the router's broadcast — none of which can name
+  // all three on its own.
+  const controlDeps: ControlDeps = {
+    store,
+    agent,
+    appSettings,
+    // API and tool writes are rare next to socket traffic, so a full broadcast
+    // is the safe choice: every topic one can touch gets refreshed without
+    // enumerating them here.
+    broadcast: () => router.broadcastSnapshots(),
+    analytics,
+  }
+  // Claude calls the tools in-process; codex reaches the same functions over
+  // the loopback API through `kanna mcp`.
+  agent.setKannaMcpServerFactory((chatId) => createClaudeKannaMcpServer(controlDeps, chatId))
+
   // Overlay the account's live Cursor model list on the static catalog
   // (no-op when cursor-agent is missing or logged out); broadcasts on change.
   void agent.refreshCursorModelCatalog()
@@ -457,6 +510,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           const requestClass: CloudRequestClass = cloud
             ? classifyCloudRequest(req, cloud.identity.proxySecret)
             : "local"
+          // Peer address, for the one decision that turns on where a request
+          // physically came from: whether it may use the internal agent key.
+          const peerAddress = serverInstance.requestIP(req)?.address ?? null
 
           // The proxy answers /__cloud/* itself and never forwards it; the
           // machine 404s the prefix explicitly so the client can
@@ -546,7 +602,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               // A valid API key stands in for the browser session on /api/v1.
               // The password gate is a cookie flow an API client cannot do,
               // and the key is the stronger credential of the two.
-              !(isApiRoute(url) && hasValidApiKey(req, apiKeyVerifier))
+              !(isApiRoute(url) && hasValidApiKey(req, apiKeyVerifierFor(req, peerAddress)))
             ) {
               return withOriginAgentCluster(Response.json({ error: "Unauthorized" }, { status: 401 }))
             }
@@ -569,7 +625,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               ok: true,
               port: actualPort,
               instance: instanceFingerprint(store.dataDir),
-              api: apiKeyVerifier !== null,
+              // The `--api` verifier specifically: the bridge's internal key is
+              // always present, so asking whether *any* key exists would answer
+              // true on every instance and tell a second invocation nothing.
+              api: remoteApiKeyVerifier !== null,
             }))
           }
 
@@ -619,22 +678,24 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           }
 
           if (isApiRoute(url)) {
+            const verifier = apiKeyVerifierFor(req, peerAddress)
             // Claim the prefix whether or not the API is mounted: without
             // this, an unmounted /api/v1 falls through to the SPA and answers
             // index.html with a 200, which a client reads as success.
-            if (!apiKeyVerifier) {
+            //
+            // Loopback always has a verifier (the internal agent key), so this
+            // 404 is what a remote caller sees without `--api` — the API is
+            // still invisible from the network unless the user asked for it.
+            if (!verifier) {
               return withOriginAgentCluster(Response.json({ error: "Not found" }, { status: 404 }))
             }
             const apiResponse = await handleApiRequest(req, url, {
-              store,
-              agent,
-              appSettings,
-              verifier: apiKeyVerifier,
-              // API writes are rare next to socket traffic, so a full
-              // broadcast is the safe choice: every topic an API call can
-              // touch gets refreshed without enumerating them here.
-              broadcast: () => router.broadcastSnapshots(),
-              analytics,
+              ...controlDeps,
+              verifier,
+              // Only the bridge's own key may claim to be an agent, and only
+              // from loopback — the header is otherwise ignored.
+              isInternalKey: (request) =>
+                isDirectLocalRequest(request, peerAddress) && mcpBridge.isInternalKey(extractApiKey(request)),
               version: options.update?.version ?? "0.0.0",
             })
             if (apiResponse) {
@@ -745,6 +806,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     appSettings.dispose()
     keybindings.dispose()
     terminals.closeAll()
+    // The internal key dies with this process, so leaving credential files
+    // behind would only leave stale ones for the next run to ignore.
+    await mcpBridge.dispose().catch(() => undefined)
     await store.compact()
     server.stop(true)
   }

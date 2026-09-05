@@ -27,10 +27,13 @@ function chatRecord(overrides: Partial<ChatRecord> & Pick<ChatRecord, "id" | "pr
 
 interface Calls {
   sends: Array<Extract<ClientCommand, { type: "chat.send" }>>
+  /** The out-of-band agent origin passed alongside each send, if any. */
+  sendOrigins: Array<{ chatId: string } | undefined>
   cancels: string[]
   closes: string[]
   deletes: string[]
   broadcasts: number
+  /** Analytics event names, in order, so a write can't silently stop reporting. */
   events: string[]
 }
 
@@ -49,7 +52,7 @@ function createDeps(options: { activeStatuses?: Map<string, KannaStatus> } = {})
   state.chatsById.set("chat-archived", chatRecord({ id: "chat-archived", projectId: "project-1", archivedAt: 3 }))
   state.chatsById.set("chat-deleted", chatRecord({ id: "chat-deleted", projectId: "project-1", deletedAt: 4 }))
 
-  const calls: Calls = { sends: [], cancels: [], closes: [], deletes: [], broadcasts: 0, events: [] }
+  const calls: Calls = { sends: [], sendOrigins: [], cancels: [], closes: [], deletes: [], broadcasts: 0, events: [] }
   let created = 0
 
   const store = {
@@ -72,12 +75,16 @@ function createDeps(options: { activeStatuses?: Map<string, KannaStatus> } = {})
       state.projectIdsByPath.set(localPath, project.id)
       return project
     },
-    createChat: async (projectId: string) => {
+    createChat: async (projectId: string, options?: { agentOrigin?: { chatId: string } }) => {
       created += 1
-      const chat = chatRecord({ id: `new-chat-${created}`, projectId })
+      const chat = chatRecord({ id: `new-chat-${created}`, projectId, agentOrigin: options?.agentOrigin })
       state.chatsById.set(chat.id, chat)
       return chat
     },
+    reload: async () => ({
+      projects: state.projectsById.size,
+      chats: [...state.chatsById.values()].filter((chat) => !chat.deletedAt).length,
+    }),
     deleteChat: async (chatId: string) => {
       calls.deletes.push(chatId)
       const chat = state.chatsById.get(chatId)
@@ -88,10 +95,14 @@ function createDeps(options: { activeStatuses?: Map<string, KannaStatus> } = {})
   const agent = {
     getActiveStatuses: () => options.activeStatuses ?? new Map<string, KannaStatus>(),
     getDrainingChatIds: () => new Set<string>(),
-    send: async (command: Extract<ClientCommand, { type: "chat.send" }>) => {
+    send: async (
+      command: Extract<ClientCommand, { type: "chat.send" }>,
+      options?: { agentOrigin?: { chatId: string } }
+    ) => {
       calls.sends.push(command)
+      calls.sendOrigins.push(options?.agentOrigin)
       if (command.chatId) return { chatId: command.chatId }
-      const chat = await store.createChat(command.projectId!)
+      const chat = await store.createChat(command.projectId!, { agentOrigin: options?.agentOrigin })
       return { chatId: chat.id }
     },
     cancel: async (chatId: string) => {
@@ -449,6 +460,190 @@ describe("sending a prompt", () => {
   })
 })
 
+describe("cancel and delete", () => {
+  test("cancels a running turn", async () => {
+    const { deps, calls } = createDeps()
+    const response = await call(deps, "/api/v1/chats/chat-1/cancel", { method: "POST" })
+    expect(response?.status).toBe(200)
+    expect(calls.cancels).toEqual(["chat-1"])
+    expect(calls.broadcasts).toBe(1)
+  })
+
+  test("deletes a chat, stopping its turn first", async () => {
+    const { deps, calls } = createDeps()
+    const response = await call(deps, "/api/v1/chats/chat-1", { method: "DELETE" })
+    expect(response?.status).toBe(200)
+    expect(calls.cancels).toEqual(["chat-1"])
+    expect(calls.closes).toEqual(["chat-1"])
+    expect(calls.deletes).toEqual(["chat-1"])
+    expect(calls.broadcasts).toBe(1)
+  })
+
+  test("404s deleting an unknown chat", async () => {
+    const { deps, calls } = createDeps()
+    expect((await call(deps, "/api/v1/chats/nope", { method: "DELETE" }))?.status).toBe(404)
+    expect(calls.deletes).toHaveLength(0)
+  })
+})
+
+describe("agent callers", () => {
+  /** Like `call`, but sets the agent-chat header the MCP bridge sends. */
+  function agentCall(
+    deps: ApiRouteDeps,
+    pathname: string,
+    init: { method?: string; body?: unknown; agentChatId: string }
+  ) {
+    const url = new URL(`http://localhost${pathname}`)
+    const req = new Request(url, {
+      method: init.method ?? "GET",
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        "x-kanna-agent-chat": init.agentChatId,
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    })
+    return handleApiRequest(req, url, deps)
+  }
+
+  test("the header is ignored unless the key is the internal one", async () => {
+    // A human `--api` client can set any header it likes; without the internal
+    // key it is still just a human client, and its chats are not agent work.
+    const { deps, calls, state } = createDeps()
+    const response = await agentCall(deps, "/api/v1/chats", {
+      method: "POST",
+      body: { projectId: "project-1", content: "hi" },
+      agentChatId: "chat-1",
+    })
+
+    expect(response?.status).toBe(202)
+    expect(calls.sendOrigins).toEqual([undefined])
+    expect((await json(response)).chat.createdByChatId).toBeNull()
+    expect(state.chatsById.get("new-chat-1")?.agentOrigin).toBeUndefined()
+  })
+
+  test("with the internal key, a created chat records who created it", async () => {
+    const { deps, calls } = createDeps()
+    deps.isInternalKey = () => true
+
+    const response = await agentCall(deps, "/api/v1/chats", {
+      method: "POST",
+      body: { projectId: "project-1", content: "hi" },
+      agentChatId: "chat-1",
+    })
+
+    expect(response?.status).toBe(202)
+    expect(calls.sendOrigins).toEqual([{ chatId: "chat-1" }])
+    expect((await json(response)).chat.createdByChatId).toBe("chat-1")
+  })
+
+  test("a chat an agent created cannot start more work", async () => {
+    const { deps, state, calls } = createDeps()
+    deps.isInternalKey = () => true
+    state.chatsById.set(
+      "spawned",
+      chatRecord({ id: "spawned", projectId: "project-1", agentOrigin: { chatId: "chat-1" } })
+    )
+
+    const created = await agentCall(deps, "/api/v1/chats", {
+      method: "POST",
+      body: { projectId: "project-1", content: "go deeper" },
+      agentChatId: "spawned",
+    })
+    const sent = await agentCall(deps, "/api/v1/chats/chat-2/messages", {
+      method: "POST",
+      body: { content: "go deeper" },
+      agentChatId: "spawned",
+    })
+
+    expect(created?.status).toBe(409)
+    expect(sent?.status).toBe(409)
+    expect(calls.sends).toHaveLength(0)
+  })
+
+  test("an agent cannot prompt its own chat", async () => {
+    const { deps, calls } = createDeps()
+    deps.isInternalKey = () => true
+
+    const response = await agentCall(deps, "/api/v1/chats/chat-1/messages", {
+      method: "POST",
+      body: { content: "again" },
+      agentChatId: "chat-1",
+    })
+
+    expect(response?.status).toBe(409)
+    expect(calls.sends).toHaveLength(0)
+  })
+
+  test("reading is never gated by the guard", async () => {
+    const { deps, state } = createDeps()
+    deps.isInternalKey = () => true
+    state.chatsById.set(
+      "spawned",
+      chatRecord({ id: "spawned", projectId: "project-1", agentOrigin: { chatId: "chat-1" } })
+    )
+
+    expect((await agentCall(deps, "/api/v1/projects", { agentChatId: "spawned" }))?.status).toBe(200)
+    expect((await agentCall(deps, "/api/v1/chats", { agentChatId: "spawned" }))?.status).toBe(200)
+    expect((await agentCall(deps, "/api/v1/chats/chat-1", { agentChatId: "spawned" }))?.status).toBe(200)
+  })
+})
+
+describe("reload", () => {
+  test("re-reads the store and reports what it found", async () => {
+    const { deps, calls } = createDeps()
+    const response = await call(deps, "/api/v1/reload", { method: "POST" })
+
+    expect(response?.status).toBe(200)
+    expect(await json(response)).toMatchObject({ chats: 3, droppedChatIds: [], activeChatIds: [] })
+    expect(calls.broadcasts).toBe(1)
+  })
+
+  test("names the chats that were mid-turn, and drops ones that vanished", async () => {
+    const activeStatuses = new Map<KannaStatus, KannaStatus>() as Map<string, KannaStatus>
+    activeStatuses.set("chat-1", "running")
+    activeStatuses.set("chat-gone", "running")
+    const { deps, calls } = createDeps({ activeStatuses })
+
+    const body = await json(await call(deps, "/api/v1/reload", { method: "POST" }))
+
+    expect(body.activeChatIds).toEqual(["chat-1"])
+    expect(body.droppedChatIds).toEqual(["chat-gone"])
+    expect(calls.cancels).toEqual(["chat-gone"])
+    expect(calls.closes).toEqual(["chat-gone"])
+  })
+
+  test("a store that refuses to reload answers 409, not 500", async () => {
+    const { deps, calls } = createDeps()
+    deps.store.reload = async () => {
+      throw new Error("snapshot.json is not valid JSON")
+    }
+
+    const response = await call(deps, "/api/v1/reload", { method: "POST" })
+
+    expect(response?.status).toBe(409)
+    expect((await json(response)).error).toContain("snapshot.json is not valid JSON")
+    expect(calls.broadcasts).toBe(0)
+  })
+
+  test("only POST", async () => {
+    const { deps } = createDeps()
+    const response = await call(deps, "/api/v1/reload")
+    expect(response?.status).toBe(405)
+    expect(response?.headers.get("Allow")).toBe("POST")
+  })
+
+  test("still needs a key", async () => {
+    const { deps } = createDeps()
+    expect((await call(deps, "/api/v1/reload", { method: "POST", key: null }))?.status).toBe(401)
+  })
+
+  test("is listed in the root capabilities", async () => {
+    const { deps } = createDeps()
+    expect((await json(await call(deps, "/api/v1"))).capabilities).toContain("reload")
+  })
+})
+
 describe("provider validation", () => {
   // An unknown provider is only noticed when the turn is set up. For a prompt
   // that queues behind a running turn that happens after the 202, in
@@ -568,31 +763,5 @@ describe("analytics", () => {
     await call(deps, "/api/v1/projects")
     await call(deps, "/api/v1/chats/chat-1")
     expect(calls.events).toEqual([])
-  })
-})
-
-describe("cancel and delete", () => {
-  test("cancels a running turn", async () => {
-    const { deps, calls } = createDeps()
-    const response = await call(deps, "/api/v1/chats/chat-1/cancel", { method: "POST" })
-    expect(response?.status).toBe(200)
-    expect(calls.cancels).toEqual(["chat-1"])
-    expect(calls.broadcasts).toBe(1)
-  })
-
-  test("deletes a chat, stopping its turn first", async () => {
-    const { deps, calls } = createDeps()
-    const response = await call(deps, "/api/v1/chats/chat-1", { method: "DELETE" })
-    expect(response?.status).toBe(200)
-    expect(calls.cancels).toEqual(["chat-1"])
-    expect(calls.closes).toEqual(["chat-1"])
-    expect(calls.deletes).toEqual(["chat-1"])
-    expect(calls.broadcasts).toBe(1)
-  })
-
-  test("404s deleting an unknown chat", async () => {
-    const { deps, calls } = createDeps()
-    expect((await call(deps, "/api/v1/chats/nope", { method: "DELETE" }))?.status).toBe(404)
-    expect(calls.deletes).toHaveLength(0)
   })
 })

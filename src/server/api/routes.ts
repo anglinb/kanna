@@ -1,58 +1,56 @@
 /**
- * `/api/v1/*` — the remote REST API, mounted only when the server is started
- * with `--api` (see cli-runtime.ts).
+ * `/api/v1/*` — the remote REST API.
  *
- * Everything here goes through the same EventStore and AgentCoordinator the
- * WebSocket uses, so a chat created over HTTP shows up in a connected browser
- * immediately and is written to the normal data dir. After any write the
- * caller-supplied `broadcast` pushes fresh snapshots to connected sockets.
+ * Two kinds of caller reach this. A person or script with a key from `--api`
+ * (see cli-runtime.ts), and Kanna's own agent-facing MCP bridge, which runs as
+ * a child process of a codex session and holds a loopback-only internal key
+ * (see ../kanna-mcp-stdio.ts). The bridge additionally sends
+ * `X-Kanna-Agent-Chat`, naming the chat whose agent is calling, which is what
+ * the fan-out guard in control.ts keys off.
+ *
+ * The operations themselves live in control.ts, shared with the in-process
+ * tools Claude gets, so HTTP and MCP cannot drift.
  *
  * Prompts are asynchronous: a send returns 202 with the chat id, and the
  * caller polls `GET /api/v1/chats/:id` for status and new messages. A turn can
  * run for many minutes, which no HTTP client or proxy would sit through.
  */
 
-import type { AgentProvider, ChatSnapshot, KannaStatus, ModelOptions } from "../../shared/types"
-import type { ClientCommand } from "../../shared/protocol"
-import type { ChatRecord, ProjectRecord } from "../events"
-import type { EventStore } from "../event-store"
-import type { AnalyticsReporter } from "../analytics"
-import { initializeProjectDirectory } from "../paths"
-import { SERVER_PROVIDERS } from "../provider-catalog"
-import { deriveChatSnapshot, deriveStatus } from "../read-models"
-import { readChatWindow, type ChatWindowRouteDeps } from "../chat-window-route"
+import type { AgentProvider, ModelOptions } from "../../shared/types"
+import {
+  addProject,
+  cancelChat,
+  ControlError,
+  createChat,
+  deleteChat,
+  getChat,
+  listChats,
+  listProjects,
+  reloadFromDisk,
+  sendMessage,
+  type ControlCaller,
+  type ControlDeps,
+  type PromptFields,
+} from "./control"
 import { extractApiKey, type ApiKeyVerifier } from "./keys"
 
 export const API_ROUTE_PREFIX = "/api/v1"
 
-/** Cap on `GET /chats` so one call can't serialize an entire history. */
-const DEFAULT_CHAT_LIMIT = 50
-const MAX_CHAT_LIMIT = 200
+/**
+ * Header the MCP bridge sets to identify the chat its agent is running in.
+ * Only honoured for callers holding the internal key — a human API client
+ * setting it would only restrict itself, but there is no reason to let it.
+ */
+export const AGENT_CHAT_HEADER = "x-kanna-agent-chat"
 
-export interface ApiRouteDeps extends ChatWindowRouteDeps {
-  store: ChatWindowRouteDeps["store"] &
-    Pick<EventStore, "getProject" | "openProject" | "createChat" | "deleteChat">
-  agent: ChatWindowRouteDeps["agent"] & {
-    send: (command: Extract<ClientCommand, { type: "chat.send" }>) => Promise<{ chatId: string; queuedMessageId?: string; queued?: true }>
-    cancel: (chatId: string) => Promise<void>
-    closeChat: (chatId: string) => Promise<void>
-  }
+export interface ApiRouteDeps extends ControlDeps {
   verifier: ApiKeyVerifier
-  /** Push fresh snapshots to connected sockets after a write. */
-  broadcast: () => Promise<void> | void
   /**
-   * Same reporter the socket uses. API writes emit the same events as the
-   * equivalent `ClientCommand`, so metrics don't silently miss whatever is
-   * driven over HTTP.
+   * True when the request's key was the internal one Kanna mints for its own
+   * agent bridge. Only such a request may claim an agent chat id.
    */
-  analytics: Pick<AnalyticsReporter, "track">
+  isInternalKey?: (req: Request) => boolean
   version: string
-}
-
-class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message)
-  }
 }
 
 function json(body: unknown, status = 200) {
@@ -70,10 +68,10 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
   try {
     parsed = JSON.parse(raw)
   } catch {
-    throw new ApiError(400, "Body must be valid JSON")
+    throw new ControlError(400, "Body must be valid JSON")
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new ApiError(400, "Body must be a JSON object")
+    throw new ControlError(400, "Body must be a JSON object")
   }
   return parsed as Record<string, unknown>
 }
@@ -81,7 +79,7 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
 function requireString(body: Record<string, unknown>, field: string): string {
   const value = body[field]
   if (typeof value !== "string" || !value.trim()) {
-    throw new ApiError(400, `Missing or empty "${field}"`)
+    throw new ControlError(400, `Missing or empty "${field}"`)
   }
   return value
 }
@@ -89,14 +87,14 @@ function requireString(body: Record<string, unknown>, field: string): string {
 function optionalString(body: Record<string, unknown>, field: string): string | undefined {
   const value = body[field]
   if (value === undefined || value === null) return undefined
-  if (typeof value !== "string") throw new ApiError(400, `"${field}" must be a string`)
+  if (typeof value !== "string") throw new ControlError(400, `"${field}" must be a string`)
   return value
 }
 
 function optionalBoolean(body: Record<string, unknown>, field: string): boolean | undefined {
   const value = body[field]
   if (value === undefined || value === null) return undefined
-  if (typeof value !== "boolean") throw new ApiError(400, `"${field}" must be a boolean`)
+  if (typeof value !== "boolean") throw new ControlError(400, `"${field}" must be a boolean`)
   return value
 }
 
@@ -104,67 +102,17 @@ function isTruthyParam(value: string | null) {
   return value === "" || value === "1" || value === "true"
 }
 
-function serializeProject(project: ProjectRecord, chatCount: number) {
-  return {
-    id: project.id,
-    title: project.sidebarTitle ?? project.title,
-    localPath: project.localPath,
-    createdAt: project.createdAt,
-    updatedAt: project.updatedAt,
-    chatCount,
-  }
-}
-
-function serializeChat(chat: ChatRecord, status: KannaStatus) {
-  return {
-    id: chat.id,
-    projectId: chat.projectId,
-    title: chat.title,
-    status,
-    provider: chat.provider,
-    createdAt: chat.createdAt,
-    updatedAt: chat.updatedAt,
-    lastMessageAt: chat.lastMessageAt ?? null,
-    lastModel: chat.lastModel ?? null,
-    hasMessages: Boolean(chat.hasMessages),
-    unread: chat.unread,
-    archived: Boolean(chat.archivedAt),
-  }
-}
-
-/**
- * Reject a provider the server has no catalog entry for.
- *
- * This has to happen before `agent.send`. A bad provider is only discovered
- * when the turn is set up — and for a prompt that lands behind a running turn
- * that is long after the 202, in `dequeueAndStartQueuedMessage`, which removes
- * the queued message *before* the catalog lookup throws. The prompt would be
- * acknowledged and then silently dropped. Validating against SERVER_PROVIDERS
- * (rather than a hand-written list) keeps this in step with what
- * `getProviderSettings` will actually accept.
- */
-function readProvider(body: Record<string, unknown>): AgentProvider | undefined {
-  const value = optionalString(body, "provider")
-  if (value === undefined) return undefined
-  const entry = SERVER_PROVIDERS.find((candidate) => candidate.id === value)
-  if (!entry) {
-    const known = SERVER_PROVIDERS.map((candidate) => candidate.id).join(", ")
-    throw new ApiError(400, `Unknown provider "${value}". Expected one of: ${known}`)
-  }
-  return entry.id
-}
-
 /**
  * The prompt fields shared by "create a chat and send" and "send to an
  * existing chat". Kept in one place so the two routes can't drift.
  */
-function readPromptFields(body: Record<string, unknown>) {
+function readPromptFields(body: Record<string, unknown>): PromptFields {
   const modelOptions = body.modelOptions
   if (modelOptions !== undefined && (typeof modelOptions !== "object" || modelOptions === null || Array.isArray(modelOptions))) {
-    throw new ApiError(400, '"modelOptions" must be an object')
+    throw new ControlError(400, '"modelOptions" must be an object')
   }
   return {
-    provider: readProvider(body),
+    provider: optionalString(body, "provider") as AgentProvider | undefined,
     model: optionalString(body, "model"),
     effort: optionalString(body, "effort"),
     modelOptions: modelOptions as ModelOptions | undefined,
@@ -173,28 +121,12 @@ function readPromptFields(body: Record<string, unknown>) {
   }
 }
 
-function chatStatus(deps: ApiRouteDeps, chat: ChatRecord): KannaStatus {
-  return deriveStatus(chat, deps.agent.getActiveStatuses().get(chat.id))
-}
-
-function liveChats(deps: ApiRouteDeps) {
-  return [...deps.store.state.chatsById.values()].filter((chat) => !chat.deletedAt)
-}
-
-function requireChat(deps: ApiRouteDeps, chatId: string): ChatRecord {
-  const chat = deps.store.getChat(chatId)
-  if (!chat || chat.deletedAt) throw new ApiError(404, "Chat not found")
-  return chat
-}
-
-function readFullChatSnapshot(chatId: string, deps: ApiRouteDeps): ChatSnapshot | null {
-  return deriveChatSnapshot(
-    deps.store.state,
-    deps.agent.getActiveStatuses(),
-    deps.agent.getDrainingChatIds(),
-    chatId,
-    (id) => deps.store.getClientTranscript(id)
-  )
+/** The agent chat behind this request, or undefined for a human caller. */
+function readCaller(req: Request, deps: ApiRouteDeps): ControlCaller | undefined {
+  const chatId = req.headers.get(AGENT_CHAT_HEADER)?.trim()
+  if (!chatId) return undefined
+  if (!deps.isInternalKey?.(req)) return undefined
+  return { chatId }
 }
 
 // --- routes ---------------------------------------------------------------
@@ -204,162 +136,65 @@ function handleRoot(deps: ApiRouteDeps) {
     name: "kanna",
     version: deps.version,
     api: 1,
-    capabilities: ["projects", "chats", "messages", "cancel"],
+    capabilities: ["projects", "chats", "messages", "cancel", "reload"],
   })
-}
-
-function handleListProjects(deps: ApiRouteDeps) {
-  const chatCounts = new Map<string, number>()
-  for (const chat of liveChats(deps)) {
-    if (chat.archivedAt) continue
-    chatCounts.set(chat.projectId, (chatCounts.get(chat.projectId) ?? 0) + 1)
-  }
-  const projects = [...deps.store.state.projectsById.values()]
-    .filter((project) => !project.deletedAt)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .map((project) => serializeProject(project, chatCounts.get(project.id) ?? 0))
-  return json({ projects })
 }
 
 async function handleCreateProject(req: Request, deps: ApiRouteDeps) {
   const body = await readJsonBody(req)
-  const localPath = requireString(body, "localPath")
-  const title = optionalString(body, "title")
-
-  // Same call the UI's "new project" flow makes: create the directory if it is
-  // missing, and `git init` it when it is empty so chats there get diffs. An
-  // existing non-empty directory is left exactly as it is.
-  let resolvedPath: string
-  try {
-    resolvedPath = await initializeProjectDirectory(localPath)
-  } catch (error) {
-    throw new ApiError(400, error instanceof Error ? error.message : "Could not open project directory")
-  }
-
-  // Mirrors ws-router's `project.open`: only a path that wasn't already open
-  // counts as opening a project.
-  const alreadyOpen = deps.store.state.projectIdsByPath.get(resolvedPath)
-  const project = await deps.store.openProject(resolvedPath, title)
-  if (!alreadyOpen) deps.analytics.track("project_opened")
-  await deps.broadcast()
-  return json({ project: serializeProject(project, 0) }, 201)
+  const result = await addProject(deps, {
+    localPath: requireString(body, "localPath"),
+    title: optionalString(body, "title"),
+  })
+  // Always 201, including for a path that was already open: opening is
+  // idempotent and existing clients treat any 2xx that isn't 201 as a
+  // surprise. `created` in the body is how a caller tells the two apart.
+  return json({ project: result.project, created: result.created }, 201)
 }
 
 function handleListChats(url: URL, deps: ApiRouteDeps) {
-  const projectId = url.searchParams.get("projectId")
-  if (projectId && !deps.store.getProject(projectId)) {
-    throw new ApiError(404, "Project not found")
-  }
-  const includeArchived = isTruthyParam(url.searchParams.get("includeArchived"))
-
   const rawLimit = url.searchParams.get("limit")
-  let limit = DEFAULT_CHAT_LIMIT
+  let limit: number | undefined
   if (rawLimit !== null) {
     const parsed = Number(rawLimit)
-    if (!Number.isInteger(parsed) || parsed < 1) throw new ApiError(400, '"limit" must be a positive integer')
-    limit = Math.min(parsed, MAX_CHAT_LIMIT)
+    if (!Number.isInteger(parsed) || parsed < 1) throw new ControlError(400, '"limit" must be a positive integer')
+    limit = parsed
   }
-
-  const matching = liveChats(deps)
-    .filter((chat) => (projectId ? chat.projectId === projectId : true))
-    .filter((chat) => (includeArchived ? true : !chat.archivedAt))
-    .sort((a, b) => (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt))
-
-  return json({
-    chats: matching.slice(0, limit).map((chat) => serializeChat(chat, chatStatus(deps, chat))),
-    total: matching.length,
-  })
+  return json(listChats(deps, {
+    projectId: url.searchParams.get("projectId") ?? undefined,
+    includeArchived: isTruthyParam(url.searchParams.get("includeArchived")),
+    limit,
+  }))
 }
 
 async function handleCreateChat(req: Request, deps: ApiRouteDeps) {
   const body = await readJsonBody(req)
-  const projectId = requireString(body, "projectId")
-  if (!deps.store.getProject(projectId)) throw new ApiError(404, "Project not found")
-
-  const content = optionalString(body, "content")
-
-  // With `content`, hand the whole thing to agent.send: it creates the chat
-  // and starts the first turn in one step, exactly as the composer does when
-  // you type into a project with no chat open.
-  if (content?.trim()) {
-    const result = await deps.agent.send({
-      type: "chat.send",
-      projectId,
-      content,
+  const result = await createChat(
+    deps,
+    {
+      projectId: requireString(body, "projectId"),
+      content: optionalString(body, "content"),
       ...readPromptFields(body),
-    })
-    await deps.broadcast()
-    const chat = requireChat(deps, result.chatId)
-    return json({ chat: serializeChat(chat, chatStatus(deps, chat)), queued: result.queued ?? false }, 202)
-  }
-
-  // `agent.send` tracks this itself on the prompt path above, so it is only
-  // emitted here, where the chat is created on its own.
-  const chat = await deps.store.createChat(projectId)
-  deps.analytics.track("chat_created")
-  await deps.broadcast()
-  return json({ chat: serializeChat(chat, chatStatus(deps, chat)) }, 201)
+    },
+    readCaller(req, deps)
+  )
+  return result.started
+    ? json({ chat: result.chat, queued: result.queued }, 202)
+    : json({ chat: result.chat }, 201)
 }
 
 function handleGetChat(url: URL, chatId: string, deps: ApiRouteDeps) {
-  const chat = requireChat(deps, chatId)
-  const full = isTruthyParam(url.searchParams.get("full"))
-  const snapshot = full ? readFullChatSnapshot(chatId, deps) : readChatWindow(chatId, deps)
-  if (!snapshot) throw new ApiError(404, "Chat not found")
-  return json({
-    chat: serializeChat(chat, chatStatus(deps, chat)),
-    runtime: snapshot.runtime,
-    queuedMessages: snapshot.queuedMessages,
-    messages: snapshot.messages,
-    startIndex: snapshot.startIndex,
-  })
+  return json(getChat(deps, { chatId, full: isTruthyParam(url.searchParams.get("full")) }))
 }
 
 async function handleSendMessage(req: Request, chatId: string, deps: ApiRouteDeps) {
-  requireChat(deps, chatId)
   const body = await readJsonBody(req)
-  const content = requireString(body, "content")
-
-  const result = await deps.agent.send({
-    type: "chat.send",
-    chatId,
-    content,
-    ...readPromptFields(body),
-  })
-  await deps.broadcast()
-
-  const chat = requireChat(deps, result.chatId)
-  return json(
-    {
-      chatId: result.chatId,
-      // True when a turn was already running: the prompt was queued behind it
-      // rather than starting one, and will run when the current turn ends.
-      queued: result.queued ?? false,
-      queuedMessageId: result.queuedMessageId ?? null,
-      status: chatStatus(deps, chat),
-    },
-    202
+  const result = await sendMessage(
+    deps,
+    { chatId, content: requireString(body, "content"), ...readPromptFields(body) },
+    readCaller(req, deps)
   )
-}
-
-async function handleCancelChat(chatId: string, deps: ApiRouteDeps) {
-  requireChat(deps, chatId)
-  await deps.agent.cancel(chatId)
-  await deps.broadcast()
-  const chat = requireChat(deps, chatId)
-  return json({ chatId, status: chatStatus(deps, chat) })
-}
-
-async function handleDeleteChat(chatId: string, deps: ApiRouteDeps) {
-  requireChat(deps, chatId)
-  // Same order as the UI's chat.delete: stop the turn, release the harness
-  // session, then tombstone the record.
-  await deps.agent.cancel(chatId)
-  await deps.agent.closeChat(chatId)
-  await deps.store.deleteChat(chatId)
-  deps.analytics.track("chat_deleted")
-  await deps.broadcast()
-  return json({ chatId, deleted: true })
+  return json(result, 202)
 }
 
 // --- dispatch -------------------------------------------------------------
@@ -387,7 +222,7 @@ async function route(req: Request, url: URL, deps: ApiRouteDeps): Promise<Respon
   } catch {
     // decodeURIComponent throws URIError on malformed input like `%ZZ`. That
     // is a bad request, not a server fault, so it must not reach the 500 path.
-    throw new ApiError(400, "Malformed percent-encoding in path")
+    throw new ControlError(400, "Malformed percent-encoding in path")
   }
 
   if (segments.length === 0) {
@@ -395,8 +230,13 @@ async function route(req: Request, url: URL, deps: ApiRouteDeps): Promise<Respon
     return handleRoot(deps)
   }
 
+  if (segments[0] === "reload" && segments.length === 1) {
+    if (req.method !== "POST") return methodNotAllowed("POST")
+    return json(await reloadFromDisk(deps))
+  }
+
   if (segments[0] === "projects" && segments.length === 1) {
-    if (req.method === "GET") return handleListProjects(deps)
+    if (req.method === "GET") return json(listProjects(deps))
     if (req.method === "POST") return await handleCreateProject(req, deps)
     return methodNotAllowed("GET, POST")
   }
@@ -411,7 +251,7 @@ async function route(req: Request, url: URL, deps: ApiRouteDeps): Promise<Respon
     const chatId = segments[1]!
     if (segments.length === 2) {
       if (req.method === "GET") return handleGetChat(url, chatId, deps)
-      if (req.method === "DELETE") return await handleDeleteChat(chatId, deps)
+      if (req.method === "DELETE") return json(await deleteChat(deps, { chatId }))
       return methodNotAllowed("GET, DELETE")
     }
 
@@ -422,7 +262,7 @@ async function route(req: Request, url: URL, deps: ApiRouteDeps): Promise<Respon
 
     if (segments.length === 3 && segments[2] === "cancel") {
       if (req.method !== "POST") return methodNotAllowed("POST")
-      return await handleCancelChat(chatId, deps)
+      return json(await cancelChat(deps, { chatId }))
     }
   }
 
@@ -450,7 +290,7 @@ export async function handleApiRequest(req: Request, url: URL, deps: ApiRouteDep
   try {
     return await route(req, url, deps)
   } catch (error) {
-    if (error instanceof ApiError) {
+    if (error instanceof ControlError) {
       return json({ error: error.message }, error.status)
     }
     // Store and agent failures surface as 500 with their message: this API is
