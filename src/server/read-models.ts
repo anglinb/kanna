@@ -275,6 +275,7 @@ export function deriveSidebarData(
           // and only the hover card reads them (`chat.getPreview`).
           ...(pendingToolKind ? { pendingToolKind } : {}),
           ...(uncommittedWork ? { uncommittedWork: true } : {}),
+          ...(chat.archivedAt ? { archivedAt: chat.archivedAt } : {}),
           hasAutomation: false,
           canFork: canForkChat(chat, activeStatuses, drainingChatIds) || undefined,
         }
