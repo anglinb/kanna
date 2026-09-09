@@ -40,6 +40,7 @@ export interface LocalHttpServerInfo {
   ownerPath?: string
   processName?: string
   sameProject?: boolean
+  publicUrl?: string
 }
 
 interface ListeningPortOwner {

@@ -38,6 +38,23 @@ export function removeCachedLocalHttpServer(port: number) {
   return nextServers
 }
 
+/**
+ * Stamp or clear the public URL on one cached row, so an expose shows up
+ * at once instead of waiting for the next poll.
+ */
+export function setCachedLocalHttpServerPublicUrl(port: number, publicUrl: string | undefined) {
+  const nextServers = (localHttpServersCache ?? []).map((server) => {
+    if (server.port !== port) return server
+    if (!publicUrl) {
+      const { publicUrl: _removed, ...rest } = server
+      return rest
+    }
+    return { ...server, publicUrl }
+  })
+  localHttpServersCache = nextServers
+  return nextServers
+}
+
 export function getCachedProjectQuickActions(projectId: string) {
   return quickActionsCacheByProjectId.get(projectId)
 }

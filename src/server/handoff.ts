@@ -211,6 +211,9 @@ export function buildHandoffContext(args: {
   let blocks: HandoffBlock[] = []
   for (const entry of args.entries) {
     if (entry.hidden) continue
+    // The main agent already received a subagent's work as the Agent tool's
+    // result, so replaying the subagent's own steps would say it twice.
+    if (entry.parentToolUseId) continue
     const block = blockFromEntry(entry)
     if (block) blocks.push({ ...block, elided: false })
   }

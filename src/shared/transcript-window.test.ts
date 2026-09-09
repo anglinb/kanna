@@ -77,6 +77,30 @@ describe("snapToRowStart", () => {
     expect(snapToRowStart(entries, 0)).toBe(0)
     expect(snapToRowStart(entries, 99)).toBe(7)
   })
+
+  test("never opens a window on a subagent's entries without their Agent row", () => {
+    const agent = () => entry("tool_call", { tool: { kind: "tool", toolKind: "subagent_task", toolName: "Agent", toolId: "a", input: {} } })
+    const child = (kind: string) => entry(kind, { parentToolUseId: "a", text: "", toolId: "t", content: "" })
+    // text, agent, [child text, child call, child result, child text], text
+    const entries = [text(), agent(), child("assistant_text"), child("tool_call"), child("tool_result"), child("assistant_text"), text()]
+    expect(snapToRowStart(entries, 5)).toBe(1)
+    expect(snapToRowStart(entries, 2)).toBe(1)
+    expect(snapToRowStart(entries, 6)).toBe(6)
+  })
+})
+
+describe("subagent entries in the window count", () => {
+  test("a subagent's text does not count as an assistant message", () => {
+    const agent = entry("tool_call", { tool: { kind: "tool", toolKind: "subagent_task", toolName: "Agent", toolId: "a", input: {} } })
+    const childText = entry("assistant_text", { text: "findings", parentToolUseId: "a" })
+    const entries = [prompt(), text(), agent, childText, childText, text()]
+    // Two assistant messages back: both main-thread texts, so the window
+    // reaches the first one (index 1) and snaps over the prompt to 0.
+    expect(findTranscriptWindowStart(entries, { endExclusive: entries.length, assistantMessages: 2 })).toBe(0)
+    // One: the last main-thread text alone (index 5); the subagent texts
+    // before it are not rows and do not stop the walk early.
+    expect(findTranscriptWindowStart(entries, { endExclusive: entries.length, assistantMessages: 1 })).toBe(5)
+  })
 })
 
 describe("buildTranscriptOutline", () => {

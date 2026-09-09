@@ -136,6 +136,39 @@ describe("normalizeClaudeStreamMessage", () => {
     expect(entries[0].tool.toolKind).toBe("bash")
   })
 
+  test("stamps a subagent's entries with the Agent call that spawned them", () => {
+    const sidechain = normalizeClaudeStreamMessage({
+      type: "assistant",
+      uuid: "msg-2",
+      parent_tool_use_id: "agent-1",
+      message: {
+        content: [
+          { type: "text", text: "Exploring." },
+          { type: "tool_use", id: "tool-2", name: "Grep", input: { pattern: "runTurn" } },
+        ],
+      },
+    })
+    expect(sidechain).toHaveLength(2)
+    expect(sidechain.every((entry) => entry.parentToolUseId === "agent-1")).toBe(true)
+
+    const sidechainResult = normalizeClaudeStreamMessage({
+      type: "user",
+      uuid: "msg-3",
+      parent_tool_use_id: "agent-1",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-2", content: "found" }] },
+    })
+    expect(sidechainResult[0]?.parentToolUseId).toBe("agent-1")
+
+    // The main thread carries null there and gets no stamp at all.
+    const main = normalizeClaudeStreamMessage({
+      type: "assistant",
+      uuid: "msg-4",
+      parent_tool_use_id: null,
+      message: { content: [{ type: "text", text: "Done." }] },
+    })
+    expect("parentToolUseId" in main[0]!).toBe(false)
+  })
+
   test("normalizes result messages", () => {
     const entries = normalizeClaudeStreamMessage({
       type: "result",

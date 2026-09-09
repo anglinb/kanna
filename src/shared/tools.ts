@@ -177,6 +177,8 @@ export function normalizeToolCall(args: {
       toolId,
       input: {
         subagentType: input.subagent_type,
+        description: typeof input.description === "string" ? input.description : undefined,
+        prompt: typeof input.prompt === "string" ? input.prompt : undefined,
       },
       rawInput: input,
     }

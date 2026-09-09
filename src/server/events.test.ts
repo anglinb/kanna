@@ -47,6 +47,15 @@ describe("cloneTranscriptEntriesForClient", () => {
     }
   })
 
+  test("drops an Agent call's prompt and keeps its description for the row title", () => {
+    const [agent] = call([
+      toolCall("subagent_task", { subagentType: "Explore", description: "Locate the loop", prompt: "x".repeat(2000) }),
+    ])
+
+    expect(inputOf(agent!)).toEqual({ subagentType: "Explore", description: "Locate the loop" })
+    expect(agent!.trimmed).toBe(true)
+  })
+
   test("leaves header-sized inputs whole and unmarked", () => {
     const [bash, read, grep] = call([
       toolCall("bash", { command: "ls -la", description: "List files", timeoutMs: 5000 }),

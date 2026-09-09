@@ -317,7 +317,19 @@ export function sameAttachmentArray(left: ChatAttachment[] | undefined, right: C
   return left.every((attachment, index) => sameAttachment(attachment, right[index]!))
 }
 
-function sameMessage(left: HydratedTranscriptMessage, right: HydratedTranscriptMessage) {
+/**
+ * A subagent's folded entries. An append or a child's result replaces the
+ * parent's list with a copy, so unchanged lists share a reference and the
+ * element walk only runs when something in the list moved.
+ */
+function sameChildren(left: HydratedTranscriptMessage[] | undefined, right: HydratedTranscriptMessage[] | undefined): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  if (left.length !== right.length) return false
+  return left.every((message, index) => sameMessage(message, right[index]!))
+}
+
+function sameMessage(left: HydratedTranscriptMessage, right: HydratedTranscriptMessage): boolean {
   if (left === right) return true
   if (left.kind !== right.kind || left.id !== right.id || left.hidden !== right.hidden) return false
 
@@ -351,6 +363,7 @@ function sameMessage(left: HydratedTranscriptMessage, right: HydratedTranscriptM
         // this is exact — and O(1) rather than stringifying every tool result
         // in the window on each snapshot push.
         && left.resultEntryId === right.resultEntryId
+        && sameChildren(left.children, right.children)
     case "result":
       return right.kind === "result"
         && left.success === right.success

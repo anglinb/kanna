@@ -51,6 +51,7 @@ import {
 } from "./attribution"
 import {
   applyClaudeSdkModels,
+  applyCodexModels,
   applyCursorModels,
   type ClaudeSdkModelInfo,
   cursorModelIdForOptions,
@@ -452,6 +453,21 @@ export function normalizeClaudeStreamMessage(
     structuredToolIds?: ReadonlySet<string>
   }
 ): TranscriptEntry[] {
+  const entries = normalizeClaudeStreamMessageEntries(message, options)
+  // Subagent (sidechain) messages arrive on the same iterator as the main
+  // thread, told apart only by this id. Stamp it on everything the message
+  // produced so readers can fold the subagent's work under its Agent row.
+  const parentToolUseId = typeof message?.parent_tool_use_id === "string" && message.parent_tool_use_id
+    ? message.parent_tool_use_id
+    : undefined
+  if (!parentToolUseId) return entries
+  return entries.map((entry) => ({ ...entry, parentToolUseId }))
+}
+
+function normalizeClaudeStreamMessageEntries(
+  message: any,
+  options?: { structuredToolIds?: ReadonlySet<string> }
+): TranscriptEntry[] {
   // Raw SDK JSON is kept only on system_init, for the raw JSON view. Tool
   // results used to carry it too, so `tool_use_result` could be lifted out
   // later; that copy held every screenshot twice and grew chats past 100 MB
@@ -785,6 +801,11 @@ async function startClaudeSession(args: {
       // MCP tools are not filtered by `tools` above — that option selects
       // built-ins only — so these arrive callable without an allowlist entry.
       ...(args.mcpServers ? { mcpServers: args.mcpServers } : {}),
+      // By default the SDK forwards only a subagent's tool calls. Its text
+      // (what it is doing, and its final report) completes the nested view
+      // under the Agent row; the normalizer stamps it with parent_tool_use_id
+      // like the rest.
+      forwardSubagentText: true,
       settingSources: ["user", "project", "local"],
       // Append-only: the claude_code preset stays intact, Kanna's git
       // attribution rides on the end of it (see attribution.ts).
@@ -903,6 +924,7 @@ export class AgentCoordinator {
   private readonly pendingTitleGeneration = new Map<string, Promise<void>>()
   /** Chats the post-turn title refiner has already looked at this process. */
   private readonly refinedTitles = new Set<string>()
+  private codexModelCatalogRefresh: Promise<void> | null = null
   readonly activeTurns = new Map<string, ActiveTurn>()
   readonly drainingStreams = new Map<string, { turn: HarnessTurn }>()
   readonly claudeSessions = new Map<string, ClaudeSessionState>()
@@ -1035,6 +1057,33 @@ export class AgentCoordinator {
     } catch {
       // Keep the static fallback catalog; the next cursor turn retries.
     }
+  }
+
+  /**
+   * Overlay the account's live Codex model list (app-server `model/list`) on
+   * the catalog — the Codex analog of refreshCursorModelCatalog. Unlike the
+   * Cursor one this runs on every codex turn, not once: OpenAI adds models to
+   * an account without a codex upgrade, and the turn's own app-server process
+   * answers the request, so the repeat costs no extra spawn. Startup and
+   * sign-in go through a short-lived probe. Failure is expected — codex
+   * missing, signed out, or too old for model/list — so it stays quiet and
+   * the static catalog remains in place. Concurrent callers share one fetch.
+   */
+  refreshCodexModelCatalog(): Promise<void> {
+    if (this.codexModelCatalogRefresh) return this.codexModelCatalogRefresh
+    this.codexModelCatalogRefresh = (async () => {
+      try {
+        const models = await this.codexManager.listModels(homedir())
+        if (models && applyCodexModels(models)) {
+          this.emitStateChange(undefined, { immediate: true })
+        }
+      } catch {
+        // Keep the static fallback catalog; the next codex turn retries.
+      } finally {
+        this.codexModelCatalogRefresh = null
+      }
+    })()
+    return this.codexModelCatalogRefresh
   }
 
 
@@ -1524,6 +1573,8 @@ export class AgentCoordinator {
       if (chat.pendingForkSessionToken && started?.sessionToken) {
         await this.store.setPendingForkSessionToken(args.chatId, null)
       }
+      // Off the turn's critical path; the session just started answers it.
+      void this.refreshCodexModelCatalog()
       turn = await this.codexManager.startTurn({
         chatId: args.chatId,
         content: buildPromptText(wireContent, args.attachments),

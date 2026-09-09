@@ -278,6 +278,79 @@ describe("processTranscriptMessages", () => {
   })
 })
 
+describe("processTranscriptMessages subagents", () => {
+  const agentCall = (toolId: string) => entry({
+    kind: "tool_call",
+    tool: { kind: "tool", toolKind: "subagent_task", toolName: "Agent", toolId, input: { subagentType: "Explore" } },
+  })
+  const childCall = (toolId: string, parentToolUseId: string) => entry({
+    kind: "tool_call",
+    parentToolUseId,
+    tool: { kind: "tool", toolKind: "grep", toolName: "Grep", toolId, input: { pattern: "x" } },
+  })
+  const childText = (text: string, parentToolUseId: string) => entry({ kind: "assistant_text", text, parentToolUseId })
+  const agentRow = (messages: ReturnType<typeof processTranscriptMessages>, index = 0) => {
+    const message = messages[index]
+    if (message?.kind !== "tool" || message.toolKind !== "subagent_task") throw new Error("unexpected message")
+    return message
+  }
+
+  test("folds a subagent's entries under its Agent row instead of the main list", () => {
+    const messages = processTranscriptMessages([
+      agentCall("agent-1"),
+      // A background agent's result lands before its work does.
+      entry({ kind: "tool_result", toolId: "agent-1", content: "running in background" }),
+      childText("Exploring.", "agent-1"),
+      childCall("grep-1", "agent-1"),
+      entry({ kind: "tool_result", toolId: "grep-1", content: "found", parentToolUseId: "agent-1" }),
+      childText("Findings.", "agent-1"),
+      entry({ kind: "assistant_text", text: "The agent found it." }),
+    ])
+
+    expect(messages.map((message) => message.kind)).toEqual(["tool", "assistant_text"])
+    const agent = agentRow(messages)
+    expect(agent.result).toBe("running in background")
+    expect(agent.children?.map((child) => child.kind)).toEqual(["assistant_text", "tool", "assistant_text"])
+    const grep = agent.children?.[1]
+    if (grep?.kind !== "tool") throw new Error("unexpected child")
+    expect(grep.result).toBe("found")
+    expect(grep.resultEntryId).toBeDefined()
+  })
+
+  test("an entry whose parent is not in the window stays inline", () => {
+    const messages = processTranscriptMessages([
+      childText("orphan", "agent-missing"),
+      childCall("grep-1", "agent-missing"),
+      entry({ kind: "tool_result", toolId: "grep-1", content: "found", parentToolUseId: "agent-missing" }),
+    ])
+
+    expect(messages.map((message) => message.kind)).toEqual(["assistant_text", "tool"])
+    if (messages[1]?.kind !== "tool") throw new Error("unexpected message")
+    expect(messages[1].result).toBe("found")
+  })
+
+  test("an appended child replaces the parent with a copy and reuses the rest", () => {
+    const first = [entry({ kind: "assistant_text", text: "a" }), agentCall("agent-1"), childCall("grep-1", "agent-1")]
+    const previous = processTranscriptMessages(first)
+    const parentBefore = agentRow(previous, 1)
+    const grepBefore = parentBefore.children?.[0]
+
+    const next = processTranscriptMessages(
+      [...first, entry({ kind: "tool_result", toolId: "grep-1", content: "found", parentToolUseId: "agent-1" })],
+      previous,
+    )
+
+    expect(next).toHaveLength(2)
+    expect(next[0]).toBe(previous[0])
+    const parentAfter = agentRow(next, 1)
+    expect(parentAfter).not.toBe(parentBefore)
+    expect(parentAfter.children?.[0]).not.toBe(grepBefore)
+    if (grepBefore?.kind !== "tool") throw new Error("unexpected child")
+    expect(grepBefore.result).toBeUndefined()
+    expect(parentBefore.children).toHaveLength(1)
+  })
+})
+
 describe("getLatestToolIds", () => {
   test("returns the latest unresolved special tool ids", () => {
     const messages = processTranscriptMessages([

@@ -53,6 +53,12 @@ export function snapToRowStart(entries: readonly TranscriptEntry[], start: numbe
   while (cut > 0) {
     const previous = entries[cut - 1]!
     const current = entries[cut]
+    // A subagent's entries render inside the Agent row that spawned them,
+    // so a cut among them would open the window on children with no parent.
+    if (current?.parentToolUseId) {
+      cut -= 1
+      continue
+    }
     if (current && isToolEntry(previous) && isToolEntry(current)) {
       cut -= 1
       continue
@@ -99,7 +105,9 @@ export function findTranscriptWindowStart(entries: readonly TranscriptEntry[], o
   for (let index = end - 1; index >= 0; index -= 1) {
     const entry = entries[index]!
     bytes += measure(entry)
-    if (entry.kind === "assistant_text") {
+    // Subagent text is not a row of its own (it folds under its Agent row),
+    // so it does not count toward the window.
+    if (entry.kind === "assistant_text" && !entry.parentToolUseId) {
       seen += 1
       lastAssistantIndex = index
       if (seen >= wanted) {

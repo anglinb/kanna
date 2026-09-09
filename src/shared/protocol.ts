@@ -37,6 +37,8 @@ export interface LocalHttpServerInfo {
   ownerPath?: string
   processName?: string
   sameProject?: boolean
+  /** Public https URL of the cloudflared tunnel, when the port is exposed. */
+  publicUrl?: string
 }
 
 export interface ProjectQuickAction {
@@ -127,6 +129,8 @@ export type ClientCommand =
   | { type: "fs.mkdir"; path: string }
   | { type: "browser.listLocalHttpServers"; projectId?: string }
   | { type: "browser.killLocalHttpServer"; port: number }
+  | { type: "browser.exposeLocalHttpServer"; port: number }
+  | { type: "browser.unexposeLocalHttpServer"; port: number }
   | { type: "project.readQuickActions"; projectId: string }
   | { type: "project.writeQuickActions"; projectId: string; quickActions: ProjectQuickAction[] }
   | { type: "update.check"; force?: boolean }

@@ -43,6 +43,7 @@ import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
+import { PortTunnelManager } from "./port-tunnels"
 import { TerminalManager } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
@@ -232,6 +233,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     void turnFiles.endTurn(chatId).finally(() => worktreeProbe.refreshForChat(chatId))
   }
   const terminals = new TerminalManager()
+  const portTunnels = new PortTunnelManager({
+    log: (message) => console.log(`${LOG_PREFIX} ${message}`),
+  })
   const keybindings = new KeybindingsManager()
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
@@ -316,10 +320,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     trackEvent: analytics.track.bind(analytics),
     onSignedIn: (service) => {
       // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
-      // flip from auth → usage) and the live Cursor model catalog.
+      // flip from auth → usage) and the live Cursor/Codex model catalogs.
       void usageLimits.refresh({ force: true }).catch(() => undefined)
       if (service === "cursor") {
         void agent.refreshCursorModelCatalog()
+      }
+      if (service === "codex") {
+        void agent.refreshCodexModelCatalog()
       }
       if (service === "gh") {
         // Never let a cached "unauthenticated" repo list outlive the sign-in
@@ -335,6 +342,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     worktreeProbe,
     agent,
     terminals,
+    portTunnels,
     keybindings,
     appSettings,
     analytics,
@@ -347,7 +355,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     refreshDiscovery,
     refreshInstalledEditors: () => {
       void refreshInstalledEditors(appSettings)
-  void refreshInstalledTerminals(appSettings)
+      void refreshInstalledTerminals(appSettings)
     },
     getDiscoveredProjects: () => discoveredProjects,
     machineDisplayName,
@@ -372,9 +380,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // the loopback API through `kanna mcp`.
   agent.setKannaMcpServerFactory((chatId) => createClaudeKannaMcpServer(controlDeps, chatId))
 
-  // Overlay the account's live Cursor model list on the static catalog
-  // (no-op when cursor-agent is missing or logged out); broadcasts on change.
+  // Overlay the account's live Cursor and Codex model lists on the static
+  // catalog (no-op when the CLI is missing or logged out); broadcasts on change.
   void agent.refreshCursorModelCatalog()
+  void agent.refreshCodexModelCatalog()
   // Seed the pi provider's model picker from saved fave models before the
   // first snapshots go out.
   void readLlmProviderSnapshot()
@@ -820,6 +829,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     // The internal key dies with this process, so leaving credential files
     // behind would only leave stale ones for the next run to ignore.
     await mcpBridge.dispose().catch(() => undefined)
+    portTunnels.stopAll()
     await store.compact()
     server.stop(true)
   }

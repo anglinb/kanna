@@ -7,6 +7,8 @@ import { isTokenShareMode } from "../shared/share"
 export interface StartedShareTunnel {
   publicUrl: string | null
   stop: () => void
+  /** Resolves when the cloudflared process exits, for any reason. */
+  exited?: Promise<void>
 }
 
 export interface ShareTunnelProcess {
@@ -122,12 +124,16 @@ export async function startShareTunnel(
     ? (deps.createNamedTunnel ?? createNamedTunnel)(shareMode.token, localUrl)
     : (deps.createQuickTunnel ?? ((url) => Tunnel.quick(url)))(localUrl)
   const publicUrl = await awaitTunnelReady(tunnel, { expectUrl: !namedTunnel })
+  const exited = new Promise<void>((resolve) => {
+    tunnel.once("exit", () => resolve())
+  })
 
   return {
     publicUrl,
     stop: () => {
       tunnel.stop()
     },
+    exited,
   }
 }
 

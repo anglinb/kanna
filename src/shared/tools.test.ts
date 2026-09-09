@@ -22,6 +22,26 @@ describe("normalizeToolCall", () => {
     expect(tool.input.questions[0]?.question).toBe("Which runtime?")
   })
 
+  test("keeps an Agent call's description and prompt", () => {
+    const tool = normalizeToolCall({
+      toolName: "Agent",
+      toolId: "tool-9",
+      input: {
+        subagent_type: "Explore",
+        description: "Locate the loop",
+        prompt: "Find the agent loop in src/worker.",
+      },
+    })
+
+    expect(tool.toolKind).toBe("subagent_task")
+    if (tool.toolKind !== "subagent_task") throw new Error("unexpected tool kind")
+    expect(tool.input).toEqual({
+      subagentType: "Explore",
+      description: "Locate the loop",
+      prompt: "Find the agent loop in src/worker.",
+    })
+  })
+
   test("maps Bash snake_case input to camelCase", () => {
     const tool = normalizeToolCall({
       toolName: "Bash",

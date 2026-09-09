@@ -13,9 +13,10 @@ import { EventStore } from "./event-store"
 import { openExternal } from "./external-open"
 import { KeybindingsManager } from "./keybindings"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
+import type { PortTunnelManager } from "./port-tunnels"
 import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath, resolveLocalPath } from "./paths"
 import { listRecentGitHubRepos } from "./github"
-import { applyPiFaveModels } from "./provider-catalog"
+import { SERVER_PROVIDERS, applyPiFaveModels } from "./provider-catalog"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
 import { writeStandaloneTranscriptExport } from "./standalone-export"
@@ -65,6 +66,12 @@ export interface ClientState {
    * against.
    */
   chatOutlineCounts?: Map<string, number>
+  /**
+   * Serialized provider catalog last sent per chat subscription. The catalog
+   * changes at runtime (models discovered from the harnesses), so an
+   * incremental push carries it whenever this differs from what is current.
+   */
+  chatProvidersSent?: Map<string, string>
   protectedDraftChatIds?: Set<string>
 }
 
@@ -74,6 +81,7 @@ interface CreateWsRouterArgs {
   worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels" | "getProjectsWithoutRepo">
   agent: AgentCoordinator
   terminals: TerminalManager
+  portTunnels?: Pick<PortTunnelManager, "expose" | "unexpose" | "getPublicUrl">
   keybindings: KeybindingsManager
   appSettings: Pick<AppSettingsManager, "getSnapshot" | "write" | "writePatch" | "onChange">
   analytics?: AnalyticsReporter
@@ -166,6 +174,14 @@ function ensureChatEntrySpans(ws: ServerWebSocket<ClientState>) {
   return ws.data.chatEntrySpans
 }
 
+function ensureChatProvidersSent(ws: ServerWebSocket<ClientState>) {
+  if (!ws.data.chatProvidersSent) {
+    ws.data.chatProvidersSent = new Map()
+  }
+
+  return ws.data.chatProvidersSent
+}
+
 function ensureSnapshotSignatures(ws: ServerWebSocket<ClientState>) {
   if (!ws.data.snapshotSignatures) {
     ws.data.snapshotSignatures = new Map()
@@ -180,6 +196,7 @@ export function createWsRouter({
   worktreeProbe,
   agent,
   terminals,
+  portTunnels,
   keybindings,
   appSettings,
   analytics,
@@ -420,7 +437,10 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "app-settings",
-          data: appSettings.getSnapshot(),
+          // The live provider catalog rides along so pickers outside a chat
+          // (new-chat composer, settings defaults) see runtime-discovered
+          // models; chat snapshots carry the same list.
+          data: { ...appSettings.getSnapshot(), availableProviders: [...SERVER_PROVIDERS] },
         },
       }
     }
@@ -694,16 +714,27 @@ export function createWsRouter({
         const data = full ? sliceChatWindow(full, getChatWindowStart(ws, id, topic.chatId)) : full
         const spans = ensureChatEntrySpans(ws)
         const outlineCounts = ensureChatOutlineCounts(ws)
+        const providersSent = ensureChatProvidersSent(ws)
         let body = toSocketChatSnapshot(data, spans.get(id))
         // The outline is a few KB and would otherwise ride every streamed
         // push; an incremental body carries it only when a prompt was added.
         const outlineCount = data?.outline?.length ?? 0
+        const providersJson = JSON.stringify(data?.availableProviders ?? null)
         if (body?.incremental) {
-          // Same for the provider catalog and the read anchor: a few KB that
-          // never change mid-chat, and the client latches both from the
-          // first full snapshot (`foldChatSnapshot` carries them forward).
-          const { availableProviders, readAnchor, ...rest } = body
+          // The read anchor never changes mid-chat, and the client latches it
+          // from the first full snapshot (`foldChatSnapshot` carries it forward).
+          const { readAnchor, ...rest } = body
           body = rest as typeof body
+          // The provider catalog is a few KB too, but it is not fixed: the
+          // server discovers models at runtime (applyCodexModels and friends).
+          // It rides an incremental push whenever this subscription has not
+          // sent this exact list — the first push after a client subscribed
+          // with a cached span, whose cache may hold an old catalog, and a
+          // change while the chat is open.
+          if (providersSent.get(id) === providersJson) {
+            const { availableProviders, ...withoutProviders } = body
+            body = withoutProviders as typeof body
+          }
           if (outlineCounts.get(id) === outlineCount) {
             const { outline, ...withoutOutline } = body
             body = withoutOutline as typeof body
@@ -719,9 +750,11 @@ export function createWsRouter({
         if (data) {
           spans.set(id, { start: data.startIndex, end: data.startIndex + data.messages.length })
           outlineCounts.set(id, outlineCount)
+          providersSent.set(id, providersJson)
         } else {
           spans.delete(id)
           outlineCounts.delete(id)
+          providersSent.delete(id)
         }
         sendSerializedSnapshot(ws, id, snapshotJson)
         continue
@@ -1017,15 +1050,34 @@ export function createWsRouter({
         }
         case "browser.listLocalHttpServers": {
           const project = command.projectId ? store.getProject(command.projectId) : null
-          const result = await listLocalHttpServers({
+          const servers = await listLocalHttpServers({
             projectPath: project?.localPath,
             projectTerminalRootPids: project ? terminals.getRootPidsByCwd(project.localPath) : [],
+          })
+          // The scan result is cached for 30 s; the tunnel URL is stamped on
+          // afterwards so an expose shows up on the next poll, not the next scan.
+          const result = servers.map((server) => {
+            const publicUrl = portTunnels?.getPublicUrl(server.port)
+            return publicUrl ? { ...server, publicUrl } : server
           })
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "browser.killLocalHttpServer": {
           const result = await killLocalHttpServer(command.port)
+          portTunnels?.unexpose(command.port)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "browser.exposeLocalHttpServer": {
+          if (!portTunnels) throw new Error("Port tunnels are not available.")
+          const result = await portTunnels.expose(command.port)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "browser.unexposeLocalHttpServer": {
+          if (!portTunnels) throw new Error("Port tunnels are not available.")
+          const result = portTunnels.unexpose(command.port)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }

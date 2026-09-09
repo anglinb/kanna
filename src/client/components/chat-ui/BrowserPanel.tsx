@@ -1,4 +1,4 @@
-import { CornerDownLeft, Ellipsis, ExternalLink, Globe, Home, Minus, Play, Plus, RefreshCw, SquareArrowOutUpRight, Trash2, Zap } from "lucide-react"
+import { Copy, CornerDownLeft, Ellipsis, ExternalLink, Globe, GlobeLock, Home, Loader2, Minus, Play, Plus, RefreshCw, SquareArrowOutUpRight, Trash2, Zap } from "lucide-react"
 import { memo, useCallback, useEffect, useRef, useState, type FocusEvent, type FormEvent, type ReactNode } from "react"
 import type { LocalHttpServerInfo, ProjectQuickAction } from "../../../shared/protocol"
 import type { KannaSocket } from "../../app/socket"
@@ -8,9 +8,11 @@ import {
   refreshCachedLocalHttpServers,
   refreshCachedProjectQuickActions,
   removeCachedLocalHttpServer,
+  setCachedLocalHttpServerPublicUrl,
   writeCachedProjectQuickActions,
 } from "../../lib/browserPanelCache"
 import { formatPathWithTilde } from "../../lib/pathUtils"
+import { useConnectionStore } from "../../stores/connectionStore"
 import { useRightSidebarStore } from "../../stores/rightSidebarStore"
 import { openContextMenuFromButton } from "../open-external-menu"
 import { Button } from "../ui/button"
@@ -70,6 +72,12 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
   const [isAddingQuickAction, setIsAddingQuickAction] = useState(false)
   const [isZoomTooltipOpen, setIsZoomTooltipOpen] = useState(false)
   const [showOtherServers, setShowOtherServers] = useState(false)
+  const [exposingPorts, setExposingPorts] = useState<ReadonlySet<number>>(() => new Set())
+  // In cloud mode the viewer's browser cannot reach localhost on the machine,
+  // so a row opens through its cloudflared URL and exposes the port on demand.
+  const connectionMode = useConnectionStore((store) => store.mode)
+  const loadConnectionMode = useConnectionStore((store) => store.load)
+  const isCloud = connectionMode === "cloud"
   const postRunRefreshTimeoutsRef = useRef<number[]>([])
   const projectServers = localServers.filter((server) => server.sameProject)
   const otherServers = localServers.filter((server) => !server.sameProject)
@@ -99,6 +107,46 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
       .then(() => refreshLocalServers({ silent: true }))
       .catch((error) => setServerError(error instanceof Error ? error.message : String(error)))
   }, [refreshLocalServers, socket])
+
+  const exposeServer = useCallback(async (server: LocalHttpServerInfo) => {
+    if (server.publicUrl) return server.publicUrl
+    setExposingPorts((current) => new Set(current).add(server.port))
+    setServerError(null)
+    try {
+      const result = await socket.command<{ port: number; publicUrl: string }>({
+        type: "browser.exposeLocalHttpServer",
+        port: server.port,
+      })
+      setLocalServers(setCachedLocalHttpServerPublicUrl(server.port, result.publicUrl))
+      return result.publicUrl
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : String(error))
+      return null
+    } finally {
+      setExposingPorts((current) => {
+        const next = new Set(current)
+        next.delete(server.port)
+        return next
+      })
+    }
+  }, [socket])
+
+  const unexposeServer = useCallback((server: LocalHttpServerInfo) => {
+    setLocalServers(setCachedLocalHttpServerPublicUrl(server.port, undefined))
+    void socket.command({ type: "browser.unexposeLocalHttpServer", port: server.port })
+      .catch((error) => setServerError(error instanceof Error ? error.message : String(error)))
+  }, [socket])
+
+  const openServer = useCallback(async (server: LocalHttpServerInfo) => {
+    if (!isCloud) {
+      navigateBrowser(projectId, server.address)
+      return
+    }
+    const publicUrl = await exposeServer(server)
+    if (publicUrl) {
+      navigateBrowser(projectId, publicUrl)
+    }
+  }, [exposeServer, isCloud, navigateBrowser, projectId])
 
   const writeQuickActions = useCallback((actions: ProjectQuickAction[]) => {
     setQuickActions(actions)
@@ -144,6 +192,12 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
   useEffect(() => {
     setAddressDraft(address)
   }, [address])
+
+  useEffect(() => {
+    if (connectionMode === "unknown") {
+      void loadConnectionMode()
+    }
+  }, [connectionMode, loadConnectionMode])
 
   useEffect(() => {
     if (address) return
@@ -394,17 +448,21 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    {visibleServers.map((server) => (
+                    {visibleServers.map((server) => {
+                      const isExposing = exposingPorts.has(server.port)
+                      const openUrl = isCloud && server.publicUrl ? server.publicUrl : server.address
+                      return (
                       <ContextMenu key={server.address}>
                         <ContextMenuTrigger asChild>
                           <div
                             role="button"
                             tabIndex={0}
-                            onClick={() => navigateBrowser(projectId, server.address)}
+                            aria-busy={isExposing}
+                            onClick={() => void openServer(server)}
                             onKeyDown={(event) => {
                               if (event.key !== "Enter" && event.key !== " ") return
                               event.preventDefault()
-                              navigateBrowser(projectId, server.address)
+                              void openServer(server)
                             }}
                             className="flex w-full min-w-0 cursor-pointer flex-col rounded-xl border border-border/70 px-3 py-1.5 pb-2.5 text-left outline-none hover:border-border hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                           >
@@ -412,6 +470,11 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
                               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                                 <span className="min-w-0 truncate text-sm font-medium text-foreground">{server.title}</span>
                                 {server.sameProject ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" /> : null}
+                                {isExposing ? (
+                                  <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" aria-label="Exposing" />
+                                ) : server.publicUrl ? (
+                                  <Globe className="h-3 w-3 shrink-0 text-sky-400" aria-label="Exposed to the internet" />
+                                ) : null}
                               </span>
                               <Button
                                 type="button"
@@ -426,7 +489,9 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
                               </Button>
                             </span>
                             <span className="flex w-full min-w-0 items-center gap-3">
-                              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{server.address}</span>
+                              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                                {isExposing ? "Exposing…" : server.publicUrl ?? server.address}
+                              </span>
                               {server.ownerPath ? (
                                 <span className="max-w-[45%] shrink-0 truncate text-right text-[11px] text-muted-foreground/70">{formatPathWithTilde(server.ownerPath)}</span>
                               ) : null}
@@ -437,12 +502,45 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
                           <ContextMenuItem
                             onSelect={(event) => {
                               event.preventDefault()
-                              window.open(server.address, "_blank", "noopener,noreferrer")
+                              window.open(openUrl, "_blank", "noopener,noreferrer")
                             }}
                           >
                             <SquareArrowOutUpRight className="h-3.5 w-3.5" />
                             <span>Open in New Tab</span>
                           </ContextMenuItem>
+                          {server.publicUrl ? (
+                            <>
+                              <ContextMenuItem
+                                onSelect={(event) => {
+                                  event.preventDefault()
+                                  void navigator.clipboard?.writeText(server.publicUrl ?? "")
+                                }}
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                <span>Copy Public URL</span>
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                onSelect={(event) => {
+                                  event.preventDefault()
+                                  unexposeServer(server)
+                                }}
+                              >
+                                <GlobeLock className="h-3.5 w-3.5" />
+                                <span>Stop Exposing</span>
+                              </ContextMenuItem>
+                            </>
+                          ) : (
+                            <ContextMenuItem
+                              disabled={isExposing}
+                              onSelect={(event) => {
+                                event.preventDefault()
+                                void exposeServer(server)
+                              }}
+                            >
+                              <Globe className="h-3.5 w-3.5" />
+                              <span>Expose to Internet</span>
+                            </ContextMenuItem>
+                          )}
                           <ContextMenuItem
                             onSelect={(event) => {
                               event.preventDefault()
@@ -455,7 +553,8 @@ function BrowserPanelImpl({ projectId, socket, onRunQuickAction }: BrowserPanelP
                           </ContextMenuItem>
                         </ContextMenuContent>
                       </ContextMenu>
-                    ))}
+                      )
+                    })}
                     {otherServers.length > 0 && !shouldAutoShowOtherServers ? (
                       <Button
                         type="button"

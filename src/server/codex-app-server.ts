@@ -22,6 +22,7 @@ import {
   type CollabAgentToolCallItem,
   type ContextCompactedNotification,
   type CodexError,
+  type CodexModelSummary,
   type CodexRateLimitSnapshot,
   type CodexRequestId,
   type GetAccountRateLimitsResponse,
@@ -44,6 +45,8 @@ import {
   type PlanDeltaNotification,
   type ServerNotification,
   type ServerRequest,
+  type ModelListParams,
+  type ModelListResponse,
   type SkillsListParams,
   type SkillsListResponse,
   type ThreadItem,
@@ -395,6 +398,7 @@ function collabToolCall(item: CollabAgentToolCallItem): TranscriptEntry {
       toolId: item.id,
       input: {
         subagentType: item.tool,
+        ...(typeof item.prompt === "string" ? { prompt: item.prompt } : {}),
       },
       rawInput: item as unknown as Record<string, unknown>,
     },
@@ -792,6 +796,47 @@ export class CodexAppServerManager {
   }
 
   private async probeAccountRateLimits(cwd: string): Promise<GetAccountRateLimitsResponse | null> {
+    return await this.withProbe(cwd, (context) =>
+      this.sendRequest<GetAccountRateLimitsResponse>(context, "account/rateLimits/read", {}))
+  }
+
+  /**
+   * The models the signed-in account can run, from `model/list`. Reuses a
+   * live session's app-server process when one exists; otherwise spawns a
+   * short-lived probe. Hidden rows (internal models the picker should not
+   * show) are left out. Returns null only when Codex is unusable (binary
+   * missing). Throws on protocol errors, including "method not found" from a
+   * codex older than model/list — callers keep the static catalog then.
+   */
+  async listModels(probeCwd: string): Promise<CodexModelSummary[] | null> {
+    for (const context of this.sessions.values()) {
+      if (context.closed) continue
+      return await this.requestModelList(context)
+    }
+    return await this.withProbe(probeCwd, (context) => this.requestModelList(context))
+  }
+
+  private async requestModelList(context: SessionContext): Promise<CodexModelSummary[]> {
+    const models: CodexModelSummary[] = []
+    let cursor: string | null | undefined
+    do {
+      const response = await this.sendRequest<ModelListResponse>(
+        context,
+        "model/list",
+        (cursor ? { cursor } : {}) satisfies ModelListParams,
+      )
+      models.push(...(response.data ?? []).filter((model) => !model.hidden))
+      cursor = response.nextCursor
+    } while (cursor)
+    return models
+  }
+
+  /**
+   * Run one request against a throwaway app-server process: spawn,
+   * handshake, `run`, then kill. Account-level reads (rate limits, the model
+   * list) use this when no chat has a live process to piggyback on.
+   */
+  private async withProbe<T>(cwd: string, run: (context: SessionContext) => Promise<T>): Promise<T | null> {
     let child: CodexAppServerProcess
     try {
       child = this.spawnProcess(cwd)
@@ -799,7 +844,7 @@ export class CodexAppServerManager {
       return null
     }
     const context: SessionContext = {
-      chatId: `usage-probe-${randomUUID()}`,
+      chatId: `probe-${randomUUID()}`,
       cwd,
       child,
       pendingRequests: new Map(),
@@ -815,11 +860,7 @@ export class CodexAppServerManager {
         capabilities: { experimentalApi: true },
       } satisfies InitializeParams)
       this.writeMessage(context, { method: "initialized" })
-      return await this.sendRequest<GetAccountRateLimitsResponse>(
-        context,
-        "account/rateLimits/read",
-        {},
-      )
+      return await run(context)
     } finally {
       context.closed = true
       try {

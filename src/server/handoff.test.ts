@@ -69,6 +69,30 @@ describe("buildHandoffContext", () => {
     expect(context!.stats.elidedToolResults).toBe(0)
   })
 
+  test("skips a subagent's own entries; the Agent result already carries them", () => {
+    const context = build([
+      userPrompt("find the loop"),
+      toolCall("Agent", { subagent_type: "Explore", prompt: "find it" }),
+      timestamped({ kind: "assistant_text", text: "Exploring.", parentToolUseId: "tool-Agent" }),
+      timestamped({
+        kind: "tool_call",
+        parentToolUseId: "tool-Agent",
+        tool: normalizeToolCall({ toolName: "Grep", toolId: "tool-grep", input: { pattern: "runTurn" } }),
+      }),
+      timestamped({ kind: "tool_result", toolId: "tool-grep", content: "durable.ts:5077", parentToolUseId: "tool-Agent" }),
+      timestamped({ kind: "tool_result", toolId: "tool-Agent", content: "The loop is at durable.ts:5077" }),
+      assistantText("Found it."),
+    ])
+
+    expect(context).not.toBeNull()
+    const text = context!.text
+    expect(text).toContain("--- assistant tool call: Agent ---")
+    expect(text).toContain("The loop is at durable.ts:5077")
+    expect(text).not.toContain("Exploring.")
+    expect(text).not.toContain("--- assistant tool call: Grep ---")
+    expect(context!.stats.includedEntries).toBe(4)
+  })
+
   test("skips plumbing entries, hidden entries, and successful results", () => {
     const context = build([
       timestamped({ kind: "system_init", provider: "claude", model: "m", tools: [], agents: [], slashCommands: [], mcpServers: [] }),

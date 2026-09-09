@@ -1090,7 +1090,8 @@ export class EventStore {
         const preview = buildChatMessagePreview(entry.content)
         if (preview) chat.lastUserMessagePreview = preview
       }
-    } else if (entry.kind === "assistant_text" && !entry.hidden) {
+    } else if (entry.kind === "assistant_text" && !entry.hidden && !entry.parentToolUseId) {
+      // A subagent's text is not the reply; the main agent's next text is.
       const preview = buildChatMessagePreview(entry.text)
       if (preview) {
         chat.lastAgentMessagePreview = preview

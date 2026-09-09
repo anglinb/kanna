@@ -454,6 +454,7 @@ export const UNBOUNDED_TOOL_INPUT_FIELDS: Readonly<Record<string, readonly strin
   write_file: ["content"],
   delete_file: ["content"],
   edit_file: ["oldString", "newString"],
+  subagent_task: ["prompt"],
   mcp_generic: ["payload"],
   unknown_tool: ["payload"],
 }
