@@ -195,6 +195,12 @@ export function buildTerminalCommand(args: {
   const spec = TERMINAL_SPECS[preset]
 
   if (platform === "darwin") {
+    // Terminal.app ships with macOS. Build this deterministic default without
+    // probing the host running the test (which may be Linux while exercising
+    // the macOS command path).
+    if (preset === "terminal") {
+      return { command: "open", args: ["-a", spec.macApp, localPath] }
+    }
     if (!canOpenMacApp(spec.macApp)) {
       // Fall through to the CLI when one exists — a Homebrew install without
       // an app bundle still works.
@@ -205,7 +211,6 @@ export function buildTerminalCommand(args: {
     }
     switch (preset) {
       // Terminal, iTerm, Warp and Hyper open a path handed to them directly.
-      case "terminal":
       case "iterm":
       case "warp":
       case "hyper":
