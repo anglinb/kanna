@@ -1,4 +1,4 @@
-import { captureBackupFiles } from "./backup-files"
+import { prepareBackupFiles } from "./backup-files"
 import type { PerformanceLog } from "./performance-log"
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { existsSync, readFileSync as readFileSyncImmediate } from "node:fs"
@@ -2300,11 +2300,12 @@ export class EventStore {
       if (this.legacyMessagesByChatId.size) {
         snapshot.messages = [...this.legacyMessagesByChatId].map(([chatId, entries]) => ({ chatId, entries }))
       }
-      captureBackupFiles(this.dataDir, destination, snapshot)
+      return prepareBackupFiles(this.dataDir, destination, snapshot)
     })
     // A backup disk error must not poison subsequent chat writes.
-    this.writeChain = capture.catch(() => undefined)
-    await capture
+    this.writeChain = capture.then(() => undefined, () => undefined)
+    const copy = await capture
+    await copy()
   }
 
   private createSnapshot(): SnapshotFile {

@@ -35,14 +35,14 @@ export async function handleBackupRequest(req: Request, manager: R2BackupManager
       const { url: authorizationUrl, browser } = manager.beginOAuth(expectedOrigin)
       const secure = expectedOrigin.startsWith("https:") ? "; Secure" : ""
       return json({ url: authorizationUrl }, 200, {
-        "Set-Cookie": `${COOKIE}=${browser}; HttpOnly; SameSite=Lax; Path=/api/backups; Max-Age=600${secure}`,
+        "Set-Cookie": `${COOKIE}_${new URL(authorizationUrl).searchParams.get("state")}=${browser}; HttpOnly; SameSite=Lax; Path=/api/backups; Max-Age=600${secure}`,
       })
     }
     if (url.pathname === `${PREFIX}/oauth/complete`) {
       const input = z.object({ code: z.string().min(1).max(4096), state: z.string().min(1).max(256) }).parse(await req.json())
-      const cookie = req.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1) ?? ""
+      const cookie = req.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}_${input.state}=`))?.slice(COOKIE.length + input.state.length + 2) ?? ""
       return json(await manager.completeOAuth(input.code, input.state, cookie), 200, {
-        "Set-Cookie": `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/api/backups; Max-Age=0`,
+        "Set-Cookie": `${COOKIE}_${input.state}=; HttpOnly; SameSite=Lax; Path=/api/backups; Max-Age=0`,
       })
     }
     return json({ error: "Not found" }, 404)

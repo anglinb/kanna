@@ -123,6 +123,31 @@ describe("R2 backups", () => {
     await expect(f.manager.completeOAuth("code", new URL(expired.url).searchParams.get("state")!, expired.browser)).rejects.toThrow("expired")
   })
 
+  test("overlapping OAuth flows keep separate states and browser cookies", async () => {
+    const f = await fixture()
+    const start = async () => {
+      const response = await handleBackupRequest(new Request("https://kanna.example/api/backups/oauth/start", {
+        method: "POST", headers: { Origin: "https://kanna.example", "Content-Type": "application/json" }, body: "{}",
+      }), f.manager)
+      const { url } = await response!.json() as { url: string }
+      return { state: new URL(url).searchParams.get("state")!, cookie: response!.headers.get("set-cookie")!.split(";")[0]! }
+    }
+    const first = await start()
+    const second = await start()
+    expect(first.cookie.split("=")[0]).not.toBe(second.cookie.split("=")[0])
+    const complete = (state: string, cookie: string) => handleBackupRequest(new Request("https://kanna.example/api/backups/oauth/complete", {
+      method: "POST", headers: { Origin: "https://kanna.example", "Content-Type": "application/json", Cookie: cookie }, body: JSON.stringify({ code: "code", state }),
+    }), f.manager)
+    expect((await complete(first.state, second.cookie))!.status).toBe(400)
+    const cookies = `${first.cookie}; ${second.cookie}`
+    expect((await complete(first.state, cookies))!.status).toBe(200)
+    expect((await complete(second.state, cookies))!.status).toBe(200)
+    expect((await complete(first.state, cookies))!.status).toBe(400)
+    const abandoned = await start()
+    await f.manager.disconnect()
+    expect((await complete(abandoned.state, abandoned.cookie))!.status).toBe(400)
+  })
+
   test("destination changes re-upload chunks and disconnect stops scheduling", async () => {
     const f = await fixture()
     await f.manager.run()

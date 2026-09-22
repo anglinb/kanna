@@ -52,7 +52,7 @@ export class R2BackupManager {
   private busy = false
   private stopped = false
   private readonly abort = new AbortController()
-  private pending?: PendingOAuth
+  private pending = new Map<string, PendingOAuth>()
   private readonly wrangler: BackupWrangler
   private readonly request: typeof fetch
   private readonly now: () => number
@@ -204,7 +204,7 @@ export class R2BackupManager {
     try {
       this.state.credential = undefined
       this.wrangler.invalidate()
-      this.pending = undefined
+      this.pending.clear()
       this.state.config.enabled = false
       this.state.nextRunAt = null
       this.state.error = null
@@ -219,23 +219,26 @@ export class R2BackupManager {
     if (!config) throw new Error("Cloudflare OAuth is not configured on this Kanna server")
     if (origin && new URL(config.redirectUri).origin !== origin) throw new Error("Cloudflare sign-in must start from the configured OAuth redirect origin")
     const verifier = randomBytes(32).toString("base64url")
-    this.pending = { verifier, state: randomBytes(32).toString("base64url"), browser: randomBytes(32).toString("base64url"), expiresAt: this.now() + 10 * 60_000 }
+    for (const [state, flow] of this.pending) if (flow.expiresAt <= this.now()) this.pending.delete(state)
+    if (this.pending.size >= 32) throw new Error("Cloudflare sign-in has too many pending attempts. Try again in ten minutes.")
+    const pending = { verifier, state: randomBytes(32).toString("base64url"), browser: randomBytes(32).toString("base64url"), expiresAt: this.now() + 10 * 60_000 }
+    this.pending.set(pending.state, pending)
     const url = new URL("https://dash.cloudflare.com/oauth2/auth")
     url.search = new URLSearchParams({
       client_id: config.clientId, redirect_uri: config.redirectUri, response_type: "code",
-      scope: config.scopes, state: this.pending.state,
+      scope: config.scopes, state: pending.state,
       code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256",
     }).toString()
-    return { url: url.toString(), browser: this.pending.browser }
+    return { url: url.toString(), browser: pending.browser }
   }
 
   async completeOAuth(code: string, state: string, browser: string) {
     this.assertIdle()
-    const pending = this.pending
+    const pending = this.pending.get(state)
     if (!pending || pending.expiresAt < this.now() || pending.state !== state || pending.browser !== browser) {
       throw new Error("Cloudflare sign-in expired or did not originate in this browser. Connect again.")
     }
-    this.pending = undefined
+    this.pending.delete(state)
     this.busy = true
     try {
       this.state.credential = await this.exchange({
