@@ -1,5 +1,5 @@
 import { close, constants, fstat, read } from "node:fs"
-import { open, readdir } from "node:fs/promises"
+import { open, readdir, stat } from "node:fs/promises"
 import { promisify } from "node:util"
 import { CString, dlopen, ptr, read as memory, toArrayBuffer, type Pointer } from "bun:ffi"
 
@@ -26,7 +26,14 @@ export async function openBackupChild(parent: number, name: string) {
   if (process.platform === "linux") {
     try { return await open(`/proc/self/fd/${parent}/${name}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // ENOENT may describe missing procfs, not a missing optional source.
+        // Validate the descriptor reference before allowing an omission.
+        try { await stat(`/proc/self/fd/${parent}`) } catch {
+          throw new Error("Backup capture on Linux requires accessible /proc/self/fd (mounted procfs)")
+        }
+        return null
+      }
       throw new Error("Backup source could not be opened without following symbolic links")
     }
   }

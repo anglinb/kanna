@@ -28,3 +28,11 @@ test("ancestor replacement cannot redirect a child open through a pinned directo
     } finally { await parent.close() }
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+
+test.skipIf(process.platform !== "linux")("missing procfs descriptor access fails instead of omitting data", async () => {
+  await expect(openBackupChild(-1, "transcripts")).rejects.toThrow("mounted procfs")
+  const root = await open(tmpdir(), "r")
+  try { expect(await openBackupChild(root.fd, `kanna-missing-${crypto.randomUUID()}`)).toBeNull() }
+  finally { await root.close() }
+})
