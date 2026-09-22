@@ -1,23 +1,23 @@
-import { mkdir, open, readdir, writeFile } from "node:fs/promises"
+import { mkdir, open, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { SnapshotFile } from "./events"
-import { openBackupChild } from "./backup-open"
+import { listBackupChildren, openBackupChild } from "./backup-open"
 
 /** Pin inodes and byte lengths while the store write queue is held, without copying file contents. */
 export async function prepareBackupFiles(dataDir: string, destination: string, snapshot: SnapshotFile) {
-  const files: Array<{ handle: NonNullable<ReturnType<typeof openBackupChild>>; target: string; size: number }> = []
+  const files: Array<{ handle: NonNullable<Awaited<ReturnType<typeof openBackupChild>>>; target: string; size: number }> = []
   const close = async () => { await Promise.all(files.map(({ handle }) => handle.close())) }
-  const pinTree = async (parent: number, name: string, source: string, target: string) => {
-    const handle = openBackupChild(parent, name)
-    if (!handle) return
+  const pinTree = async (parent: number, name: string, target: string, optional = false) => {
+    const handle = await openBackupChild(parent, name)
+    if (!handle) {
+      if (optional) return
+      throw new Error("Backup source disappeared during capture")
+    }
     let retained = false
     try {
       const info = await handle.stat()
       if (info.isDirectory()) {
-        // Listing may race with a rename, but it supplies names only. Every
-        // child is opened against this pinned directory, so no ancestor path
-        // can redirect an open outside the allowlist.
-        for (const child of await readdir(source)) await pinTree(handle.fd, child, path.join(source, child), path.join(target, child))
+        for (const child of await listBackupChildren(handle.fd)) await pinTree(handle.fd, child, path.join(target, child))
       } else if (info.isFile()) {
         files.push({ handle, target, size: info.size })
         retained = true
@@ -27,7 +27,7 @@ export async function prepareBackupFiles(dataDir: string, destination: string, s
   try {
     const data = await open(dataDir, "r")
     try {
-      for (const name of ["transcripts", "media"]) await pinTree(data.fd, name, path.join(dataDir, name), path.join(destination, name))
+      for (const name of ["transcripts", "media"]) await pinTree(data.fd, name, path.join(destination, name), true)
     } finally { await data.close() }
     for (const project of snapshot.projects) {
       let root
@@ -36,9 +36,9 @@ export async function prepareBackupFiles(dataDir: string, destination: string, s
         throw error
       }
       try {
-        const kanna = openBackupChild(root.fd, ".kanna")
+        const kanna = await openBackupChild(root.fd, ".kanna")
         if (!kanna) continue
-        try { await pinTree(kanna.fd, "uploads", path.join(project.localPath, ".kanna/uploads"), path.join(destination, "project-uploads", project.id)) }
+        try { await pinTree(kanna.fd, "uploads", path.join(destination, "project-uploads", project.id), true) }
         finally { await kanna.close() }
       } finally { await root.close() }
     }
