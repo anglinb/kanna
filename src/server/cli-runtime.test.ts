@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import { compareVersions, classifyInstallVersionFailure, parseArgs, runCli } from "./cli-runtime"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 
@@ -136,12 +137,12 @@ function createFakeCloudRuntime() {
     identity: CLOUD_IDENTITY,
     connectTokens: { mint: () => ({ token: "t", expiresInMs: 60_000 }), validate: () => false },
     getTunnelUrl: () => null,
-    start: (args: { localUrl: string }) => {
+    start: (args: { localUrl: string }) => Effect.sync(() => {
       calls.starts.push({ localUrl: args.localUrl })
-    },
-    stop: async () => {
+    }),
+    stop: Effect.sync(() => {
       calls.stops += 1
-    },
+    }),
   }
   return { runtime, calls }
 }
@@ -846,10 +847,10 @@ describe("runCli single-instance guard + hosted open", () => {
   test("paired start opens the hosted URL when the tunnel connects (not localhost)", async () => {
     const fake = createFakeCloudRuntime()
     let capturedOnTunnelUp: ((kind: "started" | "recovered") => void) | undefined
-    fake.runtime.start = (args: { localUrl: string; onTunnelUp?: (kind: "started" | "recovered") => void }) => {
+    fake.runtime.start = (args: { localUrl: string; onTunnelUp?: (kind: "started" | "recovered") => void }) => Effect.sync(() => {
       fake.calls.starts.push({ localUrl: args.localUrl })
       capturedOnTunnelUp = args.onTunnelUp
-    }
+    })
     const { calls, deps } = createDeps({
       readCloudIdentityImpl: async () => ({ ...CLOUD_IDENTITY }),
       createCloudRuntimeImpl: () => fake.runtime,
@@ -894,9 +895,9 @@ describe("runCli with the Mac app", () => {
     const app = withMacApp(true)
     const fake = createFakeCloudRuntime()
     let capturedOnTunnelUp: ((kind: "started" | "recovered") => void) | undefined
-    fake.runtime.start = (args: { localUrl: string; onTunnelUp?: (kind: "started" | "recovered") => void }) => {
+    fake.runtime.start = (args: { localUrl: string; onTunnelUp?: (kind: "started" | "recovered") => void }) => Effect.sync(() => {
       capturedOnTunnelUp = args.onTunnelUp
-    }
+    })
     const { calls, deps } = createDeps({
       openInMacApp: app.openInMacApp,
       readCloudIdentityImpl: async () => ({ ...CLOUD_IDENTITY }),

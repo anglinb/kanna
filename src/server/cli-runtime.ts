@@ -23,6 +23,8 @@ import type { Analytics } from "./analytics"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
 import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
 import { runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
+import { Effect } from "effect"
+import { ServerPlatform } from "./effect/runtime"
 
 export interface CliOptions {
   port: number
@@ -91,7 +93,10 @@ export interface CliRuntimeDeps {
   warn: (message: string) => void
   renderShareQr?: (url: string) => Promise<string>
   startShareTunnel?: (localUrl: string, shareMode: Exclude<ShareMode, false>) => Promise<StartedShareTunnel>
-  runPairCommandImpl?: typeof runPairCommand
+  runPairCommandImpl?: (
+    args: PairCommandArgs,
+    deps: { log: (message: string) => void; warn: (message: string) => void },
+  ) => Promise<number>
   readCloudIdentityImpl?: (warn: (message: string) => void) => Promise<CloudIdentity | null>
   createCloudRuntimeImpl?: (identity: CloudIdentity) => CloudRuntime
   probeExistingInstanceImpl?: (port: number) => Promise<ExistingInstance | null>
@@ -397,10 +402,10 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
   }
 
   if (parsedArgs.kind === "pair") {
-    const code = await (deps.runPairCommandImpl ?? runPairCommand)(parsedArgs.args, {
-      log: deps.log,
-      warn: deps.warn,
-    })
+    const pairDeps = { log: deps.log, warn: deps.warn }
+    const code = deps.runPairCommandImpl
+      ? await deps.runPairCommandImpl(parsedArgs.args, pairDeps)
+      : await runKanna(runPairCommand(parsedArgs.args, pairDeps).pipe(Effect.provide(ServerPlatform)))
     if (code !== 0 || parsedArgs.args.action !== "pair") {
       return { kind: "exited", code }
     }
@@ -456,7 +461,8 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
   }
 
   const readIdentity = deps.readCloudIdentityImpl
-    ?? ((warn: (message: string) => void) => readCloudIdentity(undefined, warn))
+    ?? ((warn: (message: string) => void) =>
+      runKanna(readCloudIdentity(undefined, warn).pipe(Effect.provide(ServerPlatform))))
   let identity = await readIdentity((message) => deps.warn(`${LOG_PREFIX} ${message}`))
   if (runOptions.directCloud) {
     if (!identity) {
@@ -575,10 +581,8 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // land on the offline page).
     const openHostedOnConnect = runOptions.openBrowser && !suppressOpenBrowser && !openedInMacApp
     let openedHosted = false
-    runtime.start({
+    runKannaSync(runtime.start({
       localUrl: launchUrl,
-      log: (message) => deps.log(`${LOG_PREFIX} ${message}`),
-      warn: (message) => deps.warn(`${LOG_PREFIX} ${message}`),
       onTunnelUp: (kind) => {
         if (started.analytics) runKannaSync(started.analytics.track(kind === "started" ? "cloud_tunnel_started" : "cloud_tunnel_recovered"))
         if (openHostedOnConnect && !openedHosted) {
@@ -586,7 +590,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
           deps.openUrl(runtime.identity.appOrigin)
         }
       },
-    })
+    }))
     // The supervisor logs `cloud: connected (…)` when the tunnel is live —
     // that's also when the browser opens.
     deps.log(`${LOG_PREFIX} cloud: waiting for ${runtime.identity.appOrigin} to come online… (disable with \`${CLI_COMMAND} pair --disable\`)`)
@@ -600,7 +604,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     kind: "started",
     releasedFromParent: claim.kind === "ours" ? claim.releasedFromParent : undefined,
     stop: async () => {
-      await cloudRuntime?.stop()
+      if (cloudRuntime) await runKanna(cloudRuntime.stop)
       shareTunnelStop?.()
       await stop()
     },
