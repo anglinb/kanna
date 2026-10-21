@@ -24,6 +24,20 @@ compatible: this is a refactor, not a behaviour change.
 merged service layers, reads each service out of it, and disposes it at
 shutdown. Add your layer to that `Layer.mergeAll(...)`.
 
+## Notes from wave 1
+
+- A layer whose construction needs a value built later in `startKannaServer`
+  takes it as a lazy `Effect.sync(() => ...)` or a closure, and only reads it
+  after startup (see `ProjectIcons`' `projectPaths`, `UsageLimits`' reads).
+- Where a synchronous caller needs a value, keep a synchronous accessor
+  (`runKannaSync` over `SubscriptionRef.get`) until the caller migrates;
+  don't make it async just to fit.
+- `FileSystem.stat` rounds mtimes to whole milliseconds, and
+  `readDirectory` returns names only. Where a module persists mtimes or
+  must not follow symlinks, keep node's `stat`/`readdir` behind
+  `Effect.tryPromise` and say why in a comment.
+- Typed fakes live next to the module as `<module>.fake.ts`.
+
 ## Rules
 
 ### Services
@@ -136,12 +150,16 @@ shutdown. Add your layer to that `Layer.mergeAll(...)`.
 | Area | Modules | State |
 |---|---|---|
 | Foundation | effect/*, keybindings | done |
-| Process & paths | process-utils, paths, editor-detection, terminal-detection, external-open, machine-name, mac-app, restart, instance, instance-socket, project-quick-actions | wave 1 |
-| Settings | app-settings, llm-provider, provider-catalog, usage-limits, analytics, attribution | wave 1 |
-| Storage leaves | events, transcript, transcript-media, transcript-payloads, transcript-slim, performance-log, ticket-store, schedules, uploads, standalone-export | wave 1 |
-| Terminals & serving | terminal-manager, local-http-servers, port-tunnels, share, auth, transcribe, png-thumbnail, project-icons | wave 1 |
-| Cloud | cloud/*, discovery, background-tasks | wave 1 |
-| Harness helpers & shared | harness-skills, skills, harness-instructions, visualization-*, handoff, agent-to-agent, session-artifacts, async-queue; Schema for `shared/protocol.ts` client envelopes and `shared/tools.ts` parsing | wave 1 |
-| Stores & git | event-store, read-models, diff-store, github*, worktree-*, ticket-board, ticket-messages, generate-*, quick-response, claude-executable, cli-runtime, nightly, update-manager, provider-auth | wave 2 |
+| Process & paths | process-utils, paths, editor-detection, terminal-detection, external-open, machine-name, mac-app, restart, instance, instance-socket, project-quick-actions | done |
+| Settings | app-settings, llm-provider, provider-catalog, usage-limits, analytics, attribution | done |
+| Storage leaves | events, transcript, transcript-media, transcript-payloads, transcript-slim, performance-log, ticket-store, schedules, uploads, standalone-export | done |
+| Terminals & serving | terminal-manager, local-http-servers, port-tunnels, share, auth, transcribe, png-thumbnail, project-icons | done |
+| Cloud | cloud/*, discovery, background-tasks | done |
+| Harness helpers & shared | harness-skills, skills, harness-instructions, visualization-*, handoff, agent-to-agent, session-artifacts, async-queue; Schema for `shared/protocol.ts` client envelopes and `shared/tools.ts` parsing | done |
+| Event store | event-store, read-models, transcript-payloads (sync readers) | wave 2 |
+| Git | diff-store, github, github-branch-pr, github-checks | wave 2 |
+| Derived state | worktree-probe, worktree-snapshot, ticket-board, ticket-messages, touched-file-backfill, visualization-heights | wave 2 |
+| Provider plumbing | provider-auth, claude-executable, quick-response, generate-commit-message, generate-title | wave 2 |
+| CLI | cli-runtime, cli, cli-supervisor, nightly, update-manager, share (CLI output), process-utils (`resolveCommandPath`) | wave 2 |
 | Providers & tools | codex-app-server, cursor-cli, grok-cli, pi-agent, kanna-*-tools, kanna-mcp, orchestrator, chat-commands | wave 3 |
-| Composition | agent, ws-router, server, cli, cli-supervisor, entry, chat-window-route, resume-turns, touched-file-backfill, visualization-heights; delete `bridge.ts` | wave 4 |
+| Composition | agent, ws-router, server, entry, chat-window-route, resume-turns; wire `protocol-schema.ts` into the router; delete `bridge.ts` | wave 4 |
