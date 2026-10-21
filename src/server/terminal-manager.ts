@@ -5,6 +5,7 @@ import defaultShell, { detectDefaultShell } from "default-shell"
 import { Terminal } from "@xterm/headless"
 import { SerializeAddon } from "@xterm/addon-serialize"
 import { Unicode11Addon } from "@xterm/addon-unicode11"
+import { Context, Effect, Layer, PubSub, Schema, Stream } from "effect"
 import type { TerminalEvent, TerminalSnapshot, TerminalTailResult } from "../shared/protocol"
 
 const DEFAULT_COLS = 80
@@ -25,7 +26,7 @@ const FOCUS_IN_SEQUENCE = "\x1b[I"
 const FOCUS_OUT_SEQUENCE = "\x1b[O"
 const MODE_SEQUENCE_TAIL_LENGTH = 16
 
-interface CreateTerminalArgs {
+export interface CreateTerminalArgs {
   projectPath: string
   terminalId: string
   cols: number
@@ -129,17 +130,17 @@ function normalizeTerminalDimension(value: number, fallback: number) {
   return Math.max(1, Math.round(value))
 }
 
-function resolveShell() {
-  try {
-    return detectDefaultShell()
-  } catch {
+
+/** The login shell, from the user's account, else the platform's default. */
+const resolveShell = Effect.try(() => detectDefaultShell()).pipe(
+  Effect.catchTag("UnknownError", () => Effect.sync(() => {
     if (defaultShell) return defaultShell
     if (process.platform === "win32") {
       return process.env.ComSpec || "cmd.exe"
     }
     return process.env.SHELL || "/bin/sh"
-  }
-}
+  })),
+)
 
 function resolveShellArgs(shellPath: string) {
   if (process.platform === "win32") {
@@ -215,111 +216,273 @@ function filterFocusReportInput(data: string, allowFocusReporting: boolean) {
   return data.replaceAll(FOCUS_IN_SEQUENCE, "").replaceAll(FOCUS_OUT_SEQUENCE, "")
 }
 
-function killTerminalProcessTree(subprocess: Bun.Subprocess | null) {
-  if (!subprocess) return
+/** Embedded terminals can't run here (Windows, or a Bun without `Bun.Terminal`). */
+export class TerminalUnsupportedError extends Schema.TaggedError<TerminalUnsupportedError>()(
+  "@kanna/server/terminal-manager/TerminalUnsupportedError",
+  { reason: Schema.String },
+) {
+  override get message() {
+    return this.reason
+  }
+}
 
+/** The shell could not be started. The message is the spawn error's own. */
+export class TerminalSpawnError extends Schema.TaggedError<TerminalSpawnError>()(
+  "@kanna/server/terminal-manager/TerminalSpawnError",
+  {
+    terminalId: Schema.String,
+    shell: Schema.String,
+    cwd: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return this.cause instanceof Error ? this.cause.message : String(this.cause)
+  }
+}
+
+/** The shell's process, as far as signalling it goes. */
+type ShellProcess = Pick<Bun.Subprocess, "pid" | "kill">
+
+/**
+ * Signals the shell's whole process group, falling back to the shell alone
+ * when the group can't be signalled (or on Windows). Succeeds with whether
+ * either took.
+ */
+function signalTerminalProcessGroup(subprocess: ShellProcess | null, signal: NodeJS.Signals): Effect.Effect<boolean> {
+  if (!subprocess) return Effect.succeed(false)
   const pid = subprocess.pid
-  if (typeof pid !== "number") return
+  if (typeof pid !== "number") return Effect.succeed(false)
 
-  if (process.platform !== "win32") {
-    try {
-      process.kill(-pid, "SIGKILL")
+  const shellOnly = Effect.try(() => subprocess.kill(signal))
+  const attempt = process.platform === "win32"
+    ? shellOnly
+    : Effect.try(() => process.kill(-pid, signal)).pipe(Effect.catchTag("UnknownError", () => shellOnly))
+  return attempt.pipe(
+    Effect.as(true),
+    Effect.catchTag("UnknownError", () => Effect.succeed(false)),
+  )
+}
+
+const killTerminalProcessTree = (subprocess: ShellProcess | null) =>
+  signalTerminalProcessGroup(subprocess, "SIGKILL").pipe(Effect.asVoid)
+
+/**
+ * Keystrokes for a session. Ctrl+C is sent to the process group as SIGINT
+ * rather than written, so a foreground job dies even when it has the PTY in
+ * raw mode. Exported for tests.
+ */
+export const writeToSession = Effect.fn("Terminals.writeToSession")(function* (
+  session: Pick<TerminalSession, "status" | "focusReportingEnabled"> & {
+    terminal: Pick<Bun.Terminal, "write">
+    process: ShellProcess | null
+  },
+  data: string,
+) {
+  if (session.status === "exited") return
+
+  const filteredData = filterFocusReportInput(data, session.focusReportingEnabled)
+  if (!filteredData) return
+
+  let cursor = 0
+
+  while (cursor < filteredData.length) {
+    const ctrlCIndex = filteredData.indexOf("\x03", cursor)
+
+    if (ctrlCIndex === -1) {
+      session.terminal.write(filteredData.slice(cursor))
       return
-    } catch {
-      // Fall back to killing only the shell process if group termination fails.
     }
-  }
 
-  try {
-    subprocess.kill("SIGKILL")
-  } catch {
-    // Ignore subprocess shutdown errors during disposal.
+    if (ctrlCIndex > cursor) {
+      session.terminal.write(filteredData.slice(cursor, ctrlCIndex))
+    }
+
+    yield* signalTerminalProcessGroup(session.process, "SIGINT")
+    cursor = ctrlCIndex + 1
+  }
+})
+
+/** Resizes the PTY and the shadow terminal together, then tells the shell. Exported for tests. */
+export const resizeSession = Effect.fn("Terminals.resizeSession")(function* (
+  session: Pick<TerminalSession, "cols" | "rows"> & {
+    headless: Pick<Terminal, "resize">
+    terminal: Pick<Bun.Terminal, "resize">
+    process: ShellProcess | null
+  },
+  cols: number,
+  rows: number,
+) {
+  session.cols = normalizeTerminalDimension(cols, session.cols)
+  session.rows = normalizeTerminalDimension(rows, session.rows)
+  session.headless.resize(session.cols, session.rows)
+  session.terminal.resize(session.cols, session.rows)
+  yield* signalTerminalProcessGroup(session.process, "SIGWINCH")
+})
+
+/**
+ * Single entry point for PTY bytes. Kept apart from the `Bun.Terminal`
+ * config so tests can drive it with deliberately split chunks — the real PTY
+ * gives no control over where reads land. Plain code: `Bun.Terminal` calls it
+ * synchronously, outside any fiber.
+ *
+ * The decode is stateful: bytes of a partially received character are held
+ * back and prepended to the next chunk. The shadow terminal, the tail log and
+ * the event take that same string, so they never disagree about the version.
+ */
+export function handlePtyOutput(
+  session: Pick<TerminalSession, "terminalId" | "decoder" | "output" | "focusReportingEnabled" | "modeSequenceTail"> & {
+    headless: Pick<Terminal, "write">
+  },
+  data: Uint8Array,
+  emit: (event: TerminalEvent) => void,
+) {
+  const chunk = session.decoder.write(Buffer.from(data))
+  if (!chunk) return
+  updateFocusReportingState(session, chunk)
+  session.headless.write(chunk)
+  const version = session.output.append(chunk)
+  emit({
+    type: "terminal.output",
+    terminalId: session.terminalId,
+    data: chunk,
+    version,
+  })
+}
+
+/**
+ * The shadow terminal a session's state is serialized from. Exported for
+ * tests.
+ */
+export function createHeadlessTerminal(cols: number, rows: number, scrollback: number) {
+  const headless = new Terminal({ cols, rows, scrollback, allowProposedApi: true })
+  const serializeAddon = new SerializeAddon()
+  headless.loadAddon(serializeAddon)
+  // Without this xterm runs Unicode 6 width tables, where every astral emoji
+  // measures 1 cell instead of 2. Programs size their output with a modern
+  // wcwidth, so the mismatch shifts everything after a wide character.
+  // Must stay in step with the client terminal or snapshot replay desyncs.
+  headless.loadAddon(new Unicode11Addon())
+  headless.unicode.activeVersion = "11"
+  return { headless, serializeAddon }
+}
+
+function snapshotOf(session: TerminalSession): TerminalSnapshot {
+  return {
+    terminalId: session.terminalId,
+    title: session.title,
+    cwd: session.cwd,
+    shell: session.shell,
+    cols: session.cols,
+    rows: session.rows,
+    scrollback: session.scrollback,
+    serializedState: session.serializeAddon.serialize({ scrollback: session.scrollback }),
+    status: session.status,
+    exitCode: session.exitCode,
+    outputVersion: session.output.version,
   }
 }
 
-function signalTerminalProcessGroup(subprocess: Bun.Subprocess | null, signal: NodeJS.Signals) {
-  if (!subprocess) return false
-
-  const pid = subprocess.pid
-  if (typeof pid !== "number") return false
-
-  if (process.platform !== "win32") {
-    try {
-      process.kill(-pid, signal)
-      return true
-    } catch {
-      // Fall back to signaling only the shell if group signaling fails.
-    }
-  }
-
-  try {
-    subprocess.kill(signal)
-    return true
-  } catch {
-    return false
-  }
+function disposeSession(session: TerminalSession) {
+  session.terminal.close()
+  session.serializeAddon.dispose()
+  session.headless.dispose()
 }
 
-export class TerminalManager {
-  private readonly sessions = new Map<string, TerminalSession>()
-  private readonly listeners = new Set<(event: TerminalEvent) => void>()
+export interface TerminalResourceCounts {
+  terminalSessions: number
+  runningTerminals: number
+  terminalOutputCharacters: number
+}
 
-  getResourceCounts() {
-    const sessions = [...this.sessions.values()]
-    return {
-      terminalSessions: sessions.length,
-      runningTerminals: sessions.filter(session => session.status === "running").length,
-      terminalOutputCharacters: sessions.reduce((sum, session) => sum + session.output.retainedCharacters, 0),
-    }
-  }
-
-  onEvent(listener: (event: TerminalEvent) => void) {
-    this.listeners.add(listener)
-    return () => {
-      this.listeners.delete(listener)
-    }
-  }
-
+/**
+ * The embedded terminals: one PTY-backed shell per terminal id, mirrored
+ * into a headless xterm so a pane that (re)subscribes gets the screen as it
+ * is. Every shell is killed when the layer closes.
+ *
+ * `events` carries output and exits from the moment of subscribing; it never
+ * replays. Read `snapshot` or `tail` for what came before.
+ */
+export class Terminals extends Context.Service<Terminals, {
+  readonly events: Stream.Stream<TerminalEvent>
+  /** Starts the terminal, or resizes the running one with that id. */
+  readonly create: (args: CreateTerminalArgs) => Effect.Effect<TerminalSnapshot, TerminalUnsupportedError | TerminalSpawnError>
+  readonly snapshot: (terminalId: string) => Effect.Effect<TerminalSnapshot | null>
+  readonly write: (terminalId: string, data: string) => Effect.Effect<void>
+  readonly resize: (terminalId: string, cols: number, rows: number) => Effect.Effect<void>
+  readonly close: (terminalId: string) => Effect.Effect<void>
   /**
-   * Single entry point for PTY bytes. Kept as a method (rather than inlined in
-   * the `Bun.Terminal` config) so tests can drive it with deliberately split
-   * chunks — the real PTY gives no control over where reads land.
-   *
-   * The decode is stateful: bytes of a partially received character are held
-   * back and prepended to the next chunk. Both consumers below take that same
-   * string, so xterm only ever sees one decoder's output.
+   * Output since `sinceVersion` for a pane that stopped listening while it
+   * was hidden. Falls back to a full snapshot when the gap has left the log,
+   * or when the client has no version to resume from.
    */
-  private handlePtyOutput(session: TerminalSession, data: Uint8Array) {
-    const chunk = session.decoder.write(Buffer.from(data))
-    if (!chunk) return
-    updateFocusReportingState(session, chunk)
-    this.appendOutput(session, chunk)
-  }
+  readonly tail: (terminalId: string, sinceVersion: number | null) => Effect.Effect<TerminalTailResult | null>
+  /** The shells still running in `cwd`, for telling a project's own servers apart. */
+  readonly rootPidsByCwd: (cwd: string) => Effect.Effect<ReadonlyArray<number>>
+  readonly resourceCounts: Effect.Effect<TerminalResourceCounts>
+}>()("@kanna/server/Terminals") {
+  static readonly layer = Layer.effect(this, Effect.suspend(() => makeTerminals()))
+}
 
-  /**
-   * Every byte the client may see goes through here, so the shadow terminal,
-   * the tail log and the event stream never disagree about the version.
-   */
-  private appendOutput(session: TerminalSession, chunk: string) {
-    session.headless.write(chunk)
-    const version = session.output.append(chunk)
-    this.emit({
-      type: "terminal.output",
-      terminalId: session.terminalId,
-      data: chunk,
-      version,
-    })
+const makeTerminals = Effect.fn("Terminals.make")(function* () {
+  // Sessions are touched from PTY callbacks, which run outside any fiber, so
+  // they live in a plain map rather than a Ref.
+  const sessions = new Map<string, TerminalSession>()
+  const events = yield* PubSub.unbounded<TerminalEvent>()
+  const emit = (event: TerminalEvent) => {
+    PubSub.publishUnsafe(events, event)
   }
+  const layerScope = yield* Effect.scope
 
-  createTerminal(args: CreateTerminalArgs) {
+  const close = Effect.fn("Terminals.close")(function* (terminalId: string) {
+    const session = sessions.get(terminalId)
+    if (!session) return
+    sessions.delete(terminalId)
+    yield* killTerminalProcessTree(session.process)
+    disposeSession(session)
+  })
+
+  // Shutdown kills every shell; then subscribers see the stream end.
+  yield* Effect.addFinalizer(() =>
+    Effect.forEach([...sessions.keys()], (terminalId) => close(terminalId), { discard: true }).pipe(
+      Effect.andThen(PubSub.shutdown(events)),
+    ))
+
+  /** Marks the session exited when its shell ends, unless it was closed first. */
+  const watchExit = (terminalId: string, subprocess: Bun.Subprocess) =>
+    Effect.tryPromise(() => subprocess.exited).pipe(
+      Effect.flatMap((exitCode) => Effect.sync(() => {
+        const active = sessions.get(terminalId)
+        if (!active) return
+        active.status = "exited"
+        active.exitCode = exitCode
+        emit({ type: "terminal.exit", terminalId, exitCode })
+      })),
+      Effect.catchTag("UnknownError", (error) => Effect.sync(() => {
+        const active = sessions.get(terminalId)
+        if (!active) return
+        active.status = "exited"
+        active.exitCode = 1
+        const cause = error.cause
+        emit({
+          type: "terminal.output",
+          terminalId,
+          data: `\r\n[terminal error] ${cause instanceof Error ? cause.message : String(cause)}\r\n`,
+        })
+        emit({ type: "terminal.exit", terminalId, exitCode: 1 })
+      })),
+    )
+
+  const create = Effect.fn("Terminals.create")(function* (args: CreateTerminalArgs) {
+    yield* Effect.annotateCurrentSpan("terminalId", args.terminalId)
     if (process.platform === "win32") {
-      throw new Error("Embedded terminal is currently supported on macOS/Linux only.")
+      return yield* new TerminalUnsupportedError({ reason: "Embedded terminal is currently supported on macOS/Linux only." })
     }
     if (typeof Bun.Terminal !== "function") {
-      throw new Error("Embedded terminal requires Bun 1.3.5+ with Bun.Terminal support.")
+      return yield* new TerminalUnsupportedError({ reason: "Embedded terminal requires Bun 1.3.5+ with Bun.Terminal support." })
     }
 
-    const existing = this.sessions.get(args.terminalId)
+    const existing = sessions.get(args.terminalId)
     if (existing) {
       existing.scrollback = clampScrollback(args.scrollback)
       existing.cols = normalizeTerminalDimension(args.cols, existing.cols)
@@ -327,25 +490,16 @@ export class TerminalManager {
       existing.headless.options.scrollback = existing.scrollback
       existing.headless.resize(existing.cols, existing.rows)
       existing.terminal.resize(existing.cols, existing.rows)
-      signalTerminalProcessGroup(existing.process, "SIGWINCH")
-      return this.snapshotOf(existing)
+      yield* signalTerminalProcessGroup(existing.process, "SIGWINCH")
+      return snapshotOf(existing)
     }
 
-    const shell = resolveShell()
+    const shell = yield* resolveShell
     const cols = normalizeTerminalDimension(args.cols, DEFAULT_COLS)
     const rows = normalizeTerminalDimension(args.rows, DEFAULT_ROWS)
     const scrollback = clampScrollback(args.scrollback)
     const title = path.basename(shell) || "shell"
-    const headless = new Terminal({ cols, rows, scrollback, allowProposedApi: true })
-    const serializeAddon = new SerializeAddon()
-    headless.loadAddon(serializeAddon)
-    // Without this xterm runs Unicode 6 width tables, where every astral emoji
-    // measures 1 cell instead of 2. Programs size their output with a modern
-    // wcwidth, so the mismatch shifts everything after a wide character.
-    // Must stay in step with the client terminal or snapshot replay desyncs.
-    headless.loadAddon(new Unicode11Addon())
-    headless.unicode.activeVersion = "11"
-    const decoder = new StringDecoder("utf8")
+    const { headless, serializeAddon } = createHeadlessTerminal(cols, rows, scrollback)
 
     const session: TerminalSession = {
       terminalId: args.terminalId,
@@ -363,164 +517,83 @@ export class TerminalManager {
         rows,
         name: "xterm-256color",
         data: (_terminal, data) => {
-          this.handlePtyOutput(session, data)
+          handlePtyOutput(session, data, emit)
         },
       }),
       headless,
       serializeAddon,
-      decoder,
+      decoder: new StringDecoder("utf8"),
       output: new TerminalOutputLog(),
       focusReportingEnabled: false,
       modeSequenceTail: "",
     }
 
-    try {
-      session.process = Bun.spawn([shell, ...resolveShellArgs(shell)], {
+    const subprocess = yield* Effect.try({
+      try: () => Bun.spawn([shell, ...resolveShellArgs(shell)], {
         cwd: args.projectPath,
         env: createTerminalEnv(),
         terminal: session.terminal,
-      })
-    } catch (error) {
-      session.terminal.close()
-      session.serializeAddon.dispose()
-      session.headless.dispose()
-      throw error
-    }
-    void session.process.exited.then((exitCode) => {
-      const active = this.sessions.get(args.terminalId)
-      if (!active) return
-      active.status = "exited"
-      active.exitCode = exitCode
-      this.emit({
-        type: "terminal.exit",
-        terminalId: args.terminalId,
-        exitCode,
-      })
-    }).catch((error) => {
-      const active = this.sessions.get(args.terminalId)
-      if (!active) return
-      active.status = "exited"
-      active.exitCode = 1
-      this.emit({
-        type: "terminal.output",
-        terminalId: args.terminalId,
-        data: `\r\n[terminal error] ${error instanceof Error ? error.message : String(error)}\r\n`,
-      })
-      this.emit({
-        type: "terminal.exit",
-        terminalId: args.terminalId,
-        exitCode: 1,
-      })
-    })
+      }),
+      catch: (cause) => new TerminalSpawnError({ terminalId: args.terminalId, shell, cwd: args.projectPath, cause }),
+    }).pipe(Effect.tapError(() => Effect.sync(() => disposeSession(session))))
+    session.process = subprocess
+    // The watch belongs to the layer, not to the request that created the
+    // terminal, so it outlives the request.
+    yield* watchExit(args.terminalId, subprocess).pipe(Effect.forkIn(layerScope))
 
-    this.sessions.set(args.terminalId, session)
-    return this.snapshotOf(session)
-  }
+    sessions.set(args.terminalId, session)
+    return snapshotOf(session)
+  })
 
-  getSnapshot(terminalId: string): TerminalSnapshot | null {
-    const session = this.sessions.get(terminalId)
-    return session ? this.snapshotOf(session) : null
-  }
-
-  write(terminalId: string, data: string) {
-    const session = this.sessions.get(terminalId)
-    if (!session || session.status === "exited") return
-
-    const filteredData = filterFocusReportInput(data, session.focusReportingEnabled)
-    if (!filteredData) return
-
-    let cursor = 0
-
-    while (cursor < filteredData.length) {
-      const ctrlCIndex = filteredData.indexOf("\x03", cursor)
-
-      if (ctrlCIndex === -1) {
-        session.terminal.write(filteredData.slice(cursor))
-        return
-      }
-
-      if (ctrlCIndex > cursor) {
-        session.terminal.write(filteredData.slice(cursor, ctrlCIndex))
-      }
-
-      signalTerminalProcessGroup(session.process, "SIGINT")
-      cursor = ctrlCIndex + 1
-    }
-  }
-
-  resize(terminalId: string, cols: number, rows: number) {
-    const session = this.sessions.get(terminalId)
+  const write = Effect.fn("Terminals.write")(function* (terminalId: string, data: string) {
+    const session = sessions.get(terminalId)
     if (!session) return
-    session.cols = normalizeTerminalDimension(cols, session.cols)
-    session.rows = normalizeTerminalDimension(rows, session.rows)
-    session.headless.resize(session.cols, session.rows)
-    session.terminal.resize(session.cols, session.rows)
-    signalTerminalProcessGroup(session.process, "SIGWINCH")
-  }
+    yield* writeToSession(session, data)
+  })
 
-  close(terminalId: string) {
-    const session = this.sessions.get(terminalId)
+  const resize = Effect.fn("Terminals.resize")(function* (terminalId: string, cols: number, rows: number) {
+    const session = sessions.get(terminalId)
     if (!session) return
+    yield* resizeSession(session, cols, rows)
+  })
 
-    this.sessions.delete(terminalId)
-    killTerminalProcessTree(session.process)
-    session.terminal.close()
-    session.serializeAddon.dispose()
-    session.headless.dispose()
-  }
-
-  closeAll() {
-    for (const terminalId of this.sessions.keys()) {
-      this.close(terminalId)
-    }
-  }
-
-  getRootPidsByCwd(cwd: string) {
-    const pids: number[] = []
-    for (const session of this.sessions.values()) {
-      if (session.cwd !== cwd || session.status !== "running") continue
-      const pid = session.process?.pid
-      if (typeof pid === "number") {
-        pids.push(pid)
+  return {
+    events: Stream.fromPubSub(events),
+    create,
+    snapshot: (terminalId: string) => Effect.sync(() => {
+      const session = sessions.get(terminalId)
+      return session ? snapshotOf(session) : null
+    }),
+    write,
+    resize,
+    close,
+    tail: (terminalId: string, sinceVersion: number | null) => Effect.sync((): TerminalTailResult | null => {
+      const session = sessions.get(terminalId)
+      if (!session) return null
+      const tail = sinceVersion === null ? null : session.output.tailSince(sinceVersion)
+      if (tail === null) {
+        return { terminalId, tail: null, snapshot: snapshotOf(session) }
       }
-    }
-    return pids
+      return { terminalId, tail: { data: tail, version: session.output.version }, snapshot: null }
+    }),
+    rootPidsByCwd: (cwd: string) => Effect.sync(() => {
+      const pids: number[] = []
+      for (const session of sessions.values()) {
+        if (session.cwd !== cwd || session.status !== "running") continue
+        const pid = session.process?.pid
+        if (typeof pid === "number") {
+          pids.push(pid)
+        }
+      }
+      return pids
+    }),
+    resourceCounts: Effect.sync((): TerminalResourceCounts => {
+      const all = [...sessions.values()]
+      return {
+        terminalSessions: all.length,
+        runningTerminals: all.filter((session) => session.status === "running").length,
+        terminalOutputCharacters: all.reduce((sum, session) => sum + session.output.retainedCharacters, 0),
+      }
+    }),
   }
-
-  private snapshotOf(session: TerminalSession): TerminalSnapshot {
-    return {
-      terminalId: session.terminalId,
-      title: session.title,
-      cwd: session.cwd,
-      shell: session.shell,
-      cols: session.cols,
-      rows: session.rows,
-      scrollback: session.scrollback,
-      serializedState: session.serializeAddon.serialize({ scrollback: session.scrollback }),
-      status: session.status,
-      exitCode: session.exitCode,
-      outputVersion: session.output.version,
-    }
-  }
-
-  /**
-   * Output since `sinceVersion` for a pane that stopped listening while it was
-   * hidden. Falls back to a full snapshot when the gap has left the log, or
-   * when the client has no version to resume from.
-   */
-  getTail(terminalId: string, sinceVersion: number | null): TerminalTailResult | null {
-    const session = this.sessions.get(terminalId)
-    if (!session) return null
-    const tail = sinceVersion === null ? null : session.output.tailSince(sinceVersion)
-    if (tail === null) {
-      return { terminalId, tail: null, snapshot: this.snapshotOf(session) }
-    }
-    return { terminalId, tail: { data: tail, version: session.output.version }, snapshot: null }
-  }
-
-  private emit(event: TerminalEvent) {
-    for (const listener of this.listeners) {
-      listener(event)
-    }
-  }
-}
+})

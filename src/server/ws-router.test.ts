@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeAnalytics } from "./analytics.fake"
+import { makeFakeTerminals } from "./terminal-manager.fake"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
@@ -237,10 +238,7 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
     diffStore: createFakeDiffStore(),
     worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
-    terminals: {
-      getSnapshot: () => null,
-      onEvent: () => () => {},
-    } as never,
+    terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings(DEFAULT_KEYBINDINGS_SNAPSHOT),
     appSettings: makeFakeAppSettings(DEFAULT_APP_SETTINGS_SNAPSHOT),
     llmProvider: createFakeLlmProvider(),
@@ -764,13 +762,8 @@ describe("ws-router", () => {
   })
 
   test("acks terminal.input without rebroadcasting terminal snapshots", async () => {
-    const router = createTestRouter({
-      terminals: {
-        getSnapshot: () => null,
-        onEvent: () => () => {},
-        write: () => {},
-      } as never,
-    })
+    const terminals = makeFakeTerminals()
+    const router = createTestRouter({ terminals })
     const ws = new FakeWebSocket()
 
     ws.data.subscriptions.set("sub-terminal", { type: "terminal", terminalId: "terminal-1" })
@@ -795,21 +788,16 @@ describe("ws-router", () => {
         id: "terminal-input-1",
       },
     ])
+    expect(terminals.writes).toEqual([{ terminalId: "terminal-1", data: "ls\r" }])
   })
 
   test("terminal.create with projectId null spawns a home-directory terminal", async () => {
-    const created: Array<{ projectPath: string; terminalId: string }> = []
+    const terminals = makeFakeTerminals()
     const router = createTestRouter({
       store: createFakeStore({ getProject: () => null }),
-      terminals: {
-        getSnapshot: () => null,
-        onEvent: () => () => {},
-        createTerminal: (args: { projectPath: string; terminalId: string }) => {
-          created.push({ projectPath: args.projectPath, terminalId: args.terminalId })
-          return { terminalId: args.terminalId }
-        },
-      } as never,
+      terminals,
     })
+    const created = terminals.created
     const ws = new FakeWebSocket()
 
     await router.handleMessage(
@@ -829,7 +817,7 @@ describe("ws-router", () => {
       })
     )
 
-    expect(created).toEqual([{ projectPath: homedir(), terminalId: "home" }])
+    expect(created.map(({ projectPath, terminalId }) => ({ projectPath, terminalId }))).toEqual([{ projectPath: homedir(), terminalId: "home" }])
     expect(ws.sent[0]).toMatchObject({ type: "ack", id: "terminal-create-home" })
 
     // A string projectId still resolves through the store (unknown → error).
@@ -857,21 +845,7 @@ describe("ws-router", () => {
     // Regression: a pane subscribes before its session exists (signature
     // "null"), creates, then clears (close). The post-close null snapshot
     // must not be deduped away — it's what tells the pane to recreate.
-    const sessions = new Map<string, { terminalId: string }>()
-    const router = createTestRouter({
-      terminals: {
-        getSnapshot: (terminalId: string) => sessions.get(terminalId) ?? null,
-        onEvent: () => () => {},
-        createTerminal: (args: { terminalId: string }) => {
-          const snapshot = { terminalId: args.terminalId }
-          sessions.set(args.terminalId, snapshot)
-          return snapshot
-        },
-        close: (terminalId: string) => {
-          sessions.delete(terminalId)
-        },
-      } as never,
-    })
+    const router = createTestRouter({ terminals: makeFakeTerminals() })
     const ws = new FakeWebSocket()
     router.handleOpen(ws as never)
 

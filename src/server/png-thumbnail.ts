@@ -1,8 +1,8 @@
 import { createReadStream } from "node:fs"
-import { open, writeFile } from "node:fs/promises"
 import { Readable, Writable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { crc32, createInflate, deflateSync } from "node:zlib"
+import { Effect, FileSystem, Option, Schema } from "effect"
 
 /**
  * Shrinks a PNG without ever holding it decoded.
@@ -16,12 +16,41 @@ import { crc32, createInflate, deflateSync } from "node:zlib"
  *
  * Interlaced PNGs deliver rows in seven passes rather than in order, so they
  * are refused (`UnsupportedPngError`) and the caller finds another way.
+ *
+ * The row work is plain code driven by node's zlib stream; only the two entry
+ * points (`readPngHeader`, `writePngThumbnail`) are Effects.
  */
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const READ_CHUNK_BYTES = 64 * 1024
 
-export class UnsupportedPngError extends Error {}
+/** A PNG this reader can't stream: interlaced, malformed, or not a PNG. */
+export class UnsupportedPngError extends Schema.TaggedError<UnsupportedPngError>()(
+  "@kanna/server/png-thumbnail/UnsupportedPngError",
+  {
+    filePath: Schema.String,
+    reason: Schema.String,
+  },
+) {
+  override get message() {
+    return this.reason
+  }
+}
+
+export class PngFileError extends Schema.TaggedError<PngFileError>()(
+  "@kanna/server/png-thumbnail/PngFileError",
+  {
+    operation: Schema.Literals(["read", "write"]),
+    filePath: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
+
+/**
+ * Thrown inside the node stream pipeline, where there is no Effect, and
+ * turned into `UnsupportedPngError` where the pipeline is run.
+ */
+class PngFormatError extends Error {}
 
 export interface PngHeader {
   width: number
@@ -47,16 +76,18 @@ function parseHeader(bytes: Buffer): PngHeader | null {
 }
 
 /** The size of a PNG from its first 33 bytes, or null when it isn't one. */
-export async function readPngHeader(filePath: string): Promise<PngHeader | null> {
-  const handle = await open(filePath, "r")
-  try {
-    const bytes = Buffer.alloc(33)
-    const { bytesRead } = await handle.read(bytes, 0, 33, 0)
-    return parseHeader(bytes.subarray(0, bytesRead))
-  } finally {
-    await handle.close()
-  }
-}
+export const readPngHeader = Effect.fn("PngThumbnail.readPngHeader")(function* (filePath: string) {
+  const fs = yield* FileSystem.FileSystem
+  const bytes = yield* Effect.scoped(
+    fs.open(filePath, { flag: "r" }).pipe(Effect.flatMap((file) => file.readAlloc(33))),
+  ).pipe(
+    Effect.catchTag("PlatformError", (cause) => Effect.fail(new PngFileError({ operation: "read", filePath, cause }))),
+  )
+  return Option.match(bytes, {
+    onNone: (): PngHeader | null => null,
+    onSome: (read) => parseHeader(Buffer.from(read.buffer, read.byteOffset, read.byteLength)),
+  })
+})
 
 interface PngParts {
   header: PngHeader | null
@@ -84,7 +115,7 @@ async function* readImageData(filePath: string, parts: PngParts): AsyncGenerator
     while (offset < pending.length) {
       if (!signatureSeen) {
         if (pending.length - offset < 8) break
-        if (!pending.subarray(offset, offset + 8).equals(PNG_SIGNATURE)) throw new UnsupportedPngError("Not a PNG")
+        if (!pending.subarray(offset, offset + 8).equals(PNG_SIGNATURE)) throw new PngFormatError("Not a PNG")
         signatureSeen = true
         offset += 8
         continue
@@ -176,7 +207,7 @@ function unfilterRow(filter: number, row: Uint8Array, above: Uint8Array, stride:
       }
       return
     default:
-      throw new UnsupportedPngError(`Unknown PNG filter ${filter}`)
+      throw new PngFormatError(`Unknown PNG filter ${filter}`)
   }
 }
 
@@ -213,16 +244,16 @@ class RowAverager extends Writable {
 
   private begin() {
     const header = this.parts.header
-    if (!header) throw new UnsupportedPngError("PNG has no header")
+    if (!header) throw new PngFormatError("PNG has no header")
     const channels = CHANNELS[header.colorType]
     const { bitDepth, width, height } = header
     const depthOk = bitDepth === 8 || bitDepth === 16
       || ((header.colorType === 0 || header.colorType === 3) && (bitDepth === 1 || bitDepth === 2 || bitDepth === 4))
     if (!channels || !depthOk || header.interlaced || width === 0 || height === 0) {
-      throw new UnsupportedPngError("Unsupported PNG layout")
+      throw new PngFormatError("Unsupported PNG layout")
     }
     if (header.colorType === 3 && (bitDepth === 16 || !this.parts.palette)) {
-      throw new UnsupportedPngError("Unsupported PNG palette")
+      throw new PngFormatError("Unsupported PNG palette")
     }
     this.header = header
     this.stride = Math.max(1, (channels * bitDepth) >> 3)
@@ -273,7 +304,7 @@ class RowAverager extends Writable {
 
   override _final(callback: (error?: Error | null) => void) {
     if (!this.header || this.y < this.header.height) {
-      callback(new UnsupportedPngError("PNG ended early"))
+      callback(new PngFormatError("PNG ended early"))
       return
     }
     this.flushRow()
@@ -429,19 +460,31 @@ export type Background = readonly [number, number, number]
 
 /**
  * Writes `sourcePath` to `targetPath` scaled to fit `maxSize` pixels on its
- * longer side, over `background` when one is given. Never scales up. Throws
- * `UnsupportedPngError` for a PNG this can't stream (interlaced, or malformed).
+ * longer side, over `background` when one is given. Never scales up. Fails
+ * with `UnsupportedPngError` for a PNG this can't stream (interlaced, or
+ * malformed).
  */
-export async function writePngThumbnail(sourcePath: string, targetPath: string, maxSize: number, background?: Background) {
+export const writePngThumbnail = Effect.fn("PngThumbnail.writePngThumbnail")(function* (
+  sourcePath: string,
+  targetPath: string,
+  maxSize: number,
+  background?: Background,
+) {
+  const fs = yield* FileSystem.FileSystem
   const parts: PngParts = { header: null, palette: null, paletteAlpha: null }
   const averager = new RowAverager(parts, maxSize, background ?? null)
-  try {
-    await pipeline(Readable.from(readImageData(sourcePath, parts)), createInflate(), averager)
-  } catch (error) {
-    if (error instanceof UnsupportedPngError) throw error
-    // A zlib error is a broken file, which is the caller's "find another way" too.
-    throw new UnsupportedPngError(error instanceof Error ? error.message : String(error))
-  }
-  await writeFile(targetPath, encodePng(averager.outWidth, averager.outHeight, averager.pixels))
+  yield* Effect.tryPromise({
+    try: (signal) => pipeline(Readable.from(readImageData(sourcePath, parts)), createInflate(), averager, { signal }),
+    // A zlib or read error is a broken file, which is the caller's "find
+    // another way" too.
+    catch: (error) => new UnsupportedPngError({
+      filePath: sourcePath,
+      reason: error instanceof Error ? error.message : String(error),
+    }),
+  })
+  yield* fs.writeFile(targetPath, encodePng(averager.outWidth, averager.outHeight, averager.pixels)).pipe(
+    Effect.catchTag("PlatformError", (cause) =>
+      Effect.fail(new PngFileError({ operation: "write", filePath: targetPath, cause }))),
+  )
   return { width: averager.outWidth, height: averager.outHeight }
-}
+})

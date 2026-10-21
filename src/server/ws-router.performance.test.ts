@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
+import { makeFakeTerminals } from "./terminal-manager.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -8,7 +9,6 @@ import { EventStore } from "./event-store"
 import { createWsRouter, type ClientState } from "./ws-router"
 import type { ChatSnapshot } from "../shared/types"
 
-const onChange = () => () => {}
 
 test("stream updates read only the new tail and release subscription maps", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "kanna-router-performance-"))
@@ -19,7 +19,7 @@ test("stream updates read only the new tail and release subscription maps", asyn
   const router = createWsRouter({
     store,
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() },
-    diffStore: {}, worktreeProbe: {}, terminals: { onEvent: onChange },
+    diffStore: {}, worktreeProbe: {}, terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings({} as never), appSettings: makeFakeAppSettings({ transcript: { windowAssistantMessages: 5 } }),
     llmProvider: {}, refreshDiscovery: async () => [], getDiscoveredProjects: () => [],
     machineDisplayName: "test", updateManager: null,

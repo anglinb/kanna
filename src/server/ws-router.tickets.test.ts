@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
+import { makeFakeTerminals } from "./terminal-manager.fake"
 import { PROTOCOL_VERSION } from "../shared/types"
 import type { TicketDetail } from "../shared/tickets"
 import { createEmptyState } from "./events"
@@ -62,7 +63,7 @@ function setup() {
     diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
     worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
-    terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
+    terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),
     appSettings: makeFakeAppSettings(),
     llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,

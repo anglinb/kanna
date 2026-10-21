@@ -38,7 +38,7 @@ import { createChatCommands } from "./chat-commands"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { Keybindings } from "./keybindings"
 import { ServerPlatform } from "./effect/runtime"
-import { runKanna, runKannaSync } from "./effect/bridge"
+import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
 import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
@@ -49,8 +49,8 @@ import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
-import { PortTunnelManager } from "./port-tunnels"
-import { TerminalManager } from "./terminal-manager"
+import { PortTunnels } from "./port-tunnels"
+import { Terminals } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import { fetchMainCommitSha, type NightlyInstallResult } from "./nightly"
@@ -193,10 +193,17 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       UsageLimits.layer(path.join(dataDir, "usage-limits.json"), usageReads),
       EditorDetection.layer(),
       TerminalDetection.layer(),
+      Terminals.layer,
+      PortTunnels.layer(),
+      ProjectIcons.layer({
+        dataDir,
+        projectPaths: Effect.sync((): string[] =>
+          [...store.state.projectsById.values()].filter((project) => !project.deletedAt).map((project) => project.localPath)),
+      }),
     ).pipe(Layer.provide(ServerPlatform)),
   )
   const diagnostics = await runtime.runPromise(PerformanceLog)
-  const store = new EventStore(options.dataDir, diagnostics)
+  const store: EventStore = new EventStore(options.dataDir, diagnostics)
   const diffStore = new DiffStore(store.dataDir)
   const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
@@ -232,13 +239,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       void router.broadcastSidebar()
     }
   )
-  const projectIcons = new ProjectIcons(
-    store.dataDir,
-    () => [...store.state.projectsById.values()].filter((project) => !project.deletedAt).map((project) => project.localPath),
-    () => {
-      void router.broadcastSidebar()
-    }
-  )
   // Free updates: `performRefresh` already stats every dirty file, so the
   // client's active project stays current at no extra git cost — and the dot
   // clears the instant a commit goes through Kanna's git panel.
@@ -269,11 +269,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   store.onTurnEnded = (chatId) => {
     void turnFiles.endTurn(chatId).finally(() => worktreeProbe.refreshForChat(chatId))
   }
-  const terminals = new TerminalManager()
-  const portTunnels = new PortTunnelManager({
-    log: (message) => console.log(`${LOG_PREFIX} ${message}`),
-  })
-  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection } = await runtime.runPromise(Effect.gen(function* () {
+  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons } = await runtime.runPromise(Effect.gen(function* () {
     return {
       keybindings: yield* Keybindings,
       appSettings: yield* AppSettings,
@@ -281,6 +277,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       usageLimits: yield* UsageLimits,
       editorDetection: yield* EditorDetection,
       terminalDetection: yield* TerminalDetection,
+      terminals: yield* Terminals,
+      portTunnels: yield* PortTunnels,
+      projectIcons: yield* ProjectIcons,
     }
   }))
   const trackEvent = (eventName: string, properties?: Record<string, unknown>) =>
@@ -295,6 +294,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   }
   void runKanna(editorDetection.refresh(installedAppsTarget))
   void runKanna(terminalDetection.refresh(installedAppsTarget))
+  const disposeProjectIconChanges = subscribeKanna(projectIcons.changes, () => {
+    void router.broadcastSidebar()
+  })
   const updateManager = options.update
     ? new UpdateManager({
       currentVersion: options.update.version,
@@ -489,7 +491,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const staleChatAutoArchiveInterval = setInterval(runAutoArchiveStaleChats, STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS)
   const staleChatDeleteInterval = setInterval(runDeleteStaleChats, STALE_CHAT_DELETE_INTERVAL_MS)
   worktreeProbe.start()
-  projectIcons.start()
+  void runtime.runPromise(projectIcons.start)
   // Claims recorded before base blobs never expire on their own, so a chat
   // whose work shipped months ago keeps returning to Relevant on someone
   // else's edit. Dating them is two git calls per affected chat and only
@@ -627,7 +629,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
                 return withOriginAgentCluster(auth.redirectToApp(req))
               }
               if (req.method === "POST") {
-                return withOriginAgentCluster(auth.handleLogin(req, "/"))
+                return withOriginAgentCluster(runKanna(auth.handleLogin(req, "/")))
               }
               return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
             }
@@ -748,7 +750,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(uploadResponse)
           }
 
-          const transcribeResponse = await handleTranscribe(req, url, readLlmProvider)
+          const transcribeResponse = await runKanna(handleTranscribe(req, url, readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform))))
           if (transcribeResponse) {
             return withOriginAgentCluster(transcribeResponse)
           }
@@ -845,7 +847,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     ...store.getResourceCounts(),
     ...router.getResourceCounts(),
     ...agent.getResourceCounts(),
-    ...terminals.getResourceCounts(),
+    ...runKannaSync(terminals.resourceCounts),
     ...diffStore.getResourceCounts(),
   })))
 
@@ -858,15 +860,15 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     clearInterval(staleChatAutoArchiveInterval)
     clearInterval(staleChatDeleteInterval)
     worktreeProbe.stop()
-    projectIcons.stop()
+    disposeProjectIconChanges()
     // Cancels every in-flight turn *and* marks its chat, so the next boot
     // restarts the work instead of leaving it interrupted (see resume-turns.ts).
     orchestrator.dispose()
     try { await agent.interruptForShutdown() } finally { agent.dispose() }
     router.dispose()
     providerAuth.dispose()
-    terminals.closeAll()
-    portTunnels.stopAll()
+    // runtime.dispose() below also stops the project icon passes, kills every
+    // terminal's shell and stops every port tunnel.
     await store.compact()
     // After the store's last write, so the diagnostics' final line counts it.
     await runtime.dispose()

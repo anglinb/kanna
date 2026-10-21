@@ -544,9 +544,9 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
   if (isShareEnabled(runOptions.share)) {
     try {
-      const shareTunnel = await (deps.startShareTunnel ?? ((localUrl, shareMode) => startShareTunnel(localUrl, shareMode, {
+      const shareTunnel = await (deps.startShareTunnel ?? ((localUrl, shareMode) => runKanna(startShareTunnel(localUrl, shareMode, {
         log: (message) => deps.log(`${LOG_PREFIX} ${message}`),
-      })))(launchUrl, runOptions.share)
+      }))))(launchUrl, runOptions.share)
       shareTunnelStop = shareTunnel.stop
       if (shareTunnel.publicUrl) {
         await logShareDetails(deps.log, shareTunnel.publicUrl, launchUrl, deps.renderShareQr ?? renderTerminalQr)
