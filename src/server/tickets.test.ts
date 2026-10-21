@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
+import { makeFakeTerminals } from "./terminal-manager.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -585,7 +586,7 @@ describe("the user's ticket replies", () => {
       diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
       worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
       agent,
-      terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
+      terminals: makeFakeTerminals(),
       keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),
       appSettings: { getSnapshot: () => ({ transcript: { windowAssistantMessages: 50 } }), write: async () => ({}), writePatch: async () => ({}), onChange: () => () => {} } as never,
       llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,

@@ -1,4 +1,4 @@
-import { Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { homedir } from "node:os"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
@@ -48,8 +48,9 @@ import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
-import { PortTunnelManager } from "./port-tunnels"
-import { TerminalManager } from "./terminal-manager"
+import { PortTunnels } from "./port-tunnels"
+import { Terminals } from "./terminal-manager"
+import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
 import { UpdateManager } from "./update-manager"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import { fetchMainCommitSha, type NightlyInstallResult } from "./nightly"
@@ -196,13 +197,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       void router.broadcastSidebar()
     }
   )
-  const projectIcons = new ProjectIcons(
-    store.dataDir,
-    () => [...store.state.projectsById.values()].filter((project) => !project.deletedAt).map((project) => project.localPath),
-    () => {
-      void router.broadcastSidebar()
-    }
-  )
   // Free updates: `performRefresh` already stats every dirty file, so the
   // client's active project stays current at no extra git cost — and the dot
   // clears the instant a commit goes through Kanna's git panel.
@@ -233,10 +227,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   store.onTurnEnded = (chatId) => {
     void turnFiles.endTurn(chatId).finally(() => worktreeProbe.refreshForChat(chatId))
   }
-  const terminals = new TerminalManager()
-  const portTunnels = new PortTunnelManager({
-    log: (message) => console.log(`${LOG_PREFIX} ${message}`),
-  })
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
@@ -253,9 +243,22 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
+      Terminals.layer,
+      PortTunnels.layer(),
+      ProjectIcons.layer({
+        dataDir: store.dataDir,
+        projectPaths: Effect.sync(() =>
+          [...store.state.projectsById.values()].filter((project) => !project.deletedAt).map((project) => project.localPath)),
+      }),
     ).pipe(Layer.provide(ServerPlatform)),
   )
   const keybindings = await runtime.runPromise(Keybindings)
+  const terminals = await runtime.runPromise(Terminals)
+  const portTunnels = await runtime.runPromise(PortTunnels)
+  const projectIcons = await runtime.runPromise(ProjectIcons)
+  const disposeProjectIconChanges = subscribeKanna(projectIcons.changes, () => {
+    void router.broadcastSidebar()
+  })
   const analytics = new KannaAnalyticsReporter({
     settings: appSettings,
     currentVersion: options.update?.version ?? "unknown",
@@ -462,7 +465,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const staleChatAutoArchiveInterval = setInterval(runAutoArchiveStaleChats, STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS)
   const staleChatDeleteInterval = setInterval(runDeleteStaleChats, STALE_CHAT_DELETE_INTERVAL_MS)
   worktreeProbe.start()
-  projectIcons.start()
+  void runtime.runPromise(projectIcons.start)
   // Claims recorded before base blobs never expire on their own, so a chat
   // whose work shipped months ago keeps returning to Relevant on someone
   // else's edit. Dating them is two git calls per affected chat and only
@@ -600,7 +603,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
                 return withOriginAgentCluster(auth.redirectToApp(req))
               }
               if (req.method === "POST") {
-                return withOriginAgentCluster(auth.handleLogin(req, "/"))
+                return withOriginAgentCluster(runKanna(auth.handleLogin(req, "/")))
               }
               return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
             }
@@ -721,7 +724,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(uploadResponse)
           }
 
-          const transcribeResponse = await handleTranscribe(req, url, readLlmProviderSnapshot)
+          const transcribeResponse = await runKanna(handleTranscribe(req, url, Effect.promise(() => readLlmProviderSnapshot())))
           if (transcribeResponse) {
             return withOriginAgentCluster(transcribeResponse)
           }
@@ -818,7 +821,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     ...store.getResourceCounts(),
     ...router.getResourceCounts(),
     ...agent.getResourceCounts(),
-    ...terminals.getResourceCounts(),
+    ...runKannaSync(terminals.resourceCounts),
     ...diffStore.getResourceCounts(),
   }))
 
@@ -831,7 +834,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     clearInterval(staleChatAutoArchiveInterval)
     clearInterval(staleChatDeleteInterval)
     worktreeProbe.stop()
-    projectIcons.stop()
+    disposeProjectIconChanges()
     // Cancels every in-flight turn *and* marks its chat, so the next boot
     // restarts the work instead of leaving it interrupted (see resume-turns.ts).
     orchestrator.dispose()
@@ -840,9 +843,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     providerAuth.dispose()
     usageLimits.dispose()
     appSettings.dispose()
+    // Also stops the project icon passes, kills every terminal's shell and
+    // stops every port tunnel.
     await runtime.dispose()
-    terminals.closeAll()
-    portTunnels.stopAll()
     await store.compact()
     await diagnostics.stop()
     server.stop(true)

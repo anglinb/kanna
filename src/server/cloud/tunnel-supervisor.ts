@@ -10,6 +10,7 @@
  */
 
 import { startShareTunnel, type StartedShareTunnel } from "../share"
+import { runKanna } from "../effect/bridge"
 import type { CloudApiClient } from "./api-client"
 import { CloudApiError } from "./api-client"
 import type { CloudIdentity } from "./identity"
@@ -90,7 +91,7 @@ export function startCloudTunnelSupervisor(args: TunnelSupervisorArgs): CloudTun
   const nowImpl = args.deps?.nowImpl ?? Date.now
   const startTunnelImpl = args.deps?.startTunnelImpl
     ?? ((localUrl: string, tunnelToken: string) =>
-      startShareTunnel(localUrl, { kind: "token", token: tunnelToken }, { log }))
+      runKanna(startShareTunnel(localUrl, { kind: "token", token: tunnelToken }, { log })))
   const pingIntervalMs = args.deps?.pingIntervalMs ?? PING_INTERVAL_MS
   const heartbeatEveryNPings = args.deps?.heartbeatEveryNPings ?? HEARTBEAT_EVERY_N_PINGS
 

@@ -5,6 +5,7 @@ import { LOG_PREFIX } from "../src/shared/branding"
 import { parseDevArgs } from "../src/shared/dev-ports"
 import { isShareEnabled, isTokenShareMode } from "../src/shared/share"
 import { logShareDetails, startShareTunnel } from "../src/server/share"
+import { runKanna } from "../src/server/effect/bridge"
 import { exitWithParent } from "../src/server/mac-app"
 
 const cwd = process.cwd()
@@ -130,7 +131,7 @@ if (isShareEnabled(share)) {
 
   try {
     await waitForLocalUrl(localUrl)
-    const shareTunnel = await startShareTunnel(localUrl, share)
+    const shareTunnel = await runKanna(startShareTunnel(localUrl, share))
     shareTunnelStop = shareTunnel.stop
     if (shareTunnel.publicUrl) {
       await logShareDetails(console.log, shareTunnel.publicUrl, localUrl)

@@ -17,14 +17,14 @@ import { openExternal } from "./external-open"
 import type { Keybindings } from "./keybindings"
 import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
-import type { PortTunnelManager } from "./port-tunnels"
+import type { PortTunnels } from "./port-tunnels"
 import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath, resolveLocalPath } from "./paths"
 import { listRecentGitHubRepos } from "./github"
 import { SERVER_PROVIDERS, applyPiFaveModels } from "./provider-catalog"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
 import { writeStandaloneTranscriptExport } from "./standalone-export"
-import { TerminalManager } from "./terminal-manager"
+import type { Terminals } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
 import type { ProjectIcons } from "./project-icons"
 import type { ProviderAuthManager } from "./provider-auth"
@@ -108,10 +108,10 @@ interface CreateWsRouterArgs {
   store: EventStore
   diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
   worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels" | "getProjectsWithoutRepo">
-  projectIcons?: Pick<ProjectIcons, "getUrls">
+  projectIcons?: Pick<ProjectIcons["Service"], "urls">
   agent: AgentCoordinator
-  terminals: TerminalManager
-  portTunnels?: Pick<PortTunnelManager, "expose" | "unexpose" | "getPublicUrl">
+  terminals: Terminals["Service"]
+  portTunnels?: Pick<PortTunnels["Service"], "expose" | "unexpose" | "publicUrl">
   keybindings: Keybindings["Service"]
   appSettings: Pick<AppSettingsManager, "getSnapshot" | "write" | "writePatch" | "onChange">
   analytics?: AnalyticsReporter
@@ -474,7 +474,7 @@ export function createWsRouter({
       workingTrees: worktreeProbe.getStates(),
       repoLabels: worktreeProbe.getRepoLabels(),
       projectsWithoutRepo: worktreeProbe.getProjectsWithoutRepo(),
-      projectIcons: projectIcons?.getUrls(),
+      projectIcons: projectIcons ? runKannaSync(projectIcons.urls) : undefined,
     })
 
     const sidebar: SidebarSnapshotEntry = {
@@ -652,7 +652,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "terminal",
-          data: terminals.getSnapshot(topic.terminalId),
+          data: runKannaSync(terminals.snapshot(topic.terminalId)),
         },
       }
     }
@@ -1149,7 +1149,7 @@ export function createWsRouter({
     }
   }
 
-  const disposeTerminalEvents = terminals.onEvent((event) => {
+  const disposeTerminalEvents = subscribeKanna(terminals.events, (event) => {
     pushTerminalEvent(event.terminalId, event)
   })
 
@@ -1320,34 +1320,34 @@ export function createWsRouter({
         }
         case "browser.listLocalHttpServers": {
           const project = command.projectId ? store.getProject(command.projectId) : null
-          const servers = await listLocalHttpServers({
+          const servers = await runKanna(listLocalHttpServers({
             projectPath: project?.localPath,
-            projectTerminalRootPids: project ? terminals.getRootPidsByCwd(project.localPath) : [],
-          })
+            projectTerminalRootPids: project ? runKannaSync(terminals.rootPidsByCwd(project.localPath)) : [],
+          }))
           // The scan result is cached for 30 s; the tunnel URL is stamped on
           // afterwards so an expose shows up on the next poll, not the next scan.
           const result = servers.map((server) => {
-            const publicUrl = portTunnels?.getPublicUrl(server.port)
+            const publicUrl = portTunnels ? runKannaSync(portTunnels.publicUrl(server.port)) : undefined
             return publicUrl ? { ...server, publicUrl } : server
           })
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "browser.killLocalHttpServer": {
-          const result = await killLocalHttpServer(command.port)
-          portTunnels?.unexpose(command.port)
+          const result = await runKanna(killLocalHttpServer(command.port))
+          if (portTunnels) await runKanna(portTunnels.unexpose(command.port))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "browser.exposeLocalHttpServer": {
           if (!portTunnels) throw new Error("Port tunnels are not available.")
-          const result = await portTunnels.expose(command.port)
+          const result = await runKanna(portTunnels.expose(command.port))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "browser.unexposeLocalHttpServer": {
           if (!portTunnels) throw new Error("Port tunnels are not available.")
-          const result = portTunnels.unexpose(command.port)
+          const result = await runKanna(portTunnels.unexpose(command.port))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -2057,34 +2057,34 @@ export function createWsRouter({
             }
             projectPath = project.localPath
           }
-          const snapshot = terminals.createTerminal({
+          const snapshot = await runKanna(terminals.create({
             projectPath,
             terminalId: command.terminalId,
             cols: command.cols,
             rows: command.rows,
             scrollback: command.scrollback,
-          })
+          }))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
         case "terminal.input": {
-          terminals.write(command.terminalId, command.data)
+          runKannaSync(terminals.write(command.terminalId, command.data))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "terminal.resize": {
-          terminals.resize(command.terminalId, command.cols, command.rows)
+          runKannaSync(terminals.resize(command.terminalId, command.cols, command.rows))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "terminal.close": {
-          terminals.close(command.terminalId)
+          runKannaSync(terminals.close(command.terminalId))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           pushTerminalSnapshot(command.terminalId, { force: true })
           return
         }
         case "terminal.tail": {
-          const result = terminals.getTail(command.terminalId, command.sinceVersion)
+          const result = runKannaSync(terminals.tail(command.terminalId, command.sinceVersion))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }

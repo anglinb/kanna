@@ -1,14 +1,15 @@
 import { existsSync } from "node:fs"
 import { renderANSI } from "uqr"
 import { ConfigHandler, Tunnel, bin as cloudflaredBin, install as installCloudflared } from "cloudflared"
+import { Deferred, Effect, Exit, Schema } from "effect"
 import type { ShareMode } from "../shared/share"
 import { isTokenShareMode } from "../shared/share"
 
 export interface StartedShareTunnel {
   publicUrl: string | null
   stop: () => void
-  /** Resolves when the cloudflared process exits, for any reason. */
-  exited?: Promise<void>
+  /** Completes when the cloudflared process exits, for any reason. */
+  exited?: Effect.Effect<void>
 }
 
 export interface ShareTunnelProcess {
@@ -32,6 +33,48 @@ export interface ShareTunnelDeps {
   log?: (message: string) => void
 }
 
+/** Downloading the cloudflared binary failed. */
+export class CloudflaredInstallError extends Schema.TaggedError<CloudflaredInstallError>()(
+  "@kanna/server/share/CloudflaredInstallError",
+  {
+    binPath: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return this.cause instanceof Error ? this.cause.message : String(this.cause)
+  }
+}
+
+/** cloudflared reported an error before the tunnel was ready. The message is its own. */
+export class ShareTunnelError extends Schema.TaggedError<ShareTunnelError>()(
+  "@kanna/server/share/ShareTunnelError",
+  {
+    localUrl: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return this.cause instanceof Error ? this.cause.message : String(this.cause)
+  }
+}
+
+/** cloudflared exited before the tunnel was ready. */
+export class ShareTunnelExitedError extends Schema.TaggedError<ShareTunnelExitedError>()(
+  "@kanna/server/share/ShareTunnelExitedError",
+  {
+    localUrl: Schema.String,
+    expectedUrl: Schema.Boolean,
+    code: Schema.NullOr(Schema.Number),
+    signal: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message() {
+    const readyState = this.expectedUrl ? "a public URL was ready" : "it was ready"
+    return `Cloudflare tunnel exited before ${readyState} (code: ${String(this.code)}, signal: ${String(this.signal)})`
+  }
+}
+
 export async function renderTerminalQr(url: string) {
   return renderANSI(url, {
     ecc: "L",
@@ -39,7 +82,8 @@ export async function renderTerminalQr(url: string) {
   })
 }
 
-export async function ensureCloudflaredInstalled(
+/** The cloudflared binary's path, downloading it first when it is missing. */
+export const ensureCloudflaredInstalled = Effect.fn("Share.ensureCloudflaredInstalled")(function* (
   deps: ShareTunnelDeps = {},
 ) {
   const resolvedBin = deps.cloudflaredBin ?? cloudflaredBin
@@ -51,9 +95,12 @@ export async function ensureCloudflaredInstalled(
   }
 
   deps.log?.("installing cloudflared binary")
-  await installBinary(resolvedBin)
+  yield* Effect.tryPromise({
+    try: () => installBinary(resolvedBin),
+    catch: (cause) => new CloudflaredInstallError({ binPath: resolvedBin, cause }),
+  })
   return resolvedBin
-}
+})
 
 function normalizePublicUrl(url: string) {
   return /^https?:\/\//.test(url) ? url : `https://${url}`
@@ -65,44 +112,31 @@ function createNamedTunnel(token: string, localUrl: string) {
   return tunnel
 }
 
-async function awaitTunnelReady(
-  tunnel: ShareTunnelProcess,
-  { expectUrl }: { expectUrl: boolean },
-) {
-  return await new Promise<string | null>((resolve, reject) => {
-    let settled = false
-
+/**
+ * Waits for the tunnel's public URL (quick tunnels) or its first connection
+ * (named tunnels, whose hostname cloudflared may never print).
+ */
+function awaitTunnelReady(tunnel: ShareTunnelProcess, localUrl: string, expectUrl: boolean) {
+  return Effect.callback<string | null, ShareTunnelError | ShareTunnelExitedError>((resume) => {
     const cleanup = () => {
       tunnel.off("url", handleUrl)
       tunnel.off("connected", handleConnected)
       tunnel.off("error", handleError)
       tunnel.off("exit", handleExit)
     }
-
-    const settle = (callback: () => void) => {
-      if (settled) return
-      settled = true
+    const settle = (effect: Effect.Effect<string | null, ShareTunnelError | ShareTunnelExitedError>) => {
       cleanup()
-      callback()
+      resume(effect)
     }
 
-    const handleUrl = (url: string) => {
-      settle(() => resolve(normalizePublicUrl(url)))
-    }
-
+    const handleUrl = (url: string) => settle(Effect.succeed(normalizePublicUrl(url)))
     const handleConnected = () => {
       if (expectUrl) return
-      settle(() => resolve(null))
+      settle(Effect.succeed(null))
     }
-
-    const handleError = (error: Error) => {
-      settle(() => reject(error))
-    }
-
-    const handleExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      const readyState = expectUrl ? "a public URL was ready" : "it was ready"
-      settle(() => reject(new Error(`Cloudflare tunnel exited before ${readyState} (code: ${String(code)}, signal: ${String(signal)})`)))
-    }
+    const handleError = (error: Error) => settle(Effect.fail(new ShareTunnelError({ localUrl, cause: error })))
+    const handleExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      settle(Effect.fail(new ShareTunnelExitedError({ localUrl, expectedUrl: expectUrl, code, signal })))
 
     tunnel.once("url", handleUrl)
     if (!expectUrl) {
@@ -110,22 +144,33 @@ async function awaitTunnelReady(
     }
     tunnel.once("error", handleError)
     tunnel.once("exit", handleExit)
+    return Effect.sync(cleanup)
   })
 }
 
-export async function startShareTunnel(
+/**
+ * Starts cloudflared for `localUrl`: a quick tunnel, or a named one for a
+ * token. The caller owns the result and calls `stop`; if this is interrupted
+ * before the tunnel is ready, the process is stopped here.
+ */
+export const startShareTunnel = Effect.fn("Share.startShareTunnel")(function* (
   localUrl: string,
   shareMode: Exclude<ShareMode, false> = "quick",
   deps: ShareTunnelDeps = {},
-): Promise<StartedShareTunnel> {
-  await ensureCloudflaredInstalled(deps)
+) {
+  yield* ensureCloudflaredInstalled(deps)
   const namedTunnel = isTokenShareMode(shareMode)
   const tunnel = namedTunnel
     ? (deps.createNamedTunnel ?? createNamedTunnel)(shareMode.token, localUrl)
     : (deps.createQuickTunnel ?? ((url) => Tunnel.quick(url)))(localUrl)
-  const publicUrl = await awaitTunnelReady(tunnel, { expectUrl: !namedTunnel })
-  const exited = new Promise<void>((resolve) => {
-    tunnel.once("exit", () => resolve())
+  const publicUrl = yield* awaitTunnelReady(tunnel, localUrl, !namedTunnel).pipe(
+    Effect.onInterrupt(() => Effect.sync(() => {
+      tunnel.stop()
+    })),
+  )
+  const exited = Deferred.makeUnsafe<void>()
+  tunnel.once("exit", () => {
+    Deferred.doneUnsafe(exited, Exit.void)
   })
 
   return {
@@ -133,9 +178,9 @@ export async function startShareTunnel(
     stop: () => {
       tunnel.stop()
     },
-    exited,
-  }
-}
+    exited: Deferred.await(exited),
+  } satisfies StartedShareTunnel
+})
 
 export async function logShareDetails(
   log: (message: string) => void,

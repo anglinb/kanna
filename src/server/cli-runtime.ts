@@ -9,6 +9,7 @@ import { repairBunGlobalManifest, type NightlyInstallResult } from "./nightly"
 import { PROD_SERVER_PORT } from "../shared/ports"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
+import { runKanna } from "./effect/bridge"
 import { probeExistingInstance, type ExistingInstance } from "./instance"
 import {
   claimInstance,
@@ -543,9 +544,9 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
   if (isShareEnabled(runOptions.share)) {
     try {
-      const shareTunnel = await (deps.startShareTunnel ?? ((localUrl, shareMode) => startShareTunnel(localUrl, shareMode, {
+      const shareTunnel = await (deps.startShareTunnel ?? ((localUrl, shareMode) => runKanna(startShareTunnel(localUrl, shareMode, {
         log: (message) => deps.log(`${LOG_PREFIX} ${message}`),
-      })))(launchUrl, runOptions.share)
+      }))))(launchUrl, runOptions.share)
       shareTunnelStop = shareTunnel.stop
       if (shareTunnel.publicUrl) {
         await logShareDetails(deps.log, shareTunnel.publicUrl, launchUrl, deps.renderShareQr ?? renderTerminalQr)
