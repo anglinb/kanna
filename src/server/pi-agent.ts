@@ -31,6 +31,9 @@ import { buildKannaAgentCorrection, buildKannaAgentId } from "./attribution"
 import { buildKannaSystemInstructions } from "./harness-instructions"
 import { appendSystemMessageBlock } from "./harness-skills"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
+import { Effect } from "effect"
+import { runKanna } from "./effect/bridge"
+import { ServerPlatform } from "./effect/runtime"
 import { timestamped } from "./transcript"
 
 /**
@@ -236,7 +239,7 @@ export function buildRegistryModel(connection: PiConnection, modelId: string): M
  */
 export async function resolvePiConnection(): Promise<PiConnection | null> {
   try {
-    const snapshot = await readLlmProviderSnapshot()
+    const snapshot = await runKanna(readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform)))
     if (snapshot.apiKey && snapshot.resolvedBaseUrl) {
       return {
         provider: snapshot.provider,

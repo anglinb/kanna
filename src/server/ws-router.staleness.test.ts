@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
+import { makeFakeAppSettings } from "./app-settings.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -328,31 +329,13 @@ function createWorld(options?: { projectPath?: string }) {
     },
   }
 
-  const appSettingsListeners = new Set<(snapshot: unknown) => void>()
-  let appSettingsSnapshot: Record<string, unknown> = {
+  const appSettings = makeFakeAppSettings({
     analyticsEnabled: true,
     theme: "system",
     newSidebarEnabled: false,
     // The router sizes every chat window from this on subscribe.
     transcript: { windowAssistantMessages: 50 },
-  }
-  const appSettings = {
-    getSnapshot: () => appSettingsSnapshot,
-    write: async (value: { analyticsEnabled: boolean }) => {
-      appSettingsSnapshot = { ...appSettingsSnapshot, analyticsEnabled: value.analyticsEnabled }
-      for (const listener of appSettingsListeners) listener(appSettingsSnapshot)
-      return appSettingsSnapshot
-    },
-    writePatch: async (patch: Record<string, unknown>) => {
-      appSettingsSnapshot = { ...appSettingsSnapshot, ...patch }
-      for (const listener of appSettingsListeners) listener(appSettingsSnapshot)
-      return appSettingsSnapshot
-    },
-    onChange: (listener: (snapshot: unknown) => void) => {
-      appSettingsListeners.add(listener)
-      return () => appSettingsListeners.delete(listener)
-    },
-  }
+  })
 
   const keybindingsSnapshot = {
     bindings: { toggleEmbeddedTerminal: ["cmd+j"] },
@@ -368,7 +351,7 @@ function createWorld(options?: { projectPath?: string }) {
     agent: agent as never,
     terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
     keybindings: keybindings as never,
-    appSettings: appSettings as never,
+    appSettings,
     llmProvider: {
       read: async () => ({ provider: "openai", apiKey: "", model: "", baseUrl: "", resolvedBaseUrl: "", faveModels: [], enabled: false, warning: null, filePathDisplay: "" }),
       write: async () => {

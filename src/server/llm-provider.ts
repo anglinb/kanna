@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
+import { Effect, FileSystem, Option, Schema } from "effect"
 import OpenAI from "openai"
 import { getLlmProviderFilePath } from "../shared/branding"
 import { formatDisplayPath } from "./paths"
@@ -135,28 +135,47 @@ function createDefaultSnapshot(filePath: string, warning: string | null = null):
   }
 }
 
-export async function readLlmProviderSnapshot(filePath = getLlmProviderFilePath(homedir())) {
-  try {
-    const text = await readFile(filePath, "utf8")
-    if (!text.trim()) {
-      return createDefaultSnapshot(filePath, "LLM provider file was empty. Using defaults.")
-    }
-    return normalizeLlmProviderSnapshot(JSON.parse(text), filePath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return createDefaultSnapshot(filePath)
-    }
-    if (error instanceof SyntaxError) {
-      return createDefaultSnapshot(filePath, "LLM provider file is invalid JSON. Using defaults.")
-    }
-    throw error
-  }
-}
+export class LlmProviderFileError extends Schema.TaggedError<LlmProviderFileError>()(
+  "@kanna/server/llm-provider/LlmProviderFileError",
+  {
+    operation: Schema.Literals(["read", "write"]),
+    filePath: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
-export async function writeLlmProviderSnapshot(
-  value: Pick<LlmProviderFile, "provider" | "apiKey" | "model" | "faveModels"> & { baseUrl: string },
-  filePath = getLlmProviderFilePath(homedir())
+const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
+
+export const readLlmProviderSnapshot = Effect.fn("LlmProvider.read")(function* (
+  filePath: string = getLlmProviderFilePath(homedir()),
 ) {
+  yield* Effect.annotateCurrentSpan("filePath", filePath)
+  const fs = yield* FileSystem.FileSystem
+  const text = yield* fs.readFileString(filePath).pipe(
+    Effect.map(Option.some),
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+    Effect.catchTag("PlatformError", (cause) =>
+      Effect.fail(new LlmProviderFileError({ operation: "read", filePath, cause }))),
+  )
+  if (Option.isNone(text)) {
+    return createDefaultSnapshot(filePath)
+  }
+  if (!text.value.trim()) {
+    return createDefaultSnapshot(filePath, "LLM provider file was empty. Using defaults.")
+  }
+  return yield* decodeJson(text.value).pipe(
+    Effect.map((parsed) => normalizeLlmProviderSnapshot(parsed, filePath)),
+    Effect.catchTag("SchemaError", () =>
+      Effect.succeed(createDefaultSnapshot(filePath, "LLM provider file is invalid JSON. Using defaults."))),
+  )
+})
+
+export const writeLlmProviderSnapshot = Effect.fn("LlmProvider.write")(function* (
+  value: Pick<LlmProviderFile, "provider" | "apiKey" | "model" | "faveModels"> & { baseUrl: string },
+  filePath: string = getLlmProviderFilePath(homedir()),
+) {
+  yield* Effect.annotateCurrentSpan("filePath", filePath)
+  const fs = yield* FileSystem.FileSystem
   const snapshot = normalizeLlmProviderSnapshot(value, filePath)
   const payload: LlmProviderFile = {
     provider: snapshot.provider,
@@ -165,10 +184,13 @@ export async function writeLlmProviderSnapshot(
     baseUrl: snapshot.provider === "custom" ? snapshot.baseUrl : null,
     faveModels: snapshot.faveModels,
   }
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8")
+  yield* fs.makeDirectory(path.dirname(filePath), { recursive: true }).pipe(
+    Effect.andThen(fs.writeFileString(filePath, `${JSON.stringify(payload, null, 2)}\n`)),
+    Effect.catchTag("PlatformError", (cause) =>
+      Effect.fail(new LlmProviderFileError({ operation: "write", filePath, cause }))),
+  )
   return snapshot
-}
+})
 
 function toSerializableValue(value: unknown): unknown {
   if (value === null || value === undefined) return value ?? null
@@ -190,9 +212,25 @@ function toSerializableValue(value: unknown): unknown {
   return String(value)
 }
 
-export async function validateLlmProviderCredentials(
-  value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">
-): Promise<LlmProviderValidationResult> {
+/** The provider rejected the test request (bad key, unknown model, unreachable base URL). */
+export class LlmProviderRequestError extends Schema.TaggedError<LlmProviderRequestError>()(
+  "@kanna/server/llm-provider/LlmProviderRequestError",
+  {
+    provider: Schema.String,
+    baseUrl: Schema.String,
+    model: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
+
+/**
+ * Sends a tiny request with the given credentials. Never fails: a rejected
+ * request comes back as `{ ok: false, error }` with the provider's error, for
+ * the settings page to show.
+ */
+export const validateLlmProviderCredentials = Effect.fn("LlmProvider.validate")(function* (
+  value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">,
+) {
   const snapshot = normalizeLlmProviderSnapshot(value)
   if (!snapshot.enabled) {
     return {
@@ -201,27 +239,31 @@ export async function validateLlmProviderCredentials(
         type: "config_error",
         message: snapshot.warning ?? "LLM provider configuration is incomplete.",
       },
-    }
+    } satisfies LlmProviderValidationResult
   }
+  yield* Effect.annotateCurrentSpan({ provider: snapshot.provider, baseUrl: snapshot.resolvedBaseUrl, model: snapshot.model })
 
-  try {
-    const client = new OpenAI({
-      apiKey: snapshot.apiKey,
-      baseURL: snapshot.resolvedBaseUrl,
-    })
-    await client.responses.create({
+  return yield* Effect.tryPromise({
+    try: (signal) => {
+      const client = new OpenAI({
+        apiKey: snapshot.apiKey,
+        baseURL: snapshot.resolvedBaseUrl,
+      })
+      return client.responses.create({
+        model: snapshot.model,
+        input: "Reply with ok.",
+        max_output_tokens: 5,
+      }, { signal })
+    },
+    catch: (cause) => new LlmProviderRequestError({
+      provider: snapshot.provider,
+      baseUrl: snapshot.resolvedBaseUrl,
       model: snapshot.model,
-      input: "Reply with ok.",
-      max_output_tokens: 5,
-    })
-    return {
-      ok: true,
-      error: null,
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      error: toSerializableValue(error),
-    }
-  }
-}
+      cause,
+    }),
+  }).pipe(
+    Effect.as<LlmProviderValidationResult>({ ok: true, error: null }),
+    Effect.catchTag("@kanna/server/llm-provider/LlmProviderRequestError", (error) =>
+      Effect.succeed<LlmProviderValidationResult>({ ok: false, error: toSerializableValue(error.cause) })),
+  )
+})

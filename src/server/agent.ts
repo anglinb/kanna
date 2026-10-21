@@ -38,8 +38,8 @@ import type { ChatOrchestrator } from "./orchestrator"
 import { createClaudeKannaTools } from "./kanna-tool-adapters"
 import { EventStore } from "./event-store"
 import { STRUCTURED_RESULT_TOOL_KINDS } from "./events"
-import type { AnalyticsReporter } from "./analytics"
-import { NoopAnalyticsReporter } from "./analytics"
+import { NoopAnalytics, type Analytics } from "./analytics"
+import { runKannaSync } from "./effect/bridge"
 import { CodexAppServerManager } from "./codex-app-server"
 import { CursorCliManager } from "./cursor-cli"
 import { fetchGrokAccountUsage, GrokCliManager } from "./grok-cli"
@@ -264,7 +264,7 @@ interface ClaudeSessionState {
 interface AgentCoordinatorArgs {
   store: EventStore
   onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
-  analytics?: AnalyticsReporter
+  analytics?: Analytics["Service"]
   codexManager?: CodexAppServerManager
   cursorManager?: CursorCliManager
   grokManager?: GrokCliManager
@@ -1088,7 +1088,7 @@ async function startClaudeSession(args: {
 export class AgentCoordinator {
   private readonly store: EventStore
   private readonly onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
-  private readonly analytics: AnalyticsReporter
+  private readonly analytics: Analytics["Service"]
   private readonly codexManager: CodexAppServerManager
   private readonly cursorManager: CursorCliManager
   private readonly grokManager: GrokCliManager
@@ -1149,7 +1149,7 @@ export class AgentCoordinator {
   constructor(args: AgentCoordinatorArgs) {
     this.store = args.store
     this.onStateChange = args.onStateChange
-    this.analytics = args.analytics ?? NoopAnalyticsReporter
+    this.analytics = args.analytics ?? NoopAnalytics
     this.codexManager = args.codexManager ?? new CodexAppServerManager()
     // Optional: test stand-ins for the manager predate it.
     this.codexManager.setTaskActivityListener?.((chatId, update) => this.applySubagentActivity(chatId, update))
@@ -2423,7 +2423,7 @@ export class AgentCoordinator {
       }
       const created = await this.store.createChat(command.projectId, undefined, { delegator: command.delegator })
       chatId = created.id
-      this.analytics.track("chat_created")
+      runKannaSync(this.analytics.track("chat_created"))
     }
 
     const chat = this.store.requireChat(chatId)
@@ -2436,7 +2436,7 @@ export class AgentCoordinator {
     // together (a report and a schedule, say), and the second must queue
     // behind the turn the first is still starting rather than start its own.
     if (this.isBusy(chatId)) {
-      if (!extras?.source) this.analytics.track("message_sent")
+      if (!extras?.source) runKannaSync(this.analytics.track("message_sent"))
       const queuedMessage = await this.enqueueMessage(chatId, command.content, command.attachments ?? [], {
         provider: command.provider,
         model: command.model,
@@ -2452,7 +2452,7 @@ export class AgentCoordinator {
     const provider = this.resolveProvider(command, chat.provider)
     const settings = this.getProviderSettings(provider, command)
     // The count is of messages people send.
-    if (!extras?.source) this.analytics.track("message_sent")
+    if (!extras?.source) runKannaSync(this.analytics.track("message_sent"))
     await this.startTurnForChat({
       chatId,
       provider,
@@ -2475,7 +2475,7 @@ export class AgentCoordinator {
     command: Extract<ClientCommand, { type: "message.enqueue" }>,
     extras?: { source?: MessageSource; effort?: string },
   ) {
-    if (!extras?.source) this.analytics.track("message_sent")
+    if (!extras?.source) runKannaSync(this.analytics.track("message_sent"))
     const queuedMessage = await this.enqueueMessage(command.chatId, command.content, command.attachments ?? [], {
       provider: command.provider,
       model: command.model,
@@ -2738,7 +2738,7 @@ export class AgentCoordinator {
     // source's turn — it keeps running.
     const running = this.activeTurns.has(chatId) || this.drainingStreams.has(chatId)
     const forked = await this.store.forkChat(chatId, { atLastCompletedTurn: running, ...lineage })
-    this.analytics.track("chat_created")
+    runKannaSync(this.analytics.track("chat_created"))
     return { chatId: forked.id }
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
-import type { AppSettingsSnapshot } from "../shared/types"
+import { makeFakeAppSettings } from "./app-settings.fake"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
 import { handleChatWindow, type ChatWindowRouteDeps } from "./chat-window-route"
@@ -36,11 +36,8 @@ function createDeps(entries: Array<Record<string, unknown>>) {
     pruneStaleEmptyChats: async () => [],
   }
   const agent = { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set<string>() }
-  const appSettings = {
-    // Only the transcript window is read by the route or by the router's
-    // chat push, so the rest of the settings snapshot stays blank.
-    getSnapshot: () => ({ transcript: { windowAssistantMessages: 2 } } as unknown as AppSettingsSnapshot),
-  }
+  // Only the transcript window is read by the route or by the router's chat push.
+  const appSettings = makeFakeAppSettings({ transcript: { windowAssistantMessages: 2 } })
   return { store, agent, appSettings }
 }
 
@@ -55,7 +52,7 @@ async function firstSocketSnapshot(deps: ReturnType<typeof createDeps>) {
     agent: deps.agent as never,
     terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
     keybindings: makeFakeKeybindings({} as never),
-    appSettings: { ...deps.appSettings, write: async () => ({}), writePatch: async () => ({}), onChange: () => () => {} } as never,
+    appSettings: deps.appSettings,
     llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,
     refreshDiscovery: async () => [],
     getDiscoveredProjects: () => [],

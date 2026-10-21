@@ -21,6 +21,7 @@ import type { SubagentActivityUpdate } from "./background-tasks"
 import type { ChatAttachment, TranscriptEntry } from "../shared/types"
 import type { SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
+import { makeFakeAnalytics } from "./analytics.fake"
 
 async function waitFor(condition: () => boolean, timeoutMs = 2000) {
   const start = Date.now()
@@ -1425,19 +1426,14 @@ describe("AgentCoordinator codex integration", () => {
 describe("AgentCoordinator claude integration", () => {
   test("tracks analytics for new chats, queued messages, and forks", async () => {
     const events = new AsyncEventQueue<any>()
-    const analyticsEvents: string[] = []
+    const { analytics, events: analyticsEvents } = makeFakeAnalytics()
     const store = createFakeStore()
     store.chat.provider = "claude"
     store.chat.sessionToken = "session-1"
 
     const coordinator = new AgentCoordinator({
       store: store as never,
-      analytics: {
-        track: (eventName: string) => {
-          analyticsEvents.push(eventName)
-        },
-        trackLaunch: () => {},
-      },
+      analytics,
       onStateChange: () => {},
       startClaudeSession: async () => ({
         provider: "claude",

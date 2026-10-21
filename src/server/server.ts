@@ -1,10 +1,10 @@
-import { Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { homedir } from "node:os"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
 import { stat } from "node:fs/promises"
 import { APP_NAME, getDataDir, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
-import type { ChatAttachment } from "../shared/types"
+import type { ChatAttachment, EditorPreset, TerminalPreset } from "../shared/types"
 import type { ShareMode } from "../shared/share"
 import {
   CLOUD_BROWSER_PATH_PREFIX,
@@ -22,11 +22,11 @@ import { createPairSessionManager, type PairSessionSnapshot } from "./cloud/pair
 import { EventStore } from "./event-store"
 import { AgentCoordinator } from "./agent"
 import { CodexAppServerManager } from "./codex-app-server"
-import { KannaAnalyticsReporter } from "./analytics"
-import { AppSettingsManager } from "./app-settings"
+import { Analytics } from "./analytics"
+import { AppSettings } from "./app-settings"
 import { refreshInstalledEditors } from "./editor-detection"
 import { refreshInstalledTerminals } from "./terminal-detection"
-import { UsageLimitsManager } from "./usage-limits"
+import { UsageLimits, type UsageLimitsDeps } from "./usage-limits"
 import { DiffStore } from "./diff-store"
 import { WorktreeProbe } from "./worktree-probe"
 import { TurnFileTracker } from "./worktree-snapshot"
@@ -38,6 +38,7 @@ import { createChatCommands } from "./chat-commands"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { Keybindings } from "./keybindings"
 import { ServerPlatform } from "./effect/runtime"
+import { runKanna, runKannaSync } from "./effect/bridge"
 import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
@@ -241,26 +242,45 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
   const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
-  const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"), { devbox: devboxUi })
-  await appSettings.initialize()
-  // Which editors and terminals this machine has, for the "Open in…" menus.
-  // Deliberately not awaited: it shells out per app, and the menus render
-  // fine (nothing greyed out) until the result lands.
-  void refreshInstalledEditors(appSettings)
-  void refreshInstalledTerminals(appSettings)
+  // Usage reads go through the agent, which is built below; nothing asks for
+  // a read before the router exists.
+  const usageReads: UsageLimitsDeps = {
+    fetchClaudeUsage: () => agent.fetchClaudeUsage(),
+    fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
+    fetchGrokUsage: () => agent.fetchGrokUsage(),
+  }
   // Services already on Effect, built once and released at shutdown. The
   // rest of startup still holds them as plain values until it migrates too.
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
+      Analytics.layer({
+        currentVersion: options.update?.version ?? "unknown",
+        environment: runtimeProfile === "dev" ? "dev" : "prod",
+      }).pipe(Layer.provideMerge(AppSettings.layer(path.join(store.dataDir, "settings.json"), { devbox: devboxUi }))),
+      UsageLimits.layer(path.join(store.dataDir, "usage-limits.json"), usageReads),
     ).pipe(Layer.provide(ServerPlatform)),
   )
-  const keybindings = await runtime.runPromise(Keybindings)
-  const analytics = new KannaAnalyticsReporter({
-    settings: appSettings,
-    currentVersion: options.update?.version ?? "unknown",
-    environment: runtimeProfile === "dev" ? "dev" : "prod",
-  })
+  const { keybindings, appSettings, analytics, usageLimits } = await runtime.runPromise(Effect.gen(function* () {
+    return {
+      keybindings: yield* Keybindings,
+      appSettings: yield* AppSettings,
+      analytics: yield* Analytics,
+      usageLimits: yield* UsageLimits,
+    }
+  }))
+  const trackEvent = (eventName: string, properties?: Record<string, unknown>) =>
+    runKannaSync(analytics.track(eventName, properties))
+  const readLlmProvider = () => runKanna(readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform)))
+  // Which editors and terminals this machine has, for the "Open in…" menus.
+  // Deliberately not awaited: it shells out per app, and the menus render
+  // fine (nothing greyed out) until the result lands.
+  const installedAppsTarget = {
+    setInstalledEditors: (editors: EditorPreset[]) => runKannaSync(appSettings.setInstalledEditors(editors)),
+    setInstalledTerminals: (terminals: TerminalPreset[]) => runKannaSync(appSettings.setInstalledTerminals(terminals)),
+  }
+  void refreshInstalledEditors(installedAppsTarget)
+  void refreshInstalledTerminals(installedAppsTarget)
   const updateManager = options.update
     ? new UpdateManager({
       currentVersion: options.update.version,
@@ -269,7 +289,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       installVersion: options.update.installVersion,
       installNightly: options.update.installNightly,
       devMode: runtimeProfile === "dev",
-      trackEvent: analytics.track.bind(analytics),
+      trackEvent,
     })
     : null
   const codexManager = new CodexAppServerManager()
@@ -309,25 +329,19 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   agent.orchestration = orchestrator
   agent.onChatSettled = (chatId) => orchestrator.handleChatSettled(chatId)
   agent.onChatStopped = (chatId) => orchestrator.handleChatStopped(chatId)
-  const usageLimits = new UsageLimitsManager(path.join(store.dataDir, "usage-limits.json"), {
-    fetchClaudeUsage: () => agent.fetchClaudeUsage(),
-    fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
-    fetchGrokUsage: () => agent.fetchGrokUsage(),
-  })
-  await usageLimits.initialize()
-  agent.setClaudeRateLimitListener((info) => usageLimits.recordClaudeRateLimitPush(info))
-  codexManager.setRateLimitsListener((snapshot) => usageLimits.recordCodexRateLimitPush(snapshot))
+  agent.setClaudeRateLimitListener((info) => void runKanna(usageLimits.recordClaudeRateLimitPush(info)))
+  codexManager.setRateLimitsListener((snapshot) => void runKanna(usageLimits.recordCodexRateLimitPush(snapshot)))
 
   const providerAuth = new ProviderAuthManager({
     ...createProcessAuthDeps(),
-    readLlmProvider: readLlmProviderSnapshot,
-    writeLlmProvider: writeLlmProviderSnapshot,
+    readLlmProvider,
+    writeLlmProvider: (value) => runKanna(writeLlmProviderSnapshot(value).pipe(Effect.provide(ServerPlatform))),
     fetchLatestNpmVersion: fetchLatestPackageVersion,
-    trackEvent: analytics.track.bind(analytics),
+    trackEvent,
     onSignedIn: (service) => {
       // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
       // flip from auth → usage) and the live Cursor/Codex model catalogs.
-      void usageLimits.refresh({ force: true }).catch(() => undefined)
+      void runKanna(usageLimits.refresh({ force: true }))
       if (service === "cursor") {
         void agent.refreshCursorModelCatalog()
       }
@@ -361,14 +375,14 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     analytics,
     usageLimits,
     llmProvider: {
-      read: readLlmProviderSnapshot,
-      write: writeLlmProviderSnapshot,
-      validate: validateLlmProviderCredentials,
+      read: readLlmProvider,
+      write: (value) => runKanna(writeLlmProviderSnapshot(value).pipe(Effect.provide(ServerPlatform))),
+      validate: (value) => runKanna(validateLlmProviderCredentials(value)),
     },
     refreshDiscovery,
     refreshInstalledApps: () => {
-      void refreshInstalledEditors(appSettings)
-      void refreshInstalledTerminals(appSettings)
+      void refreshInstalledEditors(installedAppsTarget)
+      void refreshInstalledTerminals(installedAppsTarget)
     },
     getDiscoveredProjects: () => discoveredProjects,
     machineDisplayName,
@@ -382,7 +396,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   void agent.refreshGrokModelCatalog()
   // Seed the pi provider's model picker from saved fave models before the
   // first snapshots go out.
-  void readLlmProviderSnapshot()
+  void readLlmProvider()
     .then((snapshot) => {
       if (applyPiFaveModels(snapshot.faveModels)) {
         return router.broadcastSnapshots()
@@ -721,7 +735,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(uploadResponse)
           }
 
-          const transcribeResponse = await handleTranscribe(req, url, readLlmProviderSnapshot)
+          const transcribeResponse = await handleTranscribe(req, url, readLlmProvider)
           if (transcribeResponse) {
             return withOriginAgentCluster(transcribeResponse)
           }
@@ -804,7 +818,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     }
   }
 
-  analytics.trackLaunch({
+  runKannaSync(analytics.trackLaunch({
     port: actualPort,
     host: hostname,
     openBrowser: options.openBrowser ?? true,
@@ -812,7 +826,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     password: options.password ?? null,
     strictPort,
     cloud: Boolean(options.cloud),
-  })
+  }))
 
   diagnostics.start(() => ({
     ...store.getResourceCounts(),
@@ -838,8 +852,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     try { await agent.interruptForShutdown() } finally { agent.dispose() }
     router.dispose()
     providerAuth.dispose()
-    usageLimits.dispose()
-    appSettings.dispose()
     await runtime.dispose()
     terminals.closeAll()
     portTunnels.stopAll()

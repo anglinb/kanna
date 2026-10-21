@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AgentCoordinator } from "./agent"
-import { NoopAnalyticsReporter } from "./analytics"
+import { NoopAnalytics } from "./analytics"
 import { AsyncQueue } from "./async-queue"
 import { createChatCommands } from "./chat-commands"
 import { EventStore } from "./event-store"
@@ -114,7 +114,7 @@ async function setup(options?: { closeOutGraceMs?: number }) {
   const orchestrator = new ChatOrchestrator({
     store,
     agent,
-    commands: createChatCommands({ store, agent, analytics: NoopAnalyticsReporter }),
+    commands: createChatCommands({ store, agent, analytics: NoopAnalytics }),
     push: (change) => { pushes.push(change) },
     now: () => clock ?? Date.now(),
     closeOutGraceMs: options?.closeOutGraceMs,
@@ -1680,7 +1680,7 @@ describe("delegators", () => {
 
   test("the flag is set at creation, empty or by the first send, and reaches the sidebar and the chat's snapshot", async () => {
     const { store, project, agent, codex } = await setup()
-    const commands = createChatCommands({ store, agent, analytics: NoopAnalyticsReporter })
+    const commands = createChatCommands({ store, agent, analytics: NoopAnalytics })
     const snapshotOf = (chatId: string) => deriveChatSnapshot(store.state, agent.getChatStatuses(), new Set(), chatId, () => ({ messages: [], startIndex: 0, readAnchor: null }))
     const rowOf = (chatId: string) => deriveSidebarData(store.state, agent.getChatStatuses()).projectGroups[0]!.chats.find((chat) => chat.chatId === chatId)
 
@@ -1710,7 +1710,7 @@ describe("delegators", () => {
 
   test("the flag can be changed later, survives a restart, and keeps an empty delegator from being cleared away", async () => {
     const { store, project, agent } = await setup()
-    const commands = createChatCommands({ store, agent, analytics: NoopAnalyticsReporter })
+    const commands = createChatCommands({ store, agent, analytics: NoopAnalytics })
     const born = (await commands.create(project.id, undefined, { delegator: true })).result.chatId
     const made = (await commands.create(project.id)).result.chatId
     const unmade = (await commands.create(project.id, undefined, { delegator: true })).result.chatId

@@ -18,7 +18,8 @@ import {
   type InstanceClaim,
   type InstanceStatus,
 } from "./instance-socket"
-import type { AnalyticsReporter } from "./analytics"
+import type { Analytics } from "./analytics"
+import { runKannaSync } from "./effect/bridge"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
 import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
 import { runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
@@ -79,7 +80,7 @@ export interface CliRuntimeDeps {
     trustProxy?: boolean
     cloud?: CloudRuntime | null
     allowCloudPairing?: boolean
-  }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: AnalyticsReporter; state?: AttachedServer["state"] }>
+  }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: Analytics["Service"]; state?: AttachedServer["state"] }>
   fetchLatestVersion: (packageName: string, options?: { timeoutMs?: number }) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
   installNightly?: () => Promise<NightlyInstallResult>
@@ -579,7 +580,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
       log: (message) => deps.log(`${LOG_PREFIX} ${message}`),
       warn: (message) => deps.warn(`${LOG_PREFIX} ${message}`),
       onTunnelUp: (kind) => {
-        started.analytics?.track(kind === "started" ? "cloud_tunnel_started" : "cloud_tunnel_recovered")
+        if (started.analytics) runKannaSync(started.analytics.track(kind === "started" ? "cloud_tunnel_started" : "cloud_tunnel_recovered"))
         if (openHostedOnConnect && !openedHosted) {
           openedHosted = true
           deps.openUrl(runtime.identity.appOrigin)
