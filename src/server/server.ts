@@ -250,7 +250,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   void refreshInstalledTerminals(appSettings)
   // Services already on Effect, built once and released at shutdown. The
   // rest of startup still holds them as plain values until it migrates too.
-  const runtime = ManagedRuntime.make(Keybindings.layer().pipe(Layer.provide(ServerPlatform)))
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Keybindings.layer(),
+    ).pipe(Layer.provide(ServerPlatform)),
+  )
   const keybindings = await runtime.runPromise(Keybindings)
   const analytics = new KannaAnalyticsReporter({
     settings: appSettings,
