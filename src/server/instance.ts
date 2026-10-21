@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import path from "node:path"
+import { Effect, Option, Schema } from "effect"
 import { getDataDir } from "../shared/branding"
 
 /** Non-reversible identifier for a data dir (safe on the public /health). */
@@ -24,26 +25,48 @@ export interface ExistingInstance {
   port: number
 }
 
+/** Nothing usable answered /health on the port. Never escapes the probe. */
+class InstanceProbeError extends Schema.TaggedError<InstanceProbeError>()(
+  "@kanna/server/instance/InstanceProbeError",
+  {
+    port: Schema.Number,
+    cause: Schema.Defect(),
+  },
+) {}
+
+/** The part of a Kanna /health answer the probe checks. */
+const InstanceHealth = Schema.Struct({
+  ok: Schema.Literal(true),
+  instance: Schema.String,
+})
+
+const PROBE_TIMEOUT = "700 millis"
+
 /**
  * Returns the running same-data-dir instance on the given port, or null.
  * Anything unexpected (nothing listening, foreign server, other data dir)
- * resolves null so startup proceeds normally.
+ * gives null so startup proceeds normally.
  */
-export async function probeExistingInstance(
+export const probeExistingInstance = Effect.fn("Instance.probeExisting")(function* (
   port: number,
   dataDir?: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<ExistingInstance | null> {
-  try {
-    const response = await fetchImpl(`http://127.0.0.1:${port}/health`, {
-      signal: AbortSignal.timeout(700),
-    })
-    if (!response.ok) return null
-    const payload = await response.json() as { ok?: unknown; instance?: unknown }
-    if (payload.ok !== true || typeof payload.instance !== "string") return null
-    if (payload.instance !== instanceFingerprint(dataDir)) return null
-    return { localUrl: `http://localhost:${port}`, port }
-  } catch {
-    return null
-  }
-}
+) {
+  yield* Effect.annotateCurrentSpan("port", port)
+  const response = yield* Effect.tryPromise({
+    try: (signal) => fetchImpl(`http://127.0.0.1:${port}/health`, { signal }),
+    catch: (cause) => new InstanceProbeError({ port, cause }),
+  })
+  if (!response.ok) return null
+  const body = yield* Effect.tryPromise({
+    try: () => response.json(),
+    catch: (cause) => new InstanceProbeError({ port, cause }),
+  })
+  const health = Schema.decodeUnknownOption(InstanceHealth)(body)
+  if (Option.isNone(health) || health.value.instance !== instanceFingerprint(dataDir)) return null
+  return { localUrl: `http://localhost:${port}`, port } satisfies ExistingInstance
+}, (effect) => effect.pipe(
+  Effect.timeoutOption(PROBE_TIMEOUT),
+  Effect.map(Option.getOrNull),
+  Effect.catchTag("@kanna/server/instance/InstanceProbeError", () => Effect.succeed(null)),
+))

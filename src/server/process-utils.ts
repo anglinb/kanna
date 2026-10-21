@@ -3,61 +3,119 @@ import { accessSync, constants, statSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import process from "node:process"
+import { Effect, Result, Schema } from "effect"
 
-function formatSpawnError(command: string, error: unknown) {
+/** A command that could not be started, or whose output could not be read. */
+export class CommandSpawnError extends Schema.TaggedError<CommandSpawnError>()(
+  "@kanna/server/process-utils/CommandSpawnError",
+  {
+    command: Schema.String,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
+
+function spawnErrorMessage(command: string, error: unknown) {
   if (!(error instanceof Error)) {
-    return new Error(`Failed to start ${command}`)
+    return `Failed to start ${command}`
   }
-
-  const code = "code" in error ? (error as NodeJS.ErrnoException).code : undefined
-  if (code === "ENOENT") {
-    return new Error(`Command not found: ${command}`)
+  if ("code" in error && error.code === "ENOENT") {
+    return `Command not found: ${command}`
   }
-
-  return new Error(error.message || `Failed to start ${command}`)
+  return error.message || `Failed to start ${command}`
 }
 
-export function spawnDetached(command: string, args: string[]) {
-  return new Promise<void>((resolve, reject) => {
-    let child
-    try {
-      child = spawn(command, args, { stdio: "ignore", detached: true })
-    } catch (error) {
-      reject(formatSpawnError(command, error))
+const spawnError = (command: string, cause: unknown) =>
+  new CommandSpawnError({ command, message: spawnErrorMessage(command, cause), cause })
+
+/**
+ * Start `command` detached from this process (an editor, a file manager, a
+ * browser) and succeed once it has started. It is never waited on or killed.
+ */
+export const spawnDetached = Effect.fn("ProcessUtils.spawnDetached")(function* (command: string, args: string[]) {
+  yield* Effect.annotateCurrentSpan("command", command)
+  // Listeners go on in the same tick as the spawn: node reports a missing
+  // command as an `error` event right after `spawn` returns.
+  yield* Effect.callback<void, CommandSpawnError>((resume) => {
+    const started = Result.try(() => spawn(command, args, { stdio: "ignore", detached: true }))
+    if (Result.isFailure(started)) {
+      resume(Effect.fail(spawnError(command, started.failure)))
       return
     }
-
-    const handleError = (error: Error) => {
-      reject(formatSpawnError(command, error))
-    }
-
+    const child = started.success
+    const handleError = (error: Error) => resume(Effect.fail(spawnError(command, error)))
     child.once("error", handleError)
     child.once("spawn", () => {
       child.off("error", handleError)
       child.unref()
-      resolve()
+      resume(Effect.void)
     })
   })
+})
+
+export interface CommandOutput {
+  readonly exitCode: number | null
+  readonly stdout: string
+  readonly stderr: string
 }
 
-export function hasCommand(command: string) {
-  const result = spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" })
-  return result.status === 0
-}
-
-function succeedsAsync(command: string, args: string[]) {
-  return new Promise<boolean>((resolve) => {
-    let child
-    try {
-      child = spawn(command, args, { stdio: "ignore" })
-    } catch {
-      resolve(false)
-      return
-    }
-    child.once("error", () => resolve(false))
-    child.once("close", (code) => resolve(code === 0))
+/**
+ * Run `argv` to completion and collect what it printed on the streams asked
+ * for. The process is killed if the caller is interrupted before it exits.
+ */
+export const runCommand = Effect.fn("ProcessUtils.runCommand")(function* (
+  argv: ReadonlyArray<string>,
+  options: {
+    readonly cwd?: string
+    readonly env?: Record<string, string | undefined>
+    readonly stdout?: boolean
+    readonly stderr?: boolean
+  } = {},
+) {
+  const command = argv[0] ?? ""
+  yield* Effect.annotateCurrentSpan("command", command)
+  const child = yield* Effect.acquireRelease(
+    Effect.try({
+      try: () => Bun.spawn([...argv], {
+        cwd: options.cwd,
+        env: options.env,
+        stdin: "ignore",
+        stdout: options.stdout ? "pipe" : "ignore",
+        stderr: options.stderr ? "pipe" : "ignore",
+      }),
+      catch: (cause) => spawnError(command, cause),
+    }),
+    (child) => Effect.sync(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill()
+    }),
+  )
+  const [, stdout, stderr] = yield* Effect.tryPromise({
+    try: () => Promise.all([child.exited, readText(child.stdout), readText(child.stderr)]),
+    catch: (cause) => new CommandSpawnError({ command, message: `Failed to read the output of ${command}`, cause }),
   })
+  return { exitCode: child.exitCode, stdout, stderr } satisfies CommandOutput
+}, Effect.scoped)
+
+function readText(stream: ReadableStream<Uint8Array> | number | undefined) {
+  return stream instanceof ReadableStream ? new Response(stream).text() : Promise.resolve("")
 }
+
+/** Whether `argv` runs and exits 0. A command that can't start is a no. */
+const succeeds = Effect.fn("ProcessUtils.succeeds")(function* (argv: ReadonlyArray<string>) {
+  return yield* runCommand(argv).pipe(
+    Effect.map((output) => output.exitCode === 0),
+    Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", () => Effect.succeed(false)),
+  )
+})
+
+/**
+ * Whether `command` is on the login shell's PATH. Blocks while the shell
+ * runs, on purpose: `installPackageVersion` is synchronous and asks through
+ * `runKannaSync`. Probes run in bulk use `commandExists`.
+ */
+export const hasCommand = Effect.fn("ProcessUtils.hasCommand")(function* (command: string) {
+  return yield* Effect.sync(() => spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" }).status === 0)
+})
 
 /**
  * `hasCommand` without blocking the event loop — for probes run in bulk.
@@ -65,17 +123,17 @@ function succeedsAsync(command: string, args: string[]) {
  * Windows has no `sh`, so asking it there would report every command missing
  * and quietly grey out the whole menu; `where` is the equivalent lookup.
  */
-export function commandExists(command: string) {
+export const commandExists = Effect.fn("ProcessUtils.commandExists")(function* (command: string) {
   if (process.platform === "win32") {
-    return succeedsAsync("where", [command])
+    return yield* succeeds(["where", command])
   }
-  return succeedsAsync("sh", ["-lc", `command -v ${command}`])
-}
+  return yield* succeeds(["sh", "-lc", `command -v ${command}`])
+})
 
 /** `canOpenMacApp` without blocking the event loop. */
-export function macAppExists(appName: string) {
-  return succeedsAsync("open", ["-Ra", appName])
-}
+export const macAppExists = Effect.fn("ProcessUtils.macAppExists")(function* (appName: string) {
+  return yield* succeeds(["open", "-Ra", appName])
+})
 
 /**
  * Per-user bin dirs installers target without necessarily reaching the
@@ -163,40 +221,51 @@ export function parseShellPathOutput(output: string) {
  * `-i` is what reads ~/.zshrc. `printenv` rather than `$PATH` so fish, which
  * joins list variables with spaces, prints the same thing.
  */
-export async function inheritShellPath() {
+export const inheritShellPath = Effect.fn("ProcessUtils.inheritShellPath")(function* () {
   if (process.platform === "win32") return
   // The Mac app already started this process with the whole login-shell
   // environment (macos/src/shell-env.ts); a heavy ~/.zshrc costs
   // seconds, so don't pay for it twice.
   if (process.env[SHELL_ENV_IMPORTED_ENV_VAR] === "1") return
   const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")
-  const script = `echo ${SHELL_PATH_MARKER}; printenv PATH; echo ${SHELL_PATH_MARKER}`
-  const output = await new Promise<string>((resolve) => {
-    let stdout = ""
-    let child
-    try {
-      child = spawn(shell, ["-ilc", script], {
-        stdio: ["ignore", "pipe", "ignore"],
-        // oh-my-zsh otherwise asks whether to update, and nobody can answer.
-        env: { ...process.env, DISABLE_AUTO_UPDATE: "true" },
-      })
-    } catch {
-      resolve("")
-      return
-    }
-    // A slow or hung rc file must not stall boot.
-    const timer = setTimeout(() => child.kill("SIGKILL"), SHELL_PATH_TIMEOUT_MS)
-    child.stdout.setEncoding("utf8")
-    child.stdout.on("data", (chunk: string) => { stdout += chunk })
-    child.once("error", () => { clearTimeout(timer); resolve("") })
-    child.once("close", () => { clearTimeout(timer); resolve(stdout) })
-  })
+  const output = yield* readLoginShellPath(shell).pipe(
+    Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", () => Effect.succeed("")),
+  )
   const shellPath = parseShellPathOutput(output)
   if (!shellPath) return
   process.env.PATH = mergePathLists(process.env.PATH ?? "", shellPath)
-}
+})
 
-export function canOpenMacApp(appName: string) {
-  const result = spawnSync("open", ["-Ra", appName], { stdio: "ignore" })
-  return result.status === 0
-}
+const readLoginShellPath = Effect.fn("ProcessUtils.readLoginShellPath")(function* (shell: string) {
+  const script = `echo ${SHELL_PATH_MARKER}; printenv PATH; echo ${SHELL_PATH_MARKER}`
+  const child = yield* Effect.acquireRelease(
+    Effect.try({
+      try: () => Bun.spawn([shell, "-ilc", script], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "ignore",
+        // oh-my-zsh otherwise asks whether to update, and nobody can answer.
+        env: { ...process.env, DISABLE_AUTO_UPDATE: "true" },
+      }),
+      catch: (cause) => spawnError(shell, cause),
+    }),
+    (child) => Effect.sync(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    }),
+  )
+  // A slow or hung rc file must not stall boot: kill the shell and read
+  // whatever it printed before it died.
+  yield* Effect.sleep(SHELL_PATH_TIMEOUT_MS).pipe(
+    Effect.andThen(Effect.sync(() => child.kill("SIGKILL"))),
+    Effect.forkScoped,
+  )
+  return yield* Effect.tryPromise({
+    try: () => new Response(child.stdout).text(),
+    catch: (cause) => new CommandSpawnError({ command: shell, message: `Failed to read the output of ${shell}`, cause }),
+  })
+}, Effect.scoped)
+
+/** Whether macOS knows an app by this name. Blocks, like `hasCommand`. */
+export const canOpenMacApp = Effect.fn("ProcessUtils.canOpenMacApp")(function* (appName: string) {
+  return yield* Effect.sync(() => spawnSync("open", ["-Ra", appName], { stdio: "ignore" }).status === 0)
+})

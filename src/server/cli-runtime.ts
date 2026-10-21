@@ -1,6 +1,7 @@
 import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { hasCommand, spawnDetached } from "./process-utils"
+import { runKanna, runKannaSync } from "./effect/bridge"
 import { APP_NAME, CLI_COMMAND, getDataDirDisplay, getDataRootDirDisplay, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
 import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
@@ -19,7 +20,6 @@ import {
   type InstanceStatus,
 } from "./instance-socket"
 import type { Analytics } from "./analytics"
-import { runKannaSync } from "./effect/bridge"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
 import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
 import { runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
@@ -416,10 +416,10 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // Its own boot sweep already covered this data dir, so refusing costs
     // nothing; the check only sees the default port, so a dev instance on
     // another port is on the user.
-    const status = await (deps.instanceStatusImpl ?? instanceStatus)()
+    const status = await (deps.instanceStatusImpl ?? (() => runKanna(instanceStatus())))()
     const running = status
       ? { localUrl: status.port ? `http://localhost:${status.port}` : `pid ${status.pid}` }
-      : await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(PROD_SERVER_PORT)
+      : await (deps.probeExistingInstanceImpl ?? ((port: number) => runKanna(probeExistingInstance(port))))(PROD_SERVER_PORT)
     if (running) {
       deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} is running at ${running.localUrl}; stop it before slimming transcripts`)
       return { kind: "exited", code: 1 }
@@ -476,14 +476,14 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
   // port. Either way, point the user (and browser) at it. A different
   // fingerprint (e.g. dev profile) has its own lock and keeps the
   // try-next-port behavior.
-  const claim = await (deps.claimInstanceImpl ?? claimInstance)()
+  const claim = await (deps.claimInstanceImpl ?? (() => runKanna(claimInstance())))()
   if (claim.kind === "running" && !claim.status?.port) {
     deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} is already starting${claim.status ? ` (pid ${claim.status.pid})` : ""}; try again in a moment`)
     return { kind: "exited", code: 1 }
   }
   const existing = claim.kind === "running"
     ? { localUrl: `http://localhost:${claim.status!.port}`, port: claim.status!.port! }
-    : await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(runOptions.port)
+    : await (deps.probeExistingInstanceImpl ?? ((port: number) => runKanna(probeExistingInstance(port))))(runOptions.port)
   if (existing) {
     const hostedUrl = identity?.enabled ? identity.appOrigin : null
     deps.log(`${LOG_PREFIX} kanna is already running at ${existing.localUrl}${hostedUrl ? ` (and ${hostedUrl})` : ""}`)
@@ -609,16 +609,16 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
 /** `kanna stop`: ask the running Kanna to stop, and wait until it has. */
 async function stopRunningInstance(deps: CliRuntimeDeps) {
-  const status = deps.instanceStatusImpl ?? instanceStatus
+  const status = deps.instanceStatusImpl ?? (() => runKanna(instanceStatus()))
   const running = await status()
   if (!running) {
-    const old = await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(PROD_SERVER_PORT)
+    const old = await (deps.probeExistingInstanceImpl ?? ((port: number) => runKanna(probeExistingInstance(port))))(PROD_SERVER_PORT)
     deps.log(old
       ? `${LOG_PREFIX} the ${CLI_COMMAND} at ${old.localUrl} is from before \`${CLI_COMMAND} stop\`; stop it where it runs (Ctrl-C)`
       : `${LOG_PREFIX} ${CLI_COMMAND} isn't running`)
     return old ? 1 : 0
   }
-  if (!(await (deps.requestInstanceStopImpl ?? requestInstanceStop)())) {
+  if (!(await (deps.requestInstanceStopImpl ?? (() => runKanna(requestInstanceStop())))())) {
     deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} (pid ${running.pid}) didn't take the request to stop`)
     return 1
   }
@@ -640,11 +640,11 @@ async function stopRunningInstance(deps: CliRuntimeDeps) {
 export function openUrl(url: string) {
   const platform = process.platform
   if (platform === "darwin") {
-    void spawnDetached("open", [url]).catch(() => {})
+    void runKanna(spawnDetached("open", [url])).catch(() => {})
   } else if (platform === "win32") {
-    void spawnDetached("cmd", ["/c", "start", "", url]).catch(() => {})
+    void runKanna(spawnDetached("cmd", ["/c", "start", "", url])).catch(() => {})
   } else {
-    void spawnDetached("xdg-open", [url]).catch(() => {})
+    void runKanna(spawnDetached("xdg-open", [url])).catch(() => {})
   }
   console.log(`${LOG_PREFIX} opened in default browser`)
 }
@@ -692,7 +692,7 @@ export function classifyInstallVersionFailure(output: string): UpdateInstallAtte
 }
 
 export function installPackageVersion(packageName: string, version: string) {
-  if (!hasCommand("bun")) {
+  if (!runKannaSync(hasCommand("bun"))) {
     return {
       ok: false,
       errorCode: "command_missing",

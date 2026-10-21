@@ -18,6 +18,7 @@ import {
   withBunRuntimeFlags,
 } from "./restart"
 import { exitWithParent } from "./mac-app"
+import { runKanna } from "./effect/bridge"
 import {
   acquireInstanceLock,
   INSTANCE_LOCK_ENV_VAR,
@@ -116,14 +117,14 @@ let lock: InstanceLock | null = null
 
 async function takeLockFor(argv: string[]) {
   if (lock || !startsServer(argv)) return
-  lock = await acquireInstanceLock({
+  lock = await runKanna(acquireInstanceLock({
     owner: startedBy,
     // `kanna stop`, or the Mac app's Go Offline.
     onStop: () => {
       stopRequested = true
       if (currentChild && currentChild.exitCode === null) currentChild.kill("SIGTERM")
     },
-  })
+  }))
 }
 
 const profileDir = path.join(getDataRootDir(homedir()), "profiles")

@@ -24,8 +24,8 @@ import { AgentCoordinator } from "./agent"
 import { CodexAppServerManager } from "./codex-app-server"
 import { Analytics } from "./analytics"
 import { AppSettings } from "./app-settings"
-import { refreshInstalledEditors } from "./editor-detection"
-import { refreshInstalledTerminals } from "./terminal-detection"
+import { EditorDetection } from "./editor-detection"
+import { TerminalDetection } from "./terminal-detection"
 import { UsageLimits, type UsageLimitsDeps } from "./usage-limits"
 import { DiffStore } from "./diff-store"
 import { WorktreeProbe } from "./worktree-probe"
@@ -158,12 +158,12 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const runtimeProfile = getRuntimeProfile()
   // Runs alongside the store setup below (~0.5 s for a zsh with nvm) and is
   // awaited before anything can start an agent.
-  const shellPathReady = inheritShellPath()
+  const shellPathReady = runKanna(inheritShellPath())
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
   const diagnostics = new PerformanceLog(options.dataDir ?? getDataDir(homedir()), undefined, options.update?.version)
   const store = new EventStore(options.dataDir, diagnostics)
   const diffStore = new DiffStore(store.dataDir)
-  const machineDisplayName = getMachineDisplayName()
+  const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
   // every request path below reads the current value.
   let cloud: CloudRuntime | null = options.cloud ?? null
@@ -259,14 +259,18 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
         environment: runtimeProfile === "dev" ? "dev" : "prod",
       }).pipe(Layer.provideMerge(AppSettings.layer(path.join(store.dataDir, "settings.json"), { devbox: devboxUi }))),
       UsageLimits.layer(path.join(store.dataDir, "usage-limits.json"), usageReads),
+      EditorDetection.layer(),
+      TerminalDetection.layer(),
     ).pipe(Layer.provide(ServerPlatform)),
   )
-  const { keybindings, appSettings, analytics, usageLimits } = await runtime.runPromise(Effect.gen(function* () {
+  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection } = await runtime.runPromise(Effect.gen(function* () {
     return {
       keybindings: yield* Keybindings,
       appSettings: yield* AppSettings,
       analytics: yield* Analytics,
       usageLimits: yield* UsageLimits,
+      editorDetection: yield* EditorDetection,
+      terminalDetection: yield* TerminalDetection,
     }
   }))
   const trackEvent = (eventName: string, properties?: Record<string, unknown>) =>
@@ -279,8 +283,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     setInstalledEditors: (editors: EditorPreset[]) => runKannaSync(appSettings.setInstalledEditors(editors)),
     setInstalledTerminals: (terminals: TerminalPreset[]) => runKannaSync(appSettings.setInstalledTerminals(terminals)),
   }
-  void refreshInstalledEditors(installedAppsTarget)
-  void refreshInstalledTerminals(installedAppsTarget)
+  void runKanna(editorDetection.refresh(installedAppsTarget))
+  void runKanna(terminalDetection.refresh(installedAppsTarget))
   const updateManager = options.update
     ? new UpdateManager({
       currentVersion: options.update.version,
@@ -381,8 +385,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     },
     refreshDiscovery,
     refreshInstalledApps: () => {
-      void refreshInstalledEditors(installedAppsTarget)
-      void refreshInstalledTerminals(installedAppsTarget)
+      void runKanna(editorDetection.refresh(installedAppsTarget))
+      void runKanna(terminalDetection.refresh(installedAppsTarget))
     },
     getDiscoveredProjects: () => discoveredProjects,
     machineDisplayName,

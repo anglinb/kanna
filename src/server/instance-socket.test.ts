@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { Effect } from "effect"
+import { runTest } from "./effect/testing"
 import {
   acquireInstanceLock,
   attachToSupervisor,
@@ -10,6 +12,7 @@ import {
   requestInstanceStop,
   startsServer,
   type InstanceLock,
+  waitForInstancePort,
 } from "./instance-socket"
 
 // Short: macOS caps a socket path at 104 bytes.
@@ -22,7 +25,7 @@ function socketPath() {
 }
 
 async function acquire(socket: string, owner: "terminal" | "app" = "terminal", onStop = () => {}) {
-  const lock = await acquireInstanceLock({ owner, onStop, socketPath: socket })
+  const lock = await runTest(acquireInstanceLock({ owner, onStop, socketPath: socket }))
   if (lock) locks.push(lock)
   return lock
 }
@@ -46,7 +49,7 @@ describe("the instance lock", () => {
     expect(first).not.toBeNull()
     expect(await acquire(socket)).toBeNull()
 
-    const status = await instanceStatus({ socketPath: socket })
+    const status = await runTest(instanceStatus({ socketPath: socket }))
     expect(status).toMatchObject({ ok: true, pid: process.pid, owner: "terminal", port: null })
   })
 
@@ -54,7 +57,7 @@ describe("the instance lock", () => {
     const socket = socketPath()
     const lock = (await acquire(socket))!
     lock.attach({ port: 4123, version: "1.2.3", state: () => ({ runningChats: 2, cloud: true }) })
-    expect(await instanceStatus({ socketPath: socket })).toMatchObject({
+    expect(await runTest(instanceStatus({ socketPath: socket }))).toMatchObject({
       port: 4123,
       version: "1.2.3",
       runningChats: 2,
@@ -67,7 +70,7 @@ describe("the instance lock", () => {
     // A regular file is what a dead process leaves behind as far as
     // connecting goes: nobody accepts.
     fs.writeFileSync(socket, "")
-    expect(await instanceStatus({ socketPath: socket })).toBeNull()
+    expect(await runTest(instanceStatus({ socketPath: socket }))).toBeNull()
     expect(await acquire(socket)).not.toBeNull()
   })
 
@@ -91,9 +94,9 @@ describe("the instance lock", () => {
     await acquire(socket, "terminal", () => {
       stopped = true
     })
-    expect(await requestInstanceStop({ socketPath: socket })).toBe(true)
+    expect(await runTest(requestInstanceStop({ socketPath: socket }))).toBe(true)
     expect(stopped).toBe(true)
-    expect(await requestInstanceStop({ socketPath: socketPath() })).toBe(false)
+    expect(await runTest(requestInstanceStop({ socketPath: socketPath() }))).toBe(false)
   })
 
   test("a server child attaches to its supervisor, and detaches when it exits", async () => {
@@ -104,14 +107,14 @@ describe("the instance lock", () => {
       { port: 5000, version: "9.9.9", state: () => ({ runningChats, cloud: false }) },
       { socketPath: socket },
     )
-    await until(async () => (await instanceStatus({ socketPath: socket }))?.runningChats === 1)
-    expect(await instanceStatus({ socketPath: socket })).toMatchObject({ port: 5000, version: "9.9.9" })
+    await until(async () => (await runTest(instanceStatus({ socketPath: socket })))?.runningChats === 1)
+    expect(await runTest(instanceStatus({ socketPath: socket }))).toMatchObject({ port: 5000, version: "9.9.9" })
 
     runningChats = 3
-    await until(async () => (await instanceStatus({ socketPath: socket }))?.runningChats === 3)
+    await until(async () => (await runTest(instanceStatus({ socketPath: socket })))?.runningChats === 3)
 
     detach()
-    await until(async () => (await instanceStatus({ socketPath: socket }))?.port === null)
+    await until(async () => (await runTest(instanceStatus({ socketPath: socket })))?.port === null)
   })
 
   test("close removes the socket", async () => {
@@ -120,7 +123,7 @@ describe("the instance lock", () => {
     locks.pop()
     lock.close()
     expect(fs.existsSync(socket)).toBe(false)
-    expect(await instanceStatus({ socketPath: socket })).toBeNull()
+    expect(await runTest(instanceStatus({ socketPath: socket }))).toBeNull()
   })
 })
 
@@ -155,3 +158,34 @@ async function release(socket: string) {
     })
   })
 }
+
+describe("the instance socket, from Effect", () => {
+  test("a busy listener that never answers counts as running, not stale", async () => {
+    const socket = socketPath()
+    const net = await import("node:net")
+    // Accepts connections but never replies.
+    const silent = net.createServer(() => {})
+    await new Promise<void>((resolve) => silent.listen(socket, resolve))
+    try {
+      expect(await runTest(instanceStatus({ socketPath: socket, timeoutMs: 100 }))).toBeNull()
+      expect(await acquire(socket)).toBeNull()
+    } finally {
+      silent.close()
+    }
+  })
+
+  test("waitForInstancePort waits out a server with no port yet", async () => {
+    const socket = socketPath()
+    const lock = (await acquire(socket))!
+    expect(await runTest(waitForInstancePort({ socketPath: socket, timeoutMs: 300 }))).toBeNull()
+
+    const waiting = runTest(waitForInstancePort({ socketPath: socket, timeoutMs: 5_000 }).pipe(Effect.timeout("6 seconds")))
+    await Bun.sleep(300)
+    lock.attach({ port: 4567, version: "1.0.0" })
+    expect(await waiting).toMatchObject({ port: 4567, version: "1.0.0" })
+  })
+
+  test("waitForInstancePort is null when nothing is running", async () => {
+    expect(await runTest(waitForInstancePort({ socketPath: socketPath(), timeoutMs: 300 }))).toBeNull()
+  })
+})

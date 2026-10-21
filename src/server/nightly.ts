@@ -5,6 +5,7 @@ import path from "node:path"
 import { LOG_PREFIX } from "../shared/branding"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import { hasCommand } from "./process-utils"
+import { runKanna } from "./effect/bridge"
 import { CLI_CHILD_MODE, CLI_CHILD_MODE_ENV_VAR } from "./restart"
 
 // Nightly channel: build the repo's main branch from source and install it as
@@ -159,10 +160,10 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
   const fetchImpl = deps.fetchImpl ?? fetch
   const runCommand = deps.runCommand ?? runCommandWithTimeout
 
-  if (!hasCommand("tar")) {
+  if (!(await runKanna(hasCommand("tar")))) {
     return failure("Kanna needs the `tar` command to unpack the nightly source.")
   }
-  if (!hasCommand("bun")) {
+  if (!(await runKanna(hasCommand("bun")))) {
     return failure("Kanna could not find Bun to build the nightly version.")
   }
 

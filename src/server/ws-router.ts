@@ -1,6 +1,7 @@
 import type { PerformanceLog } from "./performance-log"
 import type { ServerWebSocket } from "bun"
 import { homedir } from "node:os"
+import { Effect } from "effect"
 import { PROTOCOL_VERSION } from "../shared/types"
 import type { ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
 import { isClientEnvelope } from "../shared/protocol"
@@ -15,6 +16,7 @@ import { EventStore } from "./event-store"
 import { openExternal } from "./external-open"
 import type { Keybindings } from "./keybindings"
 import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
+import { ServerPlatform } from "./effect/runtime"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
 import type { PortTunnelManager } from "./port-tunnels"
 import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath, resolveLocalPath } from "./paths"
@@ -22,8 +24,6 @@ import { listRecentGitHubRepos } from "./github"
 import { SERVER_PROVIDERS, applyPiFaveModels } from "./provider-catalog"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
-import { Effect } from "effect"
-import { ServerPlatform } from "./effect/runtime"
 import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
@@ -1310,12 +1310,12 @@ export function createWsRouter({
           return
         }
         case "fs.list": {
-          const result = await listDirectory(command.path, { nearest: command.nearest })
+          const result = await runKanna(listDirectory(command.path, { nearest: command.nearest }).pipe(Effect.provide(ServerPlatform)))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "fs.mkdir": {
-          const result = await createDirectory(command.path)
+          const result = await runKanna(createDirectory(command.path).pipe(Effect.provide(ServerPlatform)))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1357,7 +1357,7 @@ export function createWsRouter({
           if (!project) {
             throw new Error("Project not found")
           }
-          const result = await readProjectQuickActions(project.localPath)
+          const result = await runKanna(readProjectQuickActions(project.localPath).pipe(Effect.provide(ServerPlatform)))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1366,7 +1366,7 @@ export function createWsRouter({
           if (!project) {
             throw new Error("Project not found")
           }
-          const result = await writeProjectQuickActions(project.localPath, command.quickActions)
+          const result = await runKanna(writeProjectQuickActions(project.localPath, command.quickActions).pipe(Effect.provide(ServerPlatform)))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1578,7 +1578,7 @@ export function createWsRouter({
           return
         }
         case "project.open": {
-          await ensureProjectDirectory(command.localPath)
+          await runKanna(ensureProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform)))
           const normalizedPath = resolveLocalPath(command.localPath)
           const existingProjectId = store.state.projectIdsByPath.get(normalizedPath)
           const project = await store.openProject(command.localPath)
@@ -1591,7 +1591,7 @@ export function createWsRouter({
           return
         }
         case "project.create": {
-          const resolved = await initializeProjectDirectory(command.localPath)
+          const resolved = await runKanna(initializeProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform)))
           const existingProjectId = store.state.projectIdsByPath.get(resolved)
           const project = await store.openProject(resolved, command.title)
           await refreshDiscovery()
@@ -1626,8 +1626,8 @@ export function createWsRouter({
           return
         }
         case "project.clone": {
-          const cloneDest = await resolveClonePath(command.localPath, command.fallbackPath)
-          await cloneRepository(command.cloneUrl, cloneDest)
+          const cloneDest = await runKanna(resolveClonePath(command.localPath, command.fallbackPath).pipe(Effect.provide(ServerPlatform)))
+          await runKanna(cloneRepository(command.cloneUrl, cloneDest).pipe(Effect.provide(ServerPlatform)))
           const project = await store.openProject(cloneDest, command.title)
           await refreshDiscovery()
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: cloneDest } })
@@ -1690,7 +1690,7 @@ export function createWsRouter({
           return
         }
         case "system.openExternal": {
-          await openExternal(command)
+          await runKanna(openExternal(command).pipe(Effect.provide(ServerPlatform)))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
