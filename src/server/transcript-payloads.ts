@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs"
+import { Option, Schema } from "effect"
 import type { TranscriptEntry } from "../shared/types"
 import { INLINE_TOOL_KINDS, UNBOUNDED_TOOL_INPUT_FIELDS, trimToolCallEntry } from "./events"
 
@@ -19,6 +20,11 @@ import { INLINE_TOOL_KINDS, UNBOUNDED_TOOL_INPUT_FIELDS, trimToolCallEntry } fro
  * Reads are by byte offset. The index (id to offset and length) is built
  * once per chat by scanning the sidecar for newlines, without parsing, and
  * then kept current as lines are appended.
+ *
+ * The reads are synchronous `node:fs` on purpose, not `FileSystem` effects:
+ * their callers (`EventStore.getEntriesById`, `getMessages`) are synchronous
+ * and answer within one tick, and the Effect FileSystem only reads
+ * asynchronously. They move when the EventStore does.
  */
 
 /** A header's dropped fields, keyed by entry id. */
@@ -134,7 +140,7 @@ export class TranscriptPayloadIndex {
     try {
       const buffer = Buffer.alloc(span.length)
       readSync(fd, buffer, 0, span.length, span.offset)
-      return JSON.parse(buffer.toString("utf8")) as TranscriptPayload
+      return Option.getOrNull(decodePayloadLine(buffer.toString("utf8")))
     } catch {
       // A truncated or garbled line loses one payload, not the transcript.
       return null
@@ -180,12 +186,27 @@ export function readAllTranscriptPayloads(sidecarPath: string): Map<string, Tran
   if (!existsSync(sidecarPath)) return payloads
   for (const line of readFileSync(sidecarPath, "utf8").split("\n")) {
     if (!line) continue
-    try {
-      const payload = JSON.parse(line) as TranscriptPayload
-      payloads.set(payload._id, payload)
-    } catch {
-      // Skip a garbled line rather than fail the whole read.
-    }
+    // Skip a garbled line rather than fail the whole read.
+    const payload = decodePayloadLine(line)
+    if (Option.isSome(payload)) payloads.set(payload.value._id, payload.value)
   }
   return payloads
 }
+
+/**
+ * One sidecar line. Only `_id` is checked: the bodies are whatever the
+ * provider sent, and every sidecar line ever written has to keep loading.
+ * Keys this does not name are dropped; `mergeTranscriptPayload` reads only
+ * these.
+ */
+const TranscriptPayloadLine = Schema.Struct({
+  _id: Schema.String,
+  tool: Schema.optionalKey(Schema.Struct({
+    rawInput: Schema.optionalKey(Schema.Unknown),
+    input: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  })),
+  content: Schema.optionalKey(Schema.Unknown),
+})
+
+const decodePayloadLine: (line: string) => Option.Option<TranscriptPayload> =
+  Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptPayloadLine))

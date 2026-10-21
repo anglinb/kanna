@@ -100,6 +100,44 @@ describe("TranscriptPayloadIndex", () => {
     expect(readAllTranscriptPayloads(sidecar).get("r1")).toEqual({ _id: "r1", content: "rewritten" })
   })
 
+  test("loads sidecar lines as earlier builds wrote them, and skips ones that are not payloads", async () => {
+    const dir = await makeDir()
+    const sidecar = join(dir, "c.payloads.jsonl")
+    // Real shapes: an edit's input, a Claude result with image and text
+    // blocks, a null body, a body that is a bare string. Then a truncated
+    // tail, a line whose id is not a string, and a JSON array.
+    const lines = [
+      '{"_id":"8f3c6a1e-2b7d-4c5e-9a10-1f2e3d4c5b6a","tool":{"rawInput":{"file_path":"/w/a.ts","old_string":"a","new_string":"b"},"input":{"oldString":"a","newString":"b"}}}\n',
+      '{"_id":"toolu_01ABC","content":[{"type":"text","text":"ok"},{"type":"image","url":"/api/chats/c/media/x-1.png","mimeType":"image/png"}]}\n',
+      '{"_id":"r-null","content":null}\n',
+      '{"_id":"r-text","content":"plain output\\nwith a newline"}\n',
+      '{"_id":"r-cut","content":"trunc\n',
+      '{"_id":7,"content":"x"}\n',
+      '[1,2]\n',
+    ]
+    await writeFile(sidecar, lines.join(""))
+
+    const index = new TranscriptPayloadIndex(sidecar)
+    expect(index.read("8f3c6a1e-2b7d-4c5e-9a10-1f2e3d4c5b6a")).toEqual({
+      _id: "8f3c6a1e-2b7d-4c5e-9a10-1f2e3d4c5b6a",
+      tool: { rawInput: { file_path: "/w/a.ts", old_string: "a", new_string: "b" }, input: { oldString: "a", newString: "b" } },
+    })
+    expect(index.read("toolu_01ABC")?.content).toEqual([
+      { type: "text", text: "ok" },
+      { type: "image", url: "/api/chats/c/media/x-1.png", mimeType: "image/png" },
+    ])
+    // A null body is still a body: the merge puts it back.
+    const nullPayload = index.read("r-null")
+    expect(nullPayload).toEqual({ _id: "r-null", content: null })
+    expect("content" in nullPayload!).toBe(true)
+    expect(index.read("r-text")?.content).toBe("plain output\nwith a newline")
+    expect(index.read("r-cut")).toBeNull()
+
+    expect([...readAllTranscriptPayloads(sidecar).keys()]).toEqual([
+      "8f3c6a1e-2b7d-4c5e-9a10-1f2e3d4c5b6a", "toolu_01ABC", "r-null", "r-text",
+    ])
+  })
+
   test("a missing sidecar is an empty index", () => {
     const index = new TranscriptPayloadIndex("/nonexistent/c.payloads.jsonl")
     expect(index.has("x")).toBe(false)
