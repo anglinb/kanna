@@ -28,6 +28,7 @@ import path from "node:path"
 import type { Subprocess } from "bun"
 import { PROXY_AUTH_HEADER, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { startKannaServer } from "../server"
+import { runKanna, runKannaSync } from "../effect/bridge"
 import { createCloudApiClient } from "./api-client"
 import { normalizeCloudIdentity, type CloudIdentity } from "./identity"
 import { createCloudRuntime, type CloudRuntime } from "./index"
@@ -197,9 +198,9 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
   }, 90_000)
 
   afterAll(async () => {
-    await cloudRuntime?.stop()
+    if (cloudRuntime) await runKanna(cloudRuntime.stop)
     await kannaStop?.()
-    await devboxRuntime?.stop()
+    if (devboxRuntime) await runKanna(devboxRuntime.stop)
     await devboxStop?.()
     harness?.kill()
     fakeCf?.stop(true)
@@ -238,7 +239,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
 
   test("machine: pair with the real api-client → connector credentials", async () => {
     const client = createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
-    const response = await client.pair(pairingCode, "Wire E2E Machine")
+    const response = await runKanna(client.pair(pairingCode, "Wire E2E Machine"))
     expect(response.subdomain).toBe(SUBDOMAIN)
     expect(response.appOrigin).toBe(`https://${SUBDOMAIN}.kanna.sh`)
     expect(response.tunnelToken).toBe("wire-connector-token")
@@ -280,7 +281,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     })
     kannaStop = server.stop
     kannaLocalUrl = `http://127.0.0.1:${server.port}`
-    cloudRuntime.start({ localUrl: kannaLocalUrl })
+    runKannaSync(cloudRuntime.start({ localUrl: kannaLocalUrl }))
 
     // The supervisor heartbeats the moment the connector is up — no
     // propagation wait, no URL registration.
@@ -371,7 +372,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
 
   test("graceful stop flips the machine offline via the offline signal", async () => {
     if (!cloudRuntime) throw new Error("runtime missing")
-    await cloudRuntime.stop()
+    await runKanna(cloudRuntime.stop)
 
     const response = await proxyFetch("/__cloud/machines")
     const payload = await response.json() as { machines: Array<{ online: boolean }> }
@@ -382,7 +383,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     if (!identity) throw new Error("pairing did not run")
     cfCalls.length = 0
     const client = createCloudApiClient({ controlUrl: identity.controlUrl })
-    await client.removeMachine(identity.machineToken)
+    await runKanna(client.removeMachine(identity.machineToken))
 
     const paths = cfCalls.map((call) => `${call.method} ${call.path}`)
     expect(paths.some((p) => p.startsWith("DELETE") && p.includes("/dns_records/wire-dns-id"))).toBe(true)
@@ -457,7 +458,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
       trustProxy: true,
     })
     devboxStop = server.stop
-    devboxRuntime.start({ localUrl: `http://127.0.0.1:${server.port}` })
+    runKannaSync(devboxRuntime.start({ localUrl: `http://127.0.0.1:${server.port}` }))
 
     await waitFor(async () => {
       const response = await proxyFetch("/__cloud/machines", { host: `${DEVBOX_SUBDOMAIN}.kanna.sh` })
@@ -542,7 +543,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     ])
     expect(cfCalls.length).toBe(0)
 
-    await devboxRuntime?.stop()
+    if (devboxRuntime) await runKanna(devboxRuntime.stop)
     devboxRuntime = null
     const after = await proxyFetch("/", { host: `${DEVBOX_SUBDOMAIN}.kanna.sh` })
     expect(after.status).toBe(404)
@@ -556,7 +557,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
 
   test("device code: machine mints a claim link → browser claims → machine polls credentials", async () => {
     const client = createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
-    const issued = await client.requestDeviceCode("Wire E2E Laptop")
+    const issued = await runKanna(client.requestDeviceCode("Wire E2E Laptop"))
     expect(issued.code.length).toBeGreaterThan(6)
     expect(issued.deviceToken).not.toBe(issued.code)
     const claimUrl = new URL(issued.claimUrl)
@@ -564,7 +565,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     expect(claimUrl.searchParams.get("pair")).toBe(issued.code)
 
     // Nothing claimed yet.
-    expect((await client.pollDeviceCode(issued.deviceToken)).status).toBe("pending")
+    expect((await runKanna(client.pollDeviceCode(issued.deviceToken))).status).toBe("pending")
 
     // Browser half: the claim page reads what's waiting…
     const lookup = await proxyFetch(`/api/cloud/device-code/${issued.code}`, { host: "kanna.sh" })
@@ -597,7 +598,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     expect(paths.some((p) => p.startsWith("POST") && p.includes("/cfd_tunnel"))).toBe(true)
     expect(paths.some((p) => p.includes("/dns_records"))).toBe(true)
 
-    const result = await client.pollDeviceCode(issued.deviceToken)
+    const result = await runKanna(client.pollDeviceCode(issued.deviceToken))
     expect(result.status).toBe("claimed")
     expect(result.pairing?.subdomain).toBe(CLAIM_SUBDOMAIN)
     expect(result.pairing?.appOrigin).toBe(`https://${CLAIM_SUBDOMAIN}.kanna.sh`)
@@ -606,16 +607,16 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     expect(result.pairing?.machineToken).toBeTruthy()
 
     // The credentials are handed out exactly once.
-    await expect(client.pollDeviceCode(issued.deviceToken)).rejects.toThrow()
+    await expect(runKanna(client.pollDeviceCode(issued.deviceToken))).rejects.toThrow()
 
     // Cleanup so the subdomain doesn't linger for reruns of this suite.
-    await createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
-      .removeMachine(result.pairing!.machineToken)
+    await runKanna(createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
+      .removeMachine(result.pairing!.machineToken))
   }, 30_000)
 
   test("device code: an unknown code is rejected on both halves", async () => {
     const client = createCloudApiClient({ controlUrl: `${controlBase}/api/cloud` })
-    await expect(client.pollDeviceCode("not-a-real-device-token")).rejects.toThrow()
+    await expect(runKanna(client.pollDeviceCode("not-a-real-device-token"))).rejects.toThrow()
 
     const lookup = await proxyFetch("/api/cloud/device-code/ZZZZZZZZZZZZ", { host: "kanna.sh" })
     expect(lookup.status).toBe(404)

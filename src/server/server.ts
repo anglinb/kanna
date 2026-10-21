@@ -1,4 +1,4 @@
-import { Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { homedir } from "node:os"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
@@ -16,7 +16,7 @@ import {
 import { createAuthManager } from "./auth"
 import { classifyCloudRequest, isAllowedCloudWsUpgrade, type CloudRequestClass } from "./cloud/guard"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
-import { createFleetCache } from "./cloud/fleet"
+import { CloudFleet } from "./cloud/fleet"
 import { writeCloudIdentity } from "./cloud/identity"
 import { createPairSessionManager, type PairSessionSnapshot } from "./cloud/pair-session"
 import { EventStore } from "./event-store"
@@ -35,9 +35,10 @@ import { resumeInterruptedTurns } from "./resume-turns"
 import { ChatOrchestrator } from "./orchestrator"
 import { TicketStore } from "./ticket-store"
 import { createChatCommands } from "./chat-commands"
-import { discoverProjects, type DiscoveredProject } from "./discovery"
+import { ProjectDiscovery, type DiscoveredProject } from "./discovery"
 import { Keybindings } from "./keybindings"
 import { ServerPlatform } from "./effect/runtime"
+import { runKanna } from "./effect/bridge"
 import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
@@ -180,11 +181,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   let discoveredProjects: DiscoveredProject[] = []
 
   async function refreshDiscovery() {
-    discoveredProjects = await discoverProjects()
+    discoveredProjects = await runKanna(discovery.discover())
     return discoveredProjects
   }
-
-  await refreshDiscovery()
 
   let server: ReturnType<typeof Bun.serve<ClientState>>
   let router: ReturnType<typeof createWsRouter>
@@ -253,9 +252,14 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
+      ProjectDiscovery.layer(),
+      CloudFleet.layer(),
     ).pipe(Layer.provide(ServerPlatform)),
   )
   const keybindings = await runtime.runPromise(Keybindings)
+  const discovery = await runtime.runPromise(ProjectDiscovery)
+  const fleet = await runtime.runPromise(CloudFleet)
+  await refreshDiscovery()
   const analytics = new KannaAnalyticsReporter({
     settings: appSettings,
     currentVersion: options.update?.version ?? "unknown",
@@ -483,20 +487,16 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // One-click cloud setup: the sidebar asks for a claim URL, the user opens
   // it (or scans it) on any device, and pairing lands back here — credentials
   // to ~/.kanna/cloud.json and the tunnel up, without restarting kanna.
-  const fleet = createFleetCache()
-
   const pairSession =
     options.allowCloudPairing && !cloud
-      ? createPairSessionManager({
+      ? await runKanna(createPairSessionManager({
           machineName: machineDisplayName,
-          log: (message) => console.log(`${LOG_PREFIX} ${message}`),
-          warn: (message) => console.warn(`${LOG_PREFIX} ${message}`),
-          onPaired: async (identity) => {
-            await writeCloudIdentity(identity)
+          onPaired: (identity) => Effect.gen(function* () {
+            yield* writeCloudIdentity(identity).pipe(Effect.provide(ServerPlatform))
             const runtime = createCloudRuntime(identity)
             cloud = runtime
             selfPairedCloud = runtime
-            runtime.start({
+            yield* runtime.start({
               // Byte-identical to the CLI's launch URL for a paired machine
               // (cli-runtime builds `http://localhost:<port>`; pairing is only
               // offered when we're bound to 127.0.0.1). The control plane
@@ -504,11 +504,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               // local service changes, so a different spelling here would cost
               // a pointless Cloudflare round-trip on the next boot.
               localUrl: `http://localhost:${actualPort}`,
-              log: (message) => console.log(`${LOG_PREFIX} ${message}`),
-              warn: (message) => console.warn(`${LOG_PREFIX} ${message}`),
             })
-          },
-        })
+          }),
+        }))
       : null
 
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
@@ -675,10 +673,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               return withOriginAgentCluster(respond({ status: "unsupported" }))
             }
             if (req.method === "POST") {
-              return withOriginAgentCluster(respond(await pairSession.start()))
+              return withOriginAgentCluster(respond(await runKanna(pairSession.start)))
             }
             if (req.method === "GET") {
-              return withOriginAgentCluster(respond(pairSession.status()))
+              return withOriginAgentCluster(respond(await runKanna(pairSession.status)))
             }
             return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
           }
@@ -690,7 +688,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             if (req.method !== "GET") {
               return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
             }
-            return withOriginAgentCluster(Response.json(await fleet.get(cloud?.identity ?? null), {
+            return withOriginAgentCluster(Response.json(await runKanna(fleet.get(cloud?.identity ?? null)), {
               headers: { "Cache-Control": "no-store" },
             }))
           }
@@ -823,10 +821,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   }))
 
   const shutdown = async () => {
-    pairSession?.stop()
+    if (pairSession) await runKanna(pairSession.stop)
     // A runtime handed in by the CLI is stopped by the CLI; one this process
     // attached at pair time is ours to take down.
-    await selfPairedCloud?.stop()
+    if (selfPairedCloud) await runKanna(selfPairedCloud.stop)
     clearInterval(staleEmptyChatPruneInterval)
     clearInterval(staleChatAutoArchiveInterval)
     clearInterval(staleChatDeleteInterval)
