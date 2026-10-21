@@ -6,6 +6,9 @@ import { getDataRootDir } from "../shared/branding"
 import type { LlmProviderSnapshot } from "../shared/types"
 import { CodexAppServerManager } from "./codex-app-server"
 import { readLlmProviderSnapshot } from "./llm-provider"
+import { Effect } from "effect"
+import { runKanna } from "./effect/bridge"
+import { ServerPlatform } from "./effect/runtime"
 
 const CLAUDE_STRUCTURED_TIMEOUT_MS = 5_000
 
@@ -206,7 +209,7 @@ export class QuickResponseAdapter {
 
   constructor(args: QuickResponseAdapterArgs = {}) {
     this.codexManager = args.codexManager ?? new CodexAppServerManager()
-    this.readLlmProvider = args.readLlmProvider ?? (() => readLlmProviderSnapshot())
+    this.readLlmProvider = args.readLlmProvider ?? (() => runKanna(readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform))))
     this.runOpenAIStructured = args.runOpenAIStructured ?? runOpenAIStructured
     this.runClaudeStructured = args.runClaudeStructured ?? runClaudeStructured
     this.runCodexStructured = args.runCodexStructured ?? ((structuredArgs) =>

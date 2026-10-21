@@ -1,5 +1,6 @@
 import type { ChatSnapshot, KannaStatus, SubagentActivity, WaitingOn } from "../shared/types"
-import type { AppSettingsManager } from "./app-settings"
+import type { AppSettings } from "./app-settings"
+import { runKannaSync } from "./effect/bridge"
 import type { EventStore } from "./event-store"
 import { deriveChatSnapshot } from "./read-models"
 
@@ -30,7 +31,7 @@ export interface ChatWindowRouteDeps {
     /** Optional for the same reason. */
     getWaitingOn?: (chatId: string) => WaitingOn
   }
-  appSettings: Pick<AppSettingsManager, "getSnapshot">
+  appSettings: Pick<AppSettings["Service"], "snapshot">
 }
 
 export const CHAT_WINDOW_ROUTE_PATTERN = /^\/api\/chats\/([^/]+)\/window$/
@@ -39,7 +40,7 @@ export const CHAT_WINDOW_ROUTE_PATTERN = /^\/api\/chats\/([^/]+)\/window$/
 export function readChatWindow(chatId: string, deps: ChatWindowRouteDeps): ChatSnapshot | null {
   const { store, agent, appSettings } = deps
   const windowStart = store.getChat(chatId)
-    ? store.getInitialTranscriptWindowStart(chatId, appSettings.getSnapshot().transcript.windowAssistantMessages)
+    ? store.getInitialTranscriptWindowStart(chatId, runKannaSync(appSettings.snapshot).transcript.windowAssistantMessages)
     : 0
   const full = deriveChatSnapshot(
     store.state,

@@ -1,7 +1,8 @@
 import type { ClientCommand } from "../shared/protocol"
 import type { MessageSource } from "../shared/types"
 import type { AgentCoordinator } from "./agent"
-import type { AnalyticsReporter } from "./analytics"
+import type { Analytics } from "./analytics"
+import { runKannaSync } from "./effect/bridge"
 import type { EventStore } from "./event-store"
 
 /**
@@ -58,7 +59,7 @@ interface ChatCommandsDeps {
     | "setChatDoneState"
   >
   agent: Pick<AgentCoordinator, "send" | "enqueue" | "steer" | "dequeue" | "cancel" | "closeChat" | "forkChat">
-  analytics: AnalyticsReporter
+  analytics: Analytics["Service"]
 }
 
 function chatAndSidebar(chatId: string): ChatChange {
@@ -74,7 +75,7 @@ export function createChatCommands({ store, agent, analytics }: ChatCommandsDeps
     ): Promise<ChatCommandOutcome<{ chatId: string }>> {
       const chat = await store.createChat(projectId, lineage, options)
       // The count is of chats people start.
-      if (!lineage?.createdByChatId) analytics.track("chat_created")
+      if (!lineage?.createdByChatId) runKannaSync(analytics.track("chat_created"))
       return {
         result: { chatId: chat.id },
         // Adding a chat changes local-projects too (chatCount/lastOpenedAt).
@@ -139,7 +140,7 @@ export function createChatCommands({ store, agent, analytics }: ChatCommandsDeps
       await agent.cancel(chatId)
       await agent.closeChat(chatId)
       await store.deleteChat(chatId)
-      analytics.track("chat_deleted")
+      runKannaSync(analytics.track("chat_deleted"))
       return {
         result: undefined,
         // The deleted chat's own topic must refresh (to null) so another tab

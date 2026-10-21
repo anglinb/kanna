@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
+import { makeFakeAppSettings } from "./app-settings.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -19,7 +20,7 @@ test("stream updates read only the new tail and release subscription maps", asyn
     store,
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() },
     diffStore: {}, worktreeProbe: {}, terminals: { onEvent: onChange },
-    keybindings: makeFakeKeybindings({} as never), appSettings: { onChange, getSnapshot: () => ({ transcript: { windowAssistantMessages: 5 } }) },
+    keybindings: makeFakeKeybindings({} as never), appSettings: makeFakeAppSettings({ transcript: { windowAssistantMessages: 5 } }),
     llmProvider: {}, refreshDiscovery: async () => [], getDiscoveredProjects: () => [],
     machineDisplayName: "test", updateManager: null,
   } as never)

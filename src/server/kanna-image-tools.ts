@@ -5,6 +5,9 @@ import { fileTypeFromBuffer } from "file-type"
 import type { DisplayAttachment } from "../shared/display-tools"
 import { storeLocalAttachment } from "./kanna-display-tools"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
+import { Effect } from "effect"
+import { runKanna } from "./effect/bridge"
+import { ServerPlatform } from "./effect/runtime"
 import type { KannaToolDefinition } from "./kanna-tools"
 
 /** Nano Banana 2 Lite on OpenRouter. It serves 1K images and takes up to 14 reference images. */
@@ -46,7 +49,7 @@ export interface ImageCredentials {
 
 /** The key from Settings › Providers › Model Registry, the same one voice input uses. */
 export async function readImageCredentials(): Promise<ImageCredentials> {
-  const registry = await readLlmProviderSnapshot()
+  const registry = await runKanna(readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform)))
   if (registry.provider === "openrouter" && registry.apiKey.trim()) {
     return { apiKey: registry.apiKey.trim(), baseUrl: registry.resolvedBaseUrl }
   }

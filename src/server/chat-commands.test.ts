@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { makeFakeAnalytics } from "./analytics.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -18,7 +19,7 @@ async function setup() {
   await store.initialize()
   const project = await store.openProject(dataDir)
   const calls: string[] = []
-  const tracked: string[] = []
+  const { analytics, events: tracked } = makeFakeAnalytics()
   const agent = {
     send: async () => { calls.push("send"); return { chatId: "c" } },
     enqueue: async () => { calls.push("enqueue"); return { queuedMessageId: "q" } },
@@ -31,7 +32,7 @@ async function setup() {
   const commands = createChatCommands({
     store,
     agent: agent as never,
-    analytics: { track: (event: string) => { tracked.push(event) } } as never,
+    analytics,
   })
   return { store, project, commands, calls, tracked }
 }

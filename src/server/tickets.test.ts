@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
+import { makeFakeAppSettings } from "./app-settings.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AgentCoordinator } from "./agent"
-import { NoopAnalyticsReporter } from "./analytics"
+import { NoopAnalytics } from "./analytics"
 import { AsyncQueue } from "./async-queue"
 import { createChatCommands } from "./chat-commands"
 import { EventStore } from "./event-store"
@@ -110,7 +111,7 @@ async function setup() {
   const orchestrator = new ChatOrchestrator({
     store,
     agent,
-    commands: createChatCommands({ store, agent, analytics: NoopAnalyticsReporter }),
+    commands: createChatCommands({ store, agent, analytics: NoopAnalytics }),
     push: () => {},
     tickets,
   })
@@ -587,7 +588,7 @@ describe("the user's ticket replies", () => {
       agent,
       terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
       keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),
-      appSettings: { getSnapshot: () => ({ transcript: { windowAssistantMessages: 50 } }), write: async () => ({}), writePatch: async () => ({}), onChange: () => () => {} } as never,
+      appSettings: makeFakeAppSettings({ transcript: { windowAssistantMessages: 50 } }),
       llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,
       refreshDiscovery: async () => [],
       getDiscoveredProjects: () => [],

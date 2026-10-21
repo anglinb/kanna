@@ -7,9 +7,8 @@ import { isClientEnvelope } from "../shared/protocol"
 import { diffSidebarIndex, indexSidebarData, type SidebarIndex } from "../shared/sidebar-patch"
 import type { AgentCoordinator } from "./agent"
 import { createChatCommands, type ChatChange, type ChatCommandOutcome, type ChatCommands } from "./chat-commands"
-import type { AnalyticsReporter } from "./analytics"
-import { NoopAnalyticsReporter } from "./analytics"
-import type { AppSettingsManager } from "./app-settings"
+import { NoopAnalytics, type Analytics } from "./analytics"
+import type { AppSettings } from "./app-settings"
 import type { DiscoveredProject } from "./discovery"
 import { DiffStore } from "./diff-store"
 import { EventStore } from "./event-store"
@@ -29,7 +28,7 @@ import type { WorktreeProbe } from "./worktree-probe"
 import type { ProjectIcons } from "./project-icons"
 import type { ProviderAuthManager } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
-import type { UsageLimitsManager } from "./usage-limits"
+import type { UsageLimits } from "./usage-limits"
 import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
 import type { ChatOrchestrator } from "./orchestrator"
 import type {
@@ -113,8 +112,8 @@ interface CreateWsRouterArgs {
   terminals: TerminalManager
   portTunnels?: Pick<PortTunnelManager, "expose" | "unexpose" | "getPublicUrl">
   keybindings: Keybindings["Service"]
-  appSettings: Pick<AppSettingsManager, "getSnapshot" | "write" | "writePatch" | "onChange">
-  analytics?: AnalyticsReporter
+  appSettings: AppSettings["Service"]
+  analytics?: Analytics["Service"]
   llmProvider: {
     read: () => Promise<LlmProviderSnapshot>
     write: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl"> & Partial<Pick<LlmProviderSnapshot, "faveModels">>) => Promise<LlmProviderSnapshot>
@@ -126,7 +125,7 @@ interface CreateWsRouterArgs {
   getDiscoveredProjects: () => DiscoveredProject[]
   machineDisplayName: string
   updateManager: UpdateManager | null
-  usageLimits?: Pick<UsageLimitsManager, "getSnapshot" | "refresh" | "onChange"> | null
+  usageLimits?: Pick<UsageLimits["Service"], "snapshot" | "refresh" | "changes"> | null
   providerAuth?: Pick<
     ProviderAuthManager,
     | "getSnapshot"
@@ -281,7 +280,7 @@ export function createWsRouter({
     // A create that failed leaves no chat, and the caller says so in its own words.
     await chatCreations.get(chatId)?.catch(() => {})
   }
-  const resolvedAnalytics = analytics ?? NoopAnalyticsReporter
+  const resolvedAnalytics = analytics ?? NoopAnalytics
   const chatCommands = providedChatCommands ?? createChatCommands({ store, agent, analytics: resolvedAnalytics })
 
   /**
@@ -594,13 +593,13 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "app-settings",
-          data: withProviderCatalog(appSettings.getSnapshot()),
+          data: withProviderCatalog(runKannaSync(appSettings.snapshot)),
         },
       }
     }
 
     if (topic.type === "usage-limits") {
-      const data: UsageLimitsSnapshot = usageLimits?.getSnapshot() ?? { providers: [] }
+      const data: UsageLimitsSnapshot = usageLimits ? runKannaSync(usageLimits.snapshot) : { providers: [] }
       return {
         v: PROTOCOL_VERSION,
         type: "snapshot",
@@ -765,7 +764,7 @@ export function createWsRouter({
   }
 
   function transcriptWindowAssistantMessages() {
-    return appSettings.getSnapshot().transcript.windowAssistantMessages
+    return runKannaSync(appSettings.snapshot).transcript.windowAssistantMessages
   }
 
   /** The socket's window start for a chat subscription, sizing it on first use. */
@@ -1168,7 +1167,7 @@ export function createWsRouter({
     }
   })
 
-  const disposeAppSettingsEvents = appSettings.onChange(() => {
+  const disposeAppSettingsEvents = subscribeKanna(appSettings.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1198,7 +1197,7 @@ export function createWsRouter({
     }
   }) ?? (() => {})
 
-  const disposeUsageLimitsEvents = usageLimits?.onChange(() => {
+  const disposeUsageLimitsEvents = usageLimits ? subscribeKanna(usageLimits.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1211,7 +1210,7 @@ export function createWsRouter({
         send(ws, envelope)
       }
     }
-  }) ?? (() => {})
+  }) : (() => {})
 
   const disposeProviderAuthEvents = providerAuth?.onChange(() => {
     for (const ws of sockets) {
@@ -1424,15 +1423,15 @@ export function createWsRouter({
           return
         }
         case "settings.readAppSettings": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(appSettings.getSnapshot()) })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(runKannaSync(appSettings.snapshot)) })
           return
         }
         case "usage.refresh": {
           if (usageLimits) {
             // Auto-refresh (page/palette open) respects the read TTL; the
             // manual Refresh button forces past it.
-            await usageLimits.refresh({ force: command.force ?? false })
-            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: usageLimits.getSnapshot() })
+            await runKanna(usageLimits.refresh({ force: command.force ?? false }))
+            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: runKannaSync(usageLimits.snapshot) })
           } else {
             send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { providers: [] } satisfies UsageLimitsSnapshot })
           }
@@ -1490,26 +1489,26 @@ export function createWsRouter({
           return
         }
         case "settings.writeAppSettings": {
-          const previousAnalyticsEnabled = appSettings.getSnapshot().analyticsEnabled
+          const previousAnalyticsEnabled = runKannaSync(appSettings.snapshot).analyticsEnabled
           if (previousAnalyticsEnabled && !command.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_disabled")
+            runKannaSync(resolvedAnalytics.track("analytics_disabled"))
           }
-          const snapshot = await appSettings.write({ analyticsEnabled: command.analyticsEnabled })
+          const snapshot = await runKanna(appSettings.write({ analyticsEnabled: command.analyticsEnabled }))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) })
           if (!previousAnalyticsEnabled && command.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_enabled")
+            runKannaSync(resolvedAnalytics.track("analytics_enabled"))
           }
           return
         }
         case "settings.writeAppSettingsPatch": {
-          const previousAnalyticsEnabled = appSettings.getSnapshot().analyticsEnabled
-          const snapshot = await appSettings.writePatch(command.patch)
+          const previousAnalyticsEnabled = runKannaSync(appSettings.snapshot).analyticsEnabled
+          const snapshot = await runKanna(appSettings.writePatch(command.patch))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) })
           if (command.patch.analyticsEnabled !== undefined && previousAnalyticsEnabled && !snapshot.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_disabled")
+            runKannaSync(resolvedAnalytics.track("analytics_disabled"))
           }
           if (command.patch.analyticsEnabled !== undefined && !previousAnalyticsEnabled && snapshot.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_enabled")
+            runKannaSync(resolvedAnalytics.track("analytics_enabled"))
           }
           return
         }
@@ -1584,7 +1583,7 @@ export function createWsRouter({
           await refreshDiscovery()
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id } })
           if (!existingProjectId) {
-            resolvedAnalytics.track("project_opened")
+            runKannaSync(resolvedAnalytics.track("project_opened"))
           }
           await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
           return
@@ -1596,7 +1595,7 @@ export function createWsRouter({
           await refreshDiscovery()
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: resolved } })
           if (!existingProjectId) {
-            resolvedAnalytics.track("project_opened")
+            runKannaSync(resolvedAnalytics.track("project_opened"))
           }
           await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
           return
@@ -1640,7 +1639,7 @@ export function createWsRouter({
             : (await store.openProject(command.localPath)).id
           await store.removeProject(projectId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId } })
-          resolvedAnalytics.track("project_removed")
+          runKannaSync(resolvedAnalytics.track("project_removed"))
           // Hidden projects also hide their chats, so refresh every subscription.
           await broadcastSnapshots()
           return
@@ -2223,7 +2222,7 @@ export function createWsRouter({
         // Kick a fresh usage read on subscribe so the page opens accurate;
         // the onChange fanout delivers the result to all subscribers.
         if (parsed.topic.type === "usage-limits" && usageLimits) {
-          void usageLimits.refresh().catch(() => undefined)
+          void runKanna(usageLimits.refresh())
         }
         // Same shape for provider auth: cached state paints instantly, the
         // TTL-respecting probe pushes fresh results to all subscribers.
