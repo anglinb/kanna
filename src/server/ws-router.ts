@@ -14,7 +14,8 @@ import type { DiscoveredProject } from "./discovery"
 import { DiffStore } from "./diff-store"
 import { EventStore } from "./event-store"
 import { openExternal } from "./external-open"
-import { KeybindingsManager } from "./keybindings"
+import type { Keybindings } from "./keybindings"
+import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
 import type { PortTunnelManager } from "./port-tunnels"
 import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath, resolveLocalPath } from "./paths"
@@ -111,7 +112,7 @@ interface CreateWsRouterArgs {
   agent: AgentCoordinator
   terminals: TerminalManager
   portTunnels?: Pick<PortTunnelManager, "expose" | "unexpose" | "getPublicUrl">
-  keybindings: KeybindingsManager
+  keybindings: Keybindings["Service"]
   appSettings: Pick<AppSettingsManager, "getSnapshot" | "write" | "writePatch" | "onChange">
   analytics?: AnalyticsReporter
   llmProvider: {
@@ -581,7 +582,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "keybindings",
-          data: keybindings.getSnapshot(),
+          data: runKannaSync(keybindings.snapshot),
         },
       }
     }
@@ -1152,7 +1153,7 @@ export function createWsRouter({
     pushTerminalEvent(event.terminalId, event)
   })
 
-  const disposeKeybindingEvents = keybindings.onChange(() => {
+  const disposeKeybindingEvents = subscribeKanna(keybindings.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1414,11 +1415,11 @@ export function createWsRouter({
           return
         }
         case "settings.readKeybindings": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: keybindings.getSnapshot() })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: runKannaSync(keybindings.snapshot) })
           return
         }
         case "settings.writeKeybindings": {
-          const snapshot = await keybindings.write(command.bindings)
+          const snapshot = await runKanna(keybindings.write(command.bindings))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }

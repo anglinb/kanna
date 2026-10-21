@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { makeFakeKeybindings } from "./keybindings.fake"
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
@@ -399,10 +400,7 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
       getSnapshot: () => null,
       onEvent: () => () => {},
     } as never,
-    keybindings: {
-      getSnapshot: () => DEFAULT_KEYBINDINGS_SNAPSHOT,
-      onChange: () => () => {},
-    } as never,
+    keybindings: makeFakeKeybindings(DEFAULT_KEYBINDINGS_SNAPSHOT),
     appSettings: createFakeAppSettings(),
     llmProvider: createFakeLlmProvider(),
     refreshDiscovery: async () => [],
@@ -2146,20 +2144,10 @@ describe("ws-router", () => {
 
   test("subscribes to keybindings snapshots and writes keybindings through the router", async () => {
     const initialSnapshot: KeybindingsSnapshot = DEFAULT_KEYBINDINGS_SNAPSHOT
-    const keybindings = {
-      snapshot: initialSnapshot,
-      getSnapshot() {
-        return this.snapshot
-      },
-      onChange: () => () => {},
-      async write(bindings: KeybindingsSnapshot["bindings"]) {
-        this.snapshot = { bindings, warning: null, filePathDisplay: "~/.kanna/keybindings.json" }
-        return this.snapshot
-      },
-    }
+    const keybindings = makeFakeKeybindings(initialSnapshot)
 
     const router = createTestRouter({
-      keybindings: keybindings as never,
+      keybindings,
     })
     const ws = new FakeWebSocket()
 
@@ -2179,7 +2167,7 @@ describe("ws-router", () => {
       id: "keybindings-sub-1",
       snapshot: {
         type: "keybindings",
-        data: keybindings.snapshot,
+        data: initialSnapshot,
       },
     })
 

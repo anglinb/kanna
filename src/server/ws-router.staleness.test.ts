@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { makeFakeKeybindings } from "./keybindings.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -353,24 +354,12 @@ function createWorld(options?: { projectPath?: string }) {
     },
   }
 
-  const keybindingsListeners = new Set<() => void>()
-  let keybindingsSnapshot: Record<string, unknown> = {
+  const keybindingsSnapshot = {
     bindings: { toggleEmbeddedTerminal: ["cmd+j"] },
     warning: null,
     filePathDisplay: "~/.kanna/keybindings.json",
   }
-  const keybindings = {
-    getSnapshot: () => keybindingsSnapshot,
-    write: async (bindings: Record<string, string[]>) => {
-      keybindingsSnapshot = { ...keybindingsSnapshot, bindings }
-      for (const listener of keybindingsListeners) listener()
-      return keybindingsSnapshot
-    },
-    onChange: (listener: () => void) => {
-      keybindingsListeners.add(listener)
-      return () => keybindingsListeners.delete(listener)
-    },
-  }
+  const keybindings = makeFakeKeybindings(keybindingsSnapshot as never)
 
   const router = createWsRouter({
     store: store as never,

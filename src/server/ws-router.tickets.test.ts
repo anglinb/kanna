@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { makeFakeKeybindings } from "./keybindings.fake"
 import { PROTOCOL_VERSION } from "../shared/types"
 import type { TicketDetail } from "../shared/tickets"
 import { createEmptyState } from "./events"
@@ -61,7 +62,7 @@ function setup() {
     worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
     terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
-    keybindings: { getSnapshot: () => ({ bindings: {}, warning: null }), onChange: () => () => {} } as never,
+    keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),
     appSettings: { getSnapshot: () => ({}), write: async () => ({}), writePatch: async () => ({}), onChange: () => () => {} } as never,
     llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,
     refreshDiscovery: async () => [],

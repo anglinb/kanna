@@ -1,3 +1,4 @@
+import { Layer, ManagedRuntime } from "effect"
 import { homedir } from "node:os"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
@@ -35,7 +36,8 @@ import { ChatOrchestrator } from "./orchestrator"
 import { TicketStore } from "./ticket-store"
 import { createChatCommands } from "./chat-commands"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
-import { KeybindingsManager } from "./keybindings"
+import { Keybindings } from "./keybindings"
+import { ServerPlatform } from "./effect/runtime"
 import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
@@ -235,7 +237,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const portTunnels = new PortTunnelManager({
     log: (message) => console.log(`${LOG_PREFIX} ${message}`),
   })
-  const keybindings = new KeybindingsManager()
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
@@ -247,7 +248,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // fine (nothing greyed out) until the result lands.
   void refreshInstalledEditors(appSettings)
   void refreshInstalledTerminals(appSettings)
-  await keybindings.initialize()
+  // Services already on Effect, built once and released at shutdown. The
+  // rest of startup still holds them as plain values until it migrates too.
+  const runtime = ManagedRuntime.make(Keybindings.layer().pipe(Layer.provide(ServerPlatform)))
+  const keybindings = await runtime.runPromise(Keybindings)
   const analytics = new KannaAnalyticsReporter({
     settings: appSettings,
     currentVersion: options.update?.version ?? "unknown",
@@ -832,7 +836,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     providerAuth.dispose()
     usageLimits.dispose()
     appSettings.dispose()
-    keybindings.dispose()
+    await runtime.dispose()
     terminals.closeAll()
     portTunnels.stopAll()
     await store.compact()

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { makeFakeKeybindings } from "./keybindings.fake"
 import type { AppSettingsSnapshot } from "../shared/types"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
@@ -53,7 +54,7 @@ async function firstSocketSnapshot(deps: ReturnType<typeof createDeps>) {
     worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
     agent: deps.agent as never,
     terminals: { getSnapshot: () => null, onEvent: () => () => {} } as never,
-    keybindings: { getSnapshot: () => ({}), onChange: () => () => {} } as never,
+    keybindings: makeFakeKeybindings({} as never),
     appSettings: { ...deps.appSettings, write: async () => ({}), writePatch: async () => ({}), onChange: () => () => {} } as never,
     llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,
     refreshDiscovery: async () => [],

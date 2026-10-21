@@ -1,110 +1,122 @@
-import { watch, type FSWatcher } from "node:fs"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
-import { getKeybindingsFilePath, LOG_PREFIX } from "../shared/branding"
+import { Context, Effect, FileSystem, Latch, Layer, Option, Schema, Stream, SubscriptionRef } from "effect"
+import { getKeybindingsFilePath } from "../shared/branding"
 import { DEFAULT_KEYBINDINGS, type KeybindingAction, type KeybindingsSnapshot } from "../shared/types"
 
 const KEYBINDING_ACTIONS = Object.keys(DEFAULT_KEYBINDINGS) as KeybindingAction[]
 
 type KeybindingsFile = Partial<Record<KeybindingAction, unknown>>
 
-export class KeybindingsManager {
+export class KeybindingsFileError extends Schema.TaggedError<KeybindingsFileError>()(
+  "@kanna/server/keybindings/KeybindingsFileError",
+  {
+    operation: Schema.Literals(["read", "write"]),
+    filePath: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
+
+const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
+
+/**
+ * The user's keybindings file, read once at start, rewritten from the client
+ * and reloaded when the user edits it by hand.
+ *
+ * `changes` emits each snapshot after the current one, never the current one
+ * itself; read that with `snapshot`.
+ */
+export class Keybindings extends Context.Service<Keybindings, {
   readonly filePath: string
-  private watcher: FSWatcher | null = null
-  private snapshot: KeybindingsSnapshot
-  private readonly listeners = new Set<(snapshot: KeybindingsSnapshot) => void>()
-
-  constructor(filePath = getKeybindingsFilePath(homedir())) {
-    this.filePath = filePath
-    this.snapshot = createDefaultSnapshot(this.filePath)
-  }
-
-  async initialize() {
-    await mkdir(path.dirname(this.filePath), { recursive: true })
-    const file = Bun.file(this.filePath)
-    if (!(await file.exists())) {
-      await writeFile(this.filePath, `${JSON.stringify(DEFAULT_KEYBINDINGS, null, 2)}\n`, "utf8")
-    }
-    await this.reload()
-    this.startWatching()
-  }
-
-  dispose() {
-    this.watcher?.close()
-    this.watcher = null
-    this.listeners.clear()
-  }
-
-  getSnapshot() {
-    return this.snapshot
-  }
-
-  onChange(listener: (snapshot: KeybindingsSnapshot) => void) {
-    this.listeners.add(listener)
-    return () => {
-      this.listeners.delete(listener)
-    }
-  }
-
-  async reload() {
-    const nextSnapshot = await readKeybindingsSnapshot(this.filePath)
-    this.setSnapshot(nextSnapshot)
-  }
-
-  async write(bindings: Partial<Record<KeybindingAction, string[]>>) {
-    const nextSnapshot = normalizeKeybindings(bindings, this.filePath)
-    await mkdir(path.dirname(this.filePath), { recursive: true })
-    await writeFile(this.filePath, `${JSON.stringify(nextSnapshot.bindings, null, 2)}\n`, "utf8")
-    this.setSnapshot(nextSnapshot)
-    return nextSnapshot
-  }
-
-  private setSnapshot(snapshot: KeybindingsSnapshot) {
-    this.snapshot = snapshot
-    for (const listener of this.listeners) {
-      listener(snapshot)
-    }
-  }
-
-  private startWatching() {
-    this.watcher?.close()
-    try {
-      this.watcher = watch(path.dirname(this.filePath), { persistent: false }, (_eventType, filename) => {
-        if (filename && filename !== path.basename(this.filePath)) {
-          return
-        }
-        void this.reload().catch((error: unknown) => {
-          console.warn(`${LOG_PREFIX} Failed to reload keybindings:`, error)
-        })
-      })
-    } catch (error) {
-      console.warn(`${LOG_PREFIX} Failed to watch keybindings file:`, error)
-      this.watcher = null
-    }
-  }
+  readonly snapshot: Effect.Effect<KeybindingsSnapshot>
+  readonly changes: Stream.Stream<KeybindingsSnapshot>
+  readonly reload: Effect.Effect<void, KeybindingsFileError>
+  readonly write: (
+    bindings: Partial<Record<KeybindingAction, string[]>>,
+  ) => Effect.Effect<KeybindingsSnapshot, KeybindingsFileError>
+}>()("@kanna/server/Keybindings") {
+  static readonly layer = (filePath = defaultKeybindingsFilePath()) =>
+    Layer.effect(this, makeKeybindings(filePath))
 }
 
-export async function readKeybindingsSnapshot(filePath: string) {
-  try {
-    const text = await readFile(filePath, "utf8")
-    if (!text.trim()) {
-      return createDefaultSnapshot(filePath, "Keybindings file was empty. Using defaults.")
-    }
-    const parsed = JSON.parse(text) as KeybindingsFile
-    return normalizeKeybindings(parsed, filePath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return createDefaultSnapshot(filePath)
-    }
+export const defaultKeybindingsFilePath = () => getKeybindingsFilePath(homedir())
 
-    if (error instanceof SyntaxError) {
-      return createDefaultSnapshot(filePath, "Keybindings file is invalid JSON. Using defaults.")
-    }
+const makeKeybindings = Effect.fn("Keybindings.make")(function* (filePath: string) {
+  const fs = yield* FileSystem.FileSystem
+  yield* Effect.annotateCurrentSpan("filePath", filePath)
 
-    throw error
+  const writeFile = (contents: unknown) =>
+    fs.makeDirectory(path.dirname(filePath), { recursive: true }).pipe(
+      Effect.andThen(fs.writeFileString(filePath, `${JSON.stringify(contents, null, 2)}\n`)),
+      Effect.catchTag("PlatformError", (cause) =>
+        Effect.fail(new KeybindingsFileError({ operation: "write", filePath, cause }))),
+    )
+
+  const exists = yield* fs.exists(filePath).pipe(Effect.orElseSucceed(() => false))
+  if (!exists) yield* writeFile(DEFAULT_KEYBINDINGS)
+
+  const ref = yield* SubscriptionRef.make(yield* readSnapshot(fs, filePath))
+
+  const reload = Effect.fn("Keybindings.reload")(function* () {
+    yield* SubscriptionRef.set(ref, yield* readSnapshot(fs, filePath))
+  })
+
+  const write = Effect.fn("Keybindings.write")(function* (bindings: Partial<Record<KeybindingAction, string[]>>) {
+    const next = normalizeKeybindings(bindings, filePath)
+    yield* writeFile(next.bindings)
+    yield* SubscriptionRef.set(ref, next)
+    return next
+  })
+
+  // The directory, not the file: editors save by renaming a new file over the
+  // old one, which a watch on the file itself stops seeing. The layer waits
+  // for the watcher, so an edit made right after startup is not missed.
+  const watching = yield* Latch.make()
+  yield* fs.watch(path.dirname(filePath), { onReady: () => Latch.openUnsafe(watching) }).pipe(
+    Stream.filter((event) => path.basename(event.path) === path.basename(filePath)),
+    Stream.runForEach(() =>
+      reload().pipe(
+        Effect.catchTag("@kanna/server/keybindings/KeybindingsFileError", (error) =>
+          Effect.logWarning("Failed to reload keybindings:", error.cause)),
+      )),
+    Effect.catchTag("PlatformError", (error) => Effect.logWarning("Failed to watch keybindings file:", error)),
+    Effect.ensuring(Latch.open(watching)),
+    Effect.forkScoped,
+  )
+  yield* Latch.await(watching)
+
+  return {
+    filePath,
+    snapshot: SubscriptionRef.get(ref),
+    changes: SubscriptionRef.changes(ref).pipe(Stream.drop(1)),
+    reload: reload(),
+    write,
   }
-}
+})
+
+export const readKeybindingsSnapshot = Effect.fn("Keybindings.readSnapshot")(function* (filePath: string) {
+  return yield* readSnapshot(yield* FileSystem.FileSystem, filePath)
+})
+
+const readSnapshot = Effect.fn("Keybindings.readSnapshotWith")(function* (fs: FileSystem.FileSystem, filePath: string) {
+  const text = yield* fs.readFileString(filePath).pipe(
+    Effect.map(Option.some),
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+    Effect.catchTag("PlatformError", (cause) =>
+      Effect.fail(new KeybindingsFileError({ operation: "read", filePath, cause }))),
+  )
+  if (Option.isNone(text)) {
+    return createDefaultSnapshot(filePath)
+  }
+  if (!text.value.trim()) {
+    return createDefaultSnapshot(filePath, "Keybindings file was empty. Using defaults.")
+  }
+  return yield* decodeJson(text.value).pipe(
+    Effect.map((parsed) => normalizeKeybindings(parsed as KeybindingsFile, filePath)),
+    Effect.catchTag("SchemaError", () =>
+      Effect.succeed(createDefaultSnapshot(filePath, "Keybindings file is invalid JSON. Using defaults."))),
+  )
+})
 
 export function normalizeKeybindings(value: KeybindingsFile | null | undefined, filePath = getKeybindingsFilePath(homedir())): KeybindingsSnapshot {
   const warnings: string[] = []
