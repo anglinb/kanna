@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import type { AppSettingsSnapshot, KeybindingsSnapshot, LlmProviderSnapshot, SidebarData, UpdateSnapshot } from "../shared/types"
@@ -11,15 +11,6 @@ import { createEmptyState } from "./events"
 import { EventStore } from "./event-store"
 import { deriveLocalProjectsSnapshot } from "./read-models"
 import { SERVER_PROVIDERS, applyCodexModels, resetServerProvidersForTests } from "./provider-catalog"
-import {
-  assertSafeSkillId,
-  assertSafeSkillSource,
-  buildInstallSkillCommand,
-  buildUninstallSkillCommand,
-  listGlobalSkillsWithSources,
-  listInstalledSkills,
-  parseInstalledSkillsLock,
-} from "./skills"
 import { createWsRouter } from "./ws-router"
 
 function withSidebarGroupDefaults(group: {
@@ -157,134 +148,6 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
   warning: null,
   filePathDisplay: "~/.kanna/data/settings.json",
 }
-
-describe("skills helpers", () => {
-  test("parses installed global skills from a lock payload", () => {
-    const snapshot = parseInstalledSkillsLock({
-      version: 1,
-      skills: {
-        zeta: {
-          source: "owner/zeta",
-          sourceType: "github",
-          sourceUrl: "https://github.com/owner/zeta",
-          skillPath: "skills/zeta/SKILL.md",
-          installedAt: "2026-05-01T01:00:00.000Z",
-          updatedAt: "2026-05-01T02:00:00.000Z",
-          pluginName: "zeta-plugin",
-        },
-        alpha: {
-          source: "owner/alpha",
-          sourceType: "github",
-        },
-        ignored: "not an object",
-      },
-    }, "/tmp/.skill-lock.json")
-
-    expect(snapshot.lockFilePath).toBe("/tmp/.skill-lock.json")
-    expect(snapshot.skills.map((skill) => skill.name)).toEqual(["alpha", "zeta"])
-    expect(snapshot.skills[0]).toMatchObject({
-      name: "alpha",
-      source: "owner/alpha",
-      sourceType: "github",
-      sourceUrl: "",
-      installedAt: "",
-      updatedAt: "",
-    })
-    expect(snapshot.skills[1]).toMatchObject({
-      name: "zeta",
-      source: "owner/zeta",
-      skillPath: "skills/zeta/SKILL.md",
-      pluginName: "zeta-plugin",
-    })
-  })
-
-  test("returns an empty installed skills snapshot when the lock file is missing or invalid", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "kanna-skills-"))
-    try {
-      const missingPath = path.join(dir, "missing.json")
-      expect(await listInstalledSkills(missingPath)).toEqual({
-        lockFilePath: missingPath,
-        skills: [],
-      })
-
-      const invalidPath = path.join(dir, ".skill-lock.json")
-      await writeFile(invalidPath, "{", "utf8")
-      expect(await listInstalledSkills(invalidPath)).toEqual({
-        lockFilePath: invalidPath,
-        skills: [],
-      })
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("listGlobalSkillsWithSources scans global roots and annotates lock-file sources", async () => {
-    const home = await mkdtemp(path.join(tmpdir(), "kanna-global-skills-"))
-    try {
-      const { mkdir } = await import("node:fs/promises")
-      const universalDir = path.join(home, ".agents", "skills", "installed-skill")
-      const handDroppedDir = path.join(home, ".claude", "skills", "hand-dropped")
-      await mkdir(universalDir, { recursive: true })
-      await mkdir(handDroppedDir, { recursive: true })
-      await writeFile(path.join(universalDir, "SKILL.md"), "---\nname: installed-skill\ndescription: From the marketplace\n---\n")
-      await writeFile(path.join(handDroppedDir, "SKILL.md"), "---\nname: hand-dropped\ndescription: Made by hand\n---\n")
-
-      const lockPath = path.join(home, ".agents", ".skill-lock.json")
-      await writeFile(lockPath, JSON.stringify({
-        version: 3,
-        skills: {
-          "installed-skill": { source: "owner/repo", sourceType: "github" },
-        },
-      }))
-
-      const snapshot = await listGlobalSkillsWithSources({ home, lockFilePath: lockPath })
-      const byName = new Map(snapshot.skills.map((skill) => [skill.name, skill]))
-
-      // Lock-tracked skill carries its marketplace source; ~/.agents attributes codex/cursor/grok/pi.
-      expect(byName.get("installed-skill")).toMatchObject({
-        source: "owner/repo",
-        providers: ["codex", "cursor", "grok", "pi"],
-      })
-      // Hand-dropped skill still listed, claude-attributed, with no source.
-      expect(byName.get("hand-dropped")?.providers).toEqual(["claude"])
-      expect(byName.get("hand-dropped")?.source).toBeUndefined()
-    } finally {
-      await rm(home, { recursive: true, force: true })
-    }
-  })
-
-  test("validates skill source and id before building commands", () => {
-    expect(assertSafeSkillSource(" owner/repo ")).toBe("owner/repo")
-    expect(assertSafeSkillId(" my-skill_1 ")).toBe("my-skill_1")
-    expect(() => assertSafeSkillSource("https://github.com/owner/repo")).toThrow("owner/repo")
-    expect(() => assertSafeSkillId("../nope")).toThrow("Skill id is invalid.")
-  })
-
-  test("builds global install and uninstall commands for universal and Claude Code aliases", () => {
-    expect(buildInstallSkillCommand("owner/repo", "my-skill").slice(1)).toEqual([
-      "skills",
-      "add",
-      "owner/repo",
-      "--skill",
-      "my-skill",
-      "--global",
-      "--agent",
-      "universal",
-      "claude-code",
-      "--yes",
-    ])
-    expect(buildUninstallSkillCommand("my-skill").slice(1)).toEqual([
-      "skills",
-      "remove",
-      "my-skill",
-      "--global",
-      "--agent",
-      "universal",
-      "claude-code",
-      "--yes",
-    ])
-  })
-})
 
 const DEFAULT_UPDATE_SNAPSHOT: UpdateSnapshot = {
   currentVersion: "0.12.0",

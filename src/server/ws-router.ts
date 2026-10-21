@@ -23,6 +23,8 @@ import { listRecentGitHubRepos } from "./github"
 import { SERVER_PROVIDERS, applyPiFaveModels } from "./provider-catalog"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
+import { Effect } from "effect"
+import { ServerPlatform } from "./effect/runtime"
 import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
@@ -1552,27 +1554,27 @@ export function createWsRouter({
           return
         }
         case "skills.search": {
-          const snapshot = await searchSkills(command.query, command.limit)
+          const snapshot = await runKanna(searchSkills(command.query, command.limit))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
         case "skills.install": {
-          const result = await installSkill(command.source, command.skillId)
+          const result = await runKanna(installSkill(command.source, command.skillId))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "skills.uninstall": {
-          const result = await uninstallSkill(command.skillId)
+          const result = await runKanna(uninstallSkill(command.skillId))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "skills.listInstalled": {
-          const result = await listInstalledSkills()
+          const result = await runKanna(listInstalledSkills().pipe(Effect.provide(ServerPlatform)))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "skills.listGlobal": {
-          const result = await listGlobalSkillsWithSources()
+          const result = await runKanna(listGlobalSkillsWithSources().pipe(Effect.provide(ServerPlatform)))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }

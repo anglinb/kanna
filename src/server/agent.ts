@@ -84,6 +84,9 @@ import { fallbackTitleFromMessage } from "./generate-title"
 import { asNumber, asRecord } from "../shared/json"
 import { buildHandoffContext, buildHandoffMessageContent, type HandoffContext } from "./handoff"
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
+import { Effect } from "effect"
+import { runKanna } from "./effect/bridge"
+import { ServerPlatform } from "./effect/runtime"
 import { timestamped } from "./transcript"
 import {
   findWorkflowOf,
@@ -294,7 +297,7 @@ interface AgentCoordinatorArgs {
   checkSessionArtifact?: (
     provider: AgentProvider,
     query: { cwd: string; sessionToken: string | null | undefined }
-  ) => SessionArtifactStatus
+  ) => SessionArtifactStatus | Promise<SessionArtifactStatus>
 }
 
 
@@ -1159,7 +1162,8 @@ export class AgentCoordinator {
     this.resolvePiConnection = args.resolvePiConnection ?? resolvePiConnection
     this.generateTitle = args.generateTitle ?? generateTitleForChatDetailed
     this.startClaudeSessionFn = args.startClaudeSession ?? startClaudeSession
-    this.checkSessionArtifactFn = args.checkSessionArtifact ?? checkSessionArtifact
+    this.checkSessionArtifactFn = args.checkSessionArtifact
+      ?? ((provider, query) => runKanna(checkSessionArtifact(provider, query).pipe(Effect.provide(ServerPlatform))))
   }
 
   setBackgroundErrorReporter(report: ((message: string) => void) | null) {
@@ -1889,12 +1893,12 @@ export class AgentCoordinator {
       case "claude": {
         if (this.claudeSessions.has(args.chatId)) return false
         const token = args.pendingForkSessionToken ?? args.sessionToken
-        return this.checkSessionArtifactFn("claude", { cwd: args.cwd, sessionToken: token }) === "missing"
+        return await this.checkSessionArtifactFn("claude", { cwd: args.cwd, sessionToken: token }) === "missing"
       }
       case "cursor":
-        return this.checkSessionArtifactFn("cursor", { cwd: args.cwd, sessionToken: args.sessionToken }) === "missing"
+        return await this.checkSessionArtifactFn("cursor", { cwd: args.cwd, sessionToken: args.sessionToken }) === "missing"
       case "grok":
-        return this.checkSessionArtifactFn("grok", {
+        return await this.checkSessionArtifactFn("grok", {
           cwd: args.cwd,
           sessionToken: args.pendingForkSessionToken ?? args.sessionToken,
         }) === "missing"
@@ -2581,7 +2585,7 @@ export class AgentCoordinator {
             // Session mid-shutdown or old CLI — fall through to the scan.
           }
         }
-        return { provider: "claude", skills: scanClaudeSkills({ cwd }), origin: "filesystem" }
+        return { provider: "claude", skills: await runKanna(scanClaudeSkills({ cwd }).pipe(Effect.provide(ServerPlatform))), origin: "filesystem" }
       }
       case "codex": {
         const live = command.chatId
@@ -2596,18 +2600,18 @@ export class AgentCoordinator {
           }))
           return { provider: "codex", skills, origin: "live" }
         }
-        return { provider: "codex", skills: scanCodexSkills({ cwd }), origin: "filesystem" }
+        return { provider: "codex", skills: await runKanna(scanCodexSkills({ cwd }).pipe(Effect.provide(ServerPlatform))), origin: "filesystem" }
       }
       case "cursor":
         // Cursor has no enumeration protocol; the scan mirrors the CLI's own
         // skill discovery roots, and invocation is failsafe-only by design.
-        return { provider: "cursor", skills: scanCursorSkills({ cwd }), origin: "filesystem" }
+        return { provider: "cursor", skills: await runKanna(scanCursorSkills({ cwd }).pipe(Effect.provide(ServerPlatform))), origin: "filesystem" }
       case "grok": {
         const live = await this.grokManager.listSkills({ cwd })
         if (live.length > 0) {
           return { provider: "grok", skills: live, origin: "live" }
         }
-        return { provider: "grok", skills: scanGrokSkills({ cwd }), origin: "filesystem" }
+        return { provider: "grok", skills: await runKanna(scanGrokSkills({ cwd }).pipe(Effect.provide(ServerPlatform))), origin: "filesystem" }
       }
       case "pi": {
         const skills = await this.piManager.listSkills({ chatId: command.chatId, cwd })
