@@ -9,6 +9,9 @@ import process from "node:process"
 import { createInterface } from "node:readline/promises"
 import { renderANSI } from "uqr"
 import { getCloudFilePathDisplay, LOG_PREFIX } from "../../shared/branding"
+import { Effect } from "effect"
+import { runKanna } from "../effect/bridge"
+import { ServerPlatform } from "../effect/runtime"
 import { getMachineDisplayName } from "../machine-name"
 import { CloudApiError, createCloudApiClient, type CloudApiClient } from "./api-client"
 import {
@@ -33,7 +36,7 @@ export interface PairCommandDeps {
   writeIdentity?: (identity: CloudIdentity) => Promise<void>
   deleteIdentity?: () => Promise<boolean>
   createApiClient?: (controlUrl?: string) => CloudApiClient
-  getMachineName?: () => string
+  getMachineName?: () => string | Promise<string>
   confirm?: (question: string) => Promise<boolean>
   /** Device-code flow seams (bare `kanna pair`). */
   createPairSession?: typeof createPairSessionManager
@@ -69,7 +72,7 @@ async function runDeviceCodePairing(args: {
   createPairSession: typeof createPairSessionManager
   createApiClient: (controlUrl?: string) => CloudApiClient
   writeIdentity: (identity: CloudIdentity) => Promise<void>
-  getMachineName: () => string
+  getMachineName: () => string | Promise<string>
   renderQr: (url: string) => string
   sleep: (ms: number) => Promise<void>
 }): Promise<number> {
@@ -81,7 +84,7 @@ async function runDeviceCodePairing(args: {
   let manager: PairSessionManager
   try {
     manager = args.createPairSession({
-      machineName: args.getMachineName(),
+      machineName: await args.getMachineName(),
       createApiClient: () => args.createApiClient(),
       onPaired: (identity) => args.writeIdentity(identity),
     })
@@ -128,7 +131,7 @@ export async function runPairCommand(args: PairCommandArgs, deps: PairCommandDep
   const writeIdentity = deps.writeIdentity ?? ((identity: CloudIdentity) => writeCloudIdentity(identity))
   const deleteIdentity = deps.deleteIdentity ?? (() => deleteCloudIdentity())
   const createApiClient = deps.createApiClient ?? ((controlUrl?: string) => createCloudApiClient({ controlUrl }))
-  const getMachineName = deps.getMachineName ?? getMachineDisplayName
+  const getMachineName = deps.getMachineName ?? (() => runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform))))
   const confirm = deps.confirm ?? promptConfirm
   const { log, warn } = deps
 
@@ -163,7 +166,7 @@ export async function runPairCommand(args: PairCommandArgs, deps: PairCommandDep
       const client = createApiClient()
       let response
       try {
-        response = await client.pair(args.pairingCode, getMachineName())
+        response = await client.pair(args.pairingCode, await getMachineName())
       } catch (error) {
         if (error instanceof CloudApiError && (error.status === 404 || error.status === 410)) {
           warn(`${LOG_PREFIX} that pairing code is ${error.status === 410 ? "expired" : "invalid"} — generate a new one at https://kanna.sh/fleet`)

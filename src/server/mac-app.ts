@@ -7,7 +7,8 @@
  */
 
 import process from "node:process"
-import { spawn } from "node:child_process"
+import { Effect } from "effect"
+import { runCommand } from "./process-utils"
 
 export const MAC_APP_BUNDLE_ID = "sh.kanna.mac"
 /** Registered by the app (macos/electron-builder.yml). `open?url=` names the server to show. */
@@ -21,24 +22,20 @@ export function macAppOpenUrl(localUrl: string) {
 }
 
 /**
- * Show `localUrl` in the Mac app when it is installed. Resolves false when it
+ * Show `localUrl` in the Mac app when it is installed. Succeeds with false when it
  * is not (or off macOS), so the caller falls back to the browser. `open -b`
  * exits non-zero when no app has the bundle id, which is the whole check.
  */
-export function openInMacApp(localUrl: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
-  if (platform !== "darwin") return Promise.resolve(false)
-  return new Promise((resolve) => {
-    let child
-    try {
-      child = spawn("open", ["-b", MAC_APP_BUNDLE_ID, macAppOpenUrl(localUrl)], { stdio: "ignore" })
-    } catch {
-      resolve(false)
-      return
-    }
-    child.once("error", () => resolve(false))
-    child.once("exit", (code) => resolve(code === 0))
-  })
-}
+export const openInMacApp = Effect.fn("MacApp.open")(function* (
+  localUrl: string,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (platform !== "darwin") return false
+  return yield* runCommand(["open", "-b", MAC_APP_BUNDLE_ID, macAppOpenUrl(localUrl)]).pipe(
+    Effect.map((output) => output.exitCode === 0),
+    Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", () => Effect.succeed(false)),
+  )
+})
 
 /**
  * A server the app started should go when the app goes, crash included. A
@@ -48,6 +45,9 @@ export function openInMacApp(localUrl: string, platform: NodeJS.Platform = proce
  *
  * Poll the parent's pid, not `process.ppid`: Bun reads that once at start,
  * so it never turns into launchd's 1 when the parent dies.
+ *
+ * A plain unref'd interval rather than an Effect schedule: the watch must not
+ * keep the process alive on its own, and an Effect sleep holds a ref'd timer.
  */
 export function exitWithParent(
   onOrphaned: () => void,

@@ -1,4 +1,4 @@
-import { Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { homedir } from "node:os"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
@@ -24,8 +24,8 @@ import { AgentCoordinator } from "./agent"
 import { CodexAppServerManager } from "./codex-app-server"
 import { KannaAnalyticsReporter } from "./analytics"
 import { AppSettingsManager } from "./app-settings"
-import { refreshInstalledEditors } from "./editor-detection"
-import { refreshInstalledTerminals } from "./terminal-detection"
+import { EditorDetection } from "./editor-detection"
+import { TerminalDetection } from "./terminal-detection"
 import { UsageLimitsManager } from "./usage-limits"
 import { DiffStore } from "./diff-store"
 import { WorktreeProbe } from "./worktree-probe"
@@ -38,6 +38,7 @@ import { createChatCommands } from "./chat-commands"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { Keybindings } from "./keybindings"
 import { ServerPlatform } from "./effect/runtime"
+import { runKanna } from "./effect/bridge"
 import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
@@ -157,12 +158,12 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const runtimeProfile = getRuntimeProfile()
   // Runs alongside the store setup below (~0.5 s for a zsh with nvm) and is
   // awaited before anything can start an agent.
-  const shellPathReady = inheritShellPath()
+  const shellPathReady = runKanna(inheritShellPath())
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
   const diagnostics = new PerformanceLog(options.dataDir ?? getDataDir(homedir()), undefined, options.update?.version)
   const store = new EventStore(options.dataDir, diagnostics)
   const diffStore = new DiffStore(store.dataDir)
-  const machineDisplayName = getMachineDisplayName()
+  const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
   // every request path below reads the current value.
   let cloud: CloudRuntime | null = options.cloud ?? null
@@ -243,19 +244,23 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
   const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"), { devbox: devboxUi })
   await appSettings.initialize()
-  // Which editors and terminals this machine has, for the "Open in…" menus.
-  // Deliberately not awaited: it shells out per app, and the menus render
-  // fine (nothing greyed out) until the result lands.
-  void refreshInstalledEditors(appSettings)
-  void refreshInstalledTerminals(appSettings)
   // Services already on Effect, built once and released at shutdown. The
   // rest of startup still holds them as plain values until it migrates too.
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
+      EditorDetection.layer(),
+      TerminalDetection.layer(),
     ).pipe(Layer.provide(ServerPlatform)),
   )
   const keybindings = await runtime.runPromise(Keybindings)
+  const editorDetection = await runtime.runPromise(EditorDetection)
+  const terminalDetection = await runtime.runPromise(TerminalDetection)
+  // Which editors and terminals this machine has, for the "Open in…" menus.
+  // Deliberately not awaited: it shells out per app, and the menus render
+  // fine (nothing greyed out) until the result lands.
+  void runKanna(editorDetection.refresh(appSettings))
+  void runKanna(terminalDetection.refresh(appSettings))
   const analytics = new KannaAnalyticsReporter({
     settings: appSettings,
     currentVersion: options.update?.version ?? "unknown",
@@ -367,8 +372,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     },
     refreshDiscovery,
     refreshInstalledApps: () => {
-      void refreshInstalledEditors(appSettings)
-      void refreshInstalledTerminals(appSettings)
+      void runKanna(editorDetection.refresh(appSettings))
+      void runKanna(terminalDetection.refresh(appSettings))
     },
     getDiscoveredProjects: () => discoveredProjects,
     machineDisplayName,
