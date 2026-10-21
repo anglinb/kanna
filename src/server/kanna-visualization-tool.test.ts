@@ -7,6 +7,7 @@ import { externalResource } from "./kanna-visualization-tool"
 import { readVisualizationArtifact, visualizationHeight, visualizationLink } from "../shared/visualization"
 import { copyTranscriptMedia, getTranscriptMediaDir, parseTranscriptMediaUrl, retargetEntryMediaUrls } from "./transcript-media"
 import type { TranscriptEntry } from "../shared/types"
+import { runTest } from "./effect/testing"
 let dir: string
 beforeEach(async () => { dir = await mkdtemp(path.join(tmpdir(), "kanna-visualization-")) })
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
@@ -24,7 +25,7 @@ test("snapshots local HTML and keeps forked visualizations after the source is r
   const artifact = readVisualizationArtifact(entry.content)!
   expect(artifact.title).toBe('Calculator')
   await rm(source)
-  await copyTranscriptMedia(dir, 'source', 'fork')
+  await runTest(copyTranscriptMedia(dir, 'source', 'fork'))
   const forked = retargetEntryMediaUrls(entry, 'source', 'fork')
   if (forked.kind !== 'tool_result') throw Error('Expected result')
   const fork = readVisualizationArtifact(forked.content)!

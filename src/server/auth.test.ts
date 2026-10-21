@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { persistProjectUpload } from "./uploads"
+import { runTest } from "./effect/testing"
 import { startKannaServer } from "./server"
 
 const tempDirs: string[] = []
@@ -147,13 +148,13 @@ describe("password auth", () => {
     const { server, project, projectDir } = await startPasswordServer()
 
     try {
-      const attachment = await persistProjectUpload({
+      const attachment = await runTest(persistProjectUpload({
         projectId: project.id,
         localPath: projectDir,
         fileName: "hello.txt",
         bytes: new TextEncoder().encode("hello from upload"),
         fallbackMimeType: "text/plain",
-      })
+      }))
 
       const loginResponse = await fetch(`http://localhost:${server.port}/auth/login`, {
         method: "POST",

@@ -13,6 +13,8 @@ import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
 import { ChatOrchestrator } from "./orchestrator"
 import { TicketStore } from "./ticket-store"
+import { TestPlatform } from "./effect/testing"
+import { Layer, ManagedRuntime } from "effect"
 import { createWsRouter } from "./ws-router"
 import { timestamped } from "./transcript"
 import { stripSystemMessages } from "../shared/message-preview"
@@ -98,8 +100,8 @@ async function setup() {
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-tickets-project-"))
   const store = new EventStore(dataDir)
   await store.initialize()
-  const tickets = new TicketStore(dataDir)
-  await tickets.initialize()
+  const ticketsRuntime = ManagedRuntime.make(TicketStore.layer({ dataDir }).pipe(Layer.provide(TestPlatform)))
+  const tickets = await ticketsRuntime.runPromise(TicketStore)
   const project = await store.openProject(projectDir)
   const codex = new FakeCodex()
   const agent = new AgentCoordinator({
@@ -123,7 +125,8 @@ async function setup() {
   cleanups.push(async () => {
     orchestrator.dispose()
     agent.dispose()
-    await tickets.flush()
+    await ticketsRuntime.runPromise(tickets.flush)
+    await ticketsRuntime.dispose()
     await rm(dataDir, { recursive: true, force: true })
     await rm(projectDir, { recursive: true, force: true })
   })

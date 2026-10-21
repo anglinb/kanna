@@ -56,7 +56,13 @@ import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import { fetchMainCommitSha, type NightlyInstallResult } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { instanceFingerprint } from "./instance"
-import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileContentType, persistProjectUpload } from "./uploads"
+import {
+  deleteProjectUpload,
+  inferAttachmentContentType,
+  inferProjectFileContentType,
+  persistProjectUpload,
+  type PersistProjectUploadArgs,
+} from "./uploads"
 import { getProjectUploadDir } from "./paths"
 import { inheritShellPath } from "./process-utils"
 
@@ -78,9 +84,9 @@ export async function persistUploadedFiles(args: {
   projectId: string
   localPath: string
   files: File[]
-  persistUpload?: typeof persistProjectUpload
+  persistUpload?: (upload: PersistProjectUploadArgs) => Promise<ChatAttachment>
 }): Promise<ChatAttachment[]> {
-  const persistUpload = args.persistUpload ?? persistProjectUpload
+  const persistUpload = args.persistUpload ?? ((upload) => runKanna(Effect.provide(persistProjectUpload(upload), ServerPlatform)))
   const attachments: ChatAttachment[] = []
 
   try {
@@ -97,10 +103,10 @@ export async function persistUploadedFiles(args: {
     }
   } catch (error) {
     await Promise.allSettled(
-      attachments.map((attachment) => deleteProjectUpload({
+      attachments.map((attachment) => runKanna(Effect.provide(deleteProjectUpload({
         localPath: args.localPath,
         storedName: path.basename(attachment.absolutePath),
-      }))
+      }), ServerPlatform)))
     )
     throw error
   }
@@ -160,7 +166,36 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // awaited before anything can start an agent.
   const shellPathReady = runKanna(inheritShellPath())
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
-  const diagnostics = new PerformanceLog(options.dataDir ?? getDataDir(homedir()), undefined, options.update?.version)
+  const dataDir = options.dataDir ?? getDataDir(homedir())
+  // Services already on Effect, built once and released at shutdown. The
+  // rest of startup still holds them as plain values until it migrates too.
+  // Built first: the store records diagnostics from its first read.
+  // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
+  // the dev-mode override (`bun run dev:cloud`) so the UI is developable
+  // without a cloud identity.
+  const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
+  // Usage reads go through the agent, which is built below; nothing asks for
+  // a read before the router exists.
+  const usageReads: UsageLimitsDeps = {
+    fetchClaudeUsage: () => agent.fetchClaudeUsage(),
+    fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
+    fetchGrokUsage: () => agent.fetchGrokUsage(),
+  }
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Keybindings.layer(),
+      PerformanceLog.layer({ dataDir, version: options.update?.version }),
+      TicketStore.layer({ dataDir }),
+      Analytics.layer({
+        currentVersion: options.update?.version ?? "unknown",
+        environment: runtimeProfile === "dev" ? "dev" : "prod",
+      }).pipe(Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi }))),
+      UsageLimits.layer(path.join(dataDir, "usage-limits.json"), usageReads),
+      EditorDetection.layer(),
+      TerminalDetection.layer(),
+    ).pipe(Layer.provide(ServerPlatform)),
+  )
+  const diagnostics = await runtime.runPromise(PerformanceLog)
   const store = new EventStore(options.dataDir, diagnostics)
   const diffStore = new DiffStore(store.dataDir)
   const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
@@ -238,31 +273,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const portTunnels = new PortTunnelManager({
     log: (message) => console.log(`${LOG_PREFIX} ${message}`),
   })
-  // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
-  // the dev-mode override (`bun run dev:cloud`) so the UI is developable
-  // without a cloud identity.
-  const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
-  // Usage reads go through the agent, which is built below; nothing asks for
-  // a read before the router exists.
-  const usageReads: UsageLimitsDeps = {
-    fetchClaudeUsage: () => agent.fetchClaudeUsage(),
-    fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
-    fetchGrokUsage: () => agent.fetchGrokUsage(),
-  }
-  // Services already on Effect, built once and released at shutdown. The
-  // rest of startup still holds them as plain values until it migrates too.
-  const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      Keybindings.layer(),
-      Analytics.layer({
-        currentVersion: options.update?.version ?? "unknown",
-        environment: runtimeProfile === "dev" ? "dev" : "prod",
-      }).pipe(Layer.provideMerge(AppSettings.layer(path.join(store.dataDir, "settings.json"), { devbox: devboxUi }))),
-      UsageLimits.layer(path.join(store.dataDir, "usage-limits.json"), usageReads),
-      EditorDetection.layer(),
-      TerminalDetection.layer(),
-    ).pipe(Layer.provide(ServerPlatform)),
-  )
   const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection } = await runtime.runPromise(Effect.gen(function* () {
     return {
       keybindings: yield* Keybindings,
@@ -318,8 +328,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // One set of chat actions for both callers: the router runs them for the
   // user, the orchestrator for an agent.
   const chatCommands = createChatCommands({ store, agent, analytics })
-  const tickets = new TicketStore(store.dataDir)
-  await tickets.initialize()
+  const tickets = await runtime.runPromise(TicketStore)
   const orchestrator = new ChatOrchestrator({
     store,
     agent,
@@ -662,7 +671,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
                 chunks.push(value)
               }
               const summary = JSON.parse(Buffer.concat(chunks).toString("utf8"))
-              diagnostics.mergeClientSummary(summary?.metrics, typeof summary?.clientId === "string" ? summary.clientId : undefined)
+              runKannaSync(diagnostics.mergeClientSummary(summary?.metrics, typeof summary?.clientId === "string" ? summary.clientId : undefined))
               return new Response(null, { status: 204 })
             } catch {
               return new Response(null, { status: 400 })
@@ -801,7 +810,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           },
           message(ws, raw) {
             void router.handleMessage(ws, raw).catch(error => {
-              diagnostics.record("socket_handler_errors")
+              runKannaSync(diagnostics.record("socket_handler_errors"))
               console.error("[ws-router] Handler failed:", error instanceof Error ? error.message : String(error))
             })
           },
@@ -832,13 +841,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     cloud: Boolean(options.cloud),
   }))
 
-  diagnostics.start(() => ({
+  runKannaSync(diagnostics.start(() => ({
     ...store.getResourceCounts(),
     ...router.getResourceCounts(),
     ...agent.getResourceCounts(),
     ...terminals.getResourceCounts(),
     ...diffStore.getResourceCounts(),
-  }))
+  })))
 
   const shutdown = async () => {
     pairSession?.stop()
@@ -856,11 +865,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     try { await agent.interruptForShutdown() } finally { agent.dispose() }
     router.dispose()
     providerAuth.dispose()
-    await runtime.dispose()
     terminals.closeAll()
     portTunnels.stopAll()
     await store.compact()
-    await diagnostics.stop()
+    // After the store's last write, so the diagnostics' final line counts it.
+    await runtime.dispose()
     server.stop(true)
   }
 
@@ -1167,10 +1176,10 @@ async function handleProjectUploadDelete(req: Request, url: URL, store: EventSto
     return Response.json({ error: "Invalid attachment path" }, { status: 400 })
   }
 
-  const deleted = await deleteProjectUpload({
+  const deleted = await runKanna(Effect.provide(deleteProjectUpload({
     localPath: project.localPath,
     storedName,
-  })
+  }), ServerPlatform))
 
   return Response.json({ ok: deleted })
 }

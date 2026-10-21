@@ -43,9 +43,12 @@ import {
   computeFirstRun,
   MIN_SCHEDULE_INTERVAL_MS,
   parseTimeOfDay,
-  ScheduleRunner,
+  makeScheduleRunner,
   type ScheduleFireResult,
+  type ScheduleRunner,
 } from "./schedules"
+import { Effect, Exit, Scope } from "effect"
+import { runKanna, runKannaSync } from "./effect/bridge"
 
 /**
  * The ticket a hand-off's result names: `ticket: { id, number, link }`, which
@@ -156,7 +159,7 @@ interface OrchestratorArgs {
    * Where delegators' ticket boards are kept. Without it there are no
    * tickets, and a delegator hands work off without naming one.
    */
-  tickets?: TicketStore
+  tickets?: TicketStore["Service"]
 }
 
 /**
@@ -370,7 +373,9 @@ export class ChatOrchestrator {
   private readonly push: (change: ChatChange) => void
   private readonly onError: (message: string) => void
   private readonly now: () => number
-  private readonly schedules: ScheduleRunner
+  private readonly schedules: ScheduleRunner<unknown>
+  /** Closing it stops the schedule timer. */
+  private readonly schedulesScope = Effect.runSync(Scope.make())
   /** Reports being written, so two turn ends in a row send one. */
   private readonly reporting = new Set<string>()
   /** The last report delivery under way per parent, for the next one to follow. */
@@ -423,9 +428,13 @@ export class ChatOrchestrator {
     this.tickets = args.tickets
       ? new TicketBoard({ store: args.tickets, chatInfo: (chatId) => this.ticketChatInfo(chatId), now: this.now })
       : null
-    this.schedules = new ScheduleRunner({
-      store: this.store,
-      fire: (schedule) => this.fireSchedule(schedule),
+    this.schedules = runKannaSync(Scope.provide(makeScheduleRunner<unknown>({
+      store: {
+        listSchedules: () => this.store.listSchedules(),
+        getSchedule: (scheduleId) => this.store.getSchedule(scheduleId),
+        setSchedule: (schedule) => Effect.tryPromise({ try: () => this.store.setSchedule(schedule), catch: (error) => error }),
+      },
+      fire: (schedule) => Effect.tryPromise({ try: () => this.fireSchedule(schedule), catch: (error) => error }),
       onFired: (schedule, result) => {
         // A run can create a chat, which the sidebar and the project list show.
         if (result.outcome === "sent") this.push({ sidebar: true, localProjects: true, chatIds: [result.chatId] })
@@ -436,7 +445,7 @@ export class ChatOrchestrator {
         this.onError(`schedule ${schedule.id} (${schedule.name}) failed to run: ${errorMessage(error)}`)
       },
       now: this.now,
-    })
+    }), this.schedulesScope))
   }
 
   /**
@@ -444,7 +453,7 @@ export class ChatOrchestrator {
    * that finished just before the process went down still owes its parent.
    */
   start() {
-    this.schedules.start()
+    runKannaSync(this.schedules.start)
     this.sweepReports()
     // Once more after boot has resumed what it is going to resume. A sub-chat
     // whose resume was skipped has no turn end coming to send its report.
@@ -453,7 +462,7 @@ export class ChatOrchestrator {
   }
 
   dispose() {
-    this.schedules.dispose()
+    runKannaSync(Scope.close(this.schedulesScope, Exit.void))
     if (this.bootSweep) clearTimeout(this.bootSweep)
     for (const chatId of [...this.closeOuts.keys()]) this.cancelCloseOut(chatId)
     for (const chatId of [...this.laterTurns.keys()]) this.forgetLaterTurn(chatId)
@@ -1455,7 +1464,7 @@ export class ChatOrchestrator {
       throw new Error("That time has already passed, so the schedule would never run.")
     }
     await this.store.setSchedule(schedule)
-    this.schedules.refresh()
+    runKannaSync(this.schedules.refresh)
     this.pushSchedule(schedule, existing)
     return this.describeSchedule(schedule)
   }
@@ -1520,7 +1529,7 @@ export class ChatOrchestrator {
       throw new Error(`Schedule ${scheduleId} not found. list_schedules shows the schedules that exist.`)
     }
     await this.store.deleteSchedule(scheduleId)
-    this.schedules.refresh()
+    runKannaSync(this.schedules.refresh)
     this.pushSchedule(schedule)
     // The name too: the schedule is gone, and its card has nothing else to call it.
     return { deleted: scheduleId, name: schedule.name }
@@ -1543,7 +1552,7 @@ export class ChatOrchestrator {
 
   /** Runs whatever is due now. For tests, which have no timers to wait on. */
   async runDueSchedules() {
-    await this.schedules.tick()
+    await runKanna(this.schedules.tick)
   }
 
   private async fireSchedule(schedule: ChatSchedule): Promise<ScheduleFireResult> {

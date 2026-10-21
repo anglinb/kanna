@@ -1,3 +1,6 @@
+import { Effect } from "effect"
+import { runKanna, runKannaSync } from "./effect/bridge"
+import { ServerPlatform } from "./effect/runtime"
 import type { PerformanceLog } from "./performance-log"
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { existsSync, readFileSync as readFileSyncImmediate } from "node:fs"
@@ -28,7 +31,7 @@ import { resolveLocalPath } from "./paths"
 // The sidebar's own quantization, imported rather than duplicated so the two
 // cannot drift: if the wire resolution changes, this bump condition follows.
 import { SIDEBAR_ACTIVITY_RESOLUTION_MS } from "./read-models"
-import { slimTranscriptFile } from "./transcript-slim"
+import { slimTranscriptFile, type SlimTranscriptFileResult } from "./transcript-slim"
 import {
   mergeTranscriptPayload,
   readAllTranscriptPayloads,
@@ -360,7 +363,7 @@ export class EventStore {
    */
   onQueuedMessageRemoved?: (chatId: string, queuedMessageId: string, taken: boolean) => void
 
-  constructor(dataDir = getDataDir(homedir()), private readonly diagnostics?: PerformanceLog) {
+  constructor(dataDir = getDataDir(homedir()), private readonly diagnostics?: PerformanceLog["Service"]) {
     this.dataDir = dataDir
     this.snapshotPath = path.join(this.dataDir, "snapshot.json")
     this.projectsLogPath = path.join(this.dataDir, "projects.jsonl")
@@ -1099,11 +1102,15 @@ export class EventStore {
     }
   }
 
+  private recordDiagnostic(name: string, value?: number) {
+    if (this.diagnostics) runKannaSync(this.diagnostics.record(name, value))
+  }
+
   private enqueueWrite(run: () => Promise<void>) {
     const queuedAt = performance.now()
     this.queuedWrites += 1
     const write = this.writeChain.then(async () => {
-      this.diagnostics?.record("store_queue_wait_ms", performance.now() - queuedAt)
+      this.recordDiagnostic("store_queue_wait_ms", performance.now() - queuedAt)
       try {
         await run()
       } finally {
@@ -1111,7 +1118,7 @@ export class EventStore {
       }
     })
     // The caller receives its error. Later writes still get their own attempt.
-    this.writeChain = write.catch(() => { this.diagnostics?.record("store_write_errors") })
+    this.writeChain = write.catch(() => { this.recordDiagnostic("store_write_errors") })
     return write
   }
 
@@ -1167,8 +1174,8 @@ export class EventStore {
       }
     }
     this.setCachedTranscript(chatId, entries, text.length * 2 + entries.length * 512)
-    this.diagnostics?.record("transcript_async_load_ms", performance.now() - started)
-    this.diagnostics?.record("transcript_disk_bytes", text.length)
+    this.recordDiagnostic("transcript_async_load_ms", performance.now() - started)
+    this.recordDiagnostic("transcript_disk_bytes", text.length)
   }
 
   getRollingTranscriptWindowStart(chatId: string, currentStart: number, assistantMessages: number) {
@@ -1244,7 +1251,7 @@ export class EventStore {
   private async removeTranscriptFiles(chatId: string) {
     await rm(this.transcriptPath(chatId), { force: true })
     await rm(this.payloadSidecarPath(chatId), { force: true })
-    await removeTranscriptMedia(this.dataDir, chatId)
+    await runKanna(Effect.provide(removeTranscriptMedia(this.dataDir, chatId), ServerPlatform))
     this.dropTranscriptCaches(chatId)
   }
 
@@ -1309,7 +1316,7 @@ export class EventStore {
       if (oldest === keepChatId) continue
       bytes -= this.transcriptBytes.get(oldest) ?? 0
       this.dropTranscriptCaches(oldest)
-      this.diagnostics?.record("transcript_cache_evictions")
+      this.recordDiagnostic("transcript_cache_evictions")
     }
   }
 
@@ -1329,7 +1336,7 @@ export class EventStore {
       if (!line) continue
       entries.push(JSON.parse(line) as TranscriptEntry)
     }
-    this.diagnostics?.record("transcript_sync_load_ms", performance.now() - started)
+    this.recordDiagnostic("transcript_sync_load_ms", performance.now() - started)
     return entries
   }
 
@@ -1557,7 +1564,7 @@ export class EventStore {
       const payload = sourceEntries.map((entry) => JSON.stringify(entry)).join("\n")
       const write = this.enqueueWrite(async () => {
         await this.ensureTranscriptsDir()
-        await copyTranscriptMedia(this.dataDir, sourceChatId, chatId)
+        await runKanna(Effect.provide(copyTranscriptMedia(this.dataDir, sourceChatId, chatId), ServerPlatform))
         // `getMessages` merged the payloads back in, so the fork's transcript
         // is whole on disk; its first slim sweep or append leaves it that way
         // until a rewrite, and every reader accepts both forms.
@@ -2147,7 +2154,7 @@ export class EventStore {
       // Bytes the header points at go to disk first (image files, then the
       // payload line), so a header on disk never names something missing.
       if (entry.kind === "tool_result" && !entry.trimmed) await this.loadTranscriptAsync(chatId)
-      const stored = await externalizeEntryImages(entry, { dataDir: this.dataDir, chatId })
+      const stored = await runKanna(Effect.provide(externalizeEntryImages(entry, { dataDir: this.dataDir, chatId }), ServerPlatform))
       const { header, payload } = splitTranscriptEntry(stored, (toolId) => this.isInlineResult(chatId, toolId))
       if (payload) {
         const line = serializeTranscriptPayload(payload)
@@ -2607,23 +2614,26 @@ export class EventStore {
       const transcriptPath = path.join(this.transcriptsDir, name)
       stats.chats += 1
       const write = this.enqueueWrite(async () => {
-        let result: Awaited<ReturnType<typeof slimTranscriptFile>>
+        let result: SlimTranscriptFileResult
         // Calls precede their results in a transcript, so this set is
         // complete by the time a result asks about its tool.
         const inlineToolIds = new Set<string>()
         const sidecarPath = this.payloadSidecarPath(chatId)
         try {
-          result = await slimTranscriptFile(transcriptPath, async (entry) => {
+          result = await runKanna(Effect.provide(slimTranscriptFile(transcriptPath, (entry) => {
             if (entry.kind === "tool_call" && INLINE_TOOL_KINDS.has(entry.tool.toolKind)) {
               inlineToolIds.add(entry.tool.toolId)
             }
-            const stored = await externalizeEntryImages(entry, { dataDir: this.dataDir, chatId })
-            const { header, payload } = splitTranscriptEntry(stored, (toolId) => inlineToolIds.has(toolId))
-            // The payload line lands before the header file is renamed over,
-            // same order as a live append.
-            if (payload) await appendFile(sidecarPath, serializeTranscriptPayload(payload), "utf8")
-            return header
-          })
+            return externalizeEntryImages(entry, { dataDir: this.dataDir, chatId }).pipe(
+              Effect.flatMap((stored) => {
+                const { header, payload } = splitTranscriptEntry(stored, (toolId) => inlineToolIds.has(toolId))
+                // The payload line lands before the header file is renamed over,
+                // same order as a live append.
+                if (!payload) return Effect.succeed(header)
+                return Effect.as(Effect.promise(() => appendFile(sidecarPath, serializeTranscriptPayload(payload), "utf8")), header)
+              }),
+            )
+          }), ServerPlatform))
         } catch (error) {
           options?.onProgress?.(`${LOG_PREFIX} transcript slim: skipped ${name}: ${error instanceof Error ? error.message : String(error)}`)
           return

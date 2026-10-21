@@ -105,7 +105,7 @@ export interface ClientState {
 }
 
 interface CreateWsRouterArgs {
-  diagnostics?: PerformanceLog
+  diagnostics?: PerformanceLog["Service"]
   store: EventStore
   diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
   worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels" | "getProjectsWithoutRepo">
@@ -992,9 +992,13 @@ export function createWsRouter({
           providersSent.delete(id)
         }
         sendSerializedSnapshot(ws, id, snapshotJson)
-        diagnostics?.record("chat_snapshot_ms", performance.now() - started)
-        diagnostics?.record("chat_snapshot_bytes", snapshotJson.length)
-        diagnostics?.record("chat_window_entries", Math.max(0, (end ?? 0) - windowStart))
+        if (diagnostics) {
+          runKannaSync(Effect.all([
+            diagnostics.record("chat_snapshot_ms", performance.now() - started),
+            diagnostics.record("chat_snapshot_bytes", snapshotJson.length),
+            diagnostics.record("chat_window_entries", Math.max(0, (end ?? 0) - windowStart)),
+          ], { discard: true }))
+        }
         continue
       }
       // project-git has a cheap version-counter signature, so an unchanged
@@ -2015,7 +2019,7 @@ export function createWsRouter({
         }
         case "chat.exportStandalone": {
           const { chat, project } = resolveChatProject(command.chatId)
-          const result = await writeStandaloneTranscriptExport({
+          const result = await runKanna(Effect.provide(writeStandaloneTranscriptExport({
             chatId: chat.id,
             title: chat.title,
             localPath: project.localPath,
@@ -2024,7 +2028,7 @@ export function createWsRouter({
             attachmentMode: command.attachmentMode,
             messages: store.getMessages(command.chatId),
             resolveMediaPath: (url) => store.resolveTranscriptMediaPath(url),
-          })
+          }), ServerPlatform))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }

@@ -1,5 +1,5 @@
-import { appendFile, mkdir, readdir, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { Context, Deferred, Effect, Exit, FileSystem, Layer, Option, Predicate, Schema } from "effect"
 import type {
   TicketClosure,
   TicketHandoff,
@@ -25,7 +25,6 @@ import type {
 
 const TICKET_LOG_VERSION = 1
 const COMPACTION_THRESHOLD_BYTES = 512 * 1024
-const LOG_PREFIX = "[kanna/tickets]"
 
 export type TicketStoreEvent = { v: typeof TICKET_LOG_VERSION; at: number } & (
   | { type: "ticket_created"; ticket: Pick<TicketRecord, "id" | "number" | "title" | "body"> }
@@ -167,131 +166,180 @@ export function applyTicketEvent(tickets: Map<string, TicketRecord>, delegatorCh
   }
 }
 
-export class TicketStore {
+export class TicketStoreError extends Schema.TaggedError<TicketStoreError>()(
+  "@kanna/server/ticket-store/TicketStoreError",
+  {
+    operation: Schema.Literals(["load", "append", "compact"]),
+    delegatorChatId: Schema.optionalKey(Schema.String),
+    filePath: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return this.cause instanceof Error ? this.cause.message : String(this.cause)
+  }
+}
+
+export interface TicketStoreOptions {
+  dataDir: string
+  /** Compact a board's file once it passes this many bytes. Tests set it low. */
+  compactionThresholdBytes?: number
+}
+
+/**
+ * Every delegator's board, loaded when the layer is built. Reads answer
+ * from memory; `append` applies in memory at once and then writes, one write
+ * at a time, in the order the appends ran.
+ */
+export class TicketStore extends Context.Service<TicketStore, {
   readonly dir: string
-  private readonly boards = new Map<string, Board>()
-  private writeChain = Promise.resolve()
   /** Bumped on every change, for memo keys and push decisions. */
-  version = 0
-
-  constructor(dataDir: string, private readonly compactionThresholdBytes = COMPACTION_THRESHOLD_BYTES) {
-    this.dir = path.join(dataDir, "tickets")
-  }
-
-  async initialize() {
-    await mkdir(this.dir, { recursive: true })
-    const names = (await readdir(this.dir)).filter((name) => name.endsWith(".jsonl"))
-    for (const name of names) {
-      const delegatorChatId = name.slice(0, -".jsonl".length)
-      await this.loadBoard(delegatorChatId)
-    }
-  }
-
-  private filePath(delegatorChatId: string) {
-    return path.join(this.dir, `${delegatorChatId}.jsonl`)
-  }
-
-  private async loadBoard(delegatorChatId: string) {
-    const file = Bun.file(this.filePath(delegatorChatId))
-    const text = await file.text()
-    const board: Board = { tickets: new Map(), bytes: file.size }
-    const lines = text.split("\n")
-    for (const [index, line] of lines.entries()) {
-      if (!line.trim()) continue
-      try {
-        const event = JSON.parse(line) as TicketStoreEvent
-        if (event.v !== TICKET_LOG_VERSION) continue
-        applyTicketEvent(board.tickets, delegatorChatId, event)
-      } catch {
-        // A line cut off by a crash. Anything else bad is skipped too: a board
-        // that loses one event is better than one that does not load.
-        if (index < lines.length - 2) console.warn(`${LOG_PREFIX} skipped a bad line in ${delegatorChatId}.jsonl`)
-      }
-    }
-    this.boards.set(delegatorChatId, board)
-    if (board.bytes >= this.compactionThresholdBytes) await this.enqueueWrite(() => this.compactBoard(delegatorChatId))
-  }
-
-  private enqueueWrite(run: () => Promise<void>) {
-    const next = this.writeChain.then(run)
-    this.writeChain = next.catch((error) => {
-      console.warn(`${LOG_PREFIX} write failed:`, error)
-    })
-    return next
-  }
-
-  private board(delegatorChatId: string): Board {
-    let board = this.boards.get(delegatorChatId)
-    if (!board) {
-      board = { tickets: new Map(), bytes: 0 }
-      this.boards.set(delegatorChatId, board)
-    }
-    return board
-  }
-
+  readonly version: Effect.Effect<number>
   /**
    * Applies the events in memory at once, then appends them in one write.
    * Applied first so a read straight after sees them, as the EventStore does.
+   * Succeeds once the write is on disk.
    */
-  append(delegatorChatId: string, events: TicketStoreEventInput[]): Promise<void> {
-    if (events.length === 0) return Promise.resolve()
-    const board = this.board(delegatorChatId)
-    const stamped = events.map((event) => ({ v: TICKET_LOG_VERSION, ...event }) as TicketStoreEvent)
-    for (const event of stamped) applyTicketEvent(board.tickets, delegatorChatId, event)
-    this.version += 1
-    const text = stamped.map((event) => `${JSON.stringify(event)}\n`).join("")
-    return this.enqueueWrite(async () => {
-      await mkdir(this.dir, { recursive: true })
-      await appendFile(this.filePath(delegatorChatId), text, "utf8")
-      board.bytes += Buffer.byteLength(text)
-      if (board.bytes >= this.compactionThresholdBytes) await this.compactBoard(delegatorChatId)
-    })
+  readonly append: (delegatorChatId: string, events: TicketStoreEventInput[]) => Effect.Effect<void, TicketStoreError>
+  /** For tests: compacts now, whatever the size. */
+  readonly compact: (delegatorChatId: string) => Effect.Effect<void, TicketStoreError>
+  /** Succeeds when every write queued so far has finished, failed or not. */
+  readonly flush: Effect.Effect<void>
+  readonly list: (delegatorChatId: string) => Effect.Effect<TicketRecord[]>
+  readonly get: (delegatorChatId: string, ticketId: string) => Effect.Effect<Option.Option<TicketRecord>>
+  readonly nextNumber: (delegatorChatId: string) => Effect.Effect<number>
+  /** Delegators with a board, for sweeps that look across all of them. */
+  readonly delegatorChatIds: Effect.Effect<string[]>
+}>()("@kanna/server/TicketStore") {
+  static readonly layer = (options: TicketStoreOptions) => Layer.effect(this, makeTicketStore(options))
+}
+
+const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+
+/**
+ * Events carry no Schema yet (`shared/tickets.ts` is plain types, and a
+ * board must keep loading every line older builds wrote). A line is taken
+ * when it is this log version's; `applyTicketEvent` skips what it cannot
+ * place, and a line that throws while folding is skipped like a bad one.
+ */
+const isCurrentEvent = (value: unknown): value is TicketStoreEvent =>
+  Predicate.hasProperty(value, "v") && value.v === TICKET_LOG_VERSION
+
+const makeTicketStore = Effect.fn("TicketStore.make")(function* (options: TicketStoreOptions) {
+  const fs = yield* FileSystem.FileSystem
+  const dir = path.join(options.dataDir, "tickets")
+  const compactionThresholdBytes = options.compactionThresholdBytes ?? COMPACTION_THRESHOLD_BYTES
+  const boards = new Map<string, Board>()
+  let version = 0
+  const filePath = (delegatorChatId: string) => path.join(dir, `${delegatorChatId}.jsonl`)
+  const fail = (operation: TicketStoreError["operation"], target: string, delegatorChatId?: string) => (cause: unknown) =>
+    Effect.fail(new TicketStoreError({ operation, filePath: target, cause, ...(delegatorChatId === undefined ? {} : { delegatorChatId }) }))
+
+  // The write chain: each write starts when the one queued before it has
+  // finished, failed or not.
+  let tail: Effect.Effect<void> = Effect.void
+  const enqueueWrite = (write: Effect.Effect<void, TicketStoreError>) => Effect.suspend(() => {
+    const previous = tail
+    const done = Deferred.makeUnsafe<void>()
+    tail = Deferred.await(done)
+    return previous.pipe(
+      Effect.andThen(write),
+      Effect.tapError((error) => Effect.logWarning("tickets: write failed:", error)),
+      Effect.ensuring(Deferred.succeed(done, undefined)),
+    )
+  })
+
+  const board = (delegatorChatId: string): Board => {
+    let existing = boards.get(delegatorChatId)
+    if (!existing) {
+      existing = { tickets: new Map(), bytes: 0 }
+      boards.set(delegatorChatId, existing)
+    }
+    return existing
   }
 
   /** Rewrites the file as one snapshot of the board as it is in memory. Runs on the write chain. */
-  private async compactBoard(delegatorChatId: string) {
-    const board = this.boards.get(delegatorChatId)
-    if (!board) return
+  const compactBoard = (delegatorChatId: string) => Effect.suspend(() => {
+    const current = boards.get(delegatorChatId)
+    if (!current) return Effect.void
     const snapshot: TicketStoreEvent = {
       v: TICKET_LOG_VERSION,
       at: Date.now(),
       type: "board_snapshot",
-      tickets: [...board.tickets.values()].map(cloneTicket),
+      tickets: [...current.tickets.values()].map(cloneTicket),
     }
     const text = `${JSON.stringify(snapshot)}\n`
-    const target = this.filePath(delegatorChatId)
+    const target = filePath(delegatorChatId)
     const temp = `${target}.tmp`
-    await writeFile(temp, text, "utf8")
-    await rename(temp, target)
-    board.bytes = Buffer.byteLength(text)
+    return fs.writeFileString(temp, text).pipe(
+      Effect.andThen(fs.rename(temp, target)),
+      Effect.andThen(Effect.sync(() => { current.bytes = Buffer.byteLength(text) })),
+      Effect.catchTag("PlatformError", fail("compact", target, delegatorChatId)),
+    )
+  }).pipe(Effect.withSpan("TicketStore.compactBoard", { attributes: { delegatorChatId } }))
+
+  const loadBoard = Effect.fnUntraced(function* (delegatorChatId: string) {
+    const target = filePath(delegatorChatId)
+    const bytes = yield* fs.readFile(target).pipe(Effect.catchTag("PlatformError", fail("load", target, delegatorChatId)))
+    const loaded: Board = { tickets: new Map(), bytes: bytes.byteLength }
+    const lines = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8").split("\n")
+    for (const [index, line] of lines.entries()) {
+      if (!line.trim()) continue
+      const event = decodeLine(line)
+      const folded = Option.isSome(event) && isCurrentEvent(event.value)
+        ? yield* Effect.exit(Effect.sync(() => applyTicketEvent(loaded.tickets, delegatorChatId, event.value as TicketStoreEvent)))
+        : null
+      // A line cut off by a crash. Anything else bad is skipped too: a board
+      // that loses one event is better than one that does not load.
+      const bad = Option.isNone(event) || (folded !== null && Exit.isFailure(folded))
+      if (bad && index < lines.length - 2) {
+        yield* Effect.logWarning(`tickets: skipped a bad line in ${delegatorChatId}.jsonl`)
+      }
+    }
+    boards.set(delegatorChatId, loaded)
+    if (loaded.bytes >= compactionThresholdBytes) yield* enqueueWrite(compactBoard(delegatorChatId))
+  })
+
+  yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.catchTag("PlatformError", fail("load", dir)))
+  const names = (yield* fs.readDirectory(dir).pipe(Effect.catchTag("PlatformError", fail("load", dir))))
+    .filter((name) => name.endsWith(".jsonl"))
+  for (const name of names) {
+    yield* loadBoard(name.slice(0, -".jsonl".length))
   }
 
-  /** For tests: compacts now, whatever the size. */
-  compact(delegatorChatId: string) {
-    return this.enqueueWrite(() => this.compactBoard(delegatorChatId))
-  }
+  const append = Effect.fn("TicketStore.append")(function* (delegatorChatId: string, events: TicketStoreEventInput[]) {
+    if (events.length === 0) return
+    yield* Effect.annotateCurrentSpan("delegatorChatId", delegatorChatId)
+    const current = board(delegatorChatId)
+    const stamped = events.map((event) => ({ v: TICKET_LOG_VERSION, ...event }) as TicketStoreEvent)
+    for (const event of stamped) applyTicketEvent(current.tickets, delegatorChatId, event)
+    version += 1
+    const text = stamped.map((event) => `${JSON.stringify(event)}\n`).join("")
+    const target = filePath(delegatorChatId)
+    yield* enqueueWrite(fs.makeDirectory(dir, { recursive: true }).pipe(
+      Effect.andThen(fs.writeFileString(target, text, { flag: "a" })),
+      Effect.catchTag("PlatformError", fail("append", target, delegatorChatId)),
+      Effect.andThen(Effect.suspend(() => {
+        current.bytes += Buffer.byteLength(text)
+        return current.bytes >= compactionThresholdBytes ? compactBoard(delegatorChatId) : Effect.void
+      })),
+    ))
+  })
 
-  /** Resolves when every write queued so far is on disk. */
-  flush() {
-    return this.writeChain
-  }
-
-  list(delegatorChatId: string): TicketRecord[] {
-    return [...(this.boards.get(delegatorChatId)?.tickets.values() ?? [])]
-  }
-
-  get(delegatorChatId: string, ticketId: string): TicketRecord | undefined {
-    return this.boards.get(delegatorChatId)?.tickets.get(ticketId)
-  }
-
-  nextNumber(delegatorChatId: string) {
-    let highest = 0
-    for (const ticket of this.boards.get(delegatorChatId)?.tickets.values() ?? []) highest = Math.max(highest, ticket.number)
-    return highest + 1
-  }
-
-  /** Delegators with a board, for sweeps that look across all of them. */
-  delegatorChatIds(): string[] {
-    return [...this.boards.keys()]
-  }
-}
+  return {
+    dir,
+    version: Effect.sync(() => version),
+    append,
+    compact: (delegatorChatId: string) => enqueueWrite(compactBoard(delegatorChatId)),
+    flush: Effect.suspend(() => tail),
+    list: (delegatorChatId: string) => Effect.sync(() => [...(boards.get(delegatorChatId)?.tickets.values() ?? [])]),
+    get: (delegatorChatId: string, ticketId: string) =>
+      Effect.sync(() => Option.fromUndefinedOr(boards.get(delegatorChatId)?.tickets.get(ticketId))),
+    nextNumber: (delegatorChatId: string) => Effect.sync(() => {
+      let highest = 0
+      for (const ticket of boards.get(delegatorChatId)?.tickets.values() ?? []) highest = Math.max(highest, ticket.number)
+      return highest + 1
+    }),
+    delegatorChatIds: Effect.sync(() => [...boards.keys()]),
+  } satisfies TicketStore["Service"]
+})

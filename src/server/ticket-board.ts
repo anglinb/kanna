@@ -16,6 +16,8 @@ import {
   type TicketSummary,
 } from "../shared/tickets"
 import type { ChatAttachment } from "../shared/types"
+import { Option } from "effect"
+import { runKanna, runKannaSync } from "./effect/bridge"
 import type { TicketStore, TicketStoreEventInput } from "./ticket-store"
 
 /**
@@ -49,18 +51,31 @@ function shortId(prefix: string, length = 8) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, length)}`
 }
 
+/** `TicketStore` as this file still calls it, until the board moves to Effect too. */
+function bridgeTicketStore(store: TicketStore["Service"]) {
+  return {
+    get version() {
+      return runKannaSync(store.version)
+    },
+    list: (delegatorChatId: string) => runKannaSync(store.list(delegatorChatId)),
+    get: (delegatorChatId: string, ticketId: string) => Option.getOrUndefined(runKannaSync(store.get(delegatorChatId, ticketId))),
+    nextNumber: (delegatorChatId: string) => runKannaSync(store.nextNumber(delegatorChatId)),
+    append: (delegatorChatId: string, events: TicketStoreEventInput[]) => runKanna(store.append(delegatorChatId, events)),
+  }
+}
+
 export class TicketBoard {
-  private readonly store: TicketStore
+  private readonly store: ReturnType<typeof bridgeTicketStore>
   private readonly chatInfo: (chatId: string) => TicketChatInfo | undefined
   private readonly now: () => number
   private readonly ledgers = new Map<string, Map<string, LedgerEntry>>()
 
   constructor(args: {
-    store: TicketStore
+    store: TicketStore["Service"]
     chatInfo: (chatId: string) => TicketChatInfo | undefined
     now?: () => number
   }) {
-    this.store = args.store
+    this.store = bridgeTicketStore(args.store)
     this.chatInfo = args.chatInfo
     this.now = args.now ?? Date.now
   }
