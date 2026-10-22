@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
+import { makeFakeWorktreeProbe } from "./worktree-probe.fake"
 import { PROTOCOL_VERSION } from "../shared/types"
 import type { TicketDetail } from "../shared/tickets"
 import { createEmptyState } from "./events"
@@ -61,7 +62,7 @@ function setup() {
   const router = createWsRouter({
     store: { state: createEmptyState(), getSidebarProjectOrder: () => [], pruneStaleEmptyChats: async () => [] } as never,
     diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
-    worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
+    worktreeProbe: makeFakeWorktreeProbe(),
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
     terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),

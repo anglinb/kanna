@@ -30,7 +30,7 @@ import { TerminalDetection } from "./terminal-detection"
 import { UsageLimits, type UsageLimitsDeps } from "./usage-limits"
 import { DiffStore } from "./diff-store"
 import { WorktreeProbe } from "./worktree-probe"
-import { TurnFileTracker } from "./worktree-snapshot"
+import { TurnFileRecordError, TurnFileTracker } from "./worktree-snapshot"
 import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { resumeInterruptedTurns } from "./resume-turns"
 import { ChatOrchestrator } from "./orchestrator"
@@ -204,10 +204,27 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
         projectPaths: Effect.sync((): string[] =>
           [...store.state.projectsById.values()].filter((project) => !project.deletedAt).map((project) => project.localPath)),
       }),
+      // Feeds the sidebar's muted "relevant to uncommitted work" dot. Derived and
+      // in-memory; see worktree-probe.ts for why there's no `git status` sweep.
+      WorktreeProbe.layer({ state: Effect.sync(() => store.state) }),
+      // Snapshot the worktree either side of a turn and record what changed, so
+      // the sidebar can ask "did this chat touch a file that's still uncommitted?"
+      // instead of comparing timestamps. See worktree-snapshot.ts.
+      TurnFileTracker.layer({
+        resolveChatPath: (chatId) => {
+          const chat = store.state.chatsById.get(chatId)
+          const project = chat ? store.state.projectsById.get(chat.projectId) : undefined
+          return project?.localPath ?? null
+        },
+        recordFiles: (chatId, files) => Effect.tryPromise({
+          try: () => store.recordFilesTouched(chatId, files),
+          catch: (cause) => new TurnFileRecordError({ chatId, cause }),
+        }),
+      }),
     ).pipe(Layer.provide(ServerPlatform)),
   )
   const diagnostics = await runtime.runPromise(PerformanceLog)
-  const store = new EventStoreBridge(await runtime.runPromise(EventStore))
+  const store: EventStoreBridge = new EventStoreBridge(await runtime.runPromise(EventStore))
   const diffStore = new DiffStore(store.dataDir)
   const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
@@ -232,33 +249,21 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
 
   let server: ReturnType<typeof Bun.serve<ClientState>>
   let router: ReturnType<typeof createWsRouter>
-  // Feeds the sidebar's muted "relevant to uncommitted work" dot. Derived and
-  // in-memory; see worktree-probe.ts for why there's no `git status` sweep.
-  const worktreeProbe = new WorktreeProbe(
-    () => store.state,
-    () => {
-      void router.broadcastSidebar()
-    }
-  )
+  const { worktreeProbe, turnFiles } = await runtime.runPromise(Effect.all({
+    worktreeProbe: WorktreeProbe,
+    turnFiles: TurnFileTracker,
+  }))
+  const disposeWorktreeProbeChanges = subscribeKanna(worktreeProbe.changes, () => {
+    void router.broadcastSidebar()
+  })
   // Free updates: `performRefresh` already stats every dirty file, so the
   // client's active project stays current at no extra git cost — and the dot
   // clears the instant a commit goes through Kanna's git panel.
   diffStore.onWorkingTreeProbe = (projectId, probe) => {
-    worktreeProbe.recordExternalProbe(projectId, probe)
+    void runKanna(worktreeProbe.recordExternalProbe(projectId, probe))
   }
-  // Snapshot the worktree either side of a turn and record what changed, so
-  // the sidebar can ask "did this chat touch a file that's still uncommitted?"
-  // instead of comparing timestamps. See worktree-snapshot.ts.
-  const turnFiles = new TurnFileTracker({
-    resolveChatPath: (chatId) => {
-      const chat = store.state.chatsById.get(chatId)
-      const project = chat ? store.state.projectsById.get(chat.projectId) : undefined
-      return project?.localPath ?? null
-    },
-    recordFiles: (chatId, files) => store.recordFilesTouched(chatId, files),
-  })
   store.onTurnStarted = (chatId) => {
-    turnFiles.beginTurn(chatId)
+    void runKanna(turnFiles.beginTurn(chatId))
     orchestrator.handleTurnStarted(chatId)
   }
   store.onQueuedMessageRemoved = (chatId, queuedMessageId, taken) => {
@@ -268,7 +273,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // so probe that one project then — after recording the turn's own files, so
   // the broadcast that follows already reflects them.
   store.onTurnEnded = (chatId) => {
-    void turnFiles.endTurn(chatId).finally(() => worktreeProbe.refreshForChat(chatId))
+    void runKanna(turnFiles.endTurn(chatId).pipe(Effect.andThen(worktreeProbe.refreshForChat(chatId))))
   }
   const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet } = await runtime.runPromise(Effect.gen(function* () {
     return {
@@ -494,13 +499,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const staleEmptyChatPruneInterval = setInterval(runPruneStaleEmptyChats, STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS)
   const staleChatAutoArchiveInterval = setInterval(runAutoArchiveStaleChats, STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS)
   const staleChatDeleteInterval = setInterval(runDeleteStaleChats, STALE_CHAT_DELETE_INTERVAL_MS)
-  worktreeProbe.start()
+  void runKanna(worktreeProbe.start)
   void runtime.runPromise(projectIcons.start)
   // Claims recorded before base blobs never expire on their own, so a chat
   // whose work shipped months ago keeps returning to Relevant on someone
   // else's edit. Dating them is two git calls per affected chat and only
   // happens once, so it runs in the background rather than delaying boot.
-  void backfillTouchedFileBases(store, { onProgress: (message) => console.log(message) })
+  void runKanna(backfillTouchedFileBases(store))
     .then((result) => {
       if (result.chats > 0) void router.broadcastSidebar()
     })
@@ -763,7 +768,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(attachmentContentResponse)
           }
 
-          const visualizationHeightsResponse = await handleVisualizationHeights(req, url, store)
+          const visualizationHeightsResponse = await runKanna(handleVisualizationHeights(req, url, store).pipe(Effect.provide(ServerPlatform)))
           if (visualizationHeightsResponse) {
             return withOriginAgentCluster(visualizationHeightsResponse)
           }
@@ -857,7 +862,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     clearInterval(staleEmptyChatPruneInterval)
     clearInterval(staleChatAutoArchiveInterval)
     clearInterval(staleChatDeleteInterval)
-    worktreeProbe.stop()
+    // The probe's passes stop with the runtime below; nothing hears them from here on.
+    disposeWorktreeProbeChanges()
     disposeProjectIconChanges()
     // Cancels every in-flight turn *and* marks its chat, so the next boot
     // restarts the work instead of leaving it interrupted (see resume-turns.ts).

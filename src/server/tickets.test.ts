@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
+import { makeFakeWorktreeProbe } from "./worktree-probe.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -15,7 +16,9 @@ import { KannaToolRuntime } from "./kanna-tools"
 import { ChatOrchestrator } from "./orchestrator"
 import { TicketStore } from "./ticket-store"
 import { TestPlatform } from "./effect/testing"
-import { Layer, ManagedRuntime } from "effect"
+import { Layer, ManagedRuntime, Option } from "effect"
+import { runKannaSync } from "./effect/bridge"
+import type { TicketBoard } from "./ticket-board"
 import { createWsRouter } from "./ws-router"
 import { timestamped } from "./transcript"
 import { stripSystemMessages } from "../shared/message-preview"
@@ -163,7 +166,18 @@ async function setup() {
 
   const prompts = (chatId: string) => store.getMessages(chatId).filter((entry): entry is UserPromptEntry & typeof entry => entry.kind === "user_prompt")
 
-  return { store, tickets, project, codex, agent, orchestrator, startChat, toolsFor, prompts, board: orchestrator.tickets! }
+  return { store, tickets, project, codex, agent, orchestrator, startChat, toolsFor, prompts, board: boardReads(orchestrator.tickets!) }
+}
+
+/** The board's reads, run at once, as the assertions below make them. */
+function boardReads(board: TicketBoard["Service"]) {
+  return {
+    get: (delegatorChatId: string, ticketId: string) => Option.getOrUndefined(runKannaSync(board.get(delegatorChatId, ticketId))),
+    require: (delegatorChatId: string, ticketId: string) => runKannaSync(board.require(delegatorChatId, ticketId)),
+    list: (delegatorChatId: string) => runKannaSync(board.list(delegatorChatId)),
+    summary: board.summary,
+    stateOf: board.stateOf,
+  }
 }
 
 describe("hand-offs from a delegator", () => {
@@ -587,7 +601,7 @@ describe("the user's ticket replies", () => {
     const router = createWsRouter({
       store,
       diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
-      worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
+      worktreeProbe: makeFakeWorktreeProbe(),
       agent,
       terminals: makeFakeTerminals(),
       keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),

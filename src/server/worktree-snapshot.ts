@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto"
-import { rm } from "node:fs/promises"
 import path from "node:path"
-import { LOG_PREFIX } from "../shared/branding"
-import { readTreeBlobs, resolveWorkingTreeLocation, runGit, type WorkingTreeLocation } from "./diff-store"
+import { Context, Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect"
+import type { WorkingTreeLocation } from "./diff-store"
 import type { TouchedFile } from "./events"
+import { git, resolveLocation, treeBlobs, type WorktreeGitError } from "./worktree-git"
 
 /**
  * Which files a chat actually changed, by snapshotting the working tree at each
@@ -42,143 +42,113 @@ export type { TouchedFile } from "./events"
 /** What `beginTurn` banks: the pre-turn worktree, and the commit it sat on. */
 interface PendingTurn {
   /** Tree object of the whole worktree, dirty content included. */
-  tree: string | null
-  /** `HEAD` at turn start; `null` on an unborn HEAD (nothing committed yet). */
-  head: string | null
+  tree: Option.Option<string>
+  /** `HEAD` at turn start; none on an unborn HEAD (nothing committed yet). */
+  head: Option.Option<string>
+}
+
+/** The files a turn changed could not be persisted. */
+export class TurnFileRecordError extends Schema.TaggedError<TurnFileRecordError>()(
+  "@kanna/server/worktree-snapshot/TurnFileRecordError",
+  {
+    chatId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
+
+export interface TurnFileTrackerOptions {
+  /** Absolute project path for a chat, or null when it can't be resolved. Read when a turn starts and ends. */
+  readonly resolveChatPath: (chatId: string) => string | null
+  /** Persist the files a turn changed. Never called with an empty list. */
+  readonly recordFiles: (chatId: string, files: TouchedFile[]) => Effect.Effect<void, TurnFileRecordError>
 }
 
 /** Per-chat pre-turn state, plus a location cache so `git rev-parse` runs once per project. */
-export class TurnFileTracker {
-  private readonly pendingTurns = new Map<string, Promise<PendingTurn>>()
-  private readonly locations = new Map<string, Promise<WorkingTreeLocation | null>>()
-
-  constructor(
-    private readonly options: {
-      /** Absolute project path for a chat, or null when it can't be resolved. */
-      resolveChatPath: (chatId: string) => string | null
-      /** Persist the files a turn changed. Never called with an empty list. */
-      recordFiles: (chatId: string, files: TouchedFile[]) => Promise<void>
-    }
-  ) {}
-
+export class TurnFileTracker extends Context.Service<TurnFileTracker, {
   /**
-   * Snapshot before the turn runs. Fire-and-forget: the capture races the
-   * agent's first tool call, which is fine — a file the agent changes before
-   * the snapshot lands simply shows up as pre-existing dirt rather than as this
-   * turn's work. Blocking the turn on a `git add -A` would be the worse trade.
+   * Snapshot before the turn runs. Callers don't wait for it: the capture
+   * races the agent's first tool call, which is fine — a file the agent
+   * changes before the snapshot lands simply shows up as pre-existing dirt
+   * rather than as this turn's work. Blocking the turn on a `git add -A`
+   * would be the worse trade.
    *
-   * Returns the capture promise so tests can wait for a deterministic baseline;
-   * production callers ignore it.
+   * The pending capture is registered before this does anything async, and
+   * the capture itself runs in the layer, so a caller that stops waiting
+   * doesn't cancel it. Succeeds once the capture has finished, failed or
+   * not, so tests can wait for a deterministic baseline.
    */
-  beginTurn(chatId: string): Promise<void> {
-    const localPath = this.options.resolveChatPath(chatId)
-    if (!localPath) return Promise.resolve()
-    const capture = this.captureTurn(localPath)
-    this.pendingTurns.set(chatId, capture)
-    return capture.then(() => undefined, () => undefined)
-  }
-
+  readonly beginTurn: (chatId: string) => Effect.Effect<void>
   /**
    * Snapshot after the turn and record the delta. A missing pre-tree (server
    * restarted mid-turn, project isn't a repo, capture failed) records nothing
    * rather than guessing — a chat with no recorded paths is simply never
-   * flagged, which is the safe direction.
+   * flagged, which is the safe direction. Never fails: file tracking must not
+   * break a turn's completion path, so a failure is logged.
    */
-  async endTurn(chatId: string): Promise<void> {
-    const pending = this.pendingTurns.get(chatId)
-    this.pendingTurns.delete(chatId)
-    if (!pending) return
-    const localPath = this.options.resolveChatPath(chatId)
-    if (!localPath) return
-
-    try {
-      const [pre, postTree] = await Promise.all([pending, this.captureTree(localPath)])
-      if (!pre.tree || !postTree || pre.tree === postTree) return
-      const changes = await this.diffTrees(localPath, pre.tree, postTree)
-      if (changes.length === 0) return
-      await this.options.recordFiles(chatId, await this.toTouchedFiles(localPath, pre.head, changes))
-    } catch (error) {
-      // Never let file tracking break a turn's completion path.
-      console.warn(`${LOG_PREFIX} turn file tracking failed for chat ${chatId}:`, error)
-    }
-  }
-
+  readonly endTurn: (chatId: string) => Effect.Effect<void>
   /** Drops a chat's pending state without recording anything. */
-  forget(chatId: string): void {
-    this.pendingTurns.delete(chatId)
-  }
+  readonly forget: (chatId: string) => Effect.Effect<void>
+}>()("@kanna/server/TurnFileTracker") {
+  static readonly layer = (options: TurnFileTrackerOptions) => Layer.effect(this, makeTurnFileTracker(options))
+}
 
-  /**
-   * Pairs each changed path with the blob it held at the turn's starting commit.
-   *
-   * An unborn HEAD gives every path a `null` base — accurate, since nothing is
-   * committed there — while a failed lookup leaves the base *absent*, which
-   * reads downstream as "unknown" and keeps the pre-base-blob behaviour rather
-   * than inventing a base that would expire the claim early.
-   */
-  private async toTouchedFiles(
-    localPath: string,
-    head: string | null,
-    changes: TurnFileChange[]
-  ): Promise<TouchedFile[]> {
-    const paths = changes.map((change) => change.path)
-    if (head === null) return changes.map((change) => ({ ...change, baseBlob: null }))
-    const location = await this.locationFor(localPath)
-    const blobs = location ? await readTreeBlobs(location.repoRoot, head, paths) : null
-    if (!blobs) return changes.map((change) => ({ ...change }))
-    return changes.map((change) => ({ ...change, baseBlob: blobs.get(change.path) ?? null }))
-  }
+const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options: TurnFileTrackerOptions) {
+  const fs = yield* FileSystem.FileSystem
+  const pendingTurns = new Map<string, Fiber.Fiber<PendingTurn, WorktreeGitError>>()
+  const locations = new Map<string, Effect.Effect<Option.Option<WorkingTreeLocation>, WorktreeGitError>>()
+  const layerScope = yield* Effect.scope
 
-  /** The pre-turn worktree and the commit it sits on, captured together. */
-  private async captureTurn(localPath: string): Promise<PendingTurn> {
-    const [tree, head] = await Promise.all([
-      this.captureTree(localPath),
-      this.readHead(localPath),
-    ])
-    return { tree, head }
-  }
-
-  /** `null` on an unborn HEAD or a project that isn't a repo. */
-  private async readHead(localPath: string): Promise<string | null> {
-    const location = await this.locationFor(localPath)
-    if (!location) return null
-    const head = await runGit(["rev-parse", "--verify", "HEAD"], location.repoRoot)
-    return head.exitCode === 0 ? head.stdout.trim() || null : null
-  }
-
-  private locationFor(localPath: string): Promise<WorkingTreeLocation | null> {
-    const cached = this.locations.get(localPath)
+  /** Resolved once per project path; concurrent first callers share the one resolution. */
+  const locationFor = (localPath: string) => Effect.suspend(() => {
+    const cached = locations.get(localPath)
     if (cached) return cached
-    const resolved = resolveWorkingTreeLocation(localPath)
-    this.locations.set(localPath, resolved)
-    return resolved
-  }
+    return Effect.cached(resolveLocation(localPath)).pipe(
+      Effect.flatMap((once) => {
+        locations.set(localPath, once)
+        return once
+      }),
+    )
+  })
 
   /**
    * The whole worktree as a tree object, untracked files included and
    * `.gitignore` respected — `git add -A` decides both for us, so the snapshot
    * matches what `git status` reports as dirty.
    */
-  private async captureTree(localPath: string): Promise<string | null> {
-    const location = await this.locationFor(localPath)
-    if (!location) return null
+  const captureTree = Effect.fnUntraced(function* (localPath: string) {
+    const location = yield* locationFor(localPath)
+    if (Option.isNone(location)) return Option.none<string>()
+    const { repoRoot, gitDir } = location.value
 
-    const indexPath = path.join(location.gitDir, `kanna-snapshot-index-${randomUUID()}`)
+    const indexPath = path.join(gitDir, `kanna-snapshot-index-${randomUUID()}`)
     const env = { ...process.env, GIT_INDEX_FILE: indexPath }
-    try {
+    return yield* Effect.gen(function* () {
       // Seed from HEAD so `add -A` only has to hash what actually differs.
       // Without this every snapshot re-hashes the entire worktree. Failure is
       // fine and expected on an unborn HEAD (a repo with no commits yet).
-      await runGit(["read-tree", "HEAD"], location.repoRoot, { env })
-      const added = await runGit(["add", "-A", "--", "."], location.repoRoot, { env })
-      if (added.exitCode !== 0) return null
-      const written = await runGit(["write-tree"], location.repoRoot, { env })
-      if (written.exitCode !== 0) return null
-      return written.stdout.trim() || null
-    } finally {
-      await rm(indexPath, { force: true }).catch(() => undefined)
-    }
-  }
+      yield* git(["read-tree", "HEAD"], repoRoot, { env })
+      const added = yield* git(["add", "-A", "--", "."], repoRoot, { env })
+      if (added.exitCode !== 0) return Option.none<string>()
+      const written = yield* git(["write-tree"], repoRoot, { env })
+      if (written.exitCode !== 0) return Option.none<string>()
+      return Option.fromNullOr(written.stdout.trim() || null)
+    }).pipe(Effect.ensuring(fs.remove(indexPath, { force: true }).pipe(Effect.ignore)))
+  })
+
+  /** None on an unborn HEAD or a project that isn't a repo. */
+  const readHead = Effect.fnUntraced(function* (localPath: string) {
+    const location = yield* locationFor(localPath)
+    if (Option.isNone(location)) return Option.none<string>()
+    const head = yield* git(["rev-parse", "--verify", "HEAD"], location.value.repoRoot)
+    return head.exitCode === 0 ? Option.fromNullOr(head.stdout.trim() || null) : Option.none<string>()
+  })
+
+  /** The pre-turn worktree and the commit it sits on, captured together. */
+  const captureTurn = Effect.fn("TurnFileTracker.captureTurn")(function* (localPath: string) {
+    const [tree, head] = yield* Effect.all([captureTree(localPath), readHead(localPath)], { concurrency: 2 })
+    const pending: PendingTurn = { tree, head }
+    return pending
+  })
 
   /**
    * What the turn changed, and by how much.
@@ -191,17 +161,71 @@ export class TurnFileTracker {
    * `-z` because the default output C-quotes any path with a space or a quote
    * in it, which would then match neither `git status` nor the file on disk.
    */
-  private async diffTrees(localPath: string, fromTree: string, toTree: string): Promise<TurnFileChange[]> {
-    const location = await this.locationFor(localPath)
-    if (!location) return []
-    const diff = await runGit(
-      ["diff", "--numstat", "-z", "--no-renames", fromTree, toTree],
-      location.repoRoot,
-    )
+  const diffTrees = Effect.fnUntraced(function* (localPath: string, fromTree: string, toTree: string) {
+    const location = yield* locationFor(localPath)
+    if (Option.isNone(location)) return []
+    const diff = yield* git(["diff", "--numstat", "-z", "--no-renames", fromTree, toTree], location.value.repoRoot)
     if (diff.exitCode !== 0) return []
     return parseNumstat(diff.stdout)
-  }
-}
+  })
+
+  /**
+   * Pairs each changed path with the blob it held at the turn's starting commit.
+   *
+   * An unborn HEAD gives every path a `null` base — accurate, since nothing is
+   * committed there — while a failed lookup leaves the base *absent*, which
+   * reads downstream as "unknown" and keeps the pre-base-blob behaviour rather
+   * than inventing a base that would expire the claim early.
+   */
+  const toTouchedFiles = Effect.fnUntraced(function* (localPath: string, head: Option.Option<string>, changes: TurnFileChange[]) {
+    if (Option.isNone(head)) return changes.map((change): TouchedFile => ({ ...change, baseBlob: null }))
+    const location = yield* locationFor(localPath)
+    const blobs = Option.isSome(location)
+      ? yield* treeBlobs(location.value.repoRoot, head.value, changes.map((change) => change.path))
+      : Option.none<Map<string, string | null>>()
+    if (Option.isNone(blobs)) return changes.map((change): TouchedFile => ({ ...change }))
+    return changes.map((change): TouchedFile => ({ ...change, baseBlob: blobs.value.get(change.path) ?? null }))
+  })
+
+  const recordTurn = Effect.fnUntraced(function* (chatId: string, localPath: string, pending: Fiber.Fiber<PendingTurn, WorktreeGitError>) {
+    const [pre, postTree] = yield* Effect.all([Fiber.join(pending), captureTree(localPath)], { concurrency: 2 })
+    if (Option.isNone(pre.tree) || Option.isNone(postTree) || pre.tree.value === postTree.value) return
+    const changes = yield* diffTrees(localPath, pre.tree.value, postTree.value)
+    if (changes.length === 0) return
+    yield* options.recordFiles(chatId, yield* toTouchedFiles(localPath, pre.head, changes))
+  })
+
+  const beginTurn = Effect.fn("TurnFileTracker.beginTurn")(function* (chatId: string) {
+    yield* Effect.annotateCurrentSpan("chatId", chatId)
+    const localPath = options.resolveChatPath(chatId)
+    if (!localPath) return
+    const capture = yield* captureTurn(localPath).pipe(Effect.forkIn(layerScope))
+    pendingTurns.set(chatId, capture)
+    yield* Fiber.await(capture)
+  })
+
+  const endTurn = Effect.fn("TurnFileTracker.endTurn")(function* (chatId: string) {
+    yield* Effect.annotateCurrentSpan("chatId", chatId)
+    const pending = pendingTurns.get(chatId)
+    pendingTurns.delete(chatId)
+    if (!pending) return
+    const localPath = options.resolveChatPath(chatId)
+    if (!localPath) return
+    yield* recordTurn(chatId, localPath, pending).pipe(
+      // Never let file tracking break a turn's completion path.
+      Effect.tapError((error) => Effect.logWarning(`turn file tracking failed for chat ${chatId}:`, error)),
+      Effect.ignore,
+    )
+  })
+
+  return {
+    beginTurn,
+    endTurn,
+    forget: (chatId: string) => Effect.sync(() => {
+      pendingTurns.delete(chatId)
+    }),
+  } satisfies TurnFileTracker["Service"]
+})
 
 /** One path a turn changed, with the lines it added and removed there. */
 export interface TurnFileChange {

@@ -25,10 +25,11 @@ import {
   type TicketHandoff,
   type TicketRecord,
   type TicketState,
+  type TicketSummary,
 } from "../shared/tickets"
 import type { ChatAttachment } from "../shared/types"
 import type { ClientCommand } from "../shared/protocol"
-import { TicketBoard } from "./ticket-board"
+import { makeTicketBoard, type TicketBoard } from "./ticket-board"
 import {
   agentTicketDetail,
   agentTicketSummary,
@@ -38,7 +39,7 @@ import {
   stillAskingNote,
   ticketReportLine,
 } from "./ticket-messages"
-import type { TicketStore } from "./ticket-store"
+import { TicketStore } from "./ticket-store"
 import {
   computeFirstRun,
   MIN_SCHEDULE_INTERVAL_MS,
@@ -47,7 +48,7 @@ import {
   type ScheduleFireResult,
   type ScheduleRunner,
 } from "./schedules"
-import { Effect, Exit, Scope } from "effect"
+import { Effect, Exit, Option, Scope } from "effect"
 import { runKanna, runKannaSync } from "./effect/bridge"
 
 /**
@@ -408,7 +409,7 @@ export class ChatOrchestrator {
   private childIndex: { version: number; byParent: Map<string, ChatRecord[]> } | null = null
   private bootSweep: ReturnType<typeof setTimeout> | null = null
   /** Delegators' ticket boards. Null when the orchestrator was built without a ticket store. */
-  readonly tickets: TicketBoard | null
+  readonly tickets: TicketBoard["Service"] | null
   /**
    * Hand-offs whose send has not returned. Until it does, nothing knows
    * whether the message went into a turn or the queue (`placeHandoff`).
@@ -426,7 +427,7 @@ export class ChatOrchestrator {
     this.now = args.now ?? Date.now
     this.closeOutGraceMs = args.closeOutGraceMs ?? CLOSE_OUT_GRACE_MS
     this.tickets = args.tickets
-      ? new TicketBoard({ store: args.tickets, chatInfo: (chatId) => this.ticketChatInfo(chatId), now: this.now })
+      ? runKannaSync(makeTicketBoard({ chatInfo: (chatId) => this.ticketChatInfo(chatId), now: this.now }).pipe(Effect.provideService(TicketStore, args.tickets)))
       : null
     this.schedules = runKannaSync(Scope.provide(makeScheduleRunner<unknown>({
       store: {
@@ -1103,7 +1104,7 @@ export class ChatOrchestrator {
     } else {
       if (adoption.formerParentChatId) {
         // Its result goes here now, so a delegator it worked for is owed nothing on its tickets.
-        await this.tickets?.settle(adoption.formerParentChatId, target.id).catch((error) => {
+        if (this.tickets) await runKanna(this.tickets.settle(adoption.formerParentChatId, target.id)).catch((error) => {
           this.onError(`could not settle the tickets of chat ${target.id} after its adoption: ${errorMessage(error)}`)
         })
         await this.tellFormerParent(adoption.formerParentChatId, target.id, adoption.owedFormerParent)
@@ -1224,7 +1225,7 @@ export class ChatOrchestrator {
       return queuedMessageId ? { queuedMessageId, ...handedOff } : handedOff
     } catch (error) {
       if (options.report) await this.store.setReportOwed(target.id, false).catch(() => {})
-      if (delegationId) await this.tickets?.settle(actorChatId, target.id, [delegationId]).catch(() => {})
+      if (delegationId && this.tickets) await runKanna(this.tickets.settle(actorChatId, target.id, [delegationId])).catch(() => {})
       // An inline ticket was made all the same. Retrying with it again would make a second.
       const retry = ticket ? ` The hand-off was recorded on ticket #${ticket.number}; pass ticketId "${ticket.id}" to try again.` : ""
       throw new Error(`Chat ${target.id} exists, but its turn did not start: ${errorMessage(error)}${retry}`)
@@ -1241,14 +1242,15 @@ export class ChatOrchestrator {
    */
   private async placeHandoff(actorChatId: string, childChatId: string, delegationId: string, queuedMessageId?: string) {
     const board = this.tickets
-    const handoff = board?.findHandoff(actorChatId, delegationId)
-    if (!board || !handoff || handoff.turn !== null) return
+    if (!board) return
+    const handoff = Option.getOrUndefined(runKannaSync(board.findHandoff(actorChatId, delegationId)))
+    if (!handoff || handoff.turn !== null) return
     // Still waiting: the turn that takes it from the queue places it.
     if (queuedMessageId && this.store.getQueuedMessage(childChatId, queuedMessageId)) {
-      await board.delivered(actorChatId, [handoff], { queuedMessageId })
+      await runKanna(board.delivered(actorChatId, [handoff], { queuedMessageId }))
       return
     }
-    await board.delivered(actorChatId, [handoff], { turn: this.store.getChat(childChatId)?.turnCount ?? 0 })
+    await runKanna(board.delivered(actorChatId, [handoff], { turn: this.store.getChat(childChatId)?.turnCount ?? 0 }))
   }
 
   /**
@@ -1272,7 +1274,7 @@ export class ChatOrchestrator {
     if (!board || !chat.parentChatId) return
     const taken: TicketHandoff[] = []
     const gone: TicketHandoff[] = []
-    for (const handoff of board.queuedFor(chat.parentChatId, chat.id)) {
+    for (const handoff of runKannaSync(board.queuedFor(chat.parentChatId, chat.id))) {
       if (!handoff.queuedMessageId) {
         // A send still under way places its own hand-off when it returns.
         if (!this.sendingHandoffs.has(handoff.delegationId)) taken.push(handoff)
@@ -1284,7 +1286,7 @@ export class ChatOrchestrator {
     }
     const parentChatId = chat.parentChatId
     if (taken.length > 0) {
-      void board.delivered(parentChatId, taken, { turn: chat.turnCount ?? 0 }).catch((error) => {
+      void runKanna(board.delivered(parentChatId, taken, { turn: chat.turnCount ?? 0 })).catch((error) => {
         this.onError(`could not place hand-offs to chat ${chat.id} in its turn: ${errorMessage(error)}`)
       })
     }
@@ -1304,13 +1306,13 @@ export class ChatOrchestrator {
     }
     const chat = this.store.getChat(chatId)
     if (!chat?.parentChatId || !this.tickets) return
-    const carried = this.tickets.carriedBy(chat.parentChatId, chatId, queuedMessageId)
+    const carried = runKannaSync(this.tickets.carriedBy(chat.parentChatId, chatId, queuedMessageId))
     if (carried.length > 0) void this.withdrawHandoffs(chat.parentChatId, carried)
   }
 
   private async withdrawHandoffs(delegatorChatId: string, handoffs: readonly TicketHandoff[]) {
     try {
-      await this.tickets!.withdraw(delegatorChatId, handoffs)
+      await runKanna(this.tickets!.withdraw(delegatorChatId, handoffs))
       this.push({ sidebar: true, chatIds: [delegatorChatId] })
     } catch (error) {
       this.onError(`could not withdraw hand-offs on ${delegatorChatId}'s board: ${errorMessage(error)}`)
@@ -1325,7 +1327,7 @@ export class ChatOrchestrator {
       this.forgetLaterTurn(target.id)
       await this.store.setReportOwed(target.id, false)
       // With no report coming, nothing else would settle its hand-offs.
-      if (target.parentChatId) await this.tickets?.settle(target.parentChatId, target.id)
+      if (target.parentChatId && this.tickets) await runKanna(this.tickets.settle(target.parentChatId, target.id))
     }
     await this.commands.cancel(target.id)
     this.push({ sidebar: true, chatIds: [target.id] })
@@ -1367,7 +1369,7 @@ export class ChatOrchestrator {
       : await this.commands.steer({ type: "message.steer", chatId: chat.id, queuedMessageId: input.queuedMessageId })
     // The store's hook does this too; here as well so the result is true at once. A second pass finds nothing.
     if (input.action === "remove" && chat.parentChatId && this.tickets) {
-      const carried = this.tickets.carriedBy(chat.parentChatId, chat.id, input.queuedMessageId)
+      const carried = runKannaSync(this.tickets.carriedBy(chat.parentChatId, chat.id, input.queuedMessageId))
       if (carried.length > 0) await this.withdrawHandoffs(chat.parentChatId, carried)
     }
     this.push(outcome.changed!)
@@ -1671,8 +1673,8 @@ export class ChatOrchestrator {
     const parentChatId = chat?.parentChatId
     if (!chat || !parentChatId || !this.tickets) return
     // The tickets whose work is in this turn or before it, not those still queued.
-    const { tickets } = this.tickets.coveredBy(parentChatId, chatId, chat.turnCount ?? 0, { final: true, sending: this.sendingHandoffs })
-    void this.tickets.recordAsking(parentChatId, chatId, tickets).then(
+    const { tickets } = runKannaSync(this.tickets.coveredBy(parentChatId, chatId, chat.turnCount ?? 0, { final: true, sending: this.sendingHandoffs }))
+    void runKanna(this.tickets.recordAsking(parentChatId, chatId, tickets)).then(
       () => this.push({ sidebar: true, chatIds: [parentChatId] }),
       (error) => this.onError(`could not note on its tickets that chat ${chatId} is asking: ${errorMessage(error)}`),
     )
@@ -1707,9 +1709,11 @@ export class ChatOrchestrator {
     for (const child of this.childrenOf(chatId)) {
       this.forgetLaterTurn(child.id)
       // No report comes back from any of them, so their hand-offs end here.
-      void this.tickets?.settle(chatId, child.id).catch((error) => {
-        this.onError(`could not settle the tickets of sub-chat ${child.id}: ${errorMessage(error)}`)
-      })
+      if (this.tickets) {
+        void runKanna(this.tickets.settle(chatId, child.id)).catch((error) => {
+          this.onError(`could not settle the tickets of sub-chat ${child.id}: ${errorMessage(error)}`)
+        })
+      }
       if (child.adopted) {
         // Not this chat's to stop: its turn may be the user's. It only stops
         // owing a report, for the reason the others report nothing.
@@ -1832,7 +1836,7 @@ export class ChatOrchestrator {
    * a ticket or reply no longer on the board.
    */
   private ticketReplyNotice(chatId: string, ticketId: string, replyId: string): string | null {
-    const ticket = this.tickets?.get(chatId, ticketId)
+    const ticket = this.tickets ? Option.getOrUndefined(runKannaSync(this.tickets.get(chatId, ticketId))) : undefined
     const reply = ticket?.replies.find((candidate) => candidate.id === replyId)
     if (!this.tickets || !ticket || !reply) return null
     // A reply on a Done ticket reopens it in the same moment it lands.
@@ -1980,7 +1984,7 @@ export class ChatOrchestrator {
     const parentChatId = chat.parentChatId
     // Every turn up to the last has ended, so this report covers their
     // hand-offs. Only a last word settles them: an interim one names them.
-    const covered = this.tickets?.coveredBy(parentChatId, chatId, chat.turnCount ?? 0, { final: !waiting, sending: this.sendingHandoffs })
+    const covered = this.tickets ? runKannaSync(this.tickets.coveredBy(parentChatId, chatId, chat.turnCount ?? 0, { final: !waiting, sending: this.sendingHandoffs })) : undefined
     // Written now, from the turn that earned it, before anything can change.
     const section = this.buildSection(parentChatId, chat, { replyReported: chat.reportedThrough === through, tickets: covered?.tickets })
     // This report covers the turn that ended last. See `owedTurns`.
@@ -1995,8 +1999,8 @@ export class ChatOrchestrator {
         this.watchForLaterTurn(chatId)
         // Its last word, so the tickets its turns worked for hear how it
         // ended and those hand-offs are done. An interim report is neither.
-        if (covered) {
-          await this.tickets?.recordReport(parentChatId, chatId, status === "failed" ? "chat_failed" : "chat_finished", covered)
+        if (covered && this.tickets) {
+          await runKanna(this.tickets.recordReport(parentChatId, chatId, status === "failed" ? "chat_failed" : "chat_finished", covered))
             .catch((error) => this.onError(`could not record sub-chat ${chatId}'s report on its tickets: ${errorMessage(error)}`))
         }
       }
@@ -2034,13 +2038,13 @@ export class ChatOrchestrator {
     const parentChatId = chat.parentChatId
     // The ended turn's reply is its whole answer to the hand-offs it took,
     // so they settle now, though the chat goes on with the next one's.
-    const covered = this.tickets?.coveredBy(parentChatId, chatId, endedTurn)
+    const covered = this.tickets ? runKannaSync(this.tickets.coveredBy(parentChatId, chatId, endedTurn)) : undefined
     const section = this.buildSection(parentChatId, chat, { tickets: covered?.tickets })
     this.reporting.add(chatId)
     try {
       await this.store.setReportedThrough(chatId, through)
-      if (covered) {
-        await this.tickets?.recordReport(parentChatId, chatId, chat.lastTurnOutcome === "failed" ? "chat_failed" : "chat_finished", covered)
+      if (covered && this.tickets) {
+        await runKanna(this.tickets.recordReport(parentChatId, chatId, chat.lastTurnOutcome === "failed" ? "chat_failed" : "chat_finished", covered))
           .catch((error) => this.onError(`could not record sub-chat ${chatId}'s report on its tickets: ${errorMessage(error)}`))
       }
       await this.deliverInTurn(parentChatId, chatId, section)
@@ -2171,7 +2175,7 @@ export class ChatOrchestrator {
     return { chatId: chat.id, title: chat.title, state }
   }
 
-  private requireBoard(actorChatId: string): TicketBoard {
+  private requireBoard(actorChatId: string): TicketBoard["Service"] {
     if (!this.tickets) throw new Error("Tickets are not available in this session.")
     if (!this.requireChat(actorChatId).delegator) {
       throw new Error("Tickets belong to delegator chats, and this chat is not one.")
@@ -2189,7 +2193,7 @@ export class ChatOrchestrator {
     if (input.ticketId && input.ticket) {
       throw new Error("Pass ticketId or ticket, not both: ticketId hands work on an existing ticket, ticket creates one.")
     }
-    if (input.ticketId) return { ticket: this.tickets.require(caller.id, input.ticketId) }
+    if (input.ticketId) return { ticket: runKannaSync(this.tickets.require(caller.id, input.ticketId)) }
     if (input.ticket) {
       if (!input.ticket.title?.trim()) throw new Error("ticket needs a title.")
       return { create: input.ticket }
@@ -2200,8 +2204,8 @@ export class ChatOrchestrator {
   /** Mints the hand-off, creating its ticket first when the choice was a new one. */
   private async startHandoff(actorChatId: string, target: TicketTarget, childChatId: string, options?: { outstanding?: boolean }) {
     const board = this.tickets!
-    const ticket = "ticket" in target ? target.ticket : await board.create(actorChatId, target.create)
-    const { delegationId, reopened } = await board.handoff(actorChatId, ticket.id, childChatId, options)
+    const ticket = "ticket" in target ? target.ticket : await runKanna(board.create(actorChatId, target.create))
+    const { delegationId, reopened } = await runKanna(board.handoff(actorChatId, ticket.id, childChatId, options))
     this.push({ sidebar: true, chatIds: [actorChatId] })
     return { ticket, delegationId, reopened }
   }
@@ -2221,12 +2225,12 @@ export class ChatOrchestrator {
     if (!board) return
     const chat = this.store.getChat(chatId)
     if (!chat?.delegator || chat.deletedAt || chat.archivedAt || chat.lastTurnOutcome === "cancelled") {
-      board.forgetNews(chatId)
+      runKannaSync(board.forgetNews(chatId))
       return
     }
     if (this.hasTurnInFlight(chat) || this.deliveries.has(chatId)) return
     if (this.childrenOf(chatId).some((child) => this.reporting.has(child.id))) return
-    const unanswered = board.takeUnanswered(chatId)
+    const unanswered = runKannaSync(board.takeUnanswered(chatId))
     if (unanswered.length === 0) return
     const content = buildTicketNudge(unanswered, (id) => this.store.getChat(id)?.title ?? id)
     void this.commands.send({
@@ -2275,10 +2279,10 @@ export class ChatOrchestrator {
   // Reads for the snapshots.
 
   /** The board on a delegator's chat snapshot. Null for any other chat. */
-  ticketBoard(chatId: string): { tickets: ReturnType<TicketBoard["summaries"]>; ticketAttention: number; untrackedChatIds: string[]; readDoneTotal: number } | null {
+  ticketBoard(chatId: string): { tickets: TicketSummary[]; ticketAttention: number; untrackedChatIds: string[]; readDoneTotal: number } | null {
     const chat = this.store.getChat(chatId)
     if (!this.tickets || !chat?.delegator) return null
-    const all = this.tickets.summaries(chatId)
+    const all = runKannaSync(this.tickets.summaries(chatId))
     const children = this.childrenOf(chatId).map((child) => child.id)
     // Capped to the latest read Done tickets (`snapshotTickets`). The count
     // is of all of them: what waits on the user is never what is cut.
@@ -2286,13 +2290,13 @@ export class ChatOrchestrator {
     return {
       tickets,
       ticketAttention: ticketAttentionCount(all),
-      untrackedChatIds: this.tickets.untracked(chatId, children),
+      untrackedChatIds: runKannaSync(this.tickets.untracked(chatId, children)),
       readDoneTotal,
     }
   }
 
   ticketDetail(chatId: string, ticketId: string) {
-    return this.tickets?.detail(chatId, ticketId) ?? null
+    return this.tickets ? Option.getOrNull(runKannaSync(this.tickets.detail(chatId, ticketId))) : null
   }
 
   /** Every delegator's count for the compass button, those above zero only. For the sidebar. */
@@ -2300,8 +2304,8 @@ export class ChatOrchestrator {
     const counts = new Map<string, number>()
     if (!this.tickets) return counts
     for (const chat of this.store.state.chatsById.values()) {
-      if (!chat.delegator || chat.deletedAt || !this.tickets.hasBoard(chat.id)) continue
-      const count = this.tickets.attention(chat.id)
+      if (!chat.delegator || chat.deletedAt || !runKannaSync(this.tickets.hasBoard(chat.id))) continue
+      const count = runKannaSync(this.tickets.attention(chat.id))
       if (count > 0) counts.set(chat.id, count)
     }
     return counts
@@ -2314,8 +2318,8 @@ export class ChatOrchestrator {
   async replyToTicketAsUser(input: { chatId: string; ticketId: string; text: string; attachments?: ChatAttachment[] } & TurnSettings) {
     const board = this.requireBoard(input.chatId)
     const chat = this.requireChat(input.chatId)
-    const ticket = board.require(chat.id, input.ticketId)
-    const reply = await board.reply(chat.id, ticket.id, { author: "user", text: input.text, attachments: input.attachments })
+    const ticket = runKannaSync(board.require(chat.id, input.ticketId))
+    const reply = await runKanna(board.reply(chat.id, ticket.id, { author: "user", text: input.text, attachments: input.attachments }))
     // Only what the user wrote, as any message they send: the ticket's header
     // goes on the wire behind it (`ticketReplyNotice`), so the prompt is a
     // chat message in every respect, slash commands and skills included.
@@ -2328,8 +2332,8 @@ export class ChatOrchestrator {
   async setTicketStatusAsUser(input: { chatId: string; ticketId: string; status: "done" | "open" }) {
     const board = this.requireBoard(input.chatId)
     const chat = this.requireChat(input.chatId)
-    const ticket = board.require(chat.id, input.ticketId)
-    const changed = await board.setStatus(chat.id, ticket.id, input.status, "user")
+    const ticket = runKannaSync(board.require(chat.id, input.ticketId))
+    const changed = await runKanna(board.setStatus(chat.id, ticket.id, input.status, "user"))
     if (changed && input.status === "open") {
       await this.tellDelegator(chat, buildTicketReopenMessage(board.summary(ticket)), {
         kind: "ticket", ticketId: ticket.id, number: ticket.number, title: ticket.title, reopened: true,
@@ -2339,24 +2343,24 @@ export class ChatOrchestrator {
 
   async setTicketReadAsUser(input: { chatId: string; ticketId: string; read: boolean }) {
     const board = this.requireBoard(input.chatId)
-    if (input.read) await board.markRead(input.chatId, input.ticketId)
-    else await board.markUnread(input.chatId, input.ticketId)
+    if (input.read) await runKanna(board.markRead(input.chatId, input.ticketId))
+    else await runKanna(board.markUnread(input.chatId, input.ticketId))
   }
 
   // The delegator's tools.
 
   async createTicket(actorChatId: string, input: { title: string; body?: string }) {
     const board = this.requireBoard(actorChatId)
-    const ticket = await board.create(actorChatId, input)
+    const ticket = await runKanna(board.create(actorChatId, input))
     this.push({ sidebar: true, chatIds: [actorChatId] })
     return { ticketId: ticket.id, number: ticket.number, link: ticketLinkPath(actorChatId, ticket.id) }
   }
 
   async updateTicket(actorChatId: string, input: { ticketId: string; title?: string; body?: string; status?: "done" | "open" }) {
     const board = this.requireBoard(actorChatId)
-    const ticket = board.require(actorChatId, input.ticketId)
-    await board.edit(actorChatId, ticket.id, { title: input.title, body: input.body })
-    if (input.status) await board.setStatus(actorChatId, ticket.id, input.status, "delegator")
+    const ticket = runKannaSync(board.require(actorChatId, input.ticketId))
+    await runKanna(board.edit(actorChatId, ticket.id, { title: input.title, body: input.body }))
+    if (input.status) await runKanna(board.setStatus(actorChatId, ticket.id, input.status, "delegator"))
     this.push({ sidebar: true, chatIds: [actorChatId] })
     return agentTicketSummary(board.summary(ticket))
   }
@@ -2369,32 +2373,32 @@ export class ChatOrchestrator {
    */
   async replyToTicket(actorChatId: string, input: { ticketId: string; text: string; asksUser?: boolean; artifacts?: TicketArtifact[] }) {
     const board = this.requireBoard(actorChatId)
-    const reply = await board.reply(actorChatId, input.ticketId, {
+    const reply = await runKanna(board.reply(actorChatId, input.ticketId, {
       author: "delegator",
       text: input.text,
       asksUser: input.asksUser,
       artifacts: input.artifacts,
-    })
+    }))
     this.push({ sidebar: true, chatIds: [actorChatId] })
-    const ticket = board.require(actorChatId, input.ticketId)
+    const ticket = runKannaSync(board.require(actorChatId, input.ticketId))
     const question = input.asksUser === undefined && ticket.asksUser ? [...ticket.replies].reverse().find((candidate) => candidate.asksUser) : undefined
     return { replyId: reply.id, ...(question ? { note: stillAskingNote(ticket, question) } : {}) }
   }
 
   /** Throws unless the actor is a delegator with this ticket. The media tools check before they store anything. */
   checkTicket(actorChatId: string, ticketId: string) {
-    this.requireBoard(actorChatId).require(actorChatId, ticketId)
+    runKannaSync(this.requireBoard(actorChatId).require(actorChatId, ticketId))
   }
 
   readTicket(actorChatId: string, ticketId: string) {
     const board = this.requireBoard(actorChatId)
-    const ticket = board.require(actorChatId, ticketId)
-    return agentTicketDetail(board.detail(actorChatId, ticket.id)!, (id) => this.store.getChat(id)?.title ?? id)
+    const ticket = runKannaSync(board.require(actorChatId, ticketId))
+    return agentTicketDetail(Option.getOrThrow(runKannaSync(board.detail(actorChatId, ticket.id))), (id) => this.store.getChat(id)?.title ?? id)
   }
 
   listTickets(actorChatId: string, input: { status?: TicketState | "open"; limit?: number }) {
     const board = this.requireBoard(actorChatId)
-    const matching = board.summaries(actorChatId)
+    const matching = runKannaSync(board.summaries(actorChatId))
       .filter((ticket) => !input.status || (input.status === "open" ? ticket.state !== "done" : ticket.state === input.status))
       .sort(compareTicketsByActivity)
     const limit = input.limit ?? 50

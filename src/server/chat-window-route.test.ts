@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
+import { makeFakeWorktreeProbe } from "./worktree-probe.fake"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
 import { handleChatWindow, type ChatWindowRouteDeps } from "./chat-window-route"
@@ -49,7 +50,7 @@ async function firstSocketSnapshot(deps: ReturnType<typeof createDeps>) {
   const router = createWsRouter({
     store: deps.store as never,
     diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
-    worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
+    worktreeProbe: makeFakeWorktreeProbe(),
     agent: deps.agent as never,
     terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings({} as never),
