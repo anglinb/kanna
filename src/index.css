@@ -300,7 +300,7 @@
 }
 
 /*
- * A status ping that has just appeared grows in (`TicketMark` decides when).
+ * A status ping that has just appeared grows in (`StatusMark`'s `enters`).
  * The class stays on after it has run, and a class that stays does not
  * replay, so redrawing the row does not play it again.
  */
@@ -315,65 +315,9 @@
   }
 }
 
-/*
- * The ticket pane under its header. Its height sets the air above a ticket's
- * title and under its body: 24px when the pane is about 600px tall or less,
- * 44px from about 900px, in a line between. It measures the pane, not the
- * window, which can be much taller, and the pane and not its scroller, which
- * shrinks as the composer grows: the title must not move while typing.
- * Outside it, `cqh` falls back to the viewport. No transition: on a resize it
- * is just the value.
- */
-.kanna-ticket-pane {
-  container-type: size;
-  /* 540px of body (pane less its 49px header) to 24px, 840px to 44px. */
-  --ticket-head-gap: clamp(24px, 20cqh / 3 - 12px, 44px);
-  /* The rule's row adds its own 8px of padding above the line. */
-  --ticket-body-end: calc(var(--ticket-head-gap) - 8px);
-}
-
-/*
- * A ticket's ••• menu: grown out of its button, a step smaller to start than
- * the app's other floating surfaces since it is larger than most of them,
- * on a translucent material that turns solid where transparency is reduced.
- */
-.kanna-ticket-menu {
-  transform-origin: var(--radix-popover-content-transform-origin, top right);
-  background-color: color-mix(in oklab, var(--color-popover) 86%, transparent);
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
-}
-
-.kanna-ticket-menu[data-state="open"] {
-  animation: kanna-ticket-menu-in 150ms var(--ease-snappy);
-}
-
-.kanna-ticket-menu[data-state="closed"] {
-  animation: floating-surface-out 100ms var(--ease-snappy) forwards;
-}
-
-@keyframes kanna-ticket-menu-in {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .kanna-ticket-menu {
-    background-color: var(--color-popover);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .kanna-mark-enter {
     animation: none;
-  }
-
-  .kanna-ticket-menu[data-state="open"] {
-    animation: floating-surface-fade-in 150ms var(--ease-snappy);
   }
 }
 

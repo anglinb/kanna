@@ -1,14 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react"
-import { Download, Maximize2, Shapes } from "lucide-react"
+import { Download, Maximize2, PenLine, Shapes } from "lucide-react"
+import { attachFilesToComposer } from "../../app/chatFocusPolicy"
 import { hasOpenLayer, resolveEscapePress } from "../../lib/escape-key"
+import { saveFile } from "../../lib/visualization-image"
 import { fetchVisualizationHeights, pickVisualizationHeight, recordVisualizationHeight, rememberedVisualizationHeights, rememberVisualizationHeights } from "../../lib/visualization-heights"
 import { openViewer } from "../../stores/viewerStore"
 import { ViewerIconButton, ViewerSurface } from "../viewer/ViewerSurface"
 import { useOptionalAppDialog } from "../ui/app-dialog"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
+import { VisualizationMarkup } from "./VisualizationMarkup"
+import { VisualizationSaveDialog } from "./VisualizationSaveDialog"
 import { type VisualizationArtifact, VISUALIZATION_EXPAND_BUTTON, visualizationHeight, visualizationLink, visualizationDownload, visualizationWidthBucket } from "../../../shared/visualization"
 import { prepareVisualizationDocument, type VisualizationTheme } from "../../../shared/visualization-host"
-import { cssColorAlpha, isPngSignature, visualizationImageFilename, visualizationImageName } from "../../../shared/visualization-capture"
+import { cssColorAlpha, isPngSignature } from "../../../shared/visualization-capture"
 
 /** Read actual host tokens, rather than deriving dark mode from the OS. This also
  * covers custom transcript backgrounds and theme changes while a widget is live. */
@@ -53,15 +57,6 @@ function backdropColor(element: Element | null): string | undefined {
     if (cssColorAlpha(color) >= 1) return color
   }
   return undefined
-}
-
-function saveFile(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const link = window.document.createElement("a")
-  link.href = url
-  link.download = filename
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 /**
@@ -306,38 +301,18 @@ export function VisualizationExpandButton({ onClick }: { onClick: () => void }) 
  */
 export function VisualizationFullView({ artifact, onClose }: { artifact: VisualizationArtifact; onClose: () => void }) {
   const capture = useRef<VisualizationCapture | null>(null)
-  const dialog = useOptionalAppDialog()
-  const saving = useRef(false)
+  // Only the app has a composer to add a marked-up image to; the export viewer has neither it nor this provider.
+  const hasComposer = useOptionalAppDialog() !== null
+  const [open, setOpen] = useState<{ kind: "save" | "markup"; image: Promise<Blob> } | null>(null)
 
   // Drawing starts on the click, while the name is being typed, so the file
   // is ready by the time it is confirmed. It is the page as it is now: a tab
   // or a slider set here is in the image.
-  const download = async () => {
-    if (saving.current || !capture.current) return
-    saving.current = true
-    try {
-      const png = capture.current()
-      png.catch(() => {})
-      const name = dialog
-        ? await dialog.prompt({
-            title: "Download as PNG",
-            description: "The .png extension is added for you.",
-            initialValue: visualizationImageName(artifact.title),
-            placeholder: "visualization",
-            confirmLabel: "Download",
-          })
-        : visualizationImageName(artifact.title)
-      if (name === null) return
-      try {
-        saveFile(await png, visualizationImageFilename(name, artifact.title))
-      } catch (error) {
-        const description = error instanceof Error ? error.message : undefined
-        if (dialog) await dialog.alert({ title: "Could not save the image", description })
-        else console.error("Could not save the visualization as a PNG", error)
-      }
-    } finally {
-      saving.current = false
-    }
+  const start = (kind: "save" | "markup") => {
+    if (open || !capture.current) return
+    const image = capture.current()
+    image.catch(() => {})
+    setOpen({ kind, image })
   }
 
   return (
@@ -346,8 +321,29 @@ export function VisualizationFullView({ artifact, onClose }: { artifact: Visuali
       icon={<Shapes />}
       title={artifact.title}
       onClose={onClose}
-      toolbar={<ViewerIconButton label="Download as PNG" onClick={() => void download()}><Download /></ViewerIconButton>}
+      toolbar={(
+        <>
+          {hasComposer ? <ViewerIconButton label="Mark up and add to prompt" onClick={() => start("markup")}><PenLine /></ViewerIconButton> : null}
+          <ViewerIconButton label="Download image" onClick={() => start("save")}><Download /></ViewerIconButton>
+        </>
+      )}
     >
+      {open?.kind === "save" ? (
+        <VisualizationSaveDialog title={artifact.title} image={open.image} onClose={() => setOpen(null)} />
+      ) : open?.kind === "markup" ? (
+        <VisualizationMarkup
+          title={artifact.title}
+          image={open.image}
+          onCancel={() => setOpen(null)}
+          onAttach={(file) => {
+            if (!attachFilesToComposer([file])) return false
+            // Back to the chat, where the image now waits in the composer for the words to go with it.
+            setOpen(null)
+            onClose()
+            return true
+          }}
+        />
+      ) : null}
       <div className="p-4">
         <VisualizationFrame
           artifact={artifact}

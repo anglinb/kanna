@@ -22,7 +22,6 @@ import type {
   TerminalPreset,
 } from "./types"
 import type { SidebarPatch } from "./sidebar-patch"
-import type { TicketDetail } from "./tickets"
 
 export type { EditorPreset, TerminalPreset }
 
@@ -89,12 +88,6 @@ export type SubscriptionTopic =
   }
   | { type: "project-git"; projectId: string }
   | { type: "terminal"; terminalId: string }
-  /**
-   * One ticket of a delegator's board, whole: body, replies, history and its
-   * chats. Pushed again whenever any of that changes, a chat on it changing
-   * state included. Answered with null when the ticket does not exist.
-   */
-  | { type: "ticket"; chatId: string; ticketId: string }
 
 export interface TerminalSnapshot {
   terminalId: string
@@ -377,33 +370,6 @@ export type ClientCommand =
   | { type: "terminal.close"; terminalId: string }
   /** sinceVersion null → the client has no usable buffer; answer with a snapshot. */
   | { type: "terminal.tail"; terminalId: string; sinceVersion: number | null }
-  /**
-   * The user replying on a ticket. Stored on the ticket, marks it read, and
-   * goes to the delegator as a message with a `ticket` source: steered into
-   * a running turn where the harness can, queued where it cannot. A reply on
-   * a Done ticket reopens it. `chatId` is the delegator. Result: `{ replyId }`.
-   *
-   * `provider` to `autoPlan` are the delegator's composer settings, sent as
-   * `chat.send` sends them, and the turn the reply starts runs with them.
-   * Absent, it runs with what the delegator last ran with.
-   */
-  | {
-      type: "ticket.reply"
-      chatId: string
-      ticketId: string
-      text: string
-      attachments?: ChatAttachment[]
-      provider?: AgentProvider
-      model?: string
-      modelOptions?: ModelOptions
-      planMode?: boolean
-      autoPlan?: boolean
-    }
-  /** Close (`done`) or reopen (`open`) a ticket. A reopen is told to the delegator; a close is not. */
-  | { type: "ticket.setStatus"; chatId: string; ticketId: string; status: "done" | "open" }
-  /** Kept on the server, so it holds across devices. */
-  | { type: "ticket.markRead"; chatId: string; ticketId: string }
-  | { type: "ticket.markUnread"; chatId: string; ticketId: string }
 
 export type OpenExternalAction = Extract<ClientCommand, { type: "system.openExternal" }>["action"]
 
@@ -425,7 +391,6 @@ export type ServerSnapshot =
   | { type: "chat"; data: ChatSnapshot | null }
   | { type: "project-git"; data: ChatDiffSnapshot | null }
   | { type: "terminal"; data: TerminalSnapshot | null }
-  | { type: "ticket"; data: TicketDetail | null }
 
 export type ServerEnvelope =
   | { v: 1; type: "snapshot"; id: string; snapshot: ServerSnapshot }

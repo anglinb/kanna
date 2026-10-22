@@ -3,6 +3,17 @@ export const ALLOW_FOCUS_RETAIN_ATTRIBUTE = "data-allow-focus-retain"
 export const RESTORE_CHAT_INPUT_FOCUS_EVENT = "kanna:restore-chat-input-focus"
 /** Fired by the command palette's "Attach Files" action; ChatInput opens its file picker. */
 export const REQUEST_ATTACH_FILES_EVENT = "kanna:request-attach-files"
+/** Files for the page's main composer to attach, as if pasted (`attachFilesToComposer`). */
+export const ATTACH_FILES_EVENT = "kanna:attach-files"
+
+/**
+ * Hands files to the page's main composer, from somewhere that has no ref to
+ * it (the viewer). False when no composer took them: a page without one,
+ * such as the export viewer.
+ */
+export function attachFilesToComposer(files: File[]): boolean {
+  return !window.dispatchEvent(new CustomEvent(ATTACH_FILES_EVENT, { detail: { files }, cancelable: true }))
+}
 export const CHAT_INPUT_ATTRIBUTE = "data-chat-input"
 export const CHAT_SELECTION_ZONE_ATTRIBUTE = "data-chat-selection-zone"
 

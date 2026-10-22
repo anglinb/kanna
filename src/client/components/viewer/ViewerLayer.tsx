@@ -22,7 +22,6 @@ const FileViewer = lazy(() => import("./FileViewer").then((m) => ({ default: m.F
 const ChatPreview = lazy(() => import("../../app/ChatPage/ChatPreview").then((m) => ({ default: m.ChatPreview })))
 // Only a page that can preview a chat shows one.
 const DelegatedList = lazy(() => import("../../app/ChatPage/DelegatedList").then((m) => ({ default: m.DelegatedList })))
-const TicketView = lazy(() => import("../../app/ChatPage/TicketView").then((m) => ({ default: m.TicketView })))
 
 /**
  * Whether the viewer has something to show on a page that knows this project
@@ -76,13 +75,12 @@ export function ViewerLayer({ diff, chat, className, onOpenLocalLink, placement,
   const viewer = presented ? presented.viewer : live
   const stepBack = useViewerStore((store) => store.stepBack)
   const shut = useViewerStore((store) => store.shut)
-  const pageChatKey = useViewerStore((store) => store.chatKey)
-  const below = floor && viewer ? viewerLevelBelow(viewer, floor, pageChatKey || null) : null
+  const below = floor && viewer ? viewerLevelBelow(viewer, floor) : null
   const hasBack = below !== null && below !== "closed"
   const backKind = hasBack ? below.item.kind : null
   const floorState = useMemo<ViewerFloorState | null>(() => (floor ? {
     onBack: hasBack ? stepBack : null,
-    backLabel: backKind === "chat" ? "Back to chat" : backKind === "ticket" ? "Back to ticket" : "Back to tickets",
+    backLabel: backKind === "chat" ? "Back to chat" : "Back to delegated chats",
     onShut: shut,
   } : null), [backKind, floor, hasBack, shut, stepBack])
   useEffect(() => (canShowChat ? useViewerStore.getState().registerChatPreviewHost() : undefined), [canShowChat])
@@ -94,7 +92,6 @@ export function ViewerLayer({ diff, chat, className, onOpenLocalLink, placement,
     const timer = window.setTimeout(() => {
       void import("../../app/ChatPage/ChatPreview")
       void import("../../app/ChatPage/DelegatedList")
-      void import("../../app/ChatPage/TicketView")
     }, 1500)
     return () => window.clearTimeout(timer)
   }, [canShowChat])
@@ -161,9 +158,6 @@ export function ViewerLayer({ diff, chat, className, onOpenLocalLink, placement,
             <ChatPreview item={item} context={chat} onClose={close} />
           ) : item.kind === "delegated" ? (
             <DelegatedList item={item} onClose={close} />
-          ) : item.kind === "ticket" && chat ? (
-            // Keyed so another ticket starts over: its own subscription, its own scroll.
-            <TicketView key={`${item.chatId}:${item.ticketId}`} item={item} context={chat} onClose={close} />
           ) : null}
         </Suspense>
       </OpenLocalLinkProvider>

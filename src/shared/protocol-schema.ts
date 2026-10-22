@@ -142,7 +142,7 @@ const ProjectQuickAction = Schema.Struct({ id: Schema.String, label: Schema.Stri
 
 const EditorOpenSettings = Schema.Struct({ preset: EditorPreset, commandTemplate: Schema.String })
 
-/** The settings a send carries from the composer, shared by chat.send, message.enqueue and ticket.reply. */
+/** The settings a send carries from the composer, shared by chat.send and message.enqueue. */
 const ComposerFields = {
   attachments: Schema.optionalKey(Schema.Array(ChatAttachment)),
   provider: Schema.optionalKey(AgentProvider),
@@ -315,10 +315,6 @@ export const ClientCommandSchema = Schema.Union([
   command("terminal.resize", { terminalId: Schema.String, cols: Schema.Number, rows: Schema.Number }),
   command("terminal.close", { terminalId: Schema.String }),
   command("terminal.tail", { terminalId: Schema.String, sinceVersion: Schema.NullOr(Schema.Number) }),
-  command("ticket.reply", { chatId: Schema.String, ticketId: Schema.String, text: Schema.String, ...ComposerFields }),
-  command("ticket.setStatus", { chatId: Schema.String, ticketId: Schema.String, status: Schema.Literals(["done", "open"]) }),
-  command("ticket.markRead", { chatId: Schema.String, ticketId: Schema.String }),
-  command("ticket.markUnread", { chatId: Schema.String, ticketId: Schema.String }),
 ])
 
 export const SubscriptionTopicSchema = Schema.Union([
@@ -337,7 +333,6 @@ export const SubscriptionTopicSchema = Schema.Union([
   }),
   Schema.Struct({ type: Schema.Literal("project-git"), projectId: Schema.String }),
   Schema.Struct({ type: Schema.Literal("terminal"), terminalId: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("ticket"), chatId: Schema.String, ticketId: Schema.String }),
 ])
 
 export const ClientEnvelopeSchema = Schema.Union([

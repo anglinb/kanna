@@ -2,21 +2,19 @@ import { delegatedAttentionCount } from "../../lib/delegators"
 import { cn } from "../../lib/utils"
 import { useRightSidebarStore } from "../../stores/rightSidebarStore"
 import { useSidebarStore } from "../../stores/sidebarStore"
-import { useTicketBoardStore } from "../../stores/ticketBoardStore"
 import { openViewer, useViewerStore } from "../../stores/viewerStore"
 import { Button } from "../ui/button"
-import { ListTodo } from "lucide-react"
+import { DelegatorIcon } from "./delegator-icon"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
 
-/** The delegated list's toggle, read once: for the command palette, which shows the same state. */
+/** The delegator pane's toggle, read once: for the command palette, which shows the same state. */
 export function isDelegatedPaneOpen(chatId: string): boolean {
   return Boolean(useRightSidebarStore.getState().chatViewers[chatId])
 }
 
 /**
- * Opens the list of the chats under a delegator in the viewer's pane, or
- * shuts the pane if it is open. What the navbar's button does, and the
- * command palette's entry.
+ * Opens a delegator's pane in the viewer, or shuts the pane if it is open.
+ * What the navbar's button does, and the command palette's entry.
  */
 export function toggleDelegatedPane(chatId: string) {
   if (isDelegatedPaneOpen(chatId)) useViewerStore.getState().shut()
@@ -24,11 +22,11 @@ export function toggleDelegatedPane(chatId: string) {
 }
 
 /**
- * A delegator's way to its tickets: the navbar's button, just left of the
- * widgets toggle, on a delegator and nowhere else. It opens them in the
- * viewer's pane and shuts the pane again, and counts the tickets that want
- * the user, pane open or not. A to-do list, for what it opens, and not the
- * compass: the title beside it is the delegator's, and says what it is.
+ * A delegator's way to its pane, the list of the chats under it: the
+ * navbar's button, just left of the widgets toggle, on a delegator and
+ * nowhere else. It opens the pane and shuts it again, and counts the chats
+ * under the delegator that want the user, pane open or not: waiting on them,
+ * or finished and unread.
  *
  * One control at every width. Beside the chat it is a toggle among the
  * navbar's other plain icon buttons, lit while the pane is open as the
@@ -40,24 +38,15 @@ export function toggleDelegatedPane(chatId: string) {
  */
 export function DelegatedListButton({ chatId, overlay }: { chatId: string; overlay: boolean }) {
   // A number, so the button re-renders when the count moves and not for
-  // every push of the sidebar. A delegator with a board counts its tickets:
-  // waiting on the user, or Done and unread. Its own snapshot says so first,
-  // the sidebar's row (which leaves out a zero) otherwise. One from before
-  // tickets counts the chats under it, as its list shows them.
-  const boardCount = useTicketBoardStore((state) => state.boards[chatId]?.attention)
-  const sidebarCount = useSidebarStore((state) => {
+  // every push of the sidebar.
+  const count = useSidebarStore((state) => {
     let total = 0
-    let tickets: number | undefined
-    for (const group of state.data.projectGroups) {
-      total += delegatedAttentionCount(group.chats, chatId)
-      tickets ??= group.chats.find((row) => row.chatId === chatId)?.ticketAttention
-    }
-    return tickets ?? total
+    for (const group of state.data.projectGroups) total += delegatedAttentionCount(group.chats, chatId)
+    return total
   })
-  const count = boardCount ?? sidebarCount
   const open = useRightSidebarStore((store) => Boolean(store.chatViewers[chatId]))
   const pressed = open && !overlay
-  const action = pressed ? "Hide tickets" : "Show tickets"
+  const action = pressed ? "Hide delegated chats" : "Show delegated chats"
   const label = count > 0 ? `${action}, ${count} ${count === 1 ? "wants" : "want"} you` : action
   return (
     <Tooltip>
@@ -74,7 +63,7 @@ export function DelegatedListButton({ chatId, overlay }: { chatId: string; overl
             overlay ? "text-logo hover:text-logo" : pressed && "text-foreground",
           )}
         >
-          <ListTodo strokeWidth={2} className="h-4 shrink-0 max-md:h-5 max-md:w-5" />
+          <DelegatorIcon strokeWidth={2} className="h-4 shrink-0 max-md:h-5 max-md:w-5" />
           {count > 0 ? (
             <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-[5px] bg-foreground/10 px-1 text-xs font-bold leading-none text-foreground tabular-nums">
               {count}

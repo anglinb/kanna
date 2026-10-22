@@ -1,14 +1,12 @@
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import type { AgentProvider } from "../shared/types"
-import { AttachmentItem, resolveDisplayAttachments } from "./kanna-display-tools"
-import { KannaToolArgumentsError } from "./kanna-tool-arguments"
+import { KannaToolArgumentsError, requiredString } from "./kanna-tool-arguments"
 import { defineKannaTool, KannaToolRefusal, type KannaTool, type KannaToolContext, type KannaToolOutput } from "./kanna-tool-definition"
 import {
   READ_CHAT_KINDS,
   type ChatWriteError,
   type Orchestrator,
   type ScheduleNotFoundError,
-  type TicketActionError,
 } from "./orchestrator"
 
 /**
@@ -48,25 +46,7 @@ function reply(value: unknown): KannaToolOutput & { transcriptContent: unknown }
 
 type Run = { provider?: AgentProvider; model?: string; effort?: string; planMode?: boolean }
 
-/**
- * A tool's input did not match its schema, or the files a ticket reply names
- * could not be read. The message is the cause's, as the agent read it before.
- */
-export class OrchestrationToolError extends Schema.TaggedError<OrchestrationToolError>()(
-  "@kanna/server/kanna-orchestration-tools/OrchestrationToolError",
-  {
-    tool: Schema.String,
-    chatId: Schema.String,
-    stage: Schema.Literal("attachments"),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return this.cause instanceof Error ? this.cause.message : String(this.cause)
-  }
-}
-
-export type OrchestrationToolFailure = ChatWriteError | TicketActionError | ScheduleNotFoundError | OrchestrationToolError | KannaToolRefusal
+export type OrchestrationToolFailure = ChatWriteError | ScheduleNotFoundError | KannaToolRefusal
 
 /**
  * One chat tool, decoded by the native Kanna tool runtime.
@@ -143,40 +123,28 @@ const readChat = Schema.Struct({
   limit: optional(integer(1, 200), "Most entries per call. Default 40."),
 })
 
-/**
- * The ticket a delegator's hand-off is for. Required from a delegator, one
- * or the other, and ignored from any other chat (`chooseTicket`).
- */
-const ticketChoice = {
-  ticketId: optional(Schema.String, "Delegator chats: the ticket this work is for. Naming a Done ticket reopens it, so do that only for a defect in what it delivered; a new ask takes ticket instead. A delegator must pass this or ticket."),
-  ticket: optional(Schema.Struct({
-    title: nonEmpty,
-    body: optional(Schema.String, "Markdown: what the work is and what done looks like."),
-  }), "Delegator chats: create the ticket for this work in the same call. One ask per ticket."),
-}
+const TITLE_DESCRIPTION = "Required: a short title for the work this chat does. The chat list is the user's record of what was worked on, one chat per piece of work."
 
 const createChat = Schema.Struct({
   message: nonEmpty.annotate({ description: "The chat's first message. It sees nothing else of this conversation, so say everything it needs." }),
-  title: optional(Schema.String),
+  title: requiredString("create_chat needs a title: name the work the new chat does.").annotate({ description: TITLE_DESCRIPTION }),
   subchat: optional(Schema.Boolean, "Default true: its result is sent back to this chat when it finishes, and stopping this chat stops it. false makes an independent chat for the user."),
   projectId: optional(Schema.String, "Defaults to this chat's project."),
-  ...ticketChoice,
   ...runOptions,
 })
 
 const forkChat = Schema.Struct({
   chatId: optional(Schema.String, "The chat to copy. Defaults to this one, copied as of its last finished turn."),
   message: optional(Schema.String, "A first message for the copy. Without one it sits idle."),
-  title: optional(Schema.String),
+  title: requiredString("fork_chat needs a title: a fork does new work, and is named for it.").annotate({ description: "Required: a short title for the new work the fork does, not the original's. A fork is how a chat's context is reused for new work, so it is named for that work." }),
   subchat: optional(Schema.Boolean, "Whether the copy reports back to this chat. Defaults to true when a message is given."),
-  ...ticketChoice,
   ...runOptions,
 })
 
 const sendMessage = Schema.Struct({
   chatId: Schema.String,
   message: nonEmpty,
-  ...ticketChoice,
+  title: requiredString("send_message needs a title: the chat's current one to keep it for a follow-up on its work, or a new one if it takes on new work (prefer fork_chat for that).").annotate({ description: "Required. For a follow-up on the chat's own work, pass its current title to keep it, or a sharper one. If the message takes the chat on to new work, the title must change to that work, but prefer fork_chat: a fork, titled for the new work, keeps each chat one timeline. Renames the chat before the message goes; only a sub-chat of this one, one it started or adopts (adopt). The result says whether it changed (titleChanged)." }),
   delivery: optional(Schema.Literals(["queue", "steer"]), "queue (default) starts it now if the chat is idle and after its current turn otherwise. steer interrupts the current turn to deliver it now."),
   adopt: optional(Schema.Boolean, "true adopts the chat: this chat becomes its parent, as if it had started it. Use it when you hand work to an existing chat and need the result. From this message on, its reply arrives here as a message when its turn ends, it is listed as this chat's sub-chat, and this chat is not finished while that reply is owed. It stays adopted: later messages need no flag, and there is no undo. It is still the user's chat: it stays in their sidebar, and stopping this chat does not stop it, only drops the reply it owes. A chat that had another parent is taken from it, and that parent is told no more results are coming. A chat above this one, in the chain of chats that started it, cannot be adopted. Leave it unset for a message that needs no answer."),
   ...runOptions,
@@ -226,34 +194,6 @@ const deleteSchedule = Schema.Struct({
   scheduleId: Schema.String,
 })
 
-const createTicket = Schema.Struct({
-  title: nonEmpty,
-  body: optional(Schema.String, "Markdown: what the work is and what done looks like. Not progress."),
-})
-
-const updateTicket = Schema.Struct({
-  ticketId: Schema.String,
-  title: optional(Schema.String),
-  body: optional(Schema.String, "Replaces the body. Only when the ask or the plan changes."),
-  status: optional(Schema.Literals(["done", "open"]), "done closes it; open reopens it."),
-})
-
-const replyToTicket = Schema.Struct({
-  ticketId: Schema.String,
-  text: Schema.String.annotate({ description: "Markdown." }),
-  asksUser: optional(Schema.Boolean, "true only for a question that blocks the work or its Done; the ticket waits on the user until they reply. false withdraws an open question."),
-  attachments: optional(Schema.Array(AttachmentItem).check(Schema.isMaxLength(24)), "Files to show with the reply: local paths or HTTP/HTTPS URLs, as send_attachments takes them."),
-})
-
-const readTicket = Schema.Struct({
-  ticketId: Schema.String,
-})
-
-const listTickets = Schema.Struct({
-  status: optional(Schema.Literals(["waiting_on_you", "in_progress", "done", "open"]), "open is anything not done."),
-  limit: optional(integer(1, 200), "Default 50."),
-})
-
 export const ORCHESTRATION_TOOLS: readonly OrchestrationTool[] = [
   tool({
     name: "get_context",
@@ -278,24 +218,24 @@ export const ORCHESTRATION_TOOLS: readonly OrchestrationTool[] = [
   }),
   tool({
     name: "create_chat",
-    description: "Start a new chat with a first message, on any provider and model. Returns at once. By default it is a sub-chat of this one: its reply arrives here as a message when its turn ends. If it is still waiting on work it handed off, the message says so and another follows when that work comes back.",
+    description: "Start a new chat for new work, with a first message, on any provider and model, and a title naming that work (required). Returns at once. By default it is a sub-chat of this one: its reply arrives here as a message when its turn ends. If it is still waiting on work it handed off, the message says so and another follows when that work comes back.",
     parameters: createChat,
-    run: ({ message, title, subchat, projectId, ticketId, ticket, ...run }, orchestrator, context) =>
-      orchestrator.createChat(context.chatId, { message, title, subchat, projectId, ticketId, ticket, ...(run as Run) }),
+    run: ({ message, title, subchat, projectId, ...run }, orchestrator, context) =>
+      orchestrator.createChat(context.chatId, { message, title: title.trim(), subchat, projectId, ...(run as Run) }),
   }),
   tool({
     name: "fork_chat",
-    description: "Copy a chat, conversation included, into a new chat that continues separately. The original is untouched.",
+    description: "Copy a chat, conversation included, into a new chat that continues separately. The default way to take on new work that needs an existing chat's context: the fork does the new work, under a title for it (required), and the original stays one timeline, untouched.",
     parameters: forkChat,
-    run: ({ chatId, message, title, subchat, ticketId, ticket, ...run }, orchestrator, context) =>
-      orchestrator.forkChat(context.chatId, { chatId, message, title, subchat, ticketId, ticket, ...(run as Run) }),
+    run: ({ chatId, message, title, subchat, ...run }, orchestrator, context) =>
+      orchestrator.forkChat(context.chatId, { chatId, message, title: title.trim(), subchat, ...(run as Run) }),
   }),
   tool({
     name: "send_message",
-    description: "Send a message to another chat, as the user would. It starts a turn if the chat is idle and queues behind the current turn otherwise. A chat this one did not start sends nothing back when it finishes, unless this chat adopts it (adopt).",
+    description: "Send a message to another chat, as the user would: a follow-up on the work it is doing, with its title (required: unchanged, or sharpened). New work goes to a new chat (create_chat), or, when it needs a chat's context, to a fork of it (fork_chat): prefer that to reusing the chat under a new title. It starts a turn if the chat is idle and queues behind the current turn otherwise. A chat this one did not start sends nothing back when it finishes, unless this chat adopts it (adopt).",
     parameters: sendMessage,
-    run: ({ chatId, message, delivery, adopt, ticketId, ticket, ...run }, orchestrator, context) =>
-      orchestrator.sendMessage(context.chatId, { chatId, message, delivery, adopt, ticketId, ticket, ...(run as Run) }),
+    run: ({ chatId, message, title, delivery, adopt, ...run }, orchestrator, context) =>
+      orchestrator.sendMessage(context.chatId, { chatId, message, title: title.trim(), delivery, adopt, ...(run as Run) }),
   }),
   tool({
     name: "cancel_chat",
@@ -334,52 +274,5 @@ export const ORCHESTRATION_TOOLS: readonly OrchestrationTool[] = [
     description: "Delete a schedule.",
     parameters: deleteSchedule,
     run: (input, orchestrator) => orchestrator.deleteSchedule(input.scheduleId),
-  }),
-  tool({
-    name: "create_ticket",
-    description: "Delegator chats only. Add a ticket to this chat's board: one piece of work the user follows there. The body says what the work is and what done looks like, never progress. Returns ticketId and number. create_chat, send_message and fork_chat can also create one in the same call (ticket).",
-    parameters: createTicket,
-    run: (input, orchestrator, context) => orchestrator.createTicket(context.chatId, input),
-  }),
-  tool({
-    name: "update_ticket",
-    description: "Delegator chats only. Rename a ticket or replace its body when its ask changes, so both match the work. A ticket is Done by itself once its chats have reported and nothing is asked. status done closes one whose work ends without a report (answered here, dropped, superseded) and clears its question. status open reopens one only for a defect in what it delivered; a new ask is a new ticket. A chat on it that is still working or waiting on the user keeps it out of Done until it finishes.",
-    parameters: updateTicket,
-    run: (input, orchestrator, context) => orchestrator.updateTicket(context.chatId, input),
-  }),
-  tool({
-    name: "reply_to_ticket",
-    description: "Delegator chats only. Post on a ticket. The user reads the ticket, not this chat, and this is the only way to write on one. Post when its work comes back: start with whether the body's done-when is met, then what the user should know or try. Or post when you decide something for the user. Do not post a plan, a hand-off (the ticket records it) or \"nothing new\". asksUser: true puts the ticket in Waiting on you until the user replies there. Use it only when the work cannot go on, or be called done, without the answer, and lead with the question. A choice with a sensible default is not a block: name the default in the text and go on. asksUser: false withdraws a question settled elsewhere. For a mockup or a chart, call show_visualization with ticketId. Returns replyId.",
-    parameters: replyToTicket,
-    interruptible: true,
-    run: ({ ticketId, text, asksUser, attachments }, orchestrator, context) => Effect.gen(function* () {
-      // Checked before any file is copied, so a wrong ticket leaves nothing behind.
-      yield* orchestrator.checkTicket(context.chatId, ticketId)
-      if (!attachments?.length) return yield* Effect.uninterruptible(orchestrator.replyToTicket(context.chatId, { ticketId, text, asksUser }))
-      const files = yield* resolveDisplayAttachments(attachments, context).pipe(
-        Effect.catchCause((cause) => Effect.fail(new OrchestrationToolError({
-          tool: "reply_to_ticket", chatId: context.chatId, stage: "attachments", cause: Cause.squash(cause),
-        }))),
-      )
-      // Copying stays cancellable; once the reply starts it lands, and its files with it.
-      return yield* orchestrator.replyToTicket(context.chatId, { ticketId, text, asksUser, artifacts: files.attachments }).pipe(
-        Effect.onExit((exit) => Exit.isSuccess(exit) ? Effect.void : files.cleanup),
-        Effect.uninterruptible,
-      )
-    }),
-  }),
-  tool({
-    name: "read_ticket",
-    description: "Delegator chats only. Read a ticket whole: its body, replies and history, and its chats with how each stands now.",
-    parameters: readTicket,
-    interruptible: true,
-    run: (input, orchestrator, context) => orchestrator.readTicket(context.chatId, input.ticketId),
-  }),
-  tool({
-    name: "list_tickets",
-    description: "Delegator chats only. This chat's tickets, latest activity first, each with its state (waiting_on_you, in_progress or done), a line of status, and its chats.",
-    parameters: listTickets,
-    interruptible: true,
-    run: (input, orchestrator, context) => orchestrator.listTickets(context.chatId, input),
   }),
 ]

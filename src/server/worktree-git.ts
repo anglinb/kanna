@@ -41,7 +41,7 @@ export const treeBlobs = Effect.fn("WorktreeGit.treeBlobs")(function* (repoRoot:
 export const scanWorkingTree = (repoRoot: string): Effect.Effect<WorkingTreeScan, WorktreeGitError> =>
   probeWorkingTree(repoRoot).pipe(spawnFailed("probe working tree", repoRoot), Effect.withSpan("WorktreeGit.scanWorkingTree"))
 
-export const git = (args: string[], cwd: string, options?: { env?: Record<string, string | undefined> }) =>
+export const git = (args: string[], cwd: string, options?: { env?: Record<string, string | undefined>; stdin?: string }) =>
   runGit(args, cwd, options).pipe(
     spawnFailed("run git", cwd, args),
     Effect.withSpan("WorktreeGit.git", { attributes: { command: args[0] } }),

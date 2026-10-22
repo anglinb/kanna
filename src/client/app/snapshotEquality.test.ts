@@ -238,24 +238,3 @@ describe("applyIncrementalChatSnapshot carried fields", () => {
     expect(ids(next)).toEqual(["a", "b"])
   })
 })
-
-describe("foldChatSnapshot and a delegator's board", () => {
-  const ticket = (state: "in_progress" | "done") => ({
-    id: "tk_00000d", delegatorChatId: "chat-1", number: 13, title: "Escape hold", state, statusLine: "",
-    chats: [], createdAt: 0, updatedAt: 1, unread: state === "done", replyCount: 0,
-  })
-
-  test("a push that changes only a ticket reaches the screen", () => {
-    const current = { ...snapshot(0, ["a"]), tickets: [ticket("in_progress")], ticketAttention: 0 }
-    const next = foldChatSnapshot(current, null, { ...snapshot(0, ["a"]), tickets: [ticket("done")], ticketAttention: 1 })
-    expect(next).not.toBe(current)
-    expect(next?.tickets?.[0]?.state).toBe("done")
-  })
-
-  test("an unchanged board keeps its identity through a push that changes the transcript", () => {
-    const current = { ...snapshot(0, ["a"]), tickets: [ticket("in_progress")], ticketAttention: 0 }
-    const next = foldChatSnapshot(current, null, { ...snapshot(0, ["a", "b"]), tickets: [ticket("in_progress")], ticketAttention: 0 })
-    expect(ids(next)).toEqual(["a", "b"])
-    expect(next?.tickets).toBe(current.tickets)
-  })
-})

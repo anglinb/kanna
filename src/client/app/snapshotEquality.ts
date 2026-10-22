@@ -174,18 +174,6 @@ export function shouldPreserveExistingProjectDiffs(
   )
 }
 
-/**
- * A delegator's ticket board, as the snapshot carries it. Whole, by value:
- * it is a few rows, and a push that changes only a ticket (a chat on it
- * finishing) changes nothing else this compares.
- */
-function sameTicketBoard(left: ChatSnapshot, right: ChatSnapshot) {
-  return left.ticketAttention === right.ticketAttention
-    && left.readDoneTotal === right.readDoneTotal
-    && (left.tickets === right.tickets || JSON.stringify(left.tickets) === JSON.stringify(right.tickets))
-    && (left.untrackedChatIds === right.untrackedChatIds || JSON.stringify(left.untrackedChatIds) === JSON.stringify(right.untrackedChatIds))
-}
-
 export function sameChatSnapshotCore(left: ChatSnapshot | null, right: ChatSnapshot | null) {
   if (left === right) return true
   if (!left || !right) return false
@@ -193,7 +181,6 @@ export function sameChatSnapshotCore(left: ChatSnapshot | null, right: ChatSnaps
     && sameQueuedMessages(left.queuedMessages, right.queuedMessages)
     && sameTranscriptEntries(left.messages, right.messages)
     && sameProviders(left.availableProviders, right.availableProviders)
-    && sameTicketBoard(left, right)
 }
 
 /**
@@ -323,9 +310,6 @@ export function foldChatSnapshot(
     availableProviders: sameProviders(current.availableProviders, next.availableProviders)
       ? current.availableProviders
       : next.availableProviders,
-    ...(sameTicketBoard(current, next)
-      ? { tickets: current.tickets, untrackedChatIds: current.untrackedChatIds }
-      : {}),
   }
 }
 

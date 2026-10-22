@@ -37,6 +37,8 @@ try {
   const env = {
     HOME: home,
     KANNA_DISABLE_SELF_UPDATE: "1",
+    // A fresh HOME is a fresh analytics id: keep the smoke run out of analytics.
+    KANNA_DISABLE_ANALYTICS: "1",
     // The supervisor starts its child through `kanna` on PATH, which on a
     // developer's machine is their real install. Point it at this one.
     KANNA_CLI_CHILD_COMMAND: bin,

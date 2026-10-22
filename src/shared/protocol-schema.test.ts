@@ -318,27 +318,6 @@ const samples: CommandSamples = {
     { type: "terminal.tail", terminalId: "t1", sinceVersion: 42 },
     { type: "terminal.tail", terminalId: "t1", sinceVersion: null },
   ],
-  "ticket.reply": [
-    { type: "ticket.reply", chatId: "c1", ticketId: "k1", text: "ok" },
-    {
-      type: "ticket.reply",
-      chatId: "c1",
-      ticketId: "k1",
-      text: "ok",
-      attachments: [attachment],
-      provider: "grok",
-      model: "grok-4.6",
-      modelOptions: { grok: { reasoningEffort: "high" } },
-      planMode: true,
-      autoPlan: false,
-    },
-  ],
-  "ticket.setStatus": [
-    { type: "ticket.setStatus", chatId: "c1", ticketId: "k1", status: "done" },
-    { type: "ticket.setStatus", chatId: "c1", ticketId: "k1", status: "open" },
-  ],
-  "ticket.markRead": [{ type: "ticket.markRead", chatId: "c1", ticketId: "k1" }],
-  "ticket.markUnread": [{ type: "ticket.markUnread", chatId: "c1", ticketId: "k1" }],
 }
 
 const topics: SubscriptionTopic[] = [
@@ -354,7 +333,6 @@ const topics: SubscriptionTopic[] = [
   { type: "chat", chatId: "c1", cachedSpan: { start: 0, end: 10, endEntryId: "e9" }, background: true },
   { type: "project-git", projectId: "p1" },
   { type: "terminal", terminalId: "t1" },
-  { type: "ticket", chatId: "c1", ticketId: "k1" },
 ]
 
 const decodeFrame = Schema.decodeUnknownEffect(ClientEnvelopeFromJson)

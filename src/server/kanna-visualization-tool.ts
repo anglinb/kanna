@@ -13,9 +13,6 @@ const parameters = Schema.Struct({
   html: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(VISUALIZATION_MAX_BYTES)).annotate({ description: "Self-contained HTML fragment, including inline CSS and JavaScript. Supply html or path, not both." })),
   path: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1)).annotate({ description: "HTML file, absolute or relative to the project. Copied into this chat; source edits will not change the saved visualization." })),
   height: Schema.optionalKey(Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(80), Schema.isLessThanOrEqualTo(VISUALIZATION_MAX_HEIGHT)).annotate({ description: "Initial height in CSS pixels, default 360. The frame then fits the content automatically." })),
-  ticketId: Schema.optionalKey(Schema.String.annotate({ description: "Delegator chats only: also post it on this ticket, as a reply. Other chats cannot post on tickets." })),
-  text: Schema.optionalKey(Schema.String.annotate({ description: "With ticketId: the reply's words (markdown), posted with the visualization as one reply, as reply_to_ticket's text." })),
-  asksUser: Schema.optionalKey(Schema.Boolean.annotate({ description: "With ticketId: as on reply_to_ticket, true only when the reply's question blocks the work or its Done." })),
 })
 
 /**
@@ -65,16 +62,6 @@ export const SHOW_VISUALIZATION_TOOL = defineKannaTool({
     yield* Effect.annotateCurrentSpan("chatId", context.chatId)
     if (Boolean(args.html) === Boolean(args.path)) return yield* refuse("Provide exactly one of html or path.")
     if (!context.dataDir) return yield* refuse("Chat media storage is unavailable.")
-    if (!args.ticketId && (args.text !== undefined || args.asksUser !== undefined)) {
-      return yield* refuse("text and asksUser go with ticketId: they are the ticket reply's. Without a ticket, say it in your message.")
-    }
-    const orchestration = context.orchestration
-    // Before anything is written, so a wrong ticket leaves no file behind.
-    if (args.ticketId) {
-      if (!orchestration) return yield* refuse("Tickets are not available in this session.")
-      const ticketId = args.ticketId
-      yield* orchestration.checkTicket(context.chatId, ticketId)
-    }
     const html = args.path ? yield* readHtmlFile(path.resolve(context.cwd, args.path)) : args.html
     if (!html?.trim()) return yield* refuse("The visualization HTML is empty.")
     if (Buffer.byteLength(html) > VISUALIZATION_MAX_BYTES) return yield* refuse("Visualizations must be 2 MB or smaller.")
@@ -91,15 +78,8 @@ export const SHOW_VISUALIZATION_TOOL = defineKannaTool({
       Effect.onError(() => fs.remove(destination, { force: true }).pipe(Effect.ignore)),
     )
     const artifact: VisualizationArtifact = { type: "visualization", version: 1, title: args.title, height, url: buildTranscriptMediaUrl(context.chatId, name) }
-    // The ticket's reply points at the same file. The HTML is never copied
-    // into the board. Its words go in the same reply: a mock posted alone and
-    // then explained in a second reply read as two messages.
-    const ticketId = args.ticketId
-    const posted = ticketId && orchestration
-      ? yield* Effect.uninterruptible(orchestration.replyToTicket(context.chatId, { ticketId, text: args.text ?? "", asksUser: args.asksUser, artifacts: [artifact] }))
-      : null
     return {
-      content: [{ type: "text" as const, text: `Visualization displayed inline in Kanna${ticketId ? ` and posted on ticket ${ticketId}` : ""}. Do not repeat it as an image, file attachment, or visualization marker.${posted?.note ? ` ${posted.note}` : ""}` }],
+      content: [{ type: "text" as const, text: "Visualization displayed inline in Kanna. Do not repeat it as an image, file attachment, or visualization marker." }],
       structuredContent: { displayed: true, visualization: artifact },
       transcriptContent: [artifact],
     }

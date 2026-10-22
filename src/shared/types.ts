@@ -1,5 +1,4 @@
 import type { TerminalPreset } from "./terminal-presets"
-import type { TicketSummary } from "./tickets"
 
 export type { TerminalPreset }
 export const STORE_VERSION = 2 as const
@@ -196,35 +195,9 @@ export type MessageSource =
   /** Another chat's agent sent it (`send_message`, or the first message of a chat it created). */
   | { kind: "agent"; chatId: string }
   /** Sub-chats reporting their results to the chat that started them. */
-  | {
-    kind: "report"
-    chatIds: string[]
-    /**
-     * In a delegator's reports: per sub-chat, the tickets its hand-offs
-     * belonged to when it reported (the header's "For ticket …" line, as
-     * data). Chats with none are left out, and so is the field when no chat
-     * has any.
-     */
-    tickets?: Record<string, string[]>
-  }
+  | { kind: "report"; chatIds: string[] }
   /** A schedule fired. */
   | { kind: "schedule"; scheduleId: string }
-  /**
-   * The user's reply on one of a delegator's tickets, forwarded to it. The
-   * user wrote it, so it reads as theirs; the client quotes the ticket above
-   * it. `content` opens with a `<system-message>` for the agent (the ticket,
-   * its chats, how to answer), which display strips; the rest is the reply.
-   *
-   * With `reopened` instead of `replyId`, the user reopened a Done ticket by
-   * hand, and `content` is the `<system-message>` alone: draw one quiet line.
-   */
-  | { kind: "ticket"; ticketId: string; number: number; title: string; replyId?: string; reopened?: true }
-  /**
-   * Kanna reminding a delegator, after its turn, to post on tickets it left
-   * without a word. `content` is a `<system-message>` only, nothing for the
-   * user: draw nothing, or one quiet line.
-   */
-  | { kind: "ticket_nudge"; ticketIds: string[] }
 
 export interface QueuedChatMessage {
   id: string
@@ -1212,12 +1185,6 @@ export interface SidebarChatRow {
   delegator?: true
   /** With `status: "waiting_on_subagent"`, and only then: how many of what. */
   waitingOn?: WaitingOn
-  /**
-   * On a delegator: its tickets waiting on the user plus its unread Done
-   * ones, the count on the compass button (`ticketAttentionCount`). Absent
-   * when that is zero, and on every other row.
-   */
-  ticketAttention?: number
 }
 
 /**
@@ -2717,26 +2684,6 @@ export interface ChatSnapshot {
    * any push where it changed; absent means "same as last time".
    */
   outline?: TranscriptOutlineEntry[]
-  /**
-   * On a delegator, and only there: its whole ticket board, in no particular
-   * order (`compareTicketsByActivity` sorts a column). Small, so it ships
-   * whole on every push, incremental ones included. One ticket's replies and
-   * history come on the `ticket` topic. See `shared/tickets.ts`.
-   */
-  tickets?: TicketSummary[]
-  /** On a delegator: `ticketAttentionCount(tickets)`. The same value as `SidebarChatRow.ticketAttention`, but present when zero. */
-  ticketAttention?: number
-  /**
-   * On a delegator: its sub-chats that no ticket links to, such as those it
-   * started before it had a board. The board lists them under "Other chats".
-   */
-  untrackedChatIds?: string[]
-  /**
-   * On a delegator: how many read Done tickets it has in all. `tickets`
-   * carries only the latest `SNAPSHOT_READ_DONE_LIMIT` of them, so the list
-   * counts with this and says that older ones are not shown.
-   */
-  readDoneTotal?: number
 }
 
 /** One turn of a chat, as the outline names it. */

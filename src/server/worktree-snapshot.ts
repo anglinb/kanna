@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
+import { copyFile, lstat, rm, stat, utimes } from "node:fs/promises"
 import path from "node:path"
-import { Context, Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect"
+import { Context, Effect, Fiber, FileSystem, Layer, Option, Schema, Semaphore } from "effect"
 import type { WorkingTreeLocation } from "./diff-store"
 import type { TouchedFile } from "./events"
 import { git, resolveLocation, treeBlobs, type WorktreeGitError } from "./worktree-git"
@@ -39,10 +40,32 @@ import { git, resolveLocation, treeBlobs, type WorktreeGitError } from "./worktr
 /** A path one turn changed, and the committed content it was based on. */
 export type { TouchedFile } from "./events"
 
+/**
+ * Dirty files at or above this size are fingerprinted by size and mtime rather
+ * than hashed. Snapshots run on every turn boundary of every chat, and a
+ * project that renders video or keeps datasets untracked would otherwise have
+ * each one hash, compress and write gigabytes of loose objects that nothing
+ * ever prunes. Source files sit far below this.
+ *
+ * The fingerprint is a stat, not the content, so a `touch` or a rewrite with
+ * identical bytes still counts as a change. Reading the file to rule that out
+ * is the cost this exists to avoid.
+ */
+export const LARGE_FILE_BYTES = 5 * 1024 * 1024
+
+const STAT_BATCH = 256
+
+/** The worktree at one instant. */
+interface Snapshot {
+  /** Tree object of the worktree, dirty content included, large files left out. */
+  tree: string
+  /** The large dirty files `tree` leaves out: path → `size:mtime:ctime:ino`. */
+  largeFiles: Map<string, string>
+}
+
 /** What `beginTurn` banks: the pre-turn worktree, and the commit it sat on. */
 interface PendingTurn {
-  /** Tree object of the whole worktree, dirty content included. */
-  tree: Option.Option<string>
+  snapshot: Option.Option<Snapshot>
   /** `HEAD` at turn start; none on an unborn HEAD (nothing committed yet). */
   head: Option.Option<string>
 }
@@ -70,7 +93,9 @@ export class TurnFileTracker extends Context.Service<TurnFileTracker, {
    * races the agent's first tool call, which is fine — a file the agent
    * changes before the snapshot lands simply shows up as pre-existing dirt
    * rather than as this turn's work. Blocking the turn on a `git add -A`
-   * would be the worse trade.
+   * would be the worse trade. Captures run one per project (see
+   * `captureSnapshot`), so this one can also wait out a capture already
+   * running for another chat, which widens that window by up to one capture.
    *
    * The pending capture is registered before this does anything async, and
    * the capture itself runs in the layer, so a caller that stops waiting
@@ -97,6 +122,12 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
   const pendingTurns = new Map<string, Fiber.Fiber<PendingTurn, WorktreeGitError>>()
   const locations = new Map<string, Effect.Effect<Option.Option<WorkingTreeLocation>, WorktreeGitError>>()
   const layerScope = yield* Effect.scope
+  /** A project's capture now running, and the one queued to start after it. */
+  const captureQueues = new Map<string, {
+    running?: Fiber.Fiber<Option.Option<Snapshot>, WorktreeGitError>
+    next?: Fiber.Fiber<Option.Option<Snapshot>, WorktreeGitError>
+  }>()
+  const captureLock = yield* Semaphore.make(1)
 
   /** Resolved once per project path; concurrent first callers share the one resolution. */
   const locationFor = (localPath: string) => Effect.suspend(() => {
@@ -113,27 +144,74 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
   /**
    * The whole worktree as a tree object, untracked files included and
    * `.gitignore` respected — `git add -A` decides both for us, so the snapshot
-   * matches what `git status` reports as dirty.
+   * matches what `git status` reports as dirty. Large dirty files are left out
+   * of the tree and fingerprinted instead (see `LARGE_FILE_BYTES`).
    */
-  const captureTree = Effect.fnUntraced(function* (localPath: string) {
+  const writeSnapshot = Effect.fnUntraced(function* (localPath: string) {
     const location = yield* locationFor(localPath)
-    if (Option.isNone(location)) return Option.none<string>()
+    if (Option.isNone(location)) return Option.none<Snapshot>()
     const { repoRoot, gitDir } = location.value
 
     const indexPath = path.join(gitDir, `kanna-snapshot-index-${randomUUID()}`)
     const env = { ...process.env, GIT_INDEX_FILE: indexPath }
     return yield* Effect.gen(function* () {
-      // Seed from HEAD so `add -A` only has to hash what actually differs.
-      // Without this every snapshot re-hashes the entire worktree. Failure is
-      // fine and expected on an unborn HEAD (a repo with no commits yet).
-      yield* git(["read-tree", "HEAD"], repoRoot, { env })
-      const added = yield* git(["add", "-A", "--", "."], repoRoot, { env })
-      if (added.exitCode !== 0) return Option.none<string>()
+      yield* seedIndex(location.value, indexPath, env)
+      const largeFiles = yield* findLargeDirtyFiles(repoRoot, env)
+      if (Option.isNone(largeFiles)) return Option.none<Snapshot>()
+      // Literal so a path with `*` or `[` in it excludes only itself. Over
+      // stdin so no number of large files can hit the argument limit; that
+      // needs git 2.25+, and older git fails the `add`, so turns record nothing.
+      const pathspecs = [".", ...[...largeFiles.value.keys()].map((filePath) => `:(exclude,literal)${filePath}`)]
+      const added = yield* git(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], repoRoot, { env, stdin: pathspecs.join("\0") })
+      if (added.exitCode !== 0) return Option.none<Snapshot>()
       const written = yield* git(["write-tree"], repoRoot, { env })
-      if (written.exitCode !== 0) return Option.none<string>()
-      return Option.fromNullOr(written.stdout.trim() || null)
+      if (written.exitCode !== 0) return Option.none<Snapshot>()
+      const tree = written.stdout.trim()
+      return tree ? Option.some<Snapshot>({ tree, largeFiles: largeFiles.value }) : Option.none<Snapshot>()
     }).pipe(Effect.ensuring(fs.remove(indexPath, { force: true }).pipe(Effect.ignore)))
   })
+
+  /** Starts a capture in the layer, so a caller that stops waiting does not cancel it for the others. */
+  const startCapture = (localPath: string, queue: NonNullable<ReturnType<typeof captureQueues.get>>) => Effect.gen(function* () {
+    let running: Fiber.Fiber<Option.Option<Snapshot>, WorktreeGitError> | undefined
+    running = yield* writeSnapshot(localPath).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        if (queue.running === running) queue.running = undefined
+      })),
+      Effect.forkIn(layerScope),
+    )
+    queue.running = running
+    return running
+  })
+
+  /**
+   * One capture per project at a time. Every chat in a project snapshots the
+   * same worktree, so parallel captures only compete for the disk. A request
+   * joins the queued capture if there is one, since that capture has not
+   * started yet and so still sees everything up to the request. It never
+   * joins the running one, which may have read the tree before the request
+   * was made.
+   */
+  const captureSnapshot = (localPath: string) => captureLock.withPermits(1)(Effect.gen(function* () {
+    let queue = captureQueues.get(localPath)
+    if (!queue) {
+      queue = {}
+      captureQueues.set(localPath, queue)
+    }
+    if (queue.next) return queue.next
+    if (!queue.running) return yield* startCapture(localPath, queue)
+    const current = queue
+    const next = yield* Fiber.await(current.running!).pipe(
+      Effect.andThen(captureLock.withPermits(1)(Effect.suspend(() => {
+        current.next = undefined
+        return startCapture(localPath, current)
+      }))),
+      Effect.flatMap(Fiber.join),
+      Effect.forkIn(layerScope),
+    )
+    current.next = next
+    return next
+  })).pipe(Effect.flatMap(Fiber.join))
 
   /** None on an unborn HEAD or a project that isn't a repo. */
   const readHead = Effect.fnUntraced(function* (localPath: string) {
@@ -145,8 +223,8 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
 
   /** The pre-turn worktree and the commit it sits on, captured together. */
   const captureTurn = Effect.fn("TurnFileTracker.captureTurn")(function* (localPath: string) {
-    const [tree, head] = yield* Effect.all([captureTree(localPath), readHead(localPath)], { concurrency: 2 })
-    const pending: PendingTurn = { tree, head }
+    const [snapshot, head] = yield* Effect.all([captureSnapshot(localPath), readHead(localPath)], { concurrency: 2 })
+    const pending: PendingTurn = { snapshot, head }
     return pending
   })
 
@@ -170,6 +248,31 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
   })
 
   /**
+   * Tree changes plus large-file changes. A large file has no blob on either
+   * side, so it carries no line counts, the same as a binary file.
+   */
+  const diffSnapshots = Effect.fnUntraced(function* (localPath: string, before: Snapshot, after: Snapshot) {
+    const treeChanges = before.tree === after.tree ? [] : yield* diffTrees(localPath, before.tree, after.tree)
+    const largeChanged = new Set<string>()
+    for (const [filePath, fingerprint] of before.largeFiles) {
+      if (after.largeFiles.get(filePath) !== fingerprint) largeChanged.add(filePath)
+    }
+    for (const filePath of after.largeFiles.keys()) {
+      if (!before.largeFiles.has(filePath)) largeChanged.add(filePath)
+    }
+    // A large file's tree entry is whatever the user's index holds for it, since
+    // `add -A` skipped it, so staging one mid-turn changes the tree without the
+    // turn touching it. Only the fingerprints speak for a path that was large on
+    // either side. That also covers a file crossing the threshold, whose
+    // tree-side counts would describe only half the change.
+    const large = new Set([...before.largeFiles.keys(), ...after.largeFiles.keys()])
+    return [
+      ...treeChanges.filter((change) => !large.has(change.path)),
+      ...[...largeChanged].map((filePath): TurnFileChange => ({ path: filePath })),
+    ]
+  })
+
+  /**
    * Pairs each changed path with the blob it held at the turn's starting commit.
    *
    * An unborn HEAD gives every path a `null` base — accurate, since nothing is
@@ -188,9 +291,9 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
   })
 
   const recordTurn = Effect.fnUntraced(function* (chatId: string, localPath: string, pending: Fiber.Fiber<PendingTurn, WorktreeGitError>) {
-    const [pre, postTree] = yield* Effect.all([Fiber.join(pending), captureTree(localPath)], { concurrency: 2 })
-    if (Option.isNone(pre.tree) || Option.isNone(postTree) || pre.tree.value === postTree.value) return
-    const changes = yield* diffTrees(localPath, pre.tree.value, postTree.value)
+    const [pre, post] = yield* Effect.all([Fiber.join(pending), captureSnapshot(localPath)], { concurrency: 2 })
+    if (Option.isNone(pre.snapshot) || Option.isNone(post)) return
+    const changes = yield* diffSnapshots(localPath, pre.snapshot.value, post.value)
     if (changes.length === 0) return
     yield* options.recordFiles(chatId, yield* toTouchedFiles(localPath, pre.head, changes))
   })
@@ -225,6 +328,68 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
       pendingTurns.delete(chatId)
     }),
   } satisfies TurnFileTracker["Service"]
+})
+
+/**
+ * Starts the throwaway index as a copy of the real one, so `add -A` hashes only
+ * what changed since the user's last `git status`. The copy brings the stat
+ * cache with it. An index seeded by `read-tree HEAD` has none, so every
+ * tracked file would be re-hashed on every snapshot. The copy keeps its mtime
+ * because git's racy-clean check compares entries against it, which is why
+ * this uses node's `fs`: `FileSystem.stat` rounds mtimes to whole
+ * milliseconds. With no index to copy, seed from HEAD; that fails, as
+ * expected, on an unborn HEAD.
+ */
+const seedIndex = (location: WorkingTreeLocation, indexPath: string, env: Record<string, string | undefined>) => {
+  const userIndex = path.join(location.gitDir, "index")
+  return Effect.tryPromise(() => stat(userIndex)).pipe(
+    Effect.tap(() => Effect.tryPromise(() => copyFile(userIndex, indexPath))),
+    Effect.flatMap(({ atime, mtime }) => Effect.tryPromise(() => utimes(indexPath, atime, mtime))),
+    Effect.catch(() => Effect.tryPromise(() => rm(indexPath, { force: true })).pipe(
+      Effect.ignore,
+      Effect.andThen(git(["read-tree", "HEAD"], location.repoRoot, { env })),
+      Effect.asVoid,
+    )),
+  )
+}
+
+/**
+ * Dirty files at or above `LARGE_FILE_BYTES`, by path, each with a
+ * `size:mtime:ctime:ino` fingerprint. ctime can't be set back and a replaced
+ * file gets a new inode, so a same-size edit that keeps the old mtime
+ * (`cp -p`, `rsync -a`) still shows. Node's `lstat`, for sub-millisecond
+ * times, ctime and the inode.
+ *
+ * Dirty means untracked, or different from `HEAD`, staged or not. Measured
+ * against the index instead, staging a file would take it out of the set, and
+ * the turn it happened in would read that as a change. `diff-index` compares
+ * stat data and never reads a file, and with `ls-files` it costs a directory
+ * walk and a stat per file. On an unborn HEAD everything in the index is
+ * uncommitted, so the index is the list.
+ *
+ * A deleted file can't be stat'ed and is left to `add -A`, which records the
+ * deletion without hashing anything. None when git could not list the files.
+ */
+const findLargeDirtyFiles = Effect.fnUntraced(function* (repoRoot: string, env: Record<string, string | undefined>) {
+  const [untracked, againstHead] = yield* Effect.all([
+    git(["ls-files", "-z", "--others", "--exclude-standard"], repoRoot, { env }),
+    git(["diff-index", "--name-only", "-z", "--no-renames", "HEAD"], repoRoot, { env }),
+  ], { concurrency: 2 })
+  const changed = againstHead.exitCode === 0
+    ? againstHead
+    : yield* git(["ls-files", "-z", "--cached"], repoRoot, { env })
+  if (untracked.exitCode !== 0 || changed.exitCode !== 0) return Option.none<Map<string, string>>()
+  const paths = [...new Set(`${untracked.stdout}\0${changed.stdout}`.split("\0").filter(Boolean))]
+  const largeFiles = new Map<string, string>()
+  yield* Effect.forEach(paths, (filePath) => Effect.tryPromise(() => lstat(path.join(repoRoot, filePath))).pipe(
+    Effect.map((stats) => {
+      if (stats.isFile() && stats.size >= LARGE_FILE_BYTES) {
+        largeFiles.set(filePath, `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.ino}`)
+      }
+    }),
+    Effect.ignore,
+  ), { concurrency: STAT_BATCH, discard: true })
+  return Option.some(largeFiles)
 })
 
 /** One path a turn changed, with the lines it added and removed there. */

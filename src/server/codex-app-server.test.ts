@@ -209,6 +209,7 @@ describe("CodexAppServer", () => {
       model: "gpt-5.4",
       sessionToken: null,
       pendingForkSessionToken: "thread-source",
+      pendingForkAt: "turn-7",
     })
 
     expect(started).toEqual({ sessionToken: "thread-fork-1", resumeFellBack: false })
@@ -217,6 +218,8 @@ describe("CodexAppServer", () => {
       "initialized",
       "thread/fork",
     ])
+    // Cut at the turn the fork's transcript ends on, whatever the source ran since.
+    expect((process.messages.find((message: any) => message.method === "thread/fork") as { params: unknown }).params).toMatchObject({ threadId: "thread-source", lastTurnId: "turn-7" })
   })))
 
   test("maps fast mode and reasoning into app-server params", () => runTest(Effect.gen(function* () {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { LOG_PREFIX } from "../shared/branding"
-import { Analytics, getLaunchAnalyticsProperties, type AnalyticsOptions } from "./analytics"
+import { Analytics, getLaunchAnalyticsProperties, isAnalyticsDisabledByEnv, type AnalyticsOptions } from "./analytics"
 import { AppSettings } from "./app-settings"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { runTest } from "./effect/testing"
@@ -67,6 +67,22 @@ describe("getLaunchAnalyticsProperties", () => {
       strictPort: false,
       cloud: true,
     }).cloud_enabled).toBe(true)
+  })
+})
+
+describe("isAnalyticsDisabledByEnv", () => {
+  test("test runs, CI and explicit opt-outs disable analytics", () => {
+    expect(isAnalyticsDisabledByEnv({ NODE_ENV: "test" })).toBe(true)
+    expect(isAnalyticsDisabledByEnv({ CI: "true" })).toBe(true)
+    expect(isAnalyticsDisabledByEnv({ CI: "1" })).toBe(true)
+    expect(isAnalyticsDisabledByEnv({ KANNA_DISABLE_ANALYTICS: "1" })).toBe(true)
+    expect(isAnalyticsDisabledByEnv({ DO_NOT_TRACK: "1" })).toBe(true)
+  })
+
+  test("a normal launch keeps analytics, as do falsy flag values", () => {
+    expect(isAnalyticsDisabledByEnv({})).toBe(false)
+    expect(isAnalyticsDisabledByEnv({ NODE_ENV: "production" })).toBe(false)
+    expect(isAnalyticsDisabledByEnv({ CI: "false", DO_NOT_TRACK: "0", KANNA_DISABLE_ANALYTICS: "" })).toBe(false)
   })
 })
 

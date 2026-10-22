@@ -1,7 +1,7 @@
 import type { PerformanceLog } from "./performance-log"
 import type { ServerWebSocket } from "bun"
 import { homedir } from "node:os"
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Result, Schema, Scope, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Stream } from "effect"
 import { PROTOCOL_VERSION } from "../shared/types"
 import type { ClientCommand, ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
 import { ClientFrameJsonSchema, CompatibleClientEnvelopeSchema } from "../shared/protocol-schema"
@@ -34,7 +34,6 @@ import type { ProviderAuth } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimits } from "./usage-limits"
 import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
-import type { Orchestrator } from "./orchestrator"
 import { sendEnvelope as send, sendSerializedSnapshot, shouldIncludeTopic, type SnapshotBroadcastFilter } from "./ws-transport"
 import type {
   AppSettingsSnapshot,
@@ -157,15 +156,7 @@ interface CreateWsRouterArgs {
    * the same code as these commands. Built here when not handed in.
    */
   chatCommands?: ChatCommands["Service"]
-  /** Delegators' ticket boards (the orchestrator). Without it there are none to show. */
-  tickets?: TicketService
 }
-
-/** What the router reads and does of a delegator's tickets. See `shared/tickets.ts`. */
-type TicketService = Pick<
-  Orchestrator["Service"],
-  "ticketBoard" | "ticketDetail" | "ticketAttentionByChat" | "replyToTicketAsUser" | "setTicketStatusAsUser" | "setTicketReadAsUser"
->
 
 interface SidebarSnapshotEntry {
   data: ReturnType<typeof deriveSidebarData>
@@ -237,7 +228,6 @@ export function createWsRouter({
   providerAuth,
   backgroundChatPushIntervalMs = BACKGROUND_CHAT_PUSH_INTERVAL_MS,
   chatCommands: providedChatCommands,
-  tickets,
 }: CreateWsRouterArgs) {
   const sockets = new Set<ServerWebSocket<ClientState>>()
   let pendingBroadcastTimer: Fiber.Fiber<void, never> | null = null
@@ -383,9 +373,6 @@ export function createWsRouter({
       const counts = agent.getWaitingOn?.(chatId)
       if (counts) waitingOn.set(chatId, counts)
     }
-    // Each delegator's count for its compass button. It moves with its
-    // tickets and with its chats' states, so it is in the key itself.
-    const ticketAttention = tickets ? runKannaSync(tickets.ticketAttentionByChat) : new Map<string, number>()
     // Every input to the derive, in one string. `stateVersion` now moves only
     // when an append changed something the sidebar can show (see
     // `sidebarVisibleSignature` in event-store), so a streaming turn re-derives
@@ -405,7 +392,6 @@ export function createWsRouter({
       // A chat stays waiting while the count under it falls, so the status
       // alone would not say the row had changed.
       JSON.stringify([...waitingOn].sort(([left], [right]) => left.localeCompare(right))),
-      JSON.stringify([...ticketAttention].sort(([left], [right]) => left.localeCompare(right))),
     ].join("|")
     // A store without a version (the router tests' stubs mutate state
     // directly) gets no memo rather than a stale sidebar.
@@ -420,7 +406,6 @@ export function createWsRouter({
       pendingToolKinds,
       pendingUserInputPreviews,
       waitingOn,
-      ticketAttention,
       workingTrees: runKannaSync(worktreeProbe.states),
       repoLabels: runKannaSync(worktreeProbe.repoLabels),
       projectsWithoutRepo: runKannaSync(worktreeProbe.projectsWithoutRepo),
@@ -607,18 +592,6 @@ export function createWsRouter({
       }
     }
 
-    if (topic.type === "ticket") {
-      return {
-        v: PROTOCOL_VERSION,
-        type: "snapshot",
-        id,
-        snapshot: {
-          type: "ticket",
-          data: tickets ? Option.getOrNull(runKannaSync(tickets.ticketDetail(topic.chatId, topic.ticketId))) : null,
-        },
-      }
-    }
-
     if (topic.type === "project-git") {
       return {
         v: PROTOCOL_VERSION,
@@ -639,7 +612,7 @@ export function createWsRouter({
       id,
       snapshot: {
         type: "chat",
-        data: withTicketBoard(deriveChatSnapshot(
+        data: deriveChatSnapshot(
           store.state,
           getChatStatuses(),
           agent.getDrainingChatIds(),
@@ -647,7 +620,7 @@ export function createWsRouter({
           (chatId) => store.getClientTranscript(chatId),
           agent.getSubagents?.(topic.chatId),
           agent.getWaitingOn?.(topic.chatId)
-        )),
+        ),
       },
     }
   }
@@ -669,23 +642,13 @@ export function createWsRouter({
     return earliest ?? 0
   }
 
-  /**
-   * A delegator's board rides its chat snapshot whole, incremental pushes
-   * included: it is small, and it changes without the transcript changing.
-   */
-  function withTicketBoard(data: ChatSnapshot | null): ChatSnapshot | null {
-    if (!data || !tickets) return data
-    const board = Option.getOrNull(runKannaSync(tickets.ticketBoard(data.runtime.chatId)))
-    return board ? { ...data, ...board } : data
-  }
-
   function getChatSnapshotData(chatId: string, cache?: SnapshotComputationCache, fromIndex?: number) {
     const key = `${chatId}:${fromIndex ?? "window"}:${typeof store.getTranscriptLength === "function" && store.getChat(chatId) ? store.getTranscriptLength(chatId) : ""}`
     const existing = cache?.chat?.get(key)
     if (existing !== undefined) {
       return existing
     }
-    const data = withTicketBoard(deriveChatSnapshot(
+    const data = deriveChatSnapshot(
       store.state,
       getChatStatuses(),
       agent.getDrainingChatIds(),
@@ -693,7 +656,7 @@ export function createWsRouter({
       (id) => store.getClientTranscript(id, fromIndex ?? getEarliestChatWindowStart(id)),
       agent.getSubagents?.(chatId),
       agent.getWaitingOn?.(chatId)
-    ))
+    )
     if (cache) {
       (cache.chat ??= new Map()).set(key, data)
     }
@@ -954,7 +917,8 @@ export function createWsRouter({
         continue
       }
       // project-git has a cheap version-counter signature, so an unchanged
-      // snapshot (e.g. thousands of diff files) skips payload building entirely.
+      // snapshot (e.g. thousands of diff files) skips payload building
+      // entirely.
       const precomputedSignature = topic.type === "project-git"
         ? getProjectGitSignature(topic.projectId)
         : null
@@ -2201,27 +2165,6 @@ export function createWsRouter({
         }
         case "terminal.tail": {
           yield* (tailTerminalEffect(ws, id, command))
-          return
-        }
-        // Each changes the delegator's board, which its chat snapshot and
-        // its ticket subscriptions carry, and the compass count on its row.
-        case "ticket.reply": {
-          if (!tickets) return yield* Effect.fail(new RouterCommandError({ message: "Tickets are not available." }))
-          yield* (tickets.replyToTicketAsUser(command).pipe(Effect.flatMap((result) =>
-            finishChatCommandEffect(ws, id, { result, changed: { sidebar: true, chatIds: [command.chatId] } }))))
-          return
-        }
-        case "ticket.setStatus": {
-          if (!tickets) return yield* Effect.fail(new RouterCommandError({ message: "Tickets are not available." }))
-          yield* (tickets.setTicketStatusAsUser(command).pipe(Effect.andThen(
-            finishChatCommandEffect(ws, id, { result: undefined, changed: { sidebar: true, chatIds: [command.chatId] } }))))
-          return
-        }
-        case "ticket.markRead":
-        case "ticket.markUnread": {
-          if (!tickets) return yield* Effect.fail(new RouterCommandError({ message: "Tickets are not available." }))
-          yield* (tickets.setTicketReadAsUser({ chatId: command.chatId, ticketId: command.ticketId, read: command.type === "ticket.markRead" }).pipe(Effect.andThen(
-            finishChatCommandEffect(ws, id, { result: undefined, changed: { sidebar: true, chatIds: [command.chatId] } }))))
           return
         }
       }

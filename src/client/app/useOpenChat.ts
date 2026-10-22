@@ -91,20 +91,17 @@ export function useOpenChat(): OpenChat {
       if (action.kind === "close-preview") viewerStore.close()
       if (options?.jump) goTo()
     } else if (action.kind === "preview") {
-      // A trail that began at a delegator's board or ticket still ends
-      // there: stepping from one chat to the next inside the previewer
-      // carries it along, and a chat picked from the list starts one. A chat
-      // opened from the page starts a new trail, with neither behind it.
+      // A trail that began at a delegator's pane still ends there: stepping
+      // from one chat to the next inside the previewer carries it along, and
+      // a chat picked from the pane starts one. A chat opened from the page
+      // starts a new trail, with nothing behind it.
       const inPane = options?.from === "preview"
-      const delegated = !inPane ? undefined : item?.kind === "delegated" || item?.kind === "ticket" ? item.chatId : item?.kind === "chat" ? item.delegated : undefined
-      // A chat opened from a ticket's chip keeps the ticket to go back to.
-      const ticket = !inPane ? undefined : item?.kind === "ticket" ? item.ticketId : item?.kind === "chat" ? item.ticket : undefined
+      const delegated = !inPane ? undefined : item?.kind === "delegated" ? item.chatId : item?.kind === "chat" ? item.delegated : undefined
       viewerStore.open({
         kind: "chat",
         chatId,
         ...(action.back.length > 0 ? { back: action.back } : {}),
         ...(delegated ? { delegated } : {}),
-        ...(delegated && ticket ? { ticket } : {}),
       })
       if (options?.jump) viewerStore.setChatJump(chatId, options.jump)
     } else {

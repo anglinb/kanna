@@ -38,37 +38,37 @@ describe("buildKannaSystemInstructions", () => {
       .toBe(KANNA_DELEGATOR_INSTRUCTIONS.length + 2)
   })
 
-  test("what a delegator is told covers the five things, with tools that exist", () => {
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("almost always hand it to another chat")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("If one already covers that area")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("has this chat as its parent")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("`adopt: true` on `send_message`")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("Several unrelated tasks in one message go to several chats.")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("Do not redo")
-    const named = [...KANNA_DELEGATOR_INSTRUCTIONS.matchAll(/`([a-z_]+)`/g)].map((match) => match[1]!)
-    for (const name of named) expect(KANNA_TOOL_NAMES as readonly string[]).toContain(name)
-    // The ticket board's rules: a delegator's only guide to it.
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("Every hand-off names a ticket")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("never progress.")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("Only `reply_to_ticket` writes on a ticket.")
-    // A delegator once reopened a Done ticket for each small new ask in its
-    // area. A new ask gets its own ticket; the chat can still be the same one.
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("A new ask is a new ticket")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("So is anything asked after a ticket is Done.")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("the same piece of work, or a new request?")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("The ticket separates the asks, not the chat")
-    // What it tells the user about is the ticket, which opens in the pane.
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("link its ticket, not the chat: [#8 Title](link)")
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("Link a chat only when the user needs the chat itself.")
-    // A delegator once pinned each commit on whichever ticket was nearby, so
-    // the rest kept saying "uncommitted" after the push.
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("A commit or push is a ticket of its own")
-    // It filled tickets with "nothing new" and with plans the hand-off rows already showed.
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("post nothing when nothing is new")
-    // And let titles and bodies drift from the work they had grown into.
-    expect(KANNA_DELEGATOR_INSTRUCTIONS).toContain("rewrite the title and body")
+  test("every chat with the tools is told one chat is one piece of work, and to fork for new work", () => {
+    expect(KANNA_ORCHESTRATION_INSTRUCTIONS).toContain("Each chat is one piece of work, and its title (required on `create_chat`, `fork_chat` and `send_message`) says what.")
+    expect(KANNA_ORCHESTRATION_INSTRUCTIONS).toContain("prefer a fork to retitling a chat")
+    expect(KANNA_ORCHESTRATION_INSTRUCTIONS).not.toMatch(/ticket|checkpoint/i)
+  })
+
+  test("a delegator keeps each chat one timeline of one piece of work, and reuses a chat by forking it", () => {
+    const told = KANNA_DELEGATOR_INSTRUCTIONS
+    expect(told).toContain("Each chat under this one is a self-contained timeline of one piece of work, and its title says what that work is.")
+    expect(told).toContain("The chat list is the user's record of what was worked on")
+    expect(told).toContain("New work goes to a new chat: `create_chat`, titled for that work.")
+    expect(told).toContain("To reuse a chat's context for new work, fork it: `fork_chat`, titled for the new work.")
+    expect(told).toContain("Never point an existing chat at different work.")
+    expect(told).toContain("Follow-ups on a chat's own work go to it with `send_message`, passing its current title")
+    expect(told).toContain("If you find yourself retitling a chat because its work changed, fork it instead.")
+    expect(told).not.toMatch(/ticket|checkpoint/i)
     // Every delegator turn pays for it.
-    expect(KANNA_DELEGATOR_INSTRUCTIONS.length).toBeLessThan(2_200)
+    expect(told.length).toBeLessThan(2_200)
+  })
+
+  test("what a delegator is told covers the rest, with tools that exist", () => {
+    const told = KANNA_DELEGATOR_INSTRUCTIONS
+    expect(told).toContain("almost always hand it to another chat")
+    expect(told).toContain("has this chat as its parent")
+    expect(told).toContain("`adopt: true` on `send_message`")
+    expect(told).toContain("Several unrelated tasks in one message go to several chats.")
+    expect(told).toContain("Tell the user which chat each task went to, and link it.")
+    expect(told).toContain("Do not redo")
+    const named = [...told.matchAll(/`([a-z_]+)`/g)].map((match) => match[1]!)
+    expect(named).toEqual(expect.arrayContaining(["create_chat", "fork_chat", "send_message", "list_chats", "get_context"]))
+    for (const name of named) expect(KANNA_TOOL_NAMES as readonly string[]).toContain(name)
   })
 
   test("names only tools that exist", () => {

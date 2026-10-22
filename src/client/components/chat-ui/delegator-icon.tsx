@@ -3,8 +3,8 @@
  * leaves the travelling to the chats under it. Defined here and nowhere
  * else, so every place a delegator is marked (its row, its tab, the delegate
  * control, the menu items, the command palette) changes together. The
- * navbar's button is not one: it opens the delegator's tickets, and wears
- * their list icon (`DelegatedListButton`). The iOS app draws the same symbol.
+ * navbar's button wears it too (`DelegatedListButton`). The iOS app draws
+ * the same symbol.
  *
  * Each place says it once. A row under a "Delegators" heading is not marked,
  * nor is the pane the navbar's button opens, nor the title beside that

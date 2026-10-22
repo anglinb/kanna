@@ -1,7 +1,6 @@
-import { Cause, Context, Deferred, Effect, Exit, type Fiber, FiberSet, Layer, Option, Schema, Scope } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, type Fiber, FiberSet, Layer, Schema, Scope } from "effect"
 import type {
   AgentProvider,
-  ChatAttachment,
   ChatSchedule,
   MessageSource,
   ScheduleTrigger,
@@ -9,21 +8,6 @@ import type {
   TranscriptEntry,
 } from "../shared/types"
 import { stripSystemMessages } from "../shared/message-preview"
-import type { ClientCommand } from "../shared/protocol"
-import {
-  compareTicketsByActivity,
-  snapshotTickets,
-  ticketAttentionCount,
-  ticketLinkPath,
-  type TicketArtifact,
-  type TicketChatInfo,
-  type TicketChatState,
-  type TicketDetail,
-  type TicketHandoff,
-  type TicketRecord,
-  type TicketState,
-  type TicketSummary,
-} from "../shared/tickets"
 import { buildAgentToAgentNote, type AgentToAgentTurn } from "./agent-to-agent"
 import { ChatAgent, type ChatAgentError } from "./chat-agent"
 import { ChatCommands, type ChatChange } from "./chat-commands"
@@ -43,17 +27,6 @@ import {
   parseTimeOfDay,
   type ScheduleFireResult,
 } from "./schedules"
-import { makeTicketBoard, type TicketBoard, type TicketInputError, type TicketNotFoundError } from "./ticket-board"
-import {
-  agentTicketDetail,
-  agentTicketSummary,
-  buildTicketNudge,
-  buildTicketReopenMessage,
-  buildTicketReplyHeader,
-  stillAskingNote,
-  ticketReportLine,
-} from "./ticket-messages"
-import { TicketStore, type TicketStoreError } from "./ticket-store"
 
 /**
  * What an agent can do to chats, and the rules that keep that safe.
@@ -157,25 +130,21 @@ export class ChatActionRefusedError extends Schema.TaggedError<ChatActionRefused
 
 /**
  * The chat a hand-off is for exists (it was created, forked or found), and the
- * message that would start its turn did not go. A ticket the hand-off created
- * on the way stays, and the message names it so a retry does not make another.
+ * message that would start its turn did not go.
  */
 export class TurnNotStartedError extends Schema.TaggedError<TurnNotStartedError>()(
   "@kanna/server/orchestrator/TurnNotStartedError",
   {
     chatId: Schema.String,
-    ticket: Schema.optionalKey(Schema.Struct({ id: Schema.String, number: Schema.Number })),
     cause: Schema.Defect(),
   },
 ) {
   override get message() {
-    const retry = this.ticket ? ` The hand-off was recorded on ticket #${this.ticket.number}; pass ticketId "${this.ticket.id}" to try again.` : ""
-    return `Chat ${this.chatId} exists, but its turn did not start: ${errorMessage(this.cause)}${retry}`
+    return `Chat ${this.chatId} exists, but its turn did not start: ${errorMessage(this.cause)}`
   }
 }
 
 type StoreError = EventStoreNotFoundError | EventStoreFileError
-type BoardError = TicketNotFoundError | TicketInputError | TicketStoreError
 /** Every way an agent's write can fail. */
 export type ChatWriteError =
   | ChatNotFoundError
@@ -186,47 +155,10 @@ export type ChatWriteError =
   | StoreError
   | EventStoreRejectedError
   | ChatAgentError
-  | BoardError
 /** A read of a chat that may not exist. */
 type ChatReadError = ChatNotFoundError
-/** What the ticket tools and the ticket pane can fail with. */
-export type TicketActionError = ChatNotFoundError | ChatActionRefusedError | BoardError | ChatAgentError
 
 // ── Shapes ───────────────────────────────────────────────────────────────
-
-/**
- * The ticket a hand-off's result names: `ticket: { id, number, link }`, which
- * clients read off the tool result, and `link` the agent copies to link it.
- *
- * `reopened` and `note` when the hand-off took a Done ticket back out of
- * Done. A delegator once reopened Done tickets for new asks without noticing;
- * the note puts the rule where the reopen happens.
- */
-export interface HandedOffTicket { id: string; number: number; link: string; reopened?: true; note?: string }
-
-function handedOffTicket(delegatorChatId: string, ticket: Pick<TicketRecord, "id" | "number">, reopened = false): HandedOffTicket {
-  return {
-    id: ticket.id,
-    number: ticket.number,
-    link: ticketLinkPath(delegatorChatId, ticket.id),
-    ...(reopened ? { reopened: true as const, note: `Reopened #${ticket.number}, which was Done. A new ask needs a new ticket.` } : {}),
-  }
-}
-
-/** A composer's settings for a turn, as `chat.send` carries them: what a ticket reply runs the delegator with. */
-type TurnSettings = Partial<Pick<Extract<ClientCommand, { type: "chat.send" }>, "provider" | "model" | "modelOptions" | "planMode" | "autoPlan">>
-
-/**
- * What names the ticket a delegator's hand-off is for: one it has, or one
- * to create in the same call.
- */
-export interface TicketChoice {
-  ticketId?: string
-  ticket?: { title: string; body?: string }
-}
-
-/** A hand-off's ticket once checked: found, or to be created when the hand-off goes through. */
-type TicketTarget = { board: TicketBoard["Service"] } & ({ ticket: TicketRecord } | { create: { title: string; body?: string } })
 
 /**
  * A chat's state as an agent should read it. `running` covers queued work.
@@ -385,8 +317,6 @@ interface ReadableRow {
 interface ReportSection {
   header: string
   reply?: string
-  /** A delegator's report: the tickets the header names. Rides on the report's source (`MessageSource.tickets`). */
-  ticketIds?: string[]
 }
 
 export interface RunOptions {
@@ -396,23 +326,32 @@ export interface RunOptions {
   planMode?: boolean
 }
 
-export type CreateChatInput = RunOptions & TicketChoice & {
+export type CreateChatInput = RunOptions & {
   message: string
+  /** The work it does. Required by the tool; the user's own creations may have none. */
   title?: string
   projectId?: string
   subchat?: boolean
 }
 
-export type ForkChatInput = RunOptions & TicketChoice & {
+export type ForkChatInput = RunOptions & {
   chatId?: string
   message?: string
+  /** The new work's. A fork is how a chat's context is reused for new work, so the tool requires one. */
   title?: string
   subchat?: boolean
 }
 
-export type SendMessageInput = RunOptions & TicketChoice & {
+export type SendMessageInput = RunOptions & {
   chatId: string
   message: string
+  /**
+   * What the chat works on: its title unchanged for a follow-up on its own
+   * work, a new one when it is reused for new work. The tool requires it,
+   * so keeping it is a choice; none keeps it too. Applied to this chat's
+   * own sub-chats only; see `sendMessage`.
+   */
+  title?: string
   delivery?: "queue" | "steer"
   adopt?: boolean
 }
@@ -442,16 +381,6 @@ export type SetScheduleInput = RunOptions & {
 }
 
 export type ScheduleDescription = ReturnType<typeof describeSchedule>
-
-/** The board on a delegator's chat snapshot. */
-export interface TicketBoardSnapshot {
-  tickets: TicketSummary[]
-  ticketAttention: number
-  untrackedChatIds: string[]
-  readDoneTotal: number
-}
-
-type HandoffResult = { ticket?: HandedOffTicket }
 
 // ── Pure helpers ─────────────────────────────────────────────────────────
 
@@ -560,7 +489,7 @@ const warnOnFailure = (what: string) => <A, E, R>(effect: Effect.Effect<A, E, R>
 
 /**
  * The orchestrator: the agents' side of chat management. Sub-chats and
- * their reports, adoption, delegators and their tickets, schedules.
+ * their reports, adoption, delegators, schedules.
  *
  * Reads of memory (`getChatsWaitingOnSubchats`, `getChildActivities`, …)
  * answer synchronously, as the store's do: the coordinator asks them on
@@ -570,9 +499,6 @@ const warnOnFailure = (what: string) => <A, E, R>(effect: Effect.Effect<A, E, R>
  * and is stopped with the layer.
  */
 export class Orchestrator extends Context.Service<Orchestrator, {
-  /** Delegators' ticket boards. None when the layer was built without a `TicketStore`. */
-  readonly tickets: Option.Option<TicketBoard["Service"]>
-
   /**
    * Arms the schedules and sends any report a restart interrupted: a sub-chat
    * that finished just before the process went down still owes its parent.
@@ -591,7 +517,6 @@ export class Orchestrator extends Context.Service<Orchestrator, {
   readonly getChatsWaitingOnSubchats: (unsettled: Iterable<string>) => Set<string>
   readonly getChildActivities: (chatId: string) => SubagentActivity[]
   readonly isAgentToAgent: (chatId: string, source?: MessageSource) => boolean
-  readonly ticketChatInfo: (chatId: string) => TicketChatInfo | undefined
   readonly buildTurnNotices: (chatId: string, source?: MessageSource, turn?: AgentToAgentTurn) => Effect.Effect<string[]>
   readonly getContext: (actorChatId: string) => Effect.Effect<OrchestratorContext, ChatReadError>
   readonly listChats: (input: ListChatsInput) => Effect.Effect<{ total: number; chats: AgentChatSummary[]; nextOffset?: number }>
@@ -599,12 +524,17 @@ export class Orchestrator extends Context.Service<Orchestrator, {
   readonly listSchedules: (input: { chatId?: string; includeDisabled?: boolean }) => Effect.Effect<{ now: string; schedules: ScheduleDescription[] }>
 
   // Writes, for an agent
-  readonly createChat: (actorChatId: string, input: CreateChatInput) => Effect.Effect<AgentChatSummary & HandoffResult, ChatWriteError>
-  readonly forkChat: (actorChatId: string, input: ForkChatInput) => Effect.Effect<AgentChatSummary & HandoffResult, ChatWriteError>
+  readonly createChat: (actorChatId: string, input: CreateChatInput) => Effect.Effect<AgentChatSummary, ChatWriteError>
+  readonly forkChat: (actorChatId: string, input: ForkChatInput) => Effect.Effect<AgentChatSummary, ChatWriteError>
+  /**
+   * `titleChanged` says what it did with `title`, so the agent sees whether
+   * it kept or changed it; `note` when a title was passed for a chat that is
+   * not a sub-chat of the actor, and so left as it was.
+   */
   readonly sendMessage: (
     actorChatId: string,
     input: SendMessageInput,
-  ) => Effect.Effect<AgentChatSummary & HandoffResult & { started: boolean; queuedMessageId?: string }, ChatWriteError>
+  ) => Effect.Effect<AgentChatSummary & { started: boolean; queuedMessageId?: string; titleChanged: boolean; note?: string }, ChatWriteError>
   readonly cancelChat: (actorChatId: string, chatId: string) => Effect.Effect<AgentChatSummary, ChatWriteError>
   readonly updateChat: (
     actorChatId: string,
@@ -628,12 +558,6 @@ export class Orchestrator extends Context.Service<Orchestrator, {
    */
   readonly handleTurnStarted: (chatId: string) => Effect.Effect<void>
   /**
-   * The chat stopped to ask the user something, or for plan approval. That
-   * ends no turn, so no report says it; a delegator's tickets hear it here,
-   * and its board, which puts them in Waiting on you, is pushed.
-   */
-  readonly handleWaitingForUser: (chatId: string) => Effect.Effect<void>
-  /**
    * A task of the provider's began in a chat with no turn running, which puts
    * the chats above it in the same wait a turn starting would.
    */
@@ -644,58 +568,8 @@ export class Orchestrator extends Context.Service<Orchestrator, {
    * Each cancel fires this again for the next level down.
    */
   readonly handleChatStopped: (chatId: string) => Effect.Effect<void>
-  /**
-   * A message left a chat's queue. `taken`: a turn is starting with it, and
-   * that turn's start places its hand-offs. Otherwise it was removed unsent
-   * (the user, or an agent's `update_queued_message`), and the hand-offs it
-   * carried are withdrawn: no chat ever had that work.
-   */
-  readonly handleQueuedMessageRemoved: (chatId: string, queuedMessageId: string, taken: boolean) => Effect.Effect<void>
   /** Stops a sub-chat from its row in the parent's task log. False when the id is not one of ours. */
   readonly stopChildTask: (chatId: string, taskId: string) => Effect.Effect<boolean, ChatAgentError>
-
-  // Tickets: the snapshots' reads
-  /** The board on a delegator's chat snapshot. None for any other chat. */
-  readonly ticketBoard: (chatId: string) => Effect.Effect<Option.Option<TicketBoardSnapshot>>
-  readonly ticketDetail: (chatId: string, ticketId: string) => Effect.Effect<Option.Option<TicketDetail>>
-  /** Every delegator's count for the compass button, those above zero only. For the sidebar. */
-  readonly ticketAttentionByChat: Effect.Effect<Map<string, number>>
-
-  // Tickets: the user's commands, from the ticket pane
-  /** Stores the reply and sends it to the delegator. See `MessageSource` kind `ticket`. */
-  readonly replyToTicketAsUser: (
-    input: { chatId: string; ticketId: string; text: string; attachments?: ChatAttachment[] } & TurnSettings,
-  ) => Effect.Effect<{ replyId: string }, TicketActionError>
-  /** Close or reopen. A reopen is the delegator's to act on; a close is not. */
-  readonly setTicketStatusAsUser: (input: { chatId: string; ticketId: string; status: "done" | "open" }) => Effect.Effect<void, TicketActionError>
-  readonly setTicketReadAsUser: (input: { chatId: string; ticketId: string; read: boolean }) => Effect.Effect<void, TicketActionError>
-
-  // Tickets: the delegator's tools
-  readonly createTicket: (
-    actorChatId: string,
-    input: { title: string; body?: string },
-  ) => Effect.Effect<{ ticketId: string; number: number; link: string }, TicketActionError>
-  readonly updateTicket: (
-    actorChatId: string,
-    input: { ticketId: string; title?: string; body?: string; status?: "done" | "open" },
-  ) => Effect.Effect<ReturnType<typeof agentTicketSummary>, TicketActionError>
-  /**
-   * The delegator's reply. Posting on a ticket that still waits on the user
-   * for an earlier question returns `note` saying so: a delegator once left a
-   * ticket in Waiting on you under a status post, and the user could not find
-   * what they were being asked.
-   */
-  readonly replyToTicket: (
-    actorChatId: string,
-    input: { ticketId: string; text: string; asksUser?: boolean; artifacts?: TicketArtifact[] },
-  ) => Effect.Effect<{ replyId: string; note?: string }, TicketActionError>
-  /** Fails unless the actor is a delegator with this ticket. The media tools check before they store anything. */
-  readonly checkTicket: (actorChatId: string, ticketId: string) => Effect.Effect<void, TicketActionError>
-  readonly readTicket: (actorChatId: string, ticketId: string) => Effect.Effect<ReturnType<typeof agentTicketDetail>, TicketActionError>
-  readonly listTickets: (
-    actorChatId: string,
-    input: { status?: TicketState | "open"; limit?: number },
-  ) => Effect.Effect<{ total: number; tickets: Array<ReturnType<typeof agentTicketSummary>> }, TicketActionError>
 }>()("@kanna/server/Orchestrator") {
   static readonly layer = (options: OrchestratorOptions) => Layer.effect(this, makeOrchestrator(options))
 }
@@ -708,22 +582,16 @@ export interface OrchestratorOptions {
   readonly closeOutGraceMs?: number
 }
 
-/**
- * Builds the orchestrator over the store, the coordinator and the chat
- * commands in context. A `TicketStore` there gives delegators their boards;
- * without one there are no tickets, and a delegator hands work off without
- * naming one.
- */
+/** Builds the orchestrator over the store, the coordinator and the chat commands in context. */
 const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: OrchestratorOptions) {
   const store = yield* EventStore
   const agent = yield* ChatAgent
   const commands = yield* ChatCommands
-  const ticketStore = yield* Effect.serviceOption(TicketStore)
   const push = options.push
   const now = options.now ?? Date.now
   const closeOutGraceMs = options.closeOutGraceMs ?? CLOSE_OUT_GRACE_MS
 
-  /** What runs on its own: reports, nudges, timers. Interrupted when the layer closes. */
+  /** What runs on its own: reports, timers. Interrupted when the layer closes. */
   const fibers = yield* FiberSet.make()
   /**
    * Starts `effect` without waiting for it, as `void promise` did: it runs at
@@ -762,13 +630,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   const closeOuts = new Map<string, { ready: boolean; timer?: Fiber.Fiber<unknown> }>()
   let childIndex: { version: number; byParent: Map<string, ChatRecord[]> } | null = null
   let bootSweep: Fiber.Fiber<unknown> | null = null
-  /**
-   * Hand-offs whose send has not returned. Until it does, nothing knows
-   * whether the message went into a turn or the queue (`placeHandoff`).
-   */
-  const sendingHandoffs = new Set<string>()
-  /** Per chat: the queued message its starting turn took, until that turn's start places its hand-offs. */
-  const takenMessages = new Map<string, string>()
 
   // ── State ──────────────────────────────────────────────────────────────
 
@@ -1246,7 +1107,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     const subchat = caller.delegator ? true : input.subchat ?? true
     const projectId = input.projectId ?? caller.projectId
     if (!store.getProject(projectId)) return yield* new ProjectNotFoundError({ projectId })
-    const ticket = yield* chooseTicket(caller, input)
     yield* checkBudget(actorChatId)
     const run = yield* resolveRun(actorChatId, input, {
       provider: caller.provider,
@@ -1261,9 +1121,9 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     })
     const chat = yield* requireChat(created.result.chatId)
     if (input.title?.trim()) yield* commands.rename(chat.id, input.title)
-    const sent = yield* send(actorChatId, chat, input.message, run, { report: subchat, ticket })
+    yield* send(actorChatId, chat, input.message, run, { report: subchat })
     push(created.changed!)
-    return { ...summarize(yield* requireChat(chat.id)), ...(sent.ticket ? { ticket: sent.ticket } : {}) }
+    return summarize(yield* requireChat(chat.id))
   })
 
   const forkChat = Effect.fn("Orchestrator.forkChat")(function* (actorChatId: string, input: ForkChatInput) {
@@ -1273,16 +1133,13 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     // A fork handed work is delegation, so it reports back unless told not to.
     // A delegator's fork is under it either way.
     const subchat = caller.delegator ? true : input.subchat ?? Boolean(input.message)
-    const ticket = yield* chooseTicket(caller, input)
     yield* checkBudget(actorChatId)
     const forked = yield* commands.fork(source.id, {
       createdByChatId: actorChatId,
       ...(subchat ? { parentChatId: actorChatId } : {}),
     })
     const chat = yield* requireChat(forked.result.chatId)
-    if (input.title?.trim()) yield* commands.rename(chat.id, input.title)
-    // Results name the ticket as `ticket: { id, number }`, which clients read off a hand-off's tool result.
-    let handedOff: HandedOffTicket | undefined
+    if (input.title?.trim()) yield* commands.rename(chat.id, input.title.trim())
     if (input.message) {
       const run = yield* resolveRun(actorChatId, input, {
         provider: chat.provider,
@@ -1290,15 +1147,10 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
         planMode: chat.planMode,
         autoPlan: chat.autoPlan,
       })
-      handedOff = (yield* send(actorChatId, chat, input.message, run, { report: subchat, ticket })).ticket
-    } else if (ticket) {
-      // A copy with no message has no work yet and owes nothing, but it is
-      // the ticket's: the hand-off is what links it.
-      const { ticket: record, reopened } = yield* startHandoff(actorChatId, ticket, chat.id, { outstanding: false })
-      handedOff = handedOffTicket(actorChatId, record, reopened)
+      yield* send(actorChatId, chat, input.message, run, { report: subchat })
     }
     push({ ...forked.changed, chatIds: [chat.id] })
-    return { ...summarize(yield* requireChat(chat.id)), ...(handedOff ? { ticket: handedOff } : {}) }
+    return summarize(yield* requireChat(chat.id))
   })
 
   const sendMessage = Effect.fn("Orchestrator.sendMessage")(function* (actorChatId: string, input: SendMessageInput) {
@@ -1308,7 +1160,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       return yield* refuse(actorChatId, "A chat cannot message itself. Use set_schedule to send this chat a message later.")
     }
     const target = yield* requireChat(input.chatId)
-    const ticket = yield* chooseTicket(yield* requireChat(actorChatId), input)
     const run = yield* resolveRun(actorChatId, input, {
       provider: target.provider,
       model: target.lastModel,
@@ -1319,27 +1170,35 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     // report it earns is addressed by the link.
     const delegating = Boolean((yield* requireChat(actorChatId)).delegator)
     const adoption = input.adopt || delegating ? yield* adopt(actorChatId, target, { forced: delegating && !input.adopt }) : null
+    // Named for the work it is given, before the message lands, so the
+    // sidebar says what it is doing from the start. Only a chat of this
+    // one's: one it started, or adopts here. A message to anyone else's chat,
+    // the user's own among them, leaves its name alone. One adopted is
+    // renamed even while the user has it open: the server cannot tell.
+    const title = input.title?.trim() || target.title
+    const ownChat = (yield* requireChat(target.id)).parentChatId === actorChatId
+    const previousTitle = ownChat && title !== target.title ? target.title : null
+    if (previousTitle !== null) {
+      yield* commands.rename(target.id, title)
+      push({ sidebar: true, chatIds: [target.id] })
+    }
     const sent = yield* Effect.gen(function* () {
       return yield* send(actorChatId, target, input.message, run, {
         // Only its own parent is owed a sub-chat's result.
         report: (yield* requireChat(target.id)).parentChatId === actorChatId,
         steer: input.delivery === "steer",
-        ticket,
       })
     }).pipe(
       // The caller is told the send failed, so nothing of it may remain.
-      Effect.tapError(() => adoption ? Effect.ignore(adoption.undo) : Effect.void),
+      Effect.tapError(() => Effect.gen(function* () {
+        if (previousTitle !== null) yield* Effect.ignore(commands.rename(target.id, previousTitle))
+        if (adoption) yield* Effect.ignore(adoption.undo)
+      })),
     )
     if (!adoption) {
       push({ sidebar: true, chatIds: [target.id] })
     } else {
       if (adoption.formerParentChatId) {
-        // Its result goes here now, so a delegator it worked for is owed nothing on its tickets.
-        if (board) {
-          yield* board.settle(adoption.formerParentChatId, target.id).pipe(
-            warnOnFailure(`could not settle the tickets of chat ${target.id} after its adoption`),
-          )
-        }
         yield* tellFormerParent(adoption.formerParentChatId, target.id, adoption.owedFormerParent)
       }
       // Both task logs changed: the new parent's gained a row, the old one's lost it.
@@ -1352,7 +1211,9 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       ...summarize(yield* requireChat(target.id)),
       started: sent.queuedMessageId === undefined,
       ...(sent.queuedMessageId === undefined ? {} : { queuedMessageId: sent.queuedMessageId }),
-      ...(sent.ticket ? { ticket: sent.ticket } : {}),
+      // What it did with the title, so the agent sees whether it kept or changed it.
+      titleChanged: previousTitle !== null,
+      ...(!ownChat && title !== target.title ? { note: "Not renamed: it is not a sub-chat of this chat. Pass adopt: true to hand it work as yours, and title it." } : {}),
     }
   })
 
@@ -1420,28 +1281,19 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   /**
    * One chat's agent sending another a message. Returns the queue id when the
    * message is waiting behind a turn, and none when its own turn has started.
-   *
-   * From a delegator it is also a hand-off on `ticket`, minted before the
-   * message goes so that a turn failing at once still reports against it.
    */
   const send = Effect.fn("Orchestrator.send")(function* (
     actorChatId: string,
     target: ChatRecord,
     content: string,
     run: ResolvedRun,
-    options: { report: boolean; steer?: boolean; ticket?: TicketTarget | null },
+    options: { report: boolean; steer?: boolean },
   ) {
     const source: MessageSource = { kind: "agent", chatId: actorChatId }
     // Marked before the turn starts: a turn that fails at once still ends, and
     // that end is what sends the report.
     if (options.report) yield* store.setReportOwed(target.id, true)
-    let ticket: TicketRecord | null = null
-    let delegationId: string | null = null
-    let reopened = false
-    const attempt = Effect.gen(function* (): Effect.fn.Return<{ queuedMessageId?: string; ticket?: HandedOffTicket }, ChatWriteError> {
-      if (options.ticket) ({ ticket, delegationId, reopened } = yield* startHandoff(actorChatId, options.ticket, target.id))
-      if (delegationId) sendingHandoffs.add(delegationId)
-      const handedOff = ticket ? { ticket: handedOffTicket(actorChatId, ticket, reopened) } : {}
+    const attempt = Effect.gen(function* (): Effect.fn.Return<{ queuedMessageId?: string }, ChatWriteError> {
       if (options.steer) {
         const { provider, model, effort, planMode, autoPlan } = run
         // A steer either starts the message or fails, so nothing is left queued.
@@ -1449,107 +1301,20 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
           { type: "message.enqueue", chatId: target.id, content, provider, model, planMode, autoPlan, steer: true },
           { source, effort },
         )
-        if (delegationId) yield* placeHandoff(actorChatId, target.id, delegationId)
-        return handedOff
+        return {}
       }
       const sent = yield* commands.send({ type: "chat.send", chatId: target.id, content, ...run }, { source })
-      const queuedMessageId = "queued" in sent.result ? sent.result.queuedMessageId : undefined
-      if (delegationId) yield* placeHandoff(actorChatId, target.id, delegationId, queuedMessageId)
-      return queuedMessageId ? { queuedMessageId, ...handedOff } : handedOff
+      return "queued" in sent.result ? { queuedMessageId: sent.result.queuedMessageId } : {}
     })
     return yield* attempt.pipe(
       // Whatever stopped it, the chat is there and its turn is not: that is
       // what the caller is told, in one error, with what was cleaned up.
       Effect.catch((cause) => Effect.gen(function* () {
         if (options.report) yield* Effect.ignore(store.setReportOwed(target.id, false))
-        if (delegationId && board) yield* Effect.ignore(board.settle(actorChatId, target.id, [delegationId]))
-        // An inline ticket was made all the same. Retrying with it again would make a second.
-        const made: TicketRecord | null = ticket
-        return yield* new TurnNotStartedError({
-          chatId: target.id,
-          ...(made ? { ticket: { id: made.id, number: made.number } } : {}),
-          cause,
-        })
-      })),
-      Effect.ensuring(Effect.sync(() => {
-        if (delegationId) sendingHandoffs.delete(delegationId)
+        return yield* new TurnNotStartedError({ chatId: target.id, cause })
       })),
     )
   })
-
-  /**
-   * Says where a hand-off's message went once its send returns: into the
-   * chat's queue, or into the turn it started or was steered into. Placed
-   * here and not by the turn's start (`placeQueuedHandoffs`), because the
-   * send is what knows which message is this hand-off's.
-   */
-  const placeHandoff = Effect.fn("Orchestrator.placeHandoff")(function* (actorChatId: string, childChatId: string, delegationId: string, queuedMessageId?: string) {
-    if (!board) return
-    const handoff = Option.getOrUndefined(yield* board.findHandoff(actorChatId, delegationId))
-    if (!handoff || handoff.turn !== null) return
-    // Still waiting: the turn that takes it from the queue places it.
-    if (queuedMessageId && store.getQueuedMessage(childChatId, queuedMessageId)) {
-      yield* board.delivered(actorChatId, [handoff], { queuedMessageId })
-      return
-    }
-    yield* board.delivered(actorChatId, [handoff], { turn: store.getChat(childChatId)?.turnCount ?? 0 })
-  })
-
-  /**
-   * A turn of the chat began: the hand-offs whose queued message it took
-   * are its, and only those. The coordinator says which message that was as
-   * it leaves the queue (`handleQueuedMessageRemoved`), just before the turn
-   * starts.
-   *
-   * Not "every message gone from the queue": one removed by hand left too,
-   * and a turn that ran something else once counted its hand-off as done
-   * (a delegator moved a commit ahead of a ticket's work, and the commit's
-   * report said the ticket had finished). A removal withdraws its hand-offs
-   * as it happens, so a message gone while another was taken went unsent.
-   * One gone with no record of any take (a restart between the two, or a
-   * store without the hook) is read the old way, as taken by this turn.
-   */
-  const placeQueuedHandoffs = Effect.fnUntraced(function* (chat: ChatRecord) {
-    const takenMessageId = takenMessages.get(chat.id)
-    takenMessages.delete(chat.id)
-    if (!board || !chat.parentChatId) return
-    const taken: TicketHandoff[] = []
-    const gone: TicketHandoff[] = []
-    for (const handoff of yield* board.queuedFor(chat.parentChatId, chat.id)) {
-      if (!handoff.queuedMessageId) {
-        // A send still under way places its own hand-off when it returns.
-        if (!sendingHandoffs.has(handoff.delegationId)) taken.push(handoff)
-      } else if (handoff.queuedMessageId === takenMessageId) {
-        taken.push(handoff)
-      } else if (!store.getQueuedMessage(chat.id, handoff.queuedMessageId)) {
-        (takenMessageId === undefined ? taken : gone).push(handoff)
-      }
-    }
-    const parentChatId = chat.parentChatId
-    if (taken.length > 0) {
-      yield* background(board.delivered(parentChatId, taken, { turn: chat.turnCount ?? 0 }).pipe(
-        warnOnFailure(`could not place hand-offs to chat ${chat.id} in its turn`),
-      ))
-    }
-    if (gone.length > 0) yield* background(withdrawHandoffs(parentChatId, gone))
-  })
-
-  const handleQueuedMessageRemoved = Effect.fn("Orchestrator.handleQueuedMessageRemoved")(function* (chatId: string, queuedMessageId: string, taken: boolean) {
-    if (taken) {
-      takenMessages.set(chatId, queuedMessageId)
-      return
-    }
-    const chat = store.getChat(chatId)
-    if (!chat?.parentChatId || !board) return
-    const carried = yield* board.carriedBy(chat.parentChatId, chatId, queuedMessageId)
-    if (carried.length > 0) yield* background(withdrawHandoffs(chat.parentChatId, carried))
-  })
-
-  const withdrawHandoffs = (delegatorChatId: string, handoffs: readonly TicketHandoff[]): Effect.Effect<void> =>
-    Effect.suspend(() => board ? board.withdraw(delegatorChatId, handoffs) : Effect.void).pipe(
-      Effect.andThen(Effect.sync(() => push({ sidebar: true, chatIds: [delegatorChatId] }))),
-      warnOnFailure(`could not withdraw hand-offs on ${delegatorChatId}'s board`),
-    )
 
   const cancelChat = Effect.fn("Orchestrator.cancelChat")(function* (actorChatId: string, chatId: string) {
     yield* Effect.annotateCurrentSpan("chatId", actorChatId)
@@ -1560,8 +1325,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     if (isParentOf(target.id, actorChatId)) {
       forgetLaterTurn(target.id)
       yield* store.setReportOwed(target.id, false)
-      // With no report coming, nothing else would settle its hand-offs.
-      if (target.parentChatId && board) yield* board.settle(target.parentChatId, target.id)
     }
     yield* commands.cancel(target.id)
     push({ sidebar: true, chatIds: [target.id] })
@@ -1597,11 +1360,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     const outcome = input.action === "remove"
       ? yield* commands.dequeue({ type: "message.dequeue", chatId: chat.id, queuedMessageId: input.queuedMessageId })
       : yield* commands.steer({ type: "message.steer", chatId: chat.id, queuedMessageId: input.queuedMessageId })
-    // The store's hook does this too; here as well so the result is true at once. A second pass finds nothing.
-    if (input.action === "remove" && chat.parentChatId && board) {
-      const carried = yield* board.carriedBy(chat.parentChatId, chat.id, input.queuedMessageId)
-      if (carried.length > 0) yield* withdrawHandoffs(chat.parentChatId, carried)
-    }
     push(outcome.changed!)
     return summarize(yield* requireChat(chat.id))
   })
@@ -1815,7 +1573,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   // ── Coordinator hooks ──────────────────────────────────────────────────
 
   const handleChatSettled: (chatId: string) => Effect.Effect<void> = Effect.fn("Orchestrator.handleChatSettled")(function* (chatId: string) {
-    yield* maybeNudge(chatId)
     // What a reported sub-chat was watched for is over. Its end is not a
     // turn's start: a provider about to answer it has not begun to, so the
     // watch runs on for as long as a closing report would wait.
@@ -1856,23 +1613,9 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       }
     }
     if (owed && chat?.parentChatId) owedTurns.add(chatId)
-    // The turn that ended is the one before this one. It is reported, and its
-    // hand-offs settled, before this turn's are placed and could be counted in.
-    if (endedTurnOwed) yield* background(reportEndedTurn(chatId, (chat?.turnCount ?? 1) - 1))
-    if (chat) yield* placeQueuedHandoffs(chat)
+    // The turn that ended is the one before this one.
+    if (endedTurnOwed) yield* background(reportEndedTurn(chatId))
     pushChatsAbove(chatId)
-  })
-
-  const handleWaitingForUser = Effect.fn("Orchestrator.handleWaitingForUser")(function* (chatId: string) {
-    const chat = store.getChat(chatId)
-    const parentChatId = chat?.parentChatId
-    if (!chat || !parentChatId || !board) return
-    // The tickets whose work is in this turn or before it, not those still queued.
-    const { tickets } = yield* board.coveredBy(parentChatId, chatId, chat.turnCount ?? 0, { final: true, sending: sendingHandoffs })
-    yield* background(board.recordAsking(parentChatId, chatId, tickets).pipe(
-      Effect.andThen(Effect.sync(() => push({ sidebar: true, chatIds: [parentChatId] }))),
-      warnOnFailure(`could not note on its tickets that chat ${chatId} is asking`),
-    ))
   })
 
   function pushChatsAbove(chatId: string) {
@@ -1890,12 +1633,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   const handleChatStopped = Effect.fn("Orchestrator.handleChatStopped")(function* (chatId: string) {
     for (const child of childrenOf(chatId)) {
       forgetLaterTurn(child.id)
-      // No report comes back from any of them, so their hand-offs end here.
-      if (board) {
-        yield* background(board.settle(chatId, child.id).pipe(
-          warnOnFailure(`could not settle the tickets of sub-chat ${child.id}`),
-        ))
-      }
       if (child.adopted) {
         // Not this chat's to stop: its turn may be the user's. It only stops
         // owing a report, for the reason the others report nothing.
@@ -1991,9 +1728,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     } else if (source?.kind === "schedule") {
       const schedule = store.getSchedule(source.scheduleId)
       notices.push(`<system-message>This message was sent by the schedule "${schedule?.name ?? "unknown"}" (schedule id ${source.scheduleId}), not typed by the user just now.${agentNote}</system-message>`)
-    } else if (source?.kind === "ticket" && source.replyId) {
-      const notice = yield* ticketReplyNotice(chatId, source.ticketId, source.replyId)
-      if (Option.isSome(notice)) notices.push(notice.value)
     }
     // An adopted chat is listed only while a result from it is still to come.
     const running = childrenOf(chatId).filter((child) => isLive(child.id) && (!child.adopted || isReportDue(child)))
@@ -2005,23 +1739,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       ].join("\n"))
     }
     return notices
-  })
-
-  /**
-   * The header for the user's reply on a ticket: which ticket, how it stands
-   * now, its chats, and how to answer. Wire-only, like every notice here,
-   * so the stored prompt is just what the user wrote and goes to the harness
-   * as a chat message does, with a leading `/skill` still leading. None for
-   * a ticket or reply no longer on the board.
-   */
-  const ticketReplyNotice = Effect.fnUntraced(function* (chatId: string, ticketId: string, replyId: string) {
-    if (!board) return Option.none<string>()
-    const ticket = Option.getOrUndefined(yield* board.get(chatId, ticketId))
-    const reply = ticket?.replies.find((candidate) => candidate.id === replyId)
-    if (!ticket || !reply) return Option.none<string>()
-    // A reply on a Done ticket reopens it in the same moment it lands.
-    const reopened = ticket.history.some((event) => event.kind === "reopened" && event.cause === "user_reply" && event.createdAt === reply.createdAt)
-    return Option.some(buildTicketReplyHeader(board.summary(ticket), reopened))
   })
 
   // ── Reports ────────────────────────────────────────────────────────────
@@ -2051,7 +1768,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
    * The reply goes whole, up to `REPORT_TEXT_LIMIT`. `replyReported` is a
    * close-out after an interim report that already carried the same reply.
    */
-  function buildSection(parentChatId: string, chat: ChatRecord, sectionOptions?: { replyReported?: boolean; tickets?: readonly TicketRecord[] }): ReportSection {
+  function buildSection(parentChatId: string, chat: ChatRecord, sectionOptions?: { replyReported?: boolean }): ReportSection {
     // Adopted by another chat since this report was owed. The result goes
     // there now, so this parent gets the news instead, in the same shape.
     const adopter = chat.parentChatId && chat.parentChatId !== parentChatId ? store.getChat(chat.parentChatId) : null
@@ -2060,13 +1777,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     }
     const outcome = outcomeOf(chat)
     const lines = [`Sub-chat ${outcome.status}: [${chat.title}](${chatLink(chat.id)}) (chat id ${chat.id})`]
-    // A delegator's: the tickets of the hand-offs the reported turns handled
-    // (`TicketBoard.coveredBy`). Second, so
-    // the status line stays first for the clients that read it.
-    const awaiting = sectionOptions?.tickets ?? []
-    const tickets = ticketReportLine(awaiting)
-    if (tickets) lines.push(tickets)
-    const ticketIds = awaiting.length ? { ticketIds: awaiting.map((ticket) => ticket.id) } : {}
     const interim = interimNote(chat, outcome.status)
     if (interim) lines.push(interim)
     // Not waiting on anything, so this is its answer. What it left running
@@ -2086,8 +1796,8 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       lines.push(`Its reply is ${totalChars.toLocaleString("en-US")} characters, more than a report carries, so only the first ${REPORT_TEXT_LIMIT.toLocaleString("en-US")} are below. read_chat reads the rest: ${JSON.stringify({ chatId: chat.id, after: index - 1, textOffset })}.`)
     }
     const header = `<system-message>\n${lines.join("\n")}\n</system-message>`
-    if (!outcome.finalMessage || sectionOptions?.replyReported) return { header, ...ticketIds }
-    return { header, reply: outcome.finalMessage, ...ticketIds }
+    if (!outcome.finalMessage || sectionOptions?.replyReported) return { header }
+    return { header, reply: outcome.finalMessage }
   }
 
   /**
@@ -2162,11 +1872,8 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       cancelCloseOut(chatId)
     }
     const parentChatId = chat.parentChatId
-    // Every turn up to the last has ended, so this report covers their
-    // hand-offs. Only a last word settles them: an interim one names them.
-    const covered = board ? yield* board.coveredBy(parentChatId, chatId, chat.turnCount ?? 0, { final: !waiting, sending: sendingHandoffs }) : undefined
     // Written now, from the turn that earned it, before anything can change.
-    const section = buildSection(parentChatId, chat, { replyReported: chat.reportedThrough === through, tickets: covered?.tickets })
+    const section = buildSection(parentChatId, chat, { replyReported: chat.reportedThrough === through })
     // This report covers the turn that ended last. See `owedTurns`.
     owedTurns.delete(chatId)
     reporting.add(chatId)
@@ -2177,13 +1884,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       } else {
         yield* store.setReportOwed(chatId, false)
         watchForLaterTurn(chatId)
-        // Its last word, so the tickets its turns worked for hear how it
-        // ended and those hand-offs are done. An interim report is neither.
-        if (covered && board) {
-          yield* board.recordReport(parentChatId, chatId, status === "failed" ? "chat_failed" : "chat_finished", covered).pipe(
-            warnOnFailure(`could not record sub-chat ${chatId}'s report on its tickets`),
-          )
-        }
       }
       yield* deliverInTurn(parentChatId, chatId, section)
     }).pipe(
@@ -2211,25 +1911,17 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
    * turn's reply. A turn that was stopped is not reported: whoever stopped
    * it knows, and a steer's new turn carries the same work on.
    */
-  const reportEndedTurn = Effect.fn("Orchestrator.reportEndedTurn")(function* (chatId: string, endedTurn: number) {
+  const reportEndedTurn = Effect.fn("Orchestrator.reportEndedTurn")(function* (chatId: string) {
     const chat = store.getChat(chatId)
     if (!chat?.reportOwed || !chat.parentChatId || reporting.has(chatId)) return
     if (chat.lastTurnOutcome === "cancelled") return
     const through = chat.lastTurnEndedAt ?? 0
     if (chat.reportedThrough === through) return
     const parentChatId = chat.parentChatId
-    // The ended turn's reply is its whole answer to the hand-offs it took,
-    // so they settle now, though the chat goes on with the next one's.
-    const covered = board ? yield* board.coveredBy(parentChatId, chatId, endedTurn) : undefined
-    const section = buildSection(parentChatId, chat, { tickets: covered?.tickets })
+    const section = buildSection(parentChatId, chat)
     reporting.add(chatId)
     yield* Effect.gen(function* () {
       yield* store.setReportedThrough(chatId, through)
-      if (covered && board) {
-        yield* board.recordReport(parentChatId, chatId, chat.lastTurnOutcome === "failed" ? "chat_failed" : "chat_finished", covered).pipe(
-          warnOnFailure(`could not record sub-chat ${chatId}'s report on its tickets`),
-        )
-      }
       yield* deliverInTurn(parentChatId, chatId, section)
     }).pipe(
       warnOnFailure(`could not report sub-chat ${chatId} to its parent`),
@@ -2309,22 +2001,18 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     if (!parent || parent.archivedAt) return
     let chatIds = [chatId]
     let before = ""
-    let tickets: Record<string, string[]> = section.ticketIds ? { [chatId]: section.ticketIds } : {}
     const waiting = store.getQueuedMessages(parent.id).find((message) => message.source?.kind === "report")
     if (waiting?.source?.kind === "report") {
       // Added to, not rewritten: what it already says is a reply of its own,
       // and a sub-chat that reports again before the parent reads it would
       // otherwise lose the earlier one.
       const merged = [...new Set([...waiting.source.chatIds, chatId])]
-      const mergedTickets = { ...waiting.source.tickets }
-      if (section.ticketIds) mergedTickets[chatId] = [...new Set([...(mergedTickets[chatId] ?? []), ...section.ticketIds])]
       // If it is gone by now the parent's turn ended and took it, and those
       // results are already delivered.
       yield* store.removeQueuedMessage(parent.id, waiting.id).pipe(
         Effect.andThen(Effect.sync(() => {
           chatIds = merged
           before = waiting.content
-          tickets = mergedTickets
         })),
         Effect.ignore,
       )
@@ -2338,257 +2026,8 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       model: parent.lastModel,
       planMode: parent.planMode,
       autoPlan: parent.autoPlan,
-    }, { source: { kind: "report", chatIds, ...(Object.keys(tickets).length ? { tickets } : {}) } })
+    }, { source: { kind: "report", chatIds } })
     push({ sidebar: true, chatIds: [parent.id] })
-  })
-
-  // ── Tickets ────────────────────────────────────────────────────────────
-  //
-  // A delegator's board (`shared/tickets.ts`, `ticket-board.ts`). The board
-  // is a layer over the delegator's chat: its transcript is unchanged, and
-  // only `reply_to_ticket` (and the media tools given a ticketId) write on a
-  // ticket. Hand-offs, reports and the user's replies are recorded here.
-
-  /** How a chat stands, as a ticket shows it. Undefined for a chat that is gone. */
-  function ticketChatInfo(chatId: string): TicketChatInfo | undefined {
-    const chat = store.getChat(chatId)
-    if (!chat || chat.deletedAt) return undefined
-    const status = statusOf(chat)
-    const state: TicketChatState = status === "needs_input"
-      ? "waiting_on_you"
-      : isStillGoing(status)
-        ? "working"
-        : status === "failed"
-          ? "failed"
-          : status === "cancelled"
-            ? "stopped"
-            : "finished"
-    return { chatId: chat.id, title: chat.title, state }
-  }
-
-  const board: TicketBoard["Service"] | null = Option.isSome(ticketStore)
-    ? yield* makeTicketBoard({ chatInfo: ticketChatInfo, now }).pipe(Effect.provideService(TicketStore, ticketStore.value))
-    : null
-
-  const requireBoard = (actorChatId: string): Effect.Effect<TicketBoard["Service"], ChatNotFoundError | ChatActionRefusedError> =>
-    Effect.gen(function* () {
-      if (!board) return yield* refuse(actorChatId, "Tickets are not available in this session.")
-      if (!(yield* requireChat(actorChatId)).delegator) {
-        return yield* refuse(actorChatId, "Tickets belong to delegator chats, and this chat is not one.")
-      }
-      return board
-    })
-
-  /**
-   * The ticket a hand-off from this chat is for. Every hand-off from a
-   * delegator names one; from any other chat the choice is ignored. Checked
-   * before anything is created or sent, so a bad choice changes nothing.
-   */
-  const chooseTicket = (caller: ChatRecord, input: TicketChoice): Effect.Effect<TicketTarget | null, ChatActionRefusedError | TicketNotFoundError> =>
-    Effect.gen(function* () {
-      if (!caller.delegator || !board) return null
-      if (input.ticketId && input.ticket) {
-        return yield* refuse(caller.id, "Pass ticketId or ticket, not both: ticketId hands work on an existing ticket, ticket creates one.")
-      }
-      if (input.ticketId) return { board, ticket: yield* board.require(caller.id, input.ticketId) }
-      if (input.ticket) {
-        if (!input.ticket.title?.trim()) return yield* refuse(caller.id, "ticket needs a title.")
-        return { board, create: input.ticket }
-      }
-      return yield* refuse(caller.id, "This chat is a delegator, so every hand-off names a ticket. Pass ticketId to hand on work for an existing ticket (list_tickets shows them), or ticket: { title, body } to create one in the same call.")
-    })
-
-  /** Mints the hand-off, creating its ticket first when the choice was a new one. */
-  const startHandoff = Effect.fn("Orchestrator.startHandoff")(function* (actorChatId: string, target: TicketTarget, childChatId: string, handoffOptions?: { outstanding?: boolean }) {
-    const ticket = "ticket" in target ? target.ticket : yield* target.board.create(actorChatId, target.create)
-    const { delegationId, reopened } = yield* target.board.handoff(actorChatId, ticket.id, childChatId, handoffOptions)
-    push({ sidebar: true, chatIds: [actorChatId] })
-    return { ticket, delegationId, reopened }
-  })
-
-  /**
-   * When a delegator's turns run out: one hidden message about tickets that
-   * got a user reply or a final report it neither wrote on nor handed work
-   * from. The ledger is cleared as it is read, so the nudge's own turn
-   * cannot earn another one for the same news.
-   *
-   * Not while more is about to arrive (a queued message, a report being
-   * delivered): the round is not over. Not after the user stopped it: a
-   * nudge would start it again.
-   */
-  const maybeNudge = Effect.fnUntraced(function* (chatId: string) {
-    if (!board) return
-    const chat = store.getChat(chatId)
-    if (!chat?.delegator || chat.deletedAt || chat.archivedAt || chat.lastTurnOutcome === "cancelled") {
-      yield* board.forgetNews(chatId)
-      return
-    }
-    if (hasTurnInFlight(chat) || deliveries.has(chatId)) return
-    if (childrenOf(chatId).some((child) => reporting.has(child.id))) return
-    const unanswered = yield* board.takeUnanswered(chatId)
-    if (unanswered.length === 0) return
-    const content = buildTicketNudge(unanswered, (id) => store.getChat(id)?.title ?? id)
-    yield* background(commands.send({
-      type: "chat.send",
-      chatId,
-      content,
-      provider: chat.provider ?? undefined,
-      model: chat.lastModel,
-      planMode: chat.planMode,
-      autoPlan: chat.autoPlan,
-    }, { source: { kind: "ticket_nudge", ticketIds: unanswered.map(({ ticket }) => ticket.id) } }).pipe(
-      Effect.andThen(Effect.sync(() => push({ sidebar: true, chatIds: [chatId] }))),
-      warnOnFailure(`could not nudge delegator ${chatId} about its tickets`),
-    ))
-  })
-
-  /**
-   * A message for the delegator from the ticket pane: steered into a turn
-   * that is running, so it is read now, and queued behind one parked on a
-   * question, which a steer would throw away.
-   */
-  const tellDelegator = Effect.fn("Orchestrator.tellDelegator")(function* (chat: ChatRecord, content: string, source: MessageSource, attachments?: ChatAttachment[], settings: TurnSettings = {}) {
-    // What the delegator last ran with, under what the user's composer chose:
-    // a reply typed in the ticket's composer, which is the delegator's own,
-    // runs as a message typed in the chat would.
-    const run = {
-      provider: settings.provider ?? chat.provider ?? undefined,
-      model: settings.model ?? chat.lastModel,
-      ...(settings.modelOptions ? { modelOptions: settings.modelOptions } : {}),
-      planMode: settings.planMode ?? chat.planMode,
-      autoPlan: settings.autoPlan ?? chat.autoPlan,
-    }
-    const parked = agent.getActiveStatuses().get(chat.id) === "waiting_for_user"
-    if (agent.isBusy(chat.id) && !parked) {
-      // The message is queued; it only failed to cut in. It runs next.
-      yield* commands.enqueue({ type: "message.enqueue", chatId: chat.id, content, attachments, ...run, steer: true }, { source }).pipe(
-        warnOnFailure(`could not steer a ticket message into delegator ${chat.id}`),
-      )
-      return
-    }
-    yield* commands.send({ type: "chat.send", chatId: chat.id, content, attachments, ...run }, { source })
-  })
-
-  // Reads for the snapshots.
-
-  const ticketBoard = (chatId: string) => Effect.gen(function* () {
-    const chat = store.getChat(chatId)
-    if (!board || !chat?.delegator) return Option.none<TicketBoardSnapshot>()
-    const all = yield* board.summaries(chatId)
-    const children = childrenOf(chatId).map((child) => child.id)
-    // Capped to the latest read Done tickets (`snapshotTickets`). The count
-    // is of all of them: what waits on the user is never what is cut.
-    const { tickets, readDoneTotal } = snapshotTickets(all)
-    return Option.some({
-      tickets,
-      ticketAttention: ticketAttentionCount(all),
-      untrackedChatIds: yield* board.untracked(chatId, children),
-      readDoneTotal,
-    })
-  })
-
-  const ticketAttentionByChat = Effect.gen(function* () {
-    const counts = new Map<string, number>()
-    if (!board) return counts
-    for (const chat of store.state.chatsById.values()) {
-      if (!chat.delegator || chat.deletedAt || !(yield* board.hasBoard(chat.id))) continue
-      const count = yield* board.attention(chat.id)
-      if (count > 0) counts.set(chat.id, count)
-    }
-    return counts
-  })
-
-  // The user's commands, from the ticket pane. The router pushes what they
-  // change, after its ack.
-
-  const replyToTicketAsUser = Effect.fn("Orchestrator.replyToTicketAsUser")(function* (
-    input: { chatId: string; ticketId: string; text: string; attachments?: ChatAttachment[] } & TurnSettings,
-  ) {
-    yield* Effect.annotateCurrentSpan("chatId", input.chatId)
-    const tickets = yield* requireBoard(input.chatId)
-    const chat = yield* requireChat(input.chatId)
-    const ticket = yield* tickets.require(chat.id, input.ticketId)
-    const reply = yield* tickets.reply(chat.id, ticket.id, { author: "user", text: input.text, attachments: input.attachments })
-    // Only what the user wrote, as any message they send: the ticket's header
-    // goes on the wire behind it (`ticketReplyNotice`), so the prompt is a
-    // chat message in every respect, slash commands and skills included.
-    const { provider, model, modelOptions, planMode, autoPlan } = input
-    yield* tellDelegator(chat, reply.text, { kind: "ticket", ticketId: ticket.id, number: ticket.number, title: ticket.title, replyId: reply.id }, input.attachments, { provider, model, modelOptions, planMode, autoPlan })
-    return { replyId: reply.id }
-  })
-
-  const setTicketStatusAsUser = Effect.fn("Orchestrator.setTicketStatusAsUser")(function* (input: { chatId: string; ticketId: string; status: "done" | "open" }) {
-    yield* Effect.annotateCurrentSpan("chatId", input.chatId)
-    const tickets = yield* requireBoard(input.chatId)
-    const chat = yield* requireChat(input.chatId)
-    const ticket = yield* tickets.require(chat.id, input.ticketId)
-    const changed = yield* tickets.setStatus(chat.id, ticket.id, input.status, "user")
-    if (changed && input.status === "open") {
-      yield* tellDelegator(chat, buildTicketReopenMessage(tickets.summary(ticket)), {
-        kind: "ticket", ticketId: ticket.id, number: ticket.number, title: ticket.title, reopened: true,
-      })
-    }
-  })
-
-  const setTicketReadAsUser = Effect.fn("Orchestrator.setTicketReadAsUser")(function* (input: { chatId: string; ticketId: string; read: boolean }) {
-    yield* Effect.annotateCurrentSpan("chatId", input.chatId)
-    const tickets = yield* requireBoard(input.chatId)
-    if (input.read) yield* tickets.markRead(input.chatId, input.ticketId)
-    else yield* tickets.markUnread(input.chatId, input.ticketId)
-  })
-
-  // The delegator's tools.
-
-  const createTicket = Effect.fn("Orchestrator.createTicket")(function* (actorChatId: string, input: { title: string; body?: string }) {
-    yield* Effect.annotateCurrentSpan("chatId", actorChatId)
-    const tickets = yield* requireBoard(actorChatId)
-    const ticket = yield* tickets.create(actorChatId, input)
-    push({ sidebar: true, chatIds: [actorChatId] })
-    return { ticketId: ticket.id, number: ticket.number, link: ticketLinkPath(actorChatId, ticket.id) }
-  })
-
-  const updateTicket = Effect.fn("Orchestrator.updateTicket")(function* (actorChatId: string, input: { ticketId: string; title?: string; body?: string; status?: "done" | "open" }) {
-    yield* Effect.annotateCurrentSpan("chatId", actorChatId)
-    const tickets = yield* requireBoard(actorChatId)
-    const ticket = yield* tickets.require(actorChatId, input.ticketId)
-    yield* tickets.edit(actorChatId, ticket.id, { title: input.title, body: input.body })
-    if (input.status) yield* tickets.setStatus(actorChatId, ticket.id, input.status, "delegator")
-    push({ sidebar: true, chatIds: [actorChatId] })
-    return agentTicketSummary(tickets.summary(ticket))
-  })
-
-  const replyToTicket = Effect.fn("Orchestrator.replyToTicket")(function* (actorChatId: string, input: { ticketId: string; text: string; asksUser?: boolean; artifacts?: TicketArtifact[] }) {
-    yield* Effect.annotateCurrentSpan("chatId", actorChatId)
-    const tickets = yield* requireBoard(actorChatId)
-    const reply = yield* tickets.reply(actorChatId, input.ticketId, {
-      author: "delegator",
-      text: input.text,
-      asksUser: input.asksUser,
-      artifacts: input.artifacts,
-    })
-    push({ sidebar: true, chatIds: [actorChatId] })
-    const ticket = yield* tickets.require(actorChatId, input.ticketId)
-    const question = input.asksUser === undefined && ticket.asksUser ? [...ticket.replies].reverse().find((candidate) => candidate.asksUser) : undefined
-    return { replyId: reply.id, ...(question ? { note: stillAskingNote(ticket, question) } : {}) }
-  })
-
-  const checkTicket = Effect.fn("Orchestrator.checkTicket")(function* (actorChatId: string, ticketId: string) {
-    yield* (yield* requireBoard(actorChatId)).require(actorChatId, ticketId)
-  })
-
-  const readTicket = Effect.fn("Orchestrator.readTicket")(function* (actorChatId: string, ticketId: string) {
-    const tickets = yield* requireBoard(actorChatId)
-    const ticket = yield* tickets.require(actorChatId, ticketId)
-    return agentTicketDetail(Option.getOrThrow(yield* tickets.detail(actorChatId, ticket.id)), (id) => store.getChat(id)?.title ?? id)
-  })
-
-  const listTickets = Effect.fn("Orchestrator.listTickets")(function* (actorChatId: string, input: { status?: TicketState | "open"; limit?: number }) {
-    const tickets = yield* requireBoard(actorChatId)
-    const matching = (yield* tickets.summaries(actorChatId))
-      .filter((ticket) => !input.status || (input.status === "open" ? ticket.state !== "done" : ticket.state === input.status))
-      .sort(compareTicketsByActivity)
-    const limit = input.limit ?? 50
-    return { total: matching.length, tickets: matching.slice(0, limit).map(agentTicketSummary) }
   })
 
   // ── Lifetime ───────────────────────────────────────────────────────────
@@ -2609,7 +2048,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   yield* Effect.addFinalizer(() => stop)
 
   return {
-    tickets: Option.fromNullishOr(board),
     start: Effect.gen(function* () {
       yield* schedules.start
       yield* sweepReports
@@ -2655,7 +2093,6 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     },
     getChildActivities,
     isAgentToAgent,
-    ticketChatInfo,
     buildTurnNotices,
     getContext,
     listChats,
@@ -2674,23 +2111,8 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
 
     handleChatSettled,
     handleTurnStarted,
-    handleWaitingForUser,
     handleBackgroundWorkStarted: (chatId) => Effect.sync(() => pushChatsAbove(chatId)),
     handleChatStopped,
-    handleQueuedMessageRemoved,
     stopChildTask,
-
-    ticketBoard,
-    ticketDetail: (chatId, ticketId) => board ? board.detail(chatId, ticketId) : Effect.succeed(Option.none()),
-    ticketAttentionByChat,
-    replyToTicketAsUser,
-    setTicketStatusAsUser,
-    setTicketReadAsUser,
-    createTicket,
-    updateTicket,
-    replyToTicket,
-    checkTicket,
-    readTicket,
-    listTickets,
   } satisfies Orchestrator["Service"]
 })

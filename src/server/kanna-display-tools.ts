@@ -11,7 +11,6 @@ import { UrlString } from "./kanna-tool-arguments"
 import {
   defineKannaTool,
   failureText,
-  KannaToolRefusal,
   platformFailureText,
   type KannaTool,
 } from "./kanna-tool-definition"
@@ -53,9 +52,8 @@ export type AttachmentItem = typeof AttachmentItem.Type
 const AttachmentItems = Schema.Array(AttachmentItem).check(Schema.isMinLength(1), Schema.isMaxLength(24))
 
 /**
- * `AttachmentItem` as zod, for the chat tools' zod schemas until they move to
- * Effect Schema (`reply_to_ticket` takes attachments too). The test checks
- * that both give providers the same JSON Schema.
+ * `AttachmentItem` as zod, kept as the reference the test checks the Effect
+ * schema against: both give providers the same JSON Schema.
  */
 export const attachmentItemSchema = z.strictObject({
   path: z.string().min(1).optional().describe("Local file path, absolute or relative to the project directory."),
@@ -178,26 +176,12 @@ export const SEND_ATTACHMENTS_TOOL = defineKannaTool({
   description: "Show images, videos, and file links in the chat. Supply local paths or HTTP/HTTPS URLs. Local files are copied into the chat so they remain available after the source changes. Images and videos appear inline; other files appear as download links.",
   parameters: Schema.Struct({
     attachments: AttachmentItems,
-    ticketId: Schema.optionalKey(Schema.String.annotate({ description: "Delegator chats only: also post these on this ticket, as a reply. Other chats cannot post on tickets." })),
   }),
-  execute: Effect.fn("KannaDisplayTools.sendAttachments")(function* ({ attachments, ticketId }, context) {
+  execute: Effect.fn("KannaDisplayTools.sendAttachments")(function* ({ attachments }, context) {
     yield* Effect.annotateCurrentSpan("chatId", context.chatId)
-    const orchestration = context.orchestration
-    // Before anything is copied, so a wrong ticket leaves nothing behind.
-    if (ticketId) {
-      if (!orchestration) return yield* new KannaToolRefusal({ tool: SEND_ATTACHMENTS, message: "Tickets are not available in this session." })
-      yield* orchestration.checkTicket(context.chatId, ticketId)
-    }
-    const { attachments: resolved, cleanup } = yield* resolveDisplayAttachments(attachments, context)
-    if (ticketId && orchestration) {
-      // The same files, by the same URLs: the ticket refers to them, it does not copy them.
-      yield* orchestration.replyToTicket(context.chatId, { ticketId, text: "", artifacts: resolved }).pipe(
-        Effect.tapError(() => cleanup),
-        Effect.uninterruptible,
-      )
-    }
+    const { attachments: resolved } = yield* resolveDisplayAttachments(attachments, context)
     return {
-      content: [{ type: "text" as const, text: `Displayed ${resolved.length} attachment${resolved.length === 1 ? "" : "s"}${ticketId ? `, and posted them on ticket ${ticketId}` : ""}.` }],
+      content: [{ type: "text" as const, text: `Displayed ${resolved.length} attachment${resolved.length === 1 ? "" : "s"}.` }],
       structuredContent: { displayed: true, attachments: resolved },
       transcriptContent: resolved,
     }

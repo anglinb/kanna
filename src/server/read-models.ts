@@ -219,8 +219,6 @@ export function deriveSidebarData(
     pendingUserInputPreviews?: Map<string, string>
     /** What each chat that is waiting on a subagent is waiting on. */
     waitingOn?: ReadonlyMap<string, WaitingOn>
-    /** Delegators' compass counts, those above zero. See `SidebarChatRow.ticketAttention`. */
-    ticketAttention?: ReadonlyMap<string, number>
     /** Per-project working-tree state, from `WorktreeProbe.getStates()`. */
     workingTrees?: ReadonlyMap<string, WorkingTreeProbe>
     /** Per-project repo/branch identity, from `WorktreeProbe.getRepoLabels()`. */
@@ -317,7 +315,6 @@ export function deriveSidebarData(
           ...(chat.parentChatId ? { parentChatId: chat.parentChatId } : {}),
           ...(chat.parentChatId && chat.adopted ? { adopted: true as const } : {}),
           ...(chat.delegator ? { delegator: true as const } : {}),
-          ...(chat.delegator && options?.ticketAttention?.get(chat.id) ? { ticketAttention: options.ticketAttention.get(chat.id) } : {}),
         }
       })
   }

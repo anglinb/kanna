@@ -169,7 +169,7 @@ export interface ViewerNavigation {
   count: number
   onPrevious: () => void
   onNext: () => void
-  /** What the buttons are called, for a view that steps through things of its own ("Previous ticket · K"). */
+  /** What the buttons are called, for a view that steps through things of its own ("Previous file · K"). */
   previousLabel?: string
   nextLabel?: string
   /**

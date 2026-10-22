@@ -49,6 +49,27 @@ export const UrlString = Schema.String.check(Schema.makeFilter<string>((value) =
   toJsonSchema: () => ({ format: "uri" }),
 }))
 
+const NON_BLANK_CHECK = "kanna/non-blank"
+
+/**
+ * `z.string({ error: message }).trim().min(1, { error: message })`: a string
+ * that isn't blank, refused with `message` whether it is missing, of the
+ * wrong type, or blank. zod also handed back the string trimmed; callers trim
+ * it themselves.
+ */
+export const requiredString = (message: string) => Schema.String.annotate({ kannaMessage: message }).check(Schema.makeFilter<string>((value) => value.trim().length > 0, {
+  expected: "a non-blank string",
+  kannaCheck: NON_BLANK_CHECK,
+  kannaMessage: message,
+  toJsonSchema: () => ({ minLength: 1 }),
+}))
+
+/** The field's own error text, where it set one (`requiredString`). */
+const customMessage = (annotations: unknown): string | undefined => {
+  const message = (annotations as { kannaMessage?: unknown } | undefined)?.kannaMessage
+  return typeof message === "string" ? message : undefined
+}
+
 export const decodeToolArguments = <S extends Schema.Decoder<unknown>>(tool: string, schema: S, options?: { readonly strict?: boolean }) => {
   const decode = Schema.decodeUnknownEffect(schema, parseOptions(options))
   return Effect.fn("KannaTools.decodeArguments")(function* (input: unknown) {
@@ -133,6 +154,12 @@ const filtersOf = (ast: SchemaAST.AST): SchemaAST.Filter<unknown>[] =>
 
 /** What zod said about a value of the wrong type, or a missing one. */
 function valueIssue(ast: SchemaAST.AST | undefined, input: unknown, path: Path): ZodIssue {
+  const issue = zodValueIssue(ast, input, path)
+  const message = customMessage(ast?.annotations)
+  return message ? { ...issue, message } : issue
+}
+
+function zodValueIssue(ast: SchemaAST.AST | undefined, input: unknown, path: Path): ZodIssue {
   const values = ast ? literalValues(ast) : null
   if (values) {
     return {
@@ -159,6 +186,9 @@ const SIZING: Record<string, string> = { string: "characters", array: "items" }
 /** One failed check, as zod's issue for the same check. Null where zod would not have reported it. */
 function filterIssue(filter: SchemaAST.Filter<unknown>, input: unknown, path: Path): ZodIssue {
   if (filter.annotations?.kannaCheck === URL_CHECK) return { code: "invalid_format", format: "url", path, message: "Invalid URL" }
+  if (filter.annotations?.kannaCheck === NON_BLANK_CHECK) {
+    return { origin: "string", code: "too_small", minimum: 1, inclusive: true, path, message: customMessage(filter.annotations) }
+  }
   const id = checkId(filter)
   const payload = checkPayload(filter)
   const origin = typeof input === "string" ? "string" : Array.isArray(input) ? "array" : "number"

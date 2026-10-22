@@ -1,13 +1,13 @@
-import { useMemo, useState, type ReactNode } from "react"
+import { useMemo, useState } from "react"
 import type { MessageSource, QueuedChatMessage } from "../../../shared/types"
 import type { ReportSection } from "../../../shared/report-sections"
 import { stripSystemMessages } from "../../../shared/message-preview"
+import { drawnMessageSource } from "../../lib/message-source"
 import { cn } from "../../lib/utils"
 import { Button } from "../ui/button"
 import { CLAMP_LINES, ClampedMessageText, FOLD_SURFACE_ATTRIBUTE } from "./ClampedMessageText"
-import { AdoptionNotice, isAdoptionNotice, ReplyQuoteRow, ReportMarker, SourceQuote, sourcedSections, useReportTicketNumbers } from "./SourcedMessage"
+import { AdoptionNotice, isAdoptionNotice, ReplyQuoteRow, ReportMarker, SourceQuote, sourcedSections } from "./SourcedMessage"
 import { UserMessageAttachments } from "./UserMessage"
-import { TicketReplyQuoteRow } from "../tickets/TicketReplyMessage"
 import { ArrowUp, X } from "lucide-react"
 
 interface QueuedUserMessageProps {
@@ -103,22 +103,21 @@ export function QueuedUserMessage({ message, onRemove, onSendNow }: QueuedUserMe
     void Promise.resolve(action()).finally(() => setBusy(false))
   }
   const form = { message, busy, onRemove: carryOut(onRemove), onSendNow: carryOut(onSendNow) }
-  if (message.source?.kind === "report") return <QueuedReport {...form} source={message.source} />
-  // The user's reply on a ticket waits as anything they typed does, with the ticket quoted over it.
-  if (message.source?.kind === "ticket") return <QueuedTypedMessage {...form} quote={<TicketReplyQuoteRow source={message.source} />} />
-  return message.source
-    ? <QueuedSourcedMessage {...form} source={message.source} />
+  // A sender this client does not draw waits as the user's own (`drawnMessageSource`).
+  const source = drawnMessageSource(message.source)
+  if (source?.kind === "report") return <QueuedReport {...form} source={source} />
+  return source
+    ? <QueuedSourcedMessage {...form} source={source} />
     : <QueuedTypedMessage {...form} />
 }
 
-function QueuedTypedMessage({ message, busy, onRemove, onSendNow, quote }: QueuedFormProps & { quote?: ReactNode }) {
+function QueuedTypedMessage({ message, busy, onRemove, onSendNow }: QueuedFormProps) {
   // What the sent message will show: without the parts meant for the agent.
   const content = stripSystemMessages(message.content)
   return (
     <div className={cn(QUEUED_ROW_CLASS, "items-end", busy && "opacity-60")}>
       <UserMessageAttachments attachments={message.attachments} />
       <div className="flex max-w-[85%] sm:max-w-[80%] flex-col items-end">
-        {quote}
         {/* Rendered even for an attachment-only message: the bubble carries
             Send now and Remove, and without it an image queued with no text
             could not be sent early or taken back. */}
@@ -154,7 +153,6 @@ function QueuedTypedMessage({ message, busy, onRemove, onSendNow, quote }: Queue
  */
 function QueuedReport({ message, source, busy, onRemove, onSendNow }: QueuedFormProps & { source: Extract<MessageSource, { kind: "report" }> }) {
   const sections = useMemo(() => sourcedSections(message.content, source), [message.content, source])
-  const ticketNumbers = useReportTicketNumbers(source)
   // Nothing to read: a report on sub-chats that were stopped before they
   // said anything. Delivered, it draws no line, as there is no reply to
   // point at. Waiting, it still needs its controls, and still says who it
@@ -173,7 +171,7 @@ function QueuedReport({ message, source, busy, onRemove, onSendNow }: QueuedForm
           <div className="flex min-w-0 flex-col items-start gap-1">
             {lines.map((section, index) => isAdoptionNotice(section)
               ? <AdoptionNotice key={index} section={section} />
-              : <ReportMarker key={index} section={section} outcome={silent ? "reported" : undefined} tickets={section.chatId ? ticketNumbers.get(section.chatId) : undefined} />)}
+              : <ReportMarker key={index} section={section} outcome={silent ? "reported" : undefined} />)}
           </div>
         </div>
         <RemoveButton corner="end" onRemove={onRemove} disabled={busy} />

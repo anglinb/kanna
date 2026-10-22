@@ -164,13 +164,13 @@ fakes retain Promise entry points at their boundaries.
 | Foundation | effect/*, keybindings | done |
 | Process & paths | process-utils, paths, editor-detection, terminal-detection, external-open, machine-name, mac-app, restart, instance, instance-socket, project-quick-actions | done |
 | Settings | app-settings, llm-provider, provider-catalog, usage-limits, analytics, attribution | done |
-| Storage leaves | events, transcript, transcript-media, transcript-payloads, transcript-slim, performance-log, ticket-store, schedules, uploads, standalone-export | done |
+| Storage leaves | events, transcript, transcript-media, transcript-payloads, transcript-slim, performance-log, schedules, uploads, standalone-export | done |
 | Terminals & serving | terminal-manager, local-http-servers, port-tunnels, share, auth, transcribe, png-thumbnail, project-icons | done |
 | Cloud | cloud/*, discovery, background-tasks | done |
 | Harness helpers & shared | harness-skills, skills, harness-instructions, visualization-*, handoff, agent-to-agent, session-artifacts; Schema for `shared/protocol.ts` client envelopes and `shared/tools.ts` parsing | done |
 | Event store | event-store, read-models, transcript-payloads (sync readers) | done |
 | Git | diff-store, github, github-branch-pr, github-checks | done |
-| Derived state | worktree-probe, worktree-snapshot, ticket-board, ticket-messages, touched-file-backfill, visualization-heights | done |
+| Derived state | worktree-probe, worktree-snapshot, touched-file-backfill, visualization-heights | done |
 | Provider plumbing | provider-auth, claude-executable, quick-response, generate-commit-message, generate-title | done |
 | CLI | cli-runtime, cli, cli-supervisor, nightly, update-manager, share (CLI output), process-utils (`resolveCommandPath`) | done |
 | Codex | codex-app-server, codex-app-server-protocol | done; scoped service in the runtime |

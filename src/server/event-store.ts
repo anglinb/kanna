@@ -185,6 +185,39 @@ export function findLastCompletedTurnEnd(entries: TranscriptEntry[]) {
 }
 
 /**
+ * Where a fork branches off its source's provider session: the provider's id
+ * for the last thing the fork's copied transcript keeps. Null when it has no
+ * such id (a provider without one, or turns recorded before they were kept).
+ *
+ * The fork's transcript stops at the source's last completed turn, but the
+ * provider forks its own copy of the session as it stands when the fork
+ * first runs. A source that ran more turns by then would hand those to the
+ * fork too, unseen in its transcript, unless the fork is cut here.
+ *
+ * - Claude: the uuid of the last message on the session's main chain, its
+ *   assistant text, tool call or tool result (`resumeSessionAt`). Not a
+ *   subagent's (their messages live in their own files), and not the turn's
+ *   `result`, which the session file does not hold.
+ * - Codex: the id of the last completed turn (`lastTurnId`), which its
+ *   `result` entry carries.
+ */
+export function forkPointOf(provider: AgentProvider, entries: readonly TranscriptEntry[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!
+    if (!entry.messageId) continue
+    if (provider === "claude") {
+      if (entry.parentToolUseId) continue
+      if (entry.kind === "assistant_text" || entry.kind === "tool_call" || entry.kind === "tool_result") return entry.messageId
+    } else if (provider === "codex") {
+      if (entry.kind === "result") return entry.messageId
+    } else {
+      return null
+    }
+  }
+  return null
+}
+
+/**
  * Re-derive the sidebar preview fields from a fork's copied transcript. Forks
  * of an idle chat inherit these from the source record instead (it is the same
  * conversation), but a fork taken mid-turn drops the running turn, so the
@@ -415,12 +448,6 @@ export interface EventStoreHooks {
    * the agent touches it. Paired with `onTurnEnded`.
    */
   onTurnStarted?: (chatId: string) => void
-  /**
-   * Fired when a message leaves a chat's queue. `taken`: a turn is about to
-   * start with it. Otherwise it was removed unsent. A delegator's hand-off
-   * rides on a queued message, and the board must know which happened.
-   */
-  onQueuedMessageRemoved?: (chatId: string, queuedMessageId: string, taken: boolean) => void
 }
 
 export interface EventStoreOptions {
@@ -563,7 +590,6 @@ export class EventStore extends Context.Service<EventStore, {
   readonly removeQueuedMessage: (
     chatId: string,
     queuedMessageId: string,
-    options?: { taken?: boolean },
   ) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly recordTurnStarted: (chatId: string, model?: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly recordFilesTouched: (chatId: string, files: TouchedFile[]) => Effect.Effect<void, EventStoreFileError>
@@ -572,9 +598,11 @@ export class EventStore extends Context.Service<EventStore, {
   readonly recordTurnCancelled: (chatId: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setTurnResumePending: (chatId: string, pending: boolean) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setSessionToken: (chatId: string, sessionToken: string | null) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
+  /** `pendingForkAt` is where the fork branches off that session (`ChatRecord.pendingForkAt`); cleared with the token. */
   readonly setPendingForkSessionToken: (
     chatId: string,
     pendingForkSessionToken: string | null,
+    pendingForkAt?: string | null,
   ) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
 
   /** Rewrites `snapshot.json` from memory and empties the event logs. Not on the write chain, as before. */
@@ -1085,6 +1113,7 @@ class StoreMemory {
         const chat = this.state.chatsById.get(event.chatId)
         if (!chat) break
         chat.pendingForkSessionToken = event.pendingForkSessionToken
+        chat.pendingForkAt = event.pendingForkAt ?? null
         chat.updatedAt = event.timestamp
         break
       }
@@ -2316,18 +2345,21 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
   const setPendingForkSessionToken = Effect.fn("EventStore.setPendingForkSessionToken")(function* (
     chatId: string,
     pendingForkSessionToken: string | null,
+    pendingForkAt: string | null = null,
   ) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
+    const at = pendingForkSessionToken === null ? null : pendingForkAt
     yield* chatSetting(
       paths.turnsLog,
       chatId,
-      (chat) => (chat.pendingForkSessionToken ?? null) === pendingForkSessionToken,
+      (chat) => (chat.pendingForkSessionToken ?? null) === pendingForkSessionToken && (chat.pendingForkAt ?? null) === at,
       (): TurnEvent => ({
         v: STORE_VERSION,
         type: "pending_fork_session_token_set",
         timestamp: Date.now(),
         chatId,
         pendingForkSessionToken,
+        ...(at !== null ? { pendingForkAt: at } : {}),
       }),
     )
   })
@@ -2395,6 +2427,9 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
       // by creation time alone.
       ...(sourceChat.lastTurnEndedAt != null ? { lastTurnEndedAt: sourceChat.lastTurnEndedAt } : {}),
       forkedFromChatId: sourceChatId,
+      // A delegator's fork is a delegator: the same conversation under the
+      // same system prompt, so the fork's first turn reads the source's cache.
+      ...(sourceChat.delegator ? { delegator: true as const } : {}),
       ...(options?.parentChatId ? { parentChatId: options.parentChatId } : {}),
       ...(options?.createdByChatId ? { createdByChatId: options.createdByChatId } : {}),
     }
@@ -2410,7 +2445,7 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     yield* setChatProvider(chatId, sourceProvider)
     yield* setPlanMode(chatId, sourceChat.planMode)
     yield* setAutoPlan(chatId, sourceChat.autoPlan)
-    yield* setPendingForkSessionToken(chatId, sourceSessionToken)
+    yield* setPendingForkSessionToken(chatId, sourceSessionToken, forkPointOf(sourceProvider, allEntries.slice(0, branchPoint)))
 
     // The fork gets its own copy of any images, and its entries point at
     // that copy, so deleting the source later does not blank its screenshots.
@@ -2854,11 +2889,9 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     return queuedMessage
   })
 
-  /** `taken` when a turn takes it from the queue to start with it; see `onQueuedMessageRemoved`. */
   const removeQueuedMessage = Effect.fn("EventStore.removeQueuedMessage")(function* (
     chatId: string,
     queuedMessageId: string,
-    options?: { taken?: boolean },
   ) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
     yield* requireChat(chatId)
@@ -2874,7 +2907,6 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
       queuedMessageId,
     }
     yield* appendEvent(paths.queuedMessagesLog, event)
-    memory.hooks.onQueuedMessageRemoved?.(chatId, queuedMessageId, Boolean(options?.taken))
   })
 
   /** `model` is what this turn runs with; omitted where the caller has none to name. */

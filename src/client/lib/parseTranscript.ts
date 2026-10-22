@@ -1,5 +1,6 @@
 import { hydrateToolResult } from "../../shared/tools"
 import type { HydratedToolCall, HydratedTranscriptMessage, NormalizedToolCall, TranscriptEntry } from "../../shared/types"
+import { drawnMessageSource } from "./message-source"
 
 function createTimestamp(createdAt: number): string {
   return new Date(createdAt).toISOString()
@@ -81,7 +82,8 @@ function hydrateEntry(entry: Exclude<TranscriptEntry, { kind: "tool_result" }>):
         content: entry.content,
         attachments: entry.attachments ?? [],
         steered: entry.steered,
-        ...(entry.source ? { source: entry.source } : {}),
+        // Only a sender it draws: an old ticket reply reads as the user's prompt.
+        ...(drawnMessageSource(entry.source) ? { source: entry.source } : {}),
       }
     case "system_init":
       return {

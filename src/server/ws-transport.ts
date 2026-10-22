@@ -24,7 +24,7 @@ export function shouldIncludeTopic(topic: SubscriptionTopic, filter?: SnapshotBr
   if (topic.type === "app-settings") return Boolean(filter.includeAppSettings)
   if (topic.type === "usage-limits") return Boolean(filter.includeUsageLimits)
   if (topic.type === "provider-auth") return Boolean(filter.includeProviderAuth)
-  if (topic.type === "chat" || topic.type === "ticket") return filter.chatIds?.has(topic.chatId) ?? false
+  if (topic.type === "chat") return filter.chatIds?.has(topic.chatId) ?? false
   if (topic.type === "project-git") return filter.projectIds?.has(topic.projectId) ?? false
   if (topic.type === "terminal") return filter.terminalIds?.has(topic.terminalId) ?? false
   return true

@@ -9,8 +9,6 @@ import { useSidebarStore } from "../../stores/sidebarStore"
 import { useViewerStore, type ViewerItem } from "../../stores/viewerStore"
 import { useOpenChat } from "../useOpenChat"
 import { useStableSidebarThreads } from "../useStableSidebarThreads"
-import { useTicketBoard } from "../../stores/ticketBoardStore"
-import { TicketBoardPane } from "./TicketBoardPane"
 
 type DelegatedItem = Extract<ViewerItem, { kind: "delegated" }>
 
@@ -33,10 +31,6 @@ const AGE_TICK_MS = 60_000
  *
  * Which chats it holds is `delegatedThreads`: the ones directly under the
  * delegator.
- *
- * A delegator whose snapshot brings a ticket board shows the board here
- * instead (`TicketBoardPane`). This list is for one that has none: a server
- * from before tickets.
  */
 export const DelegatedList = memo(function DelegatedList({ item, onClose }: {
   item: DelegatedItem
@@ -50,7 +44,6 @@ export const DelegatedList = memo(function DelegatedList({ item, onClose }: {
   const data = useSidebarStore((store) => store.data)
   const allThreads = useStableSidebarThreads(data)
   const threads = useMemo(() => delegatedThreads(allThreads, item.chatId), [allThreads, item.chatId])
-  const board = useTicketBoard(item.chatId)
 
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
@@ -82,21 +75,6 @@ export const DelegatedList = memo(function DelegatedList({ item, onClose }: {
   // the pane is stays in its accessible name, which has no navbar to lean on.
   const title = delegatedListTitle(delegator?.title)
   const named = delegator !== null && delegator !== undefined && !isUnnamedDelegator(delegator.title)
-  // A delegator with a board shows it in this list's place. One without
-  // (a server from before tickets) keeps the list of its chats.
-  if (board) {
-    return (
-      <TicketBoardPane
-        delegatorChatId={item.chatId}
-        delegatorTitle={named ? title : null}
-        board={board}
-        threads={allThreads}
-        nowMs={nowMs}
-        onSelectChat={card?.onSelectChat ?? null}
-        onClose={onClose}
-      />
-    )
-  }
   return (
     <ViewerSurface
       label={named ? `Delegated chats, ${title}` : "Delegated chats"}

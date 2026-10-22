@@ -62,7 +62,7 @@ export interface ChatViewerState {
    * is in the previewer is a look at something, and closing it goes back to
    * the chat instead of shutting the pane on it.
    */
-  returnTo?: { item: Extract<ViewerItem, { kind: "chat" | "delegated" | "ticket" }> }
+  returnTo?: { item: Extract<ViewerItem, { kind: "chat" | "delegated" }> }
 }
 
 interface RightSidebarState {
@@ -179,12 +179,33 @@ export function migrateRightSidebarStore(persistedState: unknown, version = 0) {
   const size = version >= 7 && state.size !== undefined ? clampSize(state.size) : DEFAULT_RIGHT_SIDEBAR_SIZE
   // Before v10 each chat's viewer kept its own width. There is one now, and
   // which chat's to take is anyone's guess: the pane starts from its defaults.
-  const chatViewers = Object.fromEntries(Object.entries(state.chatViewers ?? {}).map(([chatKey, { widthPx: _width, returnTo, ...viewer }]) => [
+  const chatViewers = Object.fromEntries(Object.entries(state.chatViewers ?? {}).map(([chatKey, { widthPx: _width, returnTo, item, ...viewer }]) => [
     chatKey,
-    { ...viewer, ...(returnTo ? { returnTo: { item: returnTo.item } } : {}) },
+    {
+      ...viewer,
+      item: withoutTicket(item),
+      ...(returnTo ? { returnTo: { item: withoutTicket(returnTo.item) as NonNullable<ChatViewerState["returnTo"]>["item"] } } : {}),
+    },
   ]))
   const viewerWidthPx = typeof state.viewerWidthPx === "number" && Number.isFinite(state.viewerWidthPx) ? state.viewerWidthPx : null
   return { size, projects, projectUi, chatViewers, viewerWidthPx }
+}
+
+/**
+ * Before v11 a delegator's pane held tickets: one open (`ticket`), or a chat
+ * opened from one (`chat` with `ticket`). Tickets are gone, so a ticket left
+ * open comes back as its delegator's pane, where it was, and a chat forgets
+ * the ticket it came from.
+ */
+function withoutTicket(item: ViewerItem): ViewerItem {
+  if (!item) return item
+  const stored = item as ViewerItem | { kind: "ticket"; chatId: string } | (Extract<ViewerItem, { kind: "chat" }> & { ticket?: string })
+  if (stored.kind === "ticket") return { kind: "delegated", chatId: stored.chatId }
+  if (stored.kind === "chat" && "ticket" in stored) {
+    const { ticket: _ticket, ...chat } = stored
+    return chat
+  }
+  return item
 }
 
 /**
@@ -309,7 +330,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
     }),
     {
       name: "right-sidebar-layouts",
-      version: 10,
+      version: 11,
       migrate: migrateRightSidebarStore,
       partialize: persistedRightSidebarState,
     }

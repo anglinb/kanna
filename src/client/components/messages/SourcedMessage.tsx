@@ -3,9 +3,6 @@ import { CalendarClock, CornerUpRight, MessageCircle, Split, X } from "lucide-re
 import type { ChatAttachment, MessageSource } from "../../../shared/types"
 import { stripSystemMessages } from "../../../shared/message-preview"
 import { ADOPTED_REPORT_STATUS, reportOutcome, splitReportSections, type ReportSection } from "../../../shared/report-sections"
-import { formatTicketNumbers, reportTicketNumbers } from "../../lib/tickets"
-import { useTicketBoard } from "../../stores/ticketBoardStore"
-import { useTicketTranscript } from "../tickets/ticket-transcript"
 import { cn } from "../../lib/utils"
 import { useChatReferenceActions, useChatSchedules, useSidebarThread } from "../chat-ui/chat-reference"
 import { formatScheduleTrigger } from "../chat-ui/widgets/SchedulesWidget"
@@ -199,16 +196,10 @@ export function ReplyQuoteRow({ children }: { children: ReactNode }) {
  * The title is the chat's live one, from the sidebar. A chat the sidebar
  * does not know is named for what it is, and is not a link.
  */
-export function ReportMarker({ section, outcome, tickets = [], flash = false }: {
+export function ReportMarker({ section, outcome, flash = false }: {
   section: ReportSection
   /** What to say happened, where the header cannot: see QueuedUserMessage. */
   outcome?: string
-  /**
-   * The tickets the sub-chat was working on, in a delegator's transcript
-   * (`useReportTicketNumbers`): named after the words, "Web replied #13", so the
-   * line says what the reply was about. It still opens the chat.
-   */
-  tickets?: readonly number[]
   flash?: boolean
 }) {
   const actions = useChatReferenceActions()
@@ -217,7 +208,7 @@ export function ReportMarker({ section, outcome, tickets = [], flash = false }: 
   const failed = section.status === "failed"
   const label = `${thread?.title || "A sub-chat"} ${outcome ?? reportOutcome(section.status)}`
   const content = (
-    <span className={cn("grid min-w-0 items-center gap-1.5", tickets.length > 0 ? "grid-cols-[auto_1fr_auto]" : "grid-cols-[auto_1fr]")}>
+    <span className="grid min-w-0 grid-cols-[auto_1fr] items-center gap-1.5">
       {/* A tool row's mark slot, mark and words (ToolCallMessage). */}
       <span className="relative flex h-5 w-5 items-center justify-center">
         {failed
@@ -225,7 +216,6 @@ export function ReportMarker({ section, outcome, tickets = [], flash = false }: 
           : <MessageCircle aria-hidden className="size-4 text-muted-icon" />}
       </span>
       <span className="h-5 min-w-0 truncate text-left font-medium text-foreground/80">{label}</span>
-      {tickets.length > 0 ? <span className="h-5 shrink-0 tabular-nums text-muted-foreground">{formatTicketNumbers(tickets)}</span> : null}
     </span>
   )
   const rowClass = cn("not-prose flex min-w-0 max-w-full rounded-md text-sm", flash && "kanna-jump-flash")
@@ -243,24 +233,6 @@ export function ReportMarker({ section, outcome, tickets = [], flash = false }: 
       {content}
     </button>
   )
-}
-
-const NO_TICKET_NUMBERS: ReadonlyMap<string, number[]> = new Map()
-
-/**
- * Each sub-chat's tickets in a report, by number: the source's ticket ids,
- * numbered from the board of the chat whose transcript this is. Empty for
- * any other message, and in an ordinary chat, which has no board.
- */
-export function useReportTicketNumbers(source: MessageSource): ReadonlyMap<string, number[]> {
-  const tickets = source.kind === "report" ? source.tickets : undefined
-  const board = useTicketBoard(useTicketTranscript().chatId)
-  return useMemo(() => {
-    if (!tickets || !board) return NO_TICKET_NUMBERS
-    const byId = new Map(board.tickets.map((ticket) => [ticket.id, ticket.number]))
-    const numbers = reportTicketNumbers(tickets, (id) => byId.get(id))
-    return numbers.size > 0 ? numbers : NO_TICKET_NUMBERS
-  }, [board, tickets])
 }
 
 /** One part of a delivered message: its quote, the line, and its bubble. */
@@ -310,7 +282,6 @@ interface Props {
 
 export function SourcedMessage({ content, source, attachments = [], steered = false, flash = false }: Props) {
   const sections = useMemo(() => sourcedSections(content, source), [content, source])
-  const ticketNumbers = useReportTicketNumbers(source)
 
   if (source.kind === "report") {
     return (
@@ -323,7 +294,7 @@ export function SourcedMessage({ content, source, attachments = [], steered = fa
             <AdoptionNotice section={section} />
           </div>
         ) : (
-          <ReportMarker key={index} section={section} tickets={section.chatId ? ticketNumbers.get(section.chatId) : undefined} flash={flash} />
+          <ReportMarker key={index} section={section} flash={flash} />
         ))}
       </div>
     )

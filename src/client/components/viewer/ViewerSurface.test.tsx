@@ -43,17 +43,17 @@ describe("the navigation's buttons", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
       <ViewerSurface
-        label="Ticket"
-        title="Tickets / #1"
+        label="Diff"
+        title="Changes"
         onClose={() => {}}
-        navigation={{ ...navigation, index: 0, previousLabel: "Previous ticket · K", nextLabel: "Next ticket · J", hasPrevious: false, hasNext: true }}
+        navigation={{ ...navigation, index: 0, previousLabel: "Previous file · K", nextLabel: "Next file · J", hasPrevious: false, hasNext: true }}
       >
         body
       </ViewerSurface>
       </TooltipProvider>,
     )
-    expect(html).toMatch(/aria-label="Previous ticket · K" aria-disabled="true"/)
-    expect(html).toContain('aria-label="Next ticket · J"')
-    expect(html).not.toMatch(/aria-label="Next ticket · J" aria-disabled/)
+    expect(html).toMatch(/aria-label="Previous file · K" aria-disabled="true"/)
+    expect(html).toContain('aria-label="Next file · J"')
+    expect(html).not.toMatch(/aria-label="Next file · J" aria-disabled/)
   })
 })

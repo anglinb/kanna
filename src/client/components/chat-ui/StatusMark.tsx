@@ -28,10 +28,10 @@ export const TEXT_LINE_SLOT_CLASS = "flex h-[1lh] shrink-0 items-center"
  * The sidebar's status marks, one per thing a row can want: the brand spinner
  * while working, a grey one while waiting on work handed off, a blue ping
  * when waiting on the user, a green ping when unread. A chat's row draws them
- * (`renderChatStatusDot`) and so does a ticket (`TicketMark`), so the two say
- * the same thing the same way.
+ * (`renderChatStatusDot`), and anything else that marks a chat's state
+ * draws the same ones, so they say the same thing the same way.
  *
- * `enters` grows a ping in, for one that has just appeared: see `TicketMark`.
+ * `enters` grows a ping in, for one that has just appeared.
  */
 export type StatusMarkKind = "working" | "waiting_on_subagent" | "waiting" | "unread"
 

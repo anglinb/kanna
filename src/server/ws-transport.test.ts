@@ -7,7 +7,6 @@ test("snapshot filters include only selected subscriptions", () => {
   expect(shouldIncludeTopic({ type: "sidebar" }, filter)).toBe(true)
   expect(shouldIncludeTopic({ type: "local-projects" }, filter)).toBe(false)
   expect(shouldIncludeTopic({ type: "chat", chatId: "chat-1" }, filter)).toBe(true)
-  expect(shouldIncludeTopic({ type: "ticket", chatId: "chat-1", ticketId: "ticket-1" }, filter)).toBe(true)
   expect(shouldIncludeTopic({ type: "chat", chatId: "chat-2" }, filter)).toBe(false)
 })
 

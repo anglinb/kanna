@@ -1655,6 +1655,64 @@ describe("AgentCoordinator claude integration", () => {
     await coordinator.dispose()
   })
 
+  test("a restarted Claude session's turn survives the old stream ending after it starts", async () => {
+    const queues: AsyncEventQueue<any>[] = []
+    const promptIds: string[][] = []
+    const store = createFakeStore()
+    let turnStartedCount = 0
+    store.recordTurnStarted = async () => { turnStartedCount += 1 }
+    const coordinator = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      startClaudeSession: async () => {
+        const events = new AsyncEventQueue<any>()
+        const index = queues.push(events) - 1
+        promptIds.push([])
+        return {
+          provider: "claude",
+          echoesPromptIds: true,
+          stream: events,
+          getAccountInfo: async () => null,
+          interrupt: async () => {},
+          // The CLI takes a while to exit, so the stream ends later (below).
+          close: () => {},
+          setModel: async () => {},
+          setPermissionMode: async () => {},
+          sendPrompt: async (_content: string, promptId?: string) => {
+            promptIds[index]!.push(promptId!)
+          },
+        }
+      },
+    })
+    const send = (content: string) => coordinator.send({ type: "chat.send", chatId: "chat-1", provider: "claude", content, model: "claude-opus-4-1" })
+    const result = () => timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "done" })
+
+    await send("one")
+    queues[0]!.push({ type: "transcript" as const, entry: result(), promptIds: [promptIds[0]![0]] })
+    await waitFor(() => store.turnFinishedCount === 1)
+
+    // Becoming a delegator restarts the session.
+    ;(store.chat as { delegator?: true }).delegator = true
+    await send("two")
+    expect(queues).toHaveLength(2)
+    expect(coordinator.isBusy("chat-1")).toBe(true)
+
+    // The old CLI exits now, after the new turn started.
+    queues[0]!.close()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(coordinator.isBusy("chat-1")).toBe(true)
+
+    queues[1]!.push({ type: "transcript" as const, entry: timestamped({ kind: "assistant_text", text: "answer" }) })
+    queues[1]!.push({ type: "transcript" as const, entry: result(), promptIds: [promptIds[1]![0]] })
+    await waitFor(() => store.turnFinishedCount === 2)
+    expect(coordinator.isBusy("chat-1")).toBe(false)
+    // No second turn was opened for the reply.
+    expect(turnStartedCount).toBe(2)
+
+    queues[1]!.close()
+    coordinator.dispose()
+  })
+
   test("a Claude turn the CLI started on its own does not end the user's turn", async () => {
     const events = new AsyncEventQueue<any>()
     const promptIds: string[] = []
@@ -2210,12 +2268,14 @@ describe("AgentCoordinator claude integration", () => {
     events.close()
   })
 
-  test("uses Claude forkSession when starting a forked chat", async () => {
-    const startSessionCalls: Array<{ sessionToken: string | null; forkSession: boolean }> = []
+  test("uses Claude forkSession when starting a forked chat, cut at the branch point", async () => {
+    const startSessionCalls: Array<{ sessionToken: string | null; forkSession: boolean; resumeSessionAt?: string }> = []
     const events = new AsyncEventQueue<any>()
     const store = createFakeStore()
     store.chat.provider = "claude"
     store.chat.pendingForkSessionToken = "claude-parent-1"
+    // The source's last message when the fork was made; it has run on since.
+    store.chat.pendingForkAt = "uuid-at-fork"
 
     const coordinator = new AgentCoordinator({
       store: store as never,
@@ -2224,6 +2284,7 @@ describe("AgentCoordinator claude integration", () => {
         startSessionCalls.push({
           sessionToken: args.sessionToken,
           forkSession: args.forkSession,
+          ...(args.resumeSessionAt ? { resumeSessionAt: args.resumeSessionAt } : {}),
         })
 
         return {
@@ -2276,8 +2337,10 @@ describe("AgentCoordinator claude integration", () => {
     expect(startSessionCalls).toEqual([{
       sessionToken: "claude-parent-1",
       forkSession: true,
+      resumeSessionAt: "uuid-at-fork",
     }])
     expect(store.chat.pendingForkSessionToken).toBeNull()
+    expect(store.chat.pendingForkAt).toBeNull()
     events.close()
   })
 })
@@ -2920,6 +2983,7 @@ function createFakeChat(id: string, projectId: string, title = "New Chat") {
     autoPlan: false,
     sessionToken: null as string | null,
     pendingForkSessionToken: null as string | null,
+    pendingForkAt: null as string | null,
     resumePending: undefined as boolean | undefined,
     lastModel: undefined as string | undefined,
     deletedAt: undefined as number | undefined,
@@ -2992,8 +3056,9 @@ function createFakeStore(options?: {
     async setSessionToken(chatId: string, sessionToken: string | null) {
       requireChat(chatId).sessionToken = sessionToken
     },
-    async setPendingForkSessionToken(chatId: string, pendingForkSessionToken: string | null) {
+    async setPendingForkSessionToken(chatId: string, pendingForkSessionToken: string | null, pendingForkAt: string | null = null) {
       requireChat(chatId).pendingForkSessionToken = pendingForkSessionToken
+      requireChat(chatId).pendingForkAt = pendingForkSessionToken === null ? null : pendingForkAt
     },
     async createChat() {
       return chat

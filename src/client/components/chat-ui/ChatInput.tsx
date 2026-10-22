@@ -22,7 +22,7 @@ import { RecordingWaveform } from "./RecordingWaveform"
 import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
 import { NEW_CHAT_COMPOSER_ID, type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
-import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
+import { ATTACH_FILES_EVENT, CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
 import { isEscapeClaimed, isViewerPaneOpen, resolveEscapePress } from "../../lib/escape-key"
 import { HoldToStopHint, HoldToStopRing, useHoldToStop } from "./HoldToStop"
 import type { ComposerDelegate } from "./DelegateControl"
@@ -224,9 +224,9 @@ interface Props {
    */
   delegate?: ComposerDelegate
   /**
-   * Where the draft is kept, when it is not the chat's own: a ticket's
-   * composer writes to the delegator's chat but keeps its draft per ticket,
-   * so neither the chat's draft nor another ticket's is touched.
+   * Where the draft is kept, when it is not the chat's own: a second
+   * composer that writes to the chat but keeps a draft of its own, so the
+   * chat's draft is not touched.
    */
   draftKey?: string
 }
@@ -846,6 +846,20 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     window.addEventListener(REQUEST_ATTACH_FILES_EVENT, handleAttachRequest)
     return () => window.removeEventListener(REQUEST_ATTACH_FILES_EVENT, handleAttachRequest)
   }, [secondary])
+
+  // Files from the viewer (a marked-up visualization), attached as a paste is.
+  useEffect(() => {
+    if (secondary) return
+    function handleAttachFiles(event: Event) {
+      const files = (event as CustomEvent<{ files?: unknown }>).detail?.files
+      if (!Array.isArray(files) || !files.every((file) => file instanceof File)) return
+      event.preventDefault()
+      enqueueFiles(files)
+    }
+
+    window.addEventListener(ATTACH_FILES_EVENT, handleAttachFiles)
+    return () => window.removeEventListener(ATTACH_FILES_EVENT, handleAttachFiles)
+  }, [enqueueFiles, secondary])
 
   /** The composer's current prefs, the way a send carries them. */
   function buildSubmitOptions(attachmentsForSubmit: ChatAttachment[], steer = shouldSteerSubmit(submitWhileRunning, false)) {

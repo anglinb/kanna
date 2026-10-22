@@ -65,6 +65,8 @@ export interface ThreadForkParams {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access" | null
   ephemeral?: boolean
   persistExtendedHistory: boolean
+  /** The last turn to fork through, inclusive: turns after it are left out of the fork. It cannot be in progress. */
+  lastTurnId?: string | null
 }
 
 export interface TextUserInput {

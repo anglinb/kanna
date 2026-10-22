@@ -12,8 +12,6 @@ import {
 import { toJsxRuntime } from "hast-util-to-jsx-runtime"
 import { Link, useInRouterContext } from "react-router-dom"
 import { parseChatLink } from "../../../shared/chat-links"
-import { handleTicketLinkClick, parseTicketLink } from "../../lib/tickets"
-import { openViewer, useViewerStore } from "../../stores/viewerStore"
 import { chatIdFromChatPath } from "../../lib/chat-open"
 import { useChatReferenceActions } from "../chat-ui/chat-reference"
 import { Fragment } from "react"
@@ -119,7 +117,7 @@ export function MetaRow({ children, className, ...props }: ComponentPropsWithout
 
 /**
  * The 20px slot a tool row's mark sits in, its 16px icon centred: the row
- * ToolCallMessage draws, a report's line, a ticket's history.
+ * ToolCallMessage draws, a report's line.
  */
 export function MetaIconSlot({ children }: { children: ReactNode }) {
   return <div className="w-5 h-5 relative flex shrink-0 items-center justify-center">{children}</div>
@@ -374,25 +372,6 @@ export function createMarkdownComponents(options?: {
         // Standalone exports have no Kanna router to resolve a chat against.
         if (renderOptions.localLinkMode === "text") return <span className={className}>{children}</span>
         const linkedChatId = chatIdFromChatPath(chatLink)
-        // A ticket's link (`ticketLinkPath`) opens the ticket in this page's
-        // pane, whichever delegator it is on, as a ticket's card does. A
-        // modified or middle click is the browser's: the address opens the
-        // delegator with the ticket over it, in a tab.
-        const linkedTicket = parseTicketLink(chatLink)
-        if (linkedTicket) {
-          const openTicket = (event: React.MouseEvent<HTMLAnchorElement>) => {
-            onClick?.(event)
-            handleTicketLinkClick(event, linkedTicket, {
-              canPreview: useViewerStore.getState().chatPreviewHosts > 0,
-              open: ({ chatId, ticketId }) => openViewer({ kind: "ticket", chatId, ticketId }),
-            })
-          }
-          return inRouter ? (
-            <Link {...props} className={className} to={chatLink} onClick={openTicket}>{children}</Link>
-          ) : (
-            <a {...props} className={className} href={chatLink} onClick={openTicket}>{children}</a>
-          )
-        }
         // On a chat page a chat link opens the way a chat's card does
         // (`useOpenChat`): in the previewer, and a tab for
         // Cmd/Ctrl-click or the middle button. It stays a real link, so it

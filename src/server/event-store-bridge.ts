@@ -31,8 +31,6 @@ export class EventStoreBridge {
   set onTurnEnded(hook: EventStoreHooks["onTurnEnded"]) { this.service.hooks.onTurnEnded = hook }
   get onTurnStarted() { return this.service.hooks.onTurnStarted }
   set onTurnStarted(hook: EventStoreHooks["onTurnStarted"]) { this.service.hooks.onTurnStarted = hook }
-  get onQueuedMessageRemoved() { return this.service.hooks.onQueuedMessageRemoved }
-  set onQueuedMessageRemoved(hook: EventStoreHooks["onQueuedMessageRemoved"]) { this.service.hooks.onQueuedMessageRemoved = hook }
 
   getProject(projectId: string) { return this.service.getProject(projectId) }
   getChat(chatId: string) { return this.service.getChat(chatId) }
@@ -111,8 +109,8 @@ export class EventStoreBridge {
   recordTurnCancelled(chatId: string) { return runKanna(this.service.recordTurnCancelled(chatId)) }
   setTurnResumePending(chatId: string, pending: boolean) { return runKanna(this.service.setTurnResumePending(chatId, pending)) }
   setSessionToken(chatId: string, sessionToken: string | null) { return runKanna(this.service.setSessionToken(chatId, sessionToken)) }
-  setPendingForkSessionToken(chatId: string, pendingForkSessionToken: string | null) {
-    return runKanna(this.service.setPendingForkSessionToken(chatId, pendingForkSessionToken))
+  setPendingForkSessionToken(chatId: string, pendingForkSessionToken: string | null, pendingForkAt?: string | null) {
+    return runKanna(this.service.setPendingForkSessionToken(chatId, pendingForkSessionToken, pendingForkAt))
   }
 
   compact() { return runKanna(this.service.compact) }

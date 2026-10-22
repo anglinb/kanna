@@ -41,12 +41,11 @@ export type ViewerItem =
    * page is on refers to (see `lib/chat-open`). `back` is the chats that lead back from
    * it, oldest first, when it was reached by a click inside the previewer.
    *
-   * `delegated` is set on a chat picked from a delegator's board: the
+   * `delegated` is set on a chat picked from a delegator's pane: the
    * delegator. It is the start of that chat's trail, so Back from it, or
-   * from the first chat on `back`, returns to the board. `ticket` goes with it for a chat opened from one of that delegator's
-   * tickets, so the trail ends at the ticket and then at the board.
+   * from the first chat on `back`, returns to the pane.
    */
-  | { kind: "chat"; chatId: string; back?: string[]; delegated?: string; ticket?: string }
+  | { kind: "chat"; chatId: string; back?: string[]; delegated?: string }
   /**
    * The chats under the delegator `chatId`, as a list to pick from. On a
    * delegator's page this is the pane's floor (see `lib/viewer-levels`):
@@ -55,11 +54,6 @@ export type ViewerItem =
    * phone, over the transcript.
    */
   | { kind: "delegated"; chatId: string }
-  /**
-   * One ticket of the delegator `chatId`'s board, opened over the board:
-   * Back goes to the board, wherever the ticket was opened from.
-   */
-  | { kind: "ticket"; chatId: string; ticketId: string }
 
 /**
  * What decides the width a pane opens at: a review, a preview and a chat
@@ -74,13 +68,13 @@ export function viewerWidthClass(item: ViewerItem): ViewerWidthClass {
 }
 
 /**
- * A chat, or what chats are picked from (a delegator's board, one of its
- * tickets): the previewer's own subject, as against a file or image opened
- * over it. They share a width, so the pane holds still while the board
- * turns into the chat picked from it.
+ * A chat, or what chats are picked from (a delegator's pane): the
+ * previewer's own subject, as against a file or image opened over it. They
+ * share a width, so the pane holds still while the delegator's pane turns
+ * into the chat picked from it.
  */
-export function isChatTrailItem(item: ViewerItem): item is Extract<ViewerItem, { kind: "chat" | "delegated" | "ticket" }> {
-  return item.kind === "chat" || item.kind === "delegated" || item.kind === "ticket"
+export function isChatTrailItem(item: ViewerItem): item is Extract<ViewerItem, { kind: "chat" | "delegated" }> {
+  return item.kind === "chat" || item.kind === "delegated"
 }
 
 /** The pane's floor on a delegator's page: that delegator's list. */
@@ -271,7 +265,7 @@ export const useViewerStore = create<ViewerState>()((set, get) => ({
     const { chatKey, floor } = get()
     const current = currentViewer(chatKey)
     if (!current) return
-    const below = viewerLevelBelow(current, floor, chatKey || null)
+    const below = viewerLevelBelow(current, floor)
     if (below === "closed") {
       set({ changedByKey: isKeyboardInitiated() })
       useRightSidebarStore.getState().setChatViewer(chatKey, null)

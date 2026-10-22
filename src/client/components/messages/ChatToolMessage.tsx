@@ -4,7 +4,6 @@ import { toMessagePreview } from "../../../shared/message-preview"
 import { isWorkingStatus } from "../../../shared/types"
 import { CHAT_TOOL_NAMES } from "../../../shared/tools"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
-import { handoffTicketOf } from "../../lib/tickets"
 import type { SidebarThread } from "../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../lib/utils"
 import { useChatReferenceActions, useSidebarThread } from "../chat-ui/chat-reference"
@@ -13,9 +12,6 @@ import { SidebarChatHoverCard } from "../chat-ui/sidebar/ChatHoverCard"
 import { ThreadRowMenu } from "../chat-ui/sidebar/ThreadRow"
 import { ThreadRowContent } from "../chat-ui/ThreadRowContent"
 import { useNow } from "../chat-ui/widgets/TasksWidget"
-import { TicketAlsoSentLine, TicketHandoffCard } from "../tickets/TicketHandoff"
-import { useTicketTranscript } from "../tickets/ticket-transcript"
-import { useTicketSummary } from "../../stores/ticketBoardStore"
 import { resultRecord, text, TOOL_CARD_CAPTION_CLASS, TOOL_CARD_MARK_SLOT_CLASS, toolCardClasses, toolCardErrorText, useToolCardPayload } from "./tool-card"
 import type { ProcessedToolCall } from "./types"
 
@@ -75,31 +71,9 @@ export function inlineChatToolTarget(message: ChatToolCall): string | null {
 export function ChatToolMessage({ message }: { message: ChatToolCall }) {
   const { input, rawResult, result } = useToolCardPayload(message)
   const chatId = chatToolTarget(message, input, result)
-  // A delegator's hand-off names its ticket, and draws as it (TicketHandoff).
-  // Read from the payload as fetched, so a call kept in the sidecar finds it too.
-  const ticketRef = handoffTicketOf({ ...message, input: { payload: input }, rawResult })
-  const transcript = useTicketTranscript()
-  const ticket = useTicketSummary(transcript.chatId, ticketRef?.ticketId)
 
   if (message.isError) {
     return <p role="alert" className="text-sm text-destructive">{toolCardErrorText(rawResult, "The chat could not be reached.")}</p>
-  }
-
-  if (ticketRef && transcript.chatId) {
-    if (transcript.repeats.has(message.id)) {
-      return (
-        <TicketAlsoSentLine
-          delegatorChatId={transcript.chatId}
-          ticketId={ticketRef.ticketId}
-          number={ticket?.number ?? ticketRef.number}
-          chatId={chatId}
-          fallbackTitle={text(result?.title) ?? text(input.title) ?? "a chat"}
-          reopened={ticketRef.reopened === true}
-        />
-      )
-    }
-    // Until the board has it (a snapshot behind the call) the chat's card stands in.
-    if (ticket) return <TicketHandoffCard ticket={ticket} chatId={chatId} verb={message.toolName === "fork_chat" ? "Forked to" : "Sent to"} reopened={ticketRef.reopened === true} />
   }
 
   const sent = text(input.message)

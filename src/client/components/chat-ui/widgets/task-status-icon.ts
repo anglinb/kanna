@@ -2,13 +2,12 @@ import { Check, Loader2, Square, X, type LucideIcon } from "lucide-react"
 import type { SubagentActivity } from "../../../../shared/types"
 
 /**
- * The mark for how a task stands, by status: the Tasks widget's rows, a
- * workflow's outcome, and a read Done ticket's check (`TicketMark`).
+ * The mark for how a task stands, by status: the Tasks widget's rows and a
+ * workflow's outcome.
  *
  * A leaf, importing nothing of the app's. The Tasks widget pulls in the
- * transcript's tool rows, which draw ticket cards, which draw this check:
- * kept in the widget, the map was read by a ticket's mark before the
- * widget's module had run, and the app crashed on load.
+ * transcript's tool rows, and a row that drew this mark once read the map
+ * before the widget's module had run, which crashed the app on load.
  */
 export interface StatusIcon {
   Icon: LucideIcon

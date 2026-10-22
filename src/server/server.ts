@@ -22,7 +22,7 @@ import { EventStore } from "./event-store"
 import { AgentCoordinator } from "./agent"
 import { CodexAppServer } from "./codex-app-server"
 import { PiAgent } from "./pi-agent"
-import { Analytics } from "./analytics"
+import { Analytics, isAnalyticsDisabledByEnv, NoopAnalytics } from "./analytics"
 import { AppSettings } from "./app-settings"
 import { EditorDetection } from "./editor-detection"
 import { TerminalDetection } from "./terminal-detection"
@@ -35,7 +35,6 @@ import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { resumeInterruptedTurns } from "./resume-turns"
 import { startServerMaintenance, startServerRecovery, stopServerMaintenance } from "./server-maintenance"
 import { Orchestrator } from "./orchestrator"
-import { TicketStore } from "./ticket-store"
 import { ChatAgent, type CoordinatorLike } from "./chat-agent"
 import { ChatCommands } from "./chat-commands"
 import { ProjectDiscovery, type DiscoveredProject } from "./discovery"
@@ -191,14 +190,16 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     fetchCodexRateLimits: () => agentSlot.get().fetchCodexRateLimits(),
     fetchGrokUsage: () => fetchGrokAccountUsage(),
   }
-  const analyticsLayer = Analytics.layer({
-    currentVersion: options.update?.version ?? "unknown",
-    environment: runtimeProfile === "dev" ? "dev" : "prod",
-  }).pipe(Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi })))
+  // Tests and CI boot real servers with fresh ids; they stay out of analytics.
+  const analyticsLayer = (isAnalyticsDisabledByEnv()
+    ? Layer.succeed(Analytics, NoopAnalytics)
+    : Analytics.layer({
+      currentVersion: options.update?.version ?? "unknown",
+      environment: runtimeProfile === "dev" ? "dev" : "prod",
+    })).pipe(Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi })))
   const eventStoreLayer = EventStore.layer({ dataDir }).pipe(Layer.provideMerge(PerformanceLog.layer({ dataDir, version: options.update?.version })))
-  const ticketStoreLayer = TicketStore.layer({ dataDir })
-  // The agents' side of chat management: sub-chats, their reports, schedules,
-  // delegators' tickets. It reaches the coordinator, built further down,
+  // The agents' side of chat management: sub-chats, their reports and
+  // schedules. It reaches the coordinator, built further down,
   // through `ChatAgent`, which reads `agent` on each call; its pushes go
   // through `router`. Both exist by the time anything can fire. One set of
   // chat actions (`ChatCommands`) for both callers: the router runs them for
@@ -211,7 +212,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     push: (change) => {
       void routerSlot.get().broadcastChatChange(change)
     },
-  }).pipe(Layer.provideMerge(chatCommandsLayer), Layer.provide([eventStoreLayer, ticketStoreLayer]))
+  }).pipe(Layer.provideMerge(chatCommandsLayer), Layer.provide(eventStoreLayer))
   const quickResponseLayer = QuickResponse.layerWithCodex.pipe(
     Layer.provideMerge(CodexAppServer.layer()),
   )
@@ -223,7 +224,6 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
       PiAgent.layer(),
       DiffStore.layer.pipe(Layer.provideMerge(quickResponseLayer)),
       eventStoreLayer,
-      ticketStoreLayer,
       orchestratorLayer,
       ProviderAuth.layer({
         fetchLatestNpmVersion: (packageName) => fetchLatestPackageVersion(packageName).pipe(
@@ -330,9 +330,6 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     void runKanna(turnFiles.beginTurn(chatId))
     runKannaSync(orchestratorService.handleTurnStarted(chatId))
   }
-  store.hooks.onQueuedMessageRemoved = (chatId, queuedMessageId, taken) => {
-    runKannaSync(orchestratorService.handleQueuedMessageRemoved(chatId, queuedMessageId, taken))
-  }
   // A finished turn is the likeliest moment for the dirty set to have changed,
   // so probe that one project then — after recording the turn's own files, so
   // the broadcast that follows already reflects them.
@@ -417,7 +414,6 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     projectIcons,
     agent,
     chatCommands,
-    tickets: orchestratorService,
     terminals,
     portTunnels,
     keybindings,

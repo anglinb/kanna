@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import { DEFAULT_RIGHT_SIDEBAR_SIZE, persistedChatViewers, persistedRightSidebarState, useRightSidebarStore } from "./rightSidebarStore"
-import { handleTicketLinkClick, parseTicketLink } from "../lib/tickets"
 import { getChatViewer, openViewer, useViewerStore } from "./viewerStore"
 
 const FILE = { kind: "file", projectId: "p1", path: "README.md" } as const
@@ -292,31 +291,6 @@ describe("viewerStore", () => {
       useViewerStore.getState().close()
       expect(getChatViewer()).toBeNull()
     })
-  })
-
-  test("a ticket's link in another chat opens the ticket in that chat's pane, and Back shuts it", () => {
-    const clicked = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, prevented: false, preventDefault() { this.prevented = true } }
-    const ticket = parseTicketLink("/chat/deleg-9?ticket=tk_00000d")!
-    handleTicketLinkClick(clicked, ticket, { canPreview: true, open: ({ chatId, ticketId }) => openViewer({ kind: "ticket", chatId, ticketId }) })
-    expect(clicked.prevented).toBe(true)
-    expect(getChatViewer()?.item).toEqual({ kind: "ticket", chatId: "deleg-9", ticketId: "tk_00000d" })
-    // chat-1 is an ordinary chat: the ticket's board is not this page's to go back to.
-    useViewerStore.getState().stepBack()
-    expect(getChatViewer()).toBeNull()
-  })
-
-  test("on its delegator's page the same link has the board under it", () => {
-    useViewerStore.getState().setChat("deleg-9")
-    openViewer({ kind: "ticket", chatId: "deleg-9", ticketId: "tk_00000d" })
-    useViewerStore.getState().stepBack()
-    expect(getChatViewer()?.item).toEqual({ kind: "delegated", chatId: "deleg-9" })
-  })
-
-  test("a modified click on a ticket's link is left to the browser", () => {
-    const clicked = { button: 0, metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, prevented: false, preventDefault() { this.prevented = true } }
-    handleTicketLinkClick(clicked, { chatId: "deleg-9", ticketId: "tk_00000d" }, { canPreview: true, open: () => openViewer({ kind: "ticket", chatId: "deleg-9", ticketId: "tk_00000d" }) })
-    expect(clicked.prevented).toBe(false)
-    expect(getChatViewer()).toBeNull()
   })
 })
 

@@ -18,6 +18,7 @@ export const KANNA_ORCHESTRATION_INSTRUCTIONS = [
   "- To use another chat's result, have it report here (start it with `create_chat`, or pass `adopt: true` to `send_message`) and end your turn. Its reply arrives as a message and wakes this chat. Do not poll it with `read_chat` meanwhile.",
   "- Pass `subchat: false` to `create_chat` only when the user asks for a separate chat of their own. It reports nothing back.",
   "- `fork_chat` copies a conversation, context included. `create_chat` starts empty.",
+  "- Each chat is one piece of work, and its title (required on `create_chat`, `fork_chat` and `send_message`) says what. New work goes to a new chat, or to a fork of one whose context it needs, titled for the new work: prefer a fork to retitling a chat. `send_message` is for follow-ups, with the chat's current title or a sharper one.",
   "- `set_schedule` sends a message later or on a repeat, into this chat by default. Use it to check on something in a while instead of sleeping.",
   "- `send_message` to a chat you did not start gets nothing back when that chat finishes. When you need its result, pass `adopt: true`: the chat becomes your sub-chat and its reply arrives here as a message. An adopted chat is still the user's, so it stays in their sidebar.",
   "- Stopping this chat stops the sub-chats it started, not ones it adopted. Stop one yourself with `cancel_chat` when it is no longer needed.",
@@ -28,6 +29,10 @@ export const KANNA_ORCHESTRATION_INSTRUCTIONS = [
  * `ChatRecord.delegator`. Only a delegator's session carries it, and every
  * one of its turns pays for it, so it stays short.
  *
+ * Built on one idea: each chat is a timeline of one piece of work, titled
+ * for it, so the chat list is the user's record of what was worked on. A
+ * chat repointed at new work breaks that, which is why reuse is a fork.
+ *
  * The parent rule is stated though the orchestrator enforces it: an agent
  * that knows its chats report back plans around the reports.
  */
@@ -36,22 +41,18 @@ export const KANNA_DELEGATOR_INSTRUCTIONS = [
   "",
   "This chat coordinates work. It is not where the work is done. When a message comes in, almost always hand it to another chat. Answer directly only a quick question you can settle from what you already know.",
   "",
-  "- For each task, look at the chats under this one (`list_chats` with `parentChatId` set to this chat's id, which `get_context` gives). If one already covers that area, send the task there with `send_message`, steering or queueing as fits. If none does, start a sub-chat with `create_chat`.",
-  "- Every chat you hand work to has this chat as its parent: `create_chat` as a sub-chat, and `adopt: true` on `send_message` to a chat you did not start. Kanna applies both here whatever you pass.",
+  "## One chat, one piece of work",
+  "",
+  "Each chat under this one is a self-contained timeline of one piece of work, and its title says what that work is. The chat list is the user's record of what was worked on: keep it one chat per piece of work, each titled for it.",
+  "",
+  "- New work goes to a new chat: `create_chat`, titled for that work.",
+  "- To reuse a chat's context for new work, fork it: `fork_chat`, titled for the new work. This is the default way to reuse a chat. Never point an existing chat at different work.",
+  "- Follow-ups on a chat's own work go to it with `send_message`, passing its current title, or a sharper one for the same work.",
+  "- If you find yourself retitling a chat because its work changed, fork it instead.",
+  "- The chats under this one: `list_chats` with `parentChatId` set to this chat's id, which `get_context` gives.",
   "- Several unrelated tasks in one message go to several chats.",
-  "- Do not redo or re-check a chat's work yourself.",
-  "",
-  "## Tickets",
-  "",
-  "The user follows the work on this chat's ticket board, not in this chat.",
-  "",
-  "- Every hand-off names a ticket: `ticket: { title, body }` creates one, `ticketId` names an existing one.",
-  "- A new ask is a new ticket, however small and even in the same area as another. So is anything asked after a ticket is Done. A message with several asks makes several tickets. A commit or push is a ticket of its own that names the tickets it covers.",
-  "- Reuse a ticket only to adjust its own open ask, or for a defect in what it delivered. The test: would the user call it the same piece of work, or a new request?",
-  "- The ticket separates the asks, not the chat: several tickets can go to the chat that has the context. Steer a busy chat only with its current ticket's follow-ups.",
-  "- The body is what the work is and what done looks like, never progress. When the ask changes, rewrite the title and body to match.",
-  "- Only `reply_to_ticket` writes on a ticket. Post when its work comes back or you decide something for the user. Never announce a hand-off or a plan, and post nothing when nothing is new.",
-  "- In this chat, say one line per ticket and link its ticket, not the chat: [#8 Title](link), with the link each result carries. The detail goes on the ticket. Link a chat only when the user needs the chat itself.",
+  "- Every chat you hand work to has this chat as its parent: `create_chat` as a sub-chat, and `adopt: true` on `send_message` to a chat you did not start. Kanna applies both here whatever you pass.",
+  "- Tell the user which chat each task went to, and link it. When a chat reports, tell the user briefly what came back. Do not redo or re-check its work yourself.",
 ].join("\n")
 
 export const KANNA_VISUALIZATION_INSTRUCTIONS = [

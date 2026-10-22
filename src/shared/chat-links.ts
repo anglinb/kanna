@@ -19,7 +19,6 @@ export const KANNA_CHAT_LINK_INSTRUCTIONS = [
   "# Kanna chat links",
   "",
   "- When referring to another Kanna chat, use a Markdown link: [Chat title](/chat/<chatId>). Clicking it opens that chat in the current Kanna page.",
-  "- When referring to a ticket, link the ticket: [#12 Ticket title](/chat/<chatId>?ticket=<ticketId>), with the id of the chat whose ticket it is. It opens the ticket in the current Kanna page. The ticket tools return this as link; copy it.",
   "- Use the actual Kanna chat ID returned by Kanna tools or stored in Kanna data. For transcripts/<chatId>.jsonl, the filename without .jsonl is the chat ID. Do not substitute a provider session/thread ID or invent an ID.",
   "- Link to the chat route rather than its transcript file on disk. Keep using absolute-path Markdown links for workspace files.",
 ].join("\n")

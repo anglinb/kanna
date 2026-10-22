@@ -7,8 +7,7 @@ interface Props {
 
 /**
  * An agent's words, as the transcript draws them: full-width markdown, no
- * avatar and no name. Apart from the message so a delegator's reply on a
- * ticket is this and not a copy of its classes.
+ * avatar and no name.
  */
 export function AssistantText({ text }: { text: string }) {
   return (

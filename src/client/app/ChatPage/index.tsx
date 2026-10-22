@@ -37,8 +37,6 @@ import { openViewer, useChatViewer, useViewerStore, viewerWidthClass } from "../
 import type { ChatPreviewContext } from "./ChatPreview"
 import { useOpenChat } from "../useOpenChat"
 import { useNewChatDelegate } from "./useNewChatDelegate"
-import { useTicketDeepLink } from "./useTicketDeepLink"
-import { usePublishTicketBoard } from "../../stores/ticketBoardStore"
 import { useDelegateStore } from "../../stores/delegateStore"
 import { useAppDialog } from "../../components/ui/app-dialog"
 import type { DiffViewerContext } from "../../components/chat-ui/git/DiffViewer"
@@ -617,10 +615,6 @@ export function ChatPage() {
     setViewerFloor({ kind: "delegated", chatId: viewerFloorChatId }, { openByDefault: firstTime })
     if (firstTime) delegateStore.markPaneShown(viewerFloorChatId)
   }, [setViewerFloor, state.sidebarReady, viewerFloorChatId])
-  // The board is drawn in the pane and in the transcript's ticket cards, and
-  // this snapshot is where it comes from (`ticketBoardStore`).
-  usePublishTicketBoard(state.chatSnapshot)
-  useTicketDeepLink(state.activeChatId, state.sidebarReady, isDelegator)
   const navigate = useNavigate()
   const location = useLocation()
   // The navbar's left end names the open chat (`ChatNavbarTitle`), or with

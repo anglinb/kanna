@@ -66,32 +66,3 @@ describe("hasViewerLevelBelow", () => {
     expect(hasViewerLevelBelow({ item: { kind: "chat", chatId: "b", back: ["a"] } }, null)).toBe(true)
   })
 })
-
-describe("viewerLevelBelow for tickets", () => {
-  const TICKET = { kind: "ticket", chatId: "deleg", ticketId: "tk_00000d" } as const
-
-  test("on its delegator's page a ticket goes back to its board, with or without the board as the floor", () => {
-    expect(viewerLevelBelow({ item: TICKET }, LIST, "deleg")).toEqual({ item: LIST })
-    // A phone: the delegator's page, with no floor.
-    expect(viewerLevelBelow({ item: TICKET }, null, "deleg")).toEqual({ item: LIST })
-  })
-
-  test("opened from a link in another chat, a ticket has no board under it", () => {
-    // An ordinary chat: the pane shuts.
-    expect(viewerLevelBelow({ item: TICKET }, null, "ordinary")).toBe("closed")
-    // Another delegator's page: its own board, the page's floor.
-    const otherBoard = { kind: "delegated", chatId: "other" } as const
-    expect(viewerLevelBelow({ item: TICKET }, otherBoard, "other")).toEqual({ item: otherBoard })
-  })
-
-  test("a chat opened from a ticket goes back to the ticket, and keeps it through its trail", () => {
-    expect(viewerLevelBelow({ item: { kind: "chat", chatId: "a", delegated: "deleg", ticket: "tk_00000d" } }, LIST))
-      .toEqual({ item: TICKET })
-    expect(viewerLevelBelow({ item: { kind: "chat", chatId: "b", back: ["a"], delegated: "deleg", ticket: "tk_00000d" } }, LIST))
-      .toEqual({ item: { kind: "chat", chatId: "a", delegated: "deleg", ticket: "tk_00000d" } })
-  })
-
-  test("a file opened over a ticket goes back to it", () => {
-    expect(viewerLevelBelow({ item: FILE, returnTo: { item: TICKET } }, LIST)).toEqual({ item: TICKET })
-  })
-})

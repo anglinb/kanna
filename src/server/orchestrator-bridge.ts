@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, Option, Scope } from "effect"
+import { Context, Effect, Exit, Layer, Scope } from "effect"
 import type { MessageSource } from "../shared/types"
 import type { AgentToAgentTurn } from "./agent-to-agent"
 import { NoopAnalytics, type Analytics } from "./analytics"
@@ -9,17 +9,13 @@ import { ServerPlatform } from "./effect/runtime"
 import { EventStore } from "./event-store"
 import type { EventStoreBridge } from "./event-store-bridge"
 import { Orchestrator } from "./orchestrator"
-import type { TicketBoard } from "./ticket-board"
-import { TicketStore } from "./ticket-store"
 
 type Service = Orchestrator["Service"]
 
 /**
  * `Orchestrator` as the Promise code that has not moved to Effect yet calls
- * it: the coordinator (its hooks and the turn notices), the router (the
- * ticket pane), and the Kanna tools' context (`kanna-tools.ts`, whose display
- * and visualization tools call `checkTicket` and `replyToTicket`). The method
- * names and shapes are the old class's, so those callers are unchanged.
+ * it: the coordinator (its hooks and the turn notices). The method names and
+ * shapes are the old class's, so those callers are unchanged.
  *
  * Reads that answer from memory run with `runKannaSync`, writes with
  * `runKanna`; a failure throws (or rejects with) the service's own tagged
@@ -28,12 +24,7 @@ type Service = Orchestrator["Service"]
  * `Orchestrator["Service"]` (wave 4). See docs/effect-migration.md.
  */
 export class ChatOrchestrator {
-  /** Delegators' ticket boards. Null when the orchestrator was built without a ticket store. */
-  readonly tickets: TicketBoard["Service"] | null
-
-  constructor(readonly service: Service, private readonly close: () => void = () => {}) {
-    this.tickets = Option.getOrNull(service.tickets)
-  }
+  constructor(readonly service: Service, private readonly close: () => void = () => {}) {}
 
   /** See `Orchestrator.start`. */
   start() { runKannaSync(this.service.start) }
@@ -48,7 +39,6 @@ export class ChatOrchestrator {
   getChatsWaitingOnSubchats(unsettled: Iterable<string>) { return this.service.getChatsWaitingOnSubchats(unsettled) }
   getChildActivities(chatId: string) { return this.service.getChildActivities(chatId) }
   isAgentToAgent(chatId: string, source?: MessageSource) { return this.service.isAgentToAgent(chatId, source) }
-  ticketChatInfo(chatId: string) { return this.service.ticketChatInfo(chatId) }
   buildTurnNotices(chatId: string, source?: MessageSource, turn?: AgentToAgentTurn) {
     return runKannaSync(this.service.buildTurnNotices(chatId, source, turn))
   }
@@ -71,28 +61,9 @@ export class ChatOrchestrator {
   // The coordinator's hooks
   handleChatSettled(chatId: string) { runKannaSync(this.service.handleChatSettled(chatId)) }
   handleTurnStarted(chatId: string) { runKannaSync(this.service.handleTurnStarted(chatId)) }
-  handleWaitingForUser(chatId: string) { runKannaSync(this.service.handleWaitingForUser(chatId)) }
   handleBackgroundWorkStarted(chatId: string) { runKannaSync(this.service.handleBackgroundWorkStarted(chatId)) }
   handleChatStopped(chatId: string) { runKannaSync(this.service.handleChatStopped(chatId)) }
-  handleQueuedMessageRemoved(chatId: string, queuedMessageId: string, taken: boolean) {
-    runKannaSync(this.service.handleQueuedMessageRemoved(chatId, queuedMessageId, taken))
-  }
   stopChildTask(chatId: string, taskId: string) { return runKanna(this.service.stopChildTask(chatId, taskId)) }
-
-  // Tickets
-  ticketBoard(chatId: string) { return Option.getOrNull(runKannaSync(this.service.ticketBoard(chatId))) }
-  ticketDetail(chatId: string, ticketId: string) { return Option.getOrNull(runKannaSync(this.service.ticketDetail(chatId, ticketId))) }
-  ticketAttentionByChat() { return runKannaSync(this.service.ticketAttentionByChat) }
-  replyToTicketAsUser(input: Parameters<Service["replyToTicketAsUser"]>[0]) { return runKanna(this.service.replyToTicketAsUser(input)) }
-  setTicketStatusAsUser(input: Parameters<Service["setTicketStatusAsUser"]>[0]) { return runKanna(this.service.setTicketStatusAsUser(input)) }
-  setTicketReadAsUser(input: Parameters<Service["setTicketReadAsUser"]>[0]) { return runKanna(this.service.setTicketReadAsUser(input)) }
-  createTicket(...args: Parameters<Service["createTicket"]>) { return runKanna(this.service.createTicket(...args)) }
-  updateTicket(...args: Parameters<Service["updateTicket"]>) { return runKanna(this.service.updateTicket(...args)) }
-  replyToTicket(...args: Parameters<Service["replyToTicket"]>) { return runKanna(this.service.replyToTicket(...args)) }
-  /** Throws unless the actor is a delegator with this ticket. The media tools check before they store anything. */
-  checkTicket(actorChatId: string, ticketId: string) { runKannaSync(this.service.checkTicket(actorChatId, ticketId)) }
-  readTicket(actorChatId: string, ticketId: string) { return runKannaSync(this.service.readTicket(actorChatId, ticketId)) }
-  listTickets(...args: Parameters<Service["listTickets"]>) { return runKannaSync(this.service.listTickets(...args)) }
 }
 
 /**
@@ -105,8 +76,6 @@ export async function openChatOrchestrator(args: {
   agent: CoordinatorLike
   push: (change: ChatChange) => void
   analytics?: Analytics["Service"]
-  /** Without it there are no tickets. */
-  tickets?: TicketStore["Service"]
   now?: () => number
   closeOutGraceMs?: number
 }): Promise<ChatOrchestrator> {
@@ -120,7 +89,6 @@ export async function openChatOrchestrator(args: {
     }))),
     Layer.provide(Layer.succeed(ChatAgent, agent)),
     Layer.provide(Layer.succeed(EventStore, args.store.service)),
-    Layer.provide(args.tickets ? Layer.succeed(TicketStore, args.tickets) : Layer.empty),
     Layer.provide(ServerPlatform),
   )
   const service = await runKanna(Layer.buildWithScope(layer, scope).pipe(

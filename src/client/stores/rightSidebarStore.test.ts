@@ -165,6 +165,22 @@ describe("rightSidebarStore", () => {
       expect(migrateRightSidebarStore({ size: 420, viewerWidthPx: 640 }, 10).viewerWidthPx).toBe(640)
     })
 
+    test("v11 opens a ticket left open as its delegator's pane, and a chat forgets its ticket", () => {
+      const v10 = migrateRightSidebarStore({
+        size: 420,
+        chatViewers: {
+          "deleg": { item: { kind: "ticket", chatId: "deleg", ticketId: "tk_00000d" }, expanded: false },
+          "deleg-2": { item: { kind: "chat", chatId: "a", delegated: "deleg-2", ticket: "tk_00000e" }, expanded: false },
+          "chat-3": { item: { kind: "file", projectId: "p", path: "a.md" }, expanded: false, returnTo: { item: { kind: "ticket", chatId: "deleg", ticketId: "tk_00000d" } } },
+        },
+      }, 10)
+      expect(v10.chatViewers).toEqual({
+        "deleg": { item: { kind: "delegated", chatId: "deleg" }, expanded: false },
+        "deleg-2": { item: { kind: "chat", chatId: "a", delegated: "deleg-2" }, expanded: false },
+        "chat-3": { item: { kind: "file", projectId: "p", path: "a.md" }, expanded: false, returnTo: { item: { kind: "delegated", chatId: "deleg" } } },
+      })
+    })
+
     test("keeps a v7 pixel width but resets an older percentage", () => {
       expect(migrateRightSidebarStore({ size: 520 }, 7).size).toBe(520)
       expect(migrateRightSidebarStore({ size: 44 }, 6).size).toBe(DEFAULT_RIGHT_SIDEBAR_SIZE)

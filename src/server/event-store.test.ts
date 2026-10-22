@@ -7,7 +7,7 @@ import type { TranscriptEntry } from "../shared/types"
 import type { SnapshotFile } from "./events"
 import { Effect, Layer, Result } from "effect"
 import { runTest } from "./effect/testing"
-import { defaultEventStoreDataDir, EventStore } from "./event-store"
+import { defaultEventStoreDataDir, EventStore, forkPointOf } from "./event-store"
 import { PerformanceLog } from "./performance-log"
 import { openEventStore } from "./event-store-bridge"
 import { deriveLocalProjectsSnapshot } from "./read-models"
@@ -874,6 +874,69 @@ describe("EventStore", () => {
 
     const reloaded = await openEventStore(dataDir)
     expect(reloaded.getMessages(forked.id)).toHaveLength(3)
+  })
+
+  test("a fork records where it branches off the source's session, and later turns of the source do not move it", async () => {
+    const dataDir = await createTempDataDir()
+    const store = await openEventStore(dataDir)
+    const project = await store.openProject("/tmp/project")
+    const source = await store.createChat(project.id)
+    await store.setChatProvider(source.id, "claude")
+    await store.setSessionToken(source.id, "session-1")
+    const chain = (kind: "assistant_text" | "result" | "user_prompt", at: number, messageId: string, extra: Record<string, unknown> = {}) => ({ ...entry(kind, at, extra), messageId, ...extra })
+
+    // A turn that finished: its last message on the chain is "u2". A subagent's
+    // message and the turn's result come after it, and neither is a fork point.
+    await store.recordTurnStarted(source.id)
+    await store.appendMessage(source.id, entry("user_prompt", 1_000, { content: "analyze this" }))
+    await store.appendMessage(source.id, chain("assistant_text", 2_000, "u1", { text: "looking" }))
+    await store.appendMessage(source.id, chain("assistant_text", 2_500, "u2", { text: "analysis done" }))
+    await store.appendMessage(source.id, { ...chain("assistant_text", 2_600, "sub-1", { text: "subagent" }), parentToolUseId: "tool-1" } as TranscriptEntry)
+    await store.appendMessage(source.id, chain("result", 3_000, "r1", { result: "ok" }))
+    await store.recordTurnFinished(source.id)
+    // One still running when the fork is made.
+    await store.recordTurnStarted(source.id)
+    await store.appendMessage(source.id, entry("user_prompt", 4_000, { content: "now refactor it" }))
+    await store.appendMessage(source.id, chain("assistant_text", 5_000, "u3", { text: "starting the refactor" }))
+
+    const forked = await store.forkChat(source.id, { atLastCompletedTurn: true })
+    expect(store.getChat(forked.id)).toMatchObject({ pendingForkSessionToken: "session-1", pendingForkAt: "u2" })
+
+    // The source finishes that turn and runs another before the fork's first.
+    await store.appendMessage(source.id, chain("assistant_text", 6_000, "u4", { text: "refactored" }))
+    await store.appendMessage(source.id, chain("result", 6_500, "r2", { result: "ok" }))
+    await store.recordTurnFinished(source.id)
+    expect(store.getChat(forked.id)?.pendingForkAt).toBe("u2")
+
+    // It holds across a restart, and goes with the token once the fork has run.
+    const reloaded = await openEventStore(dataDir)
+    expect(reloaded.getChat(forked.id)?.pendingForkAt).toBe("u2")
+    await reloaded.setPendingForkSessionToken(forked.id, null)
+    expect(reloaded.getChat(forked.id)).toMatchObject({ pendingForkSessionToken: null, pendingForkAt: null })
+  })
+
+  test("the fork point is the provider's: Claude's last chain message, Codex's last turn", () => {
+    const at = (kind: "assistant_text" | "result", messageId: string, extra: Record<string, unknown> = {}) => ({ ...entry(kind, 1, extra), messageId, ...extra }) as TranscriptEntry
+    const entries = [at("assistant_text", "a1"), at("result", "turn-1"), at("assistant_text", "a2"), { ...at("assistant_text", "sub"), parentToolUseId: "t" } as TranscriptEntry, at("result", "turn-2")]
+    expect(forkPointOf("claude", entries)).toBe("a2")
+    expect(forkPointOf("codex", entries)).toBe("turn-2")
+    expect(forkPointOf("pi", entries)).toBeNull()
+    // Turns recorded before ids were kept: none, and the fork copies the session whole, as it did.
+    expect(forkPointOf("claude", [entry("assistant_text", 1)])).toBeNull()
+  })
+
+  test("a delegator's fork is a delegator; an ordinary chat's is not", async () => {
+    const dataDir = await createTempDataDir()
+    const store = await openEventStore(dataDir)
+    const project = await store.openProject("/tmp/project")
+    const delegator = await store.createChat(project.id, undefined, { delegator: true })
+    const plain = await store.createChat(project.id)
+    for (const chat of [delegator, plain]) {
+      await store.setChatProvider(chat.id, "claude")
+      await store.setSessionToken(chat.id, `session-${chat.id}`)
+    }
+    expect((await store.forkChat(delegator.id)).delegator).toBe(true)
+    expect(await store.forkChat(plain.id)).not.toHaveProperty("delegator")
   })
 
   test("refuses a mid-turn fork when no turn has completed yet", async () => {
@@ -1845,18 +1908,14 @@ describe("EventStore service", () => {
       const events: string[] = []
       store.hooks.onTurnStarted = (chatId) => { events.push(`started:${store.getChat(chatId)?.turnCount}`) }
       store.hooks.onTurnEnded = (chatId) => { events.push(`ended:${store.getChat(chatId)?.lastTurnOutcome}`) }
-      store.hooks.onQueuedMessageRemoved = (_chatId, queuedMessageId, taken) => { events.push(`removed:${queuedMessageId}:${taken}`) }
       const project = yield* store.openProject("/tmp/project")
       const chat = yield* store.createChat(project.id)
-      const queued = yield* store.enqueueMessage(chat.id, { content: "hi", attachments: [], id: "q1" })
-      yield* store.removeQueuedMessage(chat.id, queued.id, { taken: true })
-      events.push("caller")
       yield* store.recordTurnStarted(chat.id)
       events.push("caller")
       yield* store.recordTurnFailed(chat.id, "boom")
       return events
     }))
-    expect(seen).toEqual(["removed:q1:true", "caller", "started:1", "caller", "ended:failed"])
+    expect(seen).toEqual(["started:1", "caller", "ended:failed"])
   })
 
   test("reads tool bodies asynchronously as the synchronous readers do", async () => {

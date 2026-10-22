@@ -3,8 +3,7 @@
  * more foldable rows in a row are one group, a lone one stays a row, and a
  * row that does not fold ends the run. A row that draws nothing (`shown`
  * false) inside a run is passed over: it neither ends the run nor joins it.
- * `KannaTranscript` folds a chat's tool calls with it, and a ticket's
- * activity its hand-offs and events, so the two fold alike.
+ * `KannaTranscript` folds a chat's tool calls with it.
  */
 export type FoldedRun<T> =
   | { type: "single"; item: T; index: number }

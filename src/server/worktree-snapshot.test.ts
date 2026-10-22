@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import { TestPlatform } from "./effect/testing"
-import { TurnFileRecordError, TurnFileTracker, type TouchedFile } from "./worktree-snapshot"
+import { LARGE_FILE_BYTES, TurnFileRecordError, TurnFileTracker, type TouchedFile } from "./worktree-snapshot"
 
 const tempDirs: string[] = []
 const runtimes: Array<ManagedRuntime.ManagedRuntime<TurnFileTracker, never>> = []
@@ -24,6 +24,10 @@ async function run(command: string[], cwd: string) {
   ])
   if (exitCode !== 0) throw new Error(stderr || stdout || `Command failed: ${command.join(" ")}`)
   return stdout
+}
+
+async function exitCode(command: string[], cwd: string) {
+  return Bun.spawn(command, { cwd, stdout: "ignore", stderr: "ignore" }).exited
 }
 
 async function createRepo() {
@@ -321,6 +325,146 @@ describe("TurnFileTracker", () => {
     await tracker.endTurn("chat-1")
 
     expect(recorded.has("chat-1")).toBe(false)
+  })
+
+  test("records a large file the turn wrote without hashing it", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+    const videoPath = path.join(repoRoot, "render.mp4")
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(videoPath, Buffer.alloc(LARGE_FILE_BYTES, 1))
+    })
+
+    // No counts: there is no blob to count lines in.
+    expect(files).toEqual([{ path: "render.mp4", baseBlob: null }])
+    // And none was written. Hashing it is the cost this path exists to avoid.
+    const sha = (await run(["git", "hash-object", videoPath], repoRoot)).trim()
+    expect(await exitCode(["git", "cat-file", "-e", sha], repoRoot)).not.toBe(0)
+  })
+
+  test("records nothing for a large file the turn left alone", async () => {
+    const repoRoot = await createRepo()
+    const { runTurn, recordedFiles: recorded } = trackerFor(repoRoot)
+    await writeFile(path.join(repoRoot, "dataset.bin"), Buffer.alloc(LARGE_FILE_BYTES, 1))
+
+    await runTurn("chat-1", async () => {})
+
+    expect(recorded.has("chat-1")).toBe(false)
+  })
+
+  test("records a large file the turn deleted", async () => {
+    const repoRoot = await createRepo()
+    const { runTurn } = trackerFor(repoRoot)
+    await writeFile(path.join(repoRoot, "dataset.bin"), Buffer.alloc(LARGE_FILE_BYTES, 1))
+
+    const paths = await runTurn("chat-1", async () => {
+      await rm(path.join(repoRoot, "dataset.bin"))
+    })
+
+    expect(paths).toEqual(["dataset.bin"])
+  })
+
+  test("records a large tracked file the turn edited", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+    const assetPath = path.join(repoRoot, "asset.bin")
+    await writeFile(assetPath, Buffer.alloc(LARGE_FILE_BYTES, 1))
+    await run(["git", "add", "asset.bin"], repoRoot)
+    await run(["git", "commit", "-m", "asset"], repoRoot)
+    const baseBlob = (await run(["git", "rev-parse", "HEAD:asset.bin"], repoRoot)).trim()
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(assetPath, Buffer.alloc(LARGE_FILE_BYTES + 1, 2))
+    })
+
+    expect(files).toEqual([{ path: "asset.bin", baseBlob }])
+    const sha = (await run(["git", "hash-object", assetPath], repoRoot)).trim()
+    expect(await exitCode(["git", "cat-file", "-e", sha], repoRoot)).not.toBe(0)
+  })
+
+  test("a file one byte under the threshold keeps its line counts", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "almost.txt"), `${"a".repeat(LARGE_FILE_BYTES - 2)}\n`, "utf8")
+    })
+
+    expect(files).toEqual([{ path: "almost.txt", additions: 1, deletions: 0, baseBlob: null }])
+  })
+
+  test("records a file that grows past the threshold, without counts", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "app.txt"), Buffer.alloc(LARGE_FILE_BYTES, 65))
+    })
+
+    expect(files.map((file) => file.path)).toEqual(["app.txt"])
+    expect(files[0]).not.toHaveProperty("additions")
+  })
+
+  test("records a file that shrinks under the threshold, without counts", async () => {
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+    await writeFile(path.join(repoRoot, "app.txt"), Buffer.alloc(LARGE_FILE_BYTES, 65))
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "app.txt"), "small\n", "utf8")
+    })
+
+    expect(files.map((file) => file.path)).toEqual(["app.txt"])
+    expect(files[0]).not.toHaveProperty("additions")
+  })
+
+  test("a large file with glob characters in its name excludes only itself", async () => {
+    // As globs, `*.bin` would match `a.bin` and `[ab].txt` would match
+    // `b.txt`, keeping both out of the tree.
+    const repoRoot = await createRepo()
+    const { runTurnForFiles } = trackerFor(repoRoot)
+    await writeFile(path.join(repoRoot, "*.bin"), Buffer.alloc(LARGE_FILE_BYTES, 1))
+    await writeFile(path.join(repoRoot, "[ab].txt"), Buffer.alloc(LARGE_FILE_BYTES, 1))
+
+    const files = await runTurnForFiles("chat-1", async () => {
+      await writeFile(path.join(repoRoot, "a.bin"), "small\n", "utf8")
+      await writeFile(path.join(repoRoot, "b.txt"), "small\n", "utf8")
+    })
+
+    expect(files.map((file) => file.path).sort()).toEqual(["a.bin", "b.txt"])
+  })
+
+  test("records nothing when a large dirty file is only staged mid-turn", async () => {
+    // Its tree entry follows the user's index, so staging moves the tree even
+    // though the file on disk never changed.
+    const repoRoot = await createRepo()
+    const { runTurn, recordedFiles: recorded } = trackerFor(repoRoot)
+    await writeFile(path.join(repoRoot, "asset.bin"), Buffer.alloc(LARGE_FILE_BYTES, 1))
+    await run(["git", "add", "asset.bin"], repoRoot)
+    await run(["git", "commit", "-m", "asset"], repoRoot)
+    await writeFile(path.join(repoRoot, "asset.bin"), Buffer.alloc(LARGE_FILE_BYTES + 1, 2))
+
+    await runTurn("chat-1", async () => {
+      await run(["git", "add", "asset.bin"], repoRoot)
+    })
+
+    expect(recorded.has("chat-1")).toBe(false)
+  })
+
+  test("concurrent turns that start together each get a baseline", async () => {
+    // Their captures are merged into one, which must still predate both edits.
+    const repoRoot = await createRepo()
+    const { tracker, recordedFiles: recorded } = trackerFor(repoRoot)
+
+    await Promise.all([tracker.beginTurn("chat-a"), tracker.beginTurn("chat-b"), tracker.beginTurn("chat-c")])
+    await writeFile(path.join(repoRoot, "a.txt"), "a\n", "utf8")
+    await tracker.endTurn("chat-a")
+    await writeFile(path.join(repoRoot, "b.txt"), "b\n", "utf8")
+    await tracker.endTurn("chat-b")
+
+    expect(recorded.get("chat-a")?.map((file) => file.path)).toEqual(["a.txt"])
+    expect(recorded.get("chat-b")?.map((file) => file.path).sort()).toEqual(["a.txt", "b.txt"])
   })
 
   test("tracks concurrent turns independently", async () => {

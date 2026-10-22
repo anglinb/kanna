@@ -12,7 +12,6 @@ import { DrainingIndicator } from "../../components/messages/DrainingIndicator"
 import { QueuedUserMessage } from "../../components/messages/QueuedUserMessage"
 import { messageNamingParent, ParentChatLink } from "../../components/messages/ParentChatLink"
 import { ReplyQuoteProjectContext } from "../../components/messages/ChatToolMessage"
-import { TicketTranscriptProvider } from "../../components/tickets/ticket-transcript"
 import { TRANSCRIPT_ROW_CLASS } from "../../components/messages/transcript-row"
 import { useParentChatId, useProjectIdForChat } from "../../stores/sidebarStore"
 import { OpenLocalLinkProvider, type OpenLocalLinkTarget } from "../../components/messages/shared"
@@ -1273,7 +1272,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     <>
       <OpenLocalLinkProvider onOpenLocalLink={handleOpenLocalLinkClick}>
         <ReplyQuoteProjectContext.Provider value={currentProjectId}>
-        <TicketTranscriptProvider chatId={activeChatId} messages={messages}>
         <MessageScroller className="h-full flex-1">
           <MessageScrollerViewport
             ref={viewportRef}
@@ -1299,7 +1297,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
             </MessageScrollerContent>
           </MessageScrollerViewport>
         </MessageScroller>
-        </TicketTranscriptProvider>
         </ReplyQuoteProjectContext.Provider>
       </OpenLocalLinkProvider>
 

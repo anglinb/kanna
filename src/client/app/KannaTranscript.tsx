@@ -13,7 +13,6 @@ import { ToolCallMessage } from "../components/messages/ToolCallMessage"
 import { formatPromptBoundary, promptOriginLabel, ResultMessage, TimeBoundary } from "../components/messages/ResultMessage"
 import { isChatToolCall } from "../components/messages/ChatToolMessage"
 import { SourcedMessage, sourcedSections } from "../components/messages/SourcedMessage"
-import { TicketReplyMessage, ticketPromptHasBody } from "../components/tickets/TicketReplyMessage"
 import { isScheduleToolCall } from "../components/messages/ScheduleToolMessage"
 import { stripSystemMessages } from "../../shared/message-preview"
 import { InterruptedMessage } from "../components/messages/InterruptedMessage"
@@ -98,8 +97,6 @@ interface TranscriptMessageRenderState {
  */
 function promptHasBody(message: Extract<HydratedTranscriptMessage, { kind: "user_prompt" }>) {
   if (stripSystemMessages(message.content).length > 0 || (message.attachments?.length ?? 0) > 0) return true
-  // A ticket reopened by the user is all header too, and still gets a line.
-  if (message.source?.kind === "ticket") return ticketPromptHasBody(message.content, message.source, message.attachments?.length ?? 0)
   return message.source?.kind === "report" && sourcedSections(message.content, message.source).length > 0
 }
 
@@ -260,8 +257,7 @@ function buildTranscriptMessageRenderStates(
       // A failed result draws an error, not a time.
       if (!hidden && message.success) boundaryAhead = true
     } else if (message.kind === "user_prompt" && !message.hidden) {
-      // A ticket reply is the user's own words, and dates itself as theirs do.
-      ownBoundaries[index] = message.source !== undefined && message.source.kind !== "ticket" && !boundaryAhead
+      ownBoundaries[index] = message.source !== undefined && !boundaryAhead
       boundaryAhead = false
     }
   }
@@ -587,8 +583,6 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
   if (message.kind === "user_prompt") {
     const bubble = !promptHasBody(message)
       ? null
-      : message.source?.kind === "ticket"
-        ? <TicketReplyMessage key={message.id} content={message.content} source={message.source} attachments={message.attachments} steered={message.steered} flash={flash} />
       : message.source
         ? <SourcedMessage key={message.id} content={message.content} source={message.source} attachments={message.attachments} steered={message.steered} flash={flash} />
         : <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} flash={flash} />

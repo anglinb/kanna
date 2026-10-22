@@ -161,3 +161,19 @@ export const NoopAnalytics: Analytics["Service"] = {
   trackLaunch: () => Effect.void,
   flush: Effect.void,
 }
+
+/**
+ * Tests and CI start real servers, each with a fresh data dir and so a fresh
+ * anonymous id, and every run landed in production analytics as a new install
+ * that lived under a minute. `bun test` sets NODE_ENV=test and CI providers
+ * set CI. KANNA_DISABLE_ANALYTICS=1 or DO_NOT_TRACK=1 covers anything else
+ * that boots Kanna unattended.
+ */
+export function isAnalyticsDisabledByEnv(env: Record<string, string | undefined> = process.env) {
+  const isSet = (value: string | undefined) => Boolean(value) && value !== "0" && value !== "false"
+  return env.NODE_ENV === "test"
+    || isSet(env.CI)
+    || isSet(env.KANNA_DISABLE_ANALYTICS)
+    || isSet(env.DO_NOT_TRACK)
+}
+

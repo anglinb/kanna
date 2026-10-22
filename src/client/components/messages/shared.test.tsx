@@ -118,8 +118,8 @@ describe("markdownComponents", () => {
   })
 })
 
-describe("a ticket's link", () => {
-  test("renders as written, with the ticket's address", () => {
+describe("a ticket link in an older chat", () => {
+  test("is a link to its chat, with the address as written", () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <TranscriptMarkdown text="See [#8 One live row per hand-off](/chat/deleg-9?ticket=tk_00000d)." />

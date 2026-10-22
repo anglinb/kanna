@@ -61,6 +61,13 @@ export interface ChatRecord {
   autoPlan: boolean
   sessionToken: string | null
   pendingForkSessionToken?: string | null
+  /**
+   * Where the fork branches off `pendingForkSessionToken`'s session: the
+   * provider's id for the last thing it kept (a Claude message uuid, a Codex
+   * turn id). Without it the provider copies the whole session as it is at the
+   * fork's first turn, and turns the source ran since leak into the fork.
+   */
+  pendingForkAt?: string | null
   hasMessages?: boolean
   lastMessageAt?: number
   /**
@@ -494,6 +501,8 @@ export type TurnEvent =
       timestamp: number
       chatId: string
       pendingForkSessionToken: string | null
+      /** Absent on events written before forks recorded where they branch. */
+      pendingForkAt?: string | null
     }
 
 export type ScheduleEvent =

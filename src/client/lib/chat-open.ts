@@ -1,7 +1,7 @@
 /**
  * What opening a chat from inside another chat's view does: a click on a
- * Kanna chat link, a delegation card, a reply quote, a Tasks row, a ticket's
- * chat.
+ * Kanna chat link, a delegation card, a reply quote, a Tasks row, a row of
+ * a delegator's list.
  *
  * It opens in the previewer, beside the chat you are reading, whatever the
  * two are to each other: a sub-chat, its parent, or a chat that only gets a

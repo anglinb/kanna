@@ -115,6 +115,10 @@ export const VISUALIZATION_CAPTURE_SCRIPT = `(() => {
       const value = computed.getPropertyValue(name);
       if (value) clone.style.setProperty(name, value);
     }
+    // The page's text color comes from its root's color-scheme. In the SVG
+    // the clone is not the root, so it is given the color it resolved to.
+    clone.style.setProperty('color', computed.color);
+    clone.style.setProperty('color-scheme', computed.colorScheme);
     const style = document.createElement('style');
     style.textContent = stylesheet();
     (clone.querySelector('head') ?? clone).prepend(style);
@@ -151,15 +155,30 @@ export function visualizationImageName(title: string): string {
 }
 
 /**
- * The file a name typed for a capture is saved as. The `.png` is added here,
- * whether or not it was typed; what a file system will not take goes.
+ * What a capture can be saved as. The page draws a PNG, and the host
+ * re-encodes it for the others. No SVG: the one the page builds holds the
+ * page as HTML in a `foreignObject`, which only a browser draws (Preview,
+ * Figma and Illustrator show it blank or broken), with every font inlined.
  */
-export function visualizationImageFilename(name: string, title: string): string {
-  const base = name.trim().replace(/\.png$/i, "")
+export const VISUALIZATION_IMAGE_TYPES = {
+  png: { label: "PNG", mimeType: "image/png", extension: "png" },
+  jpeg: { label: "JPEG", mimeType: "image/jpeg", extension: "jpg" },
+  webp: { label: "WebP", mimeType: "image/webp", extension: "webp" },
+} as const
+
+export type VisualizationImageType = keyof typeof VISUALIZATION_IMAGE_TYPES
+
+/**
+ * The file a name typed for a capture is saved as. The extension is added
+ * here, whether or not one was typed, and an image extension typed for
+ * another type is swapped for this one; what a file system will not take goes.
+ */
+export function visualizationImageFilename(name: string, title: string, type: VisualizationImageType = "png"): string {
+  const base = name.trim().replace(/\.(png|jpe?g|webp)$/i, "")
     // Control characters and what Windows, macOS or a shell will not take in a name.
     .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]+/g, "-")
     .replace(/^[.\s]+/, "").trim().slice(0, 120).trim()
-  return `${base || visualizationImageName(title)}.png`
+  return `${base || visualizationImageName(title)}.${VISUALIZATION_IMAGE_TYPES[type].extension}`
 }
 
 /**

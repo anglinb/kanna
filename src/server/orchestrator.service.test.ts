@@ -11,7 +11,7 @@ import { Orchestrator } from "./orchestrator"
 /**
  * The service itself, through its layer, over the real store and chat
  * commands and a stand-in coordinator. The rules are tested end to end in
- * `orchestrator.test.ts` and `tickets.test.ts`; these cover what the layer
+ * `orchestrator.test.ts`; these cover what the layer
  * adds: typed failures, and its lifetime.
  */
 
@@ -52,9 +52,6 @@ describe("the orchestrator service", () => {
 
     const schedule = yield* failureOf(orchestrator.deleteSchedule("gone"))
     expect(schedule._tag).toBe("@kanna/server/orchestrator/ScheduleNotFoundError")
-
-    const tickets = yield* failureOf(orchestrator.createTicket(root, { title: "x" }))
-    expect(tickets.message).toBe("Tickets are not available in this session.")
     expect(calls).toEqual([])
   })))
 
@@ -92,6 +89,5 @@ describe("the orchestrator service", () => {
     Effect.runSync(orchestrator.handleTurnStarted(child.id))
     Effect.runSync(orchestrator.handleChatSettled(child.id))
     Effect.runSync(orchestrator.handleChatStopped(root))
-    Effect.runSync(orchestrator.handleQueuedMessageRemoved(child.id, "q", false))
   })))
 })

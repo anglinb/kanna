@@ -25,13 +25,9 @@ const reference: Record<string, z.ZodType> = {
     html: z.string().min(1).max(VISUALIZATION_MAX_BYTES).optional().describe("Self-contained HTML fragment, including inline CSS and JavaScript. Supply html or path, not both."),
     path: z.string().min(1).optional().describe("HTML file, absolute or relative to the project. Copied into this chat; source edits will not change the saved visualization."),
     height: z.number().int().min(80).max(VISUALIZATION_MAX_HEIGHT).optional().describe("Initial height in CSS pixels, default 360. The frame then fits the content automatically."),
-    ticketId: z.string().optional().describe("Delegator chats only: also post it on this ticket, as a reply. Other chats cannot post on tickets."),
-    text: z.string().optional().describe("With ticketId: the reply's words (markdown), posted with the visualization as one reply, as reply_to_ticket's text."),
-    asksUser: z.boolean().optional().describe("With ticketId: as on reply_to_ticket, true only when the reply's question blocks the work or its Done."),
   }),
   send_attachments: z.strictObject({
     attachments: z.array(attachmentItem).min(1).max(24),
-    ticketId: z.string().optional().describe("Delegator chats only: also post these on this ticket, as a reply. Other chats cannot post on tickets."),
   }),
   generate_images: z.strictObject({
     images: z.array(z.strictObject({

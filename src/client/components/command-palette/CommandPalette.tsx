@@ -924,15 +924,15 @@ export function CommandPalette({ state }: { state: KannaState }) {
       }
     }
 
-    // The navbar's tickets button, for a delegator: its tickets, in the
+    // The navbar's button for a delegator: the list of its chats, in the
     // pane, under the same icon. No shortcut of its own.
     if (state.activeChatId && canShowPane && currentChatRow?.delegator) {
       const delegatorChatId = state.activeChatId
       list.push({
         id: "toggle-delegated",
-        title: viewerShown ? "Hide Tickets" : "Show Tickets",
-        keywords: ["tickets", "ticket", "board", "delegated", "delegator", "delegate", "sub-chats", "subchats", "sub chats", "chats", "list", "pane", "show", "hide", "toggle"],
-        icon: <ListTodo className={ICON_CLASS} />,
+        title: viewerShown ? "Hide Delegated" : "Show Delegated",
+        keywords: ["delegated", "delegator", "delegate", "sub-chats", "subchats", "sub chats", "chats", "list", "pane", "show", "hide", "toggle"],
+        icon: <DelegatorIcon className={ICON_CLASS} />,
         run: () => {
           close()
           toggleDelegatedPane(delegatorChatId)

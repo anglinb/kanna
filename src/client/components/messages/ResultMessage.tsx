@@ -18,9 +18,6 @@ export function promptOriginLabel(source: MessageSource | undefined): string | u
   if (!source) return undefined
   if (source.kind === "schedule") return "from an automation"
   if (source.kind === "report") return "from a sub-chat"
-  // The user's reply on a ticket is theirs, and says nothing of where it came from.
-  if (source.kind === "ticket") return undefined
-  if (source.kind === "ticket_nudge") return "from Kanna"
   return "from another agent"
 }
 
