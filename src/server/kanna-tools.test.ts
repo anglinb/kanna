@@ -12,7 +12,7 @@ import { KannaToolRuntime, KannaToolEventFilter, KANNA_TOOL_NAMES, kannaToolSpec
 import { createClaudeKannaTools, createPiKannaTools } from "./kanna-tool-adapters"
 import { createKannaMcpServer } from "./kanna-mcp"
 import { parseTranscriptMediaUrl, getTranscriptMediaDir, retargetEntryMediaUrls } from "./transcript-media"
-import { EventStore } from "./event-store"
+import { openEventStore } from "./event-store-bridge"
 import { splitTranscriptEntry } from "./transcript-payloads"
 
 const visualization = { title: "Sales", html: '<svg aria-label="Sales"><text>Jan: 10, Feb: 20</text></svg>' }
@@ -109,8 +109,7 @@ describe("shared Kanna display tools", () => {
   test("display payloads survive a store restart without extra fetches", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "kanna-display-store-"))
     try {
-      const store = new EventStore(dir)
-      await store.initialize()
+      const store = await openEventStore(dir)
       const project = await store.openProject(dir, "Display tools")
       const chat = await store.createChat(project.id)
       const runtime = new KannaToolRuntime({ chatId: chat.id, cwd: dir, dataDir: dir,
@@ -118,8 +117,7 @@ describe("shared Kanna display tools", () => {
       })
       await runtime.execute("show_visualization", visualization)
       await runtime.execute("send_attachments", attachments)
-      const reopened = new EventStore(dir)
-      await reopened.initialize()
+      const reopened = await openEventStore(dir)
       const entries = reopened.getClientTranscript(chat.id).messages
       expect(entries[0]).toMatchObject({ tool: { toolKind: "display", input: { payload: { title: "Sales" } } } })
       expect(entries[3]).toMatchObject({ content: [{ type: "attachment", kind: "image" }, { type: "attachment", kind: "file" }] })

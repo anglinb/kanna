@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createChatCommands } from "./chat-commands"
-import { EventStore } from "./event-store"
+import { openEventStore } from "./event-store-bridge"
 import { timestamped } from "./transcript"
 
 const cleanups: Array<() => Promise<void>> = []
@@ -15,8 +15,7 @@ afterEach(async () => {
 async function setup() {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-chat-commands-"))
   cleanups.push(() => rm(dataDir, { recursive: true, force: true }))
-  const store = new EventStore(dataDir)
-  await store.initialize()
+  const store = await openEventStore(dataDir)
   const project = await store.openProject(dataDir)
   const calls: string[] = []
   const { analytics, events: tracked } = makeFakeAnalytics()

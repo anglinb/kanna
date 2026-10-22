@@ -64,7 +64,7 @@ export const storeVisualizationHeight = Effect.fn("VisualizationHeights.store")(
 export const handleVisualizationHeights = Effect.fn("VisualizationHeights.handle")(function* (
   req: Request,
   url: URL,
-  store: Pick<EventStore, "resolveTranscriptMediaPath">,
+  store: Pick<EventStore["Service"], "resolveTranscriptMediaPath">,
 ) {
   const match = url.pathname.match(ROUTE)
   if (!match) return null

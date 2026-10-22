@@ -2,13 +2,12 @@ import { expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { EventStore } from "./event-store"
+import { openEventStore, type EventStoreBridge as EventStore } from "./event-store-bridge"
 
 async function fixture(run: (store: EventStore, projectId: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), "kanna-store-performance-"))
   try {
-    const store = new EventStore(directory)
-    await store.initialize()
+    const store = await openEventStore(directory)
     const project = await store.openProject(directory)
     await run(store, project.id)
   } finally { await rm(directory, { recursive: true, force: true }) }

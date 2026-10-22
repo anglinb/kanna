@@ -25,7 +25,14 @@ import type { TranscriptOutlineEntry } from "../shared/types"
 const SIDEBAR_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000
 const SIDEBAR_FALLBACK_PREVIEW_LIMIT = 5
 
-function getFolderModifiedAt(localPath: string) {
+/**
+ * A folder's mtime for the home page's "modified" sort, or undefined when it
+ * is gone. The one read these derivations make. It stays `statSync`, not a
+ * `FileSystem` effect: the router derives this snapshot synchronously within
+ * one tick, and `FileSystem.stat` rounds mtimes to whole milliseconds, which
+ * would change the `folderModifiedAt` the client receives.
+ */
+export function readFolderModifiedAt(localPath: string) {
   try {
     return statSync(resolveLocalPath(localPath)).mtimeMs
   } catch {
@@ -390,7 +397,8 @@ export function isCodexScratchWorkspacePath(localPath: string) {
 export function deriveLocalProjectsSnapshot(
   state: StoreState,
   discoveredProjects: Array<{ localPath: string; title: string; modifiedAt: number }>,
-  machineName: string
+  machineName: string,
+  folderModifiedAt: (localPath: string) => number | undefined = readFolderModifiedAt,
 ): LocalProjectsSnapshot {
   const projects = new Map<string, LocalProjectsSnapshot["projects"][number]>()
   const hiddenPaths = new Set(
@@ -410,7 +418,7 @@ export function deriveLocalProjectsSnapshot(
       title: project.title,
       source: "discovered",
       lastOpenedAt: project.modifiedAt,
-      folderModifiedAt: getFolderModifiedAt(normalizedPath),
+      folderModifiedAt: folderModifiedAt(normalizedPath),
       chatCount: 0,
     })
   }
@@ -428,7 +436,7 @@ export function deriveLocalProjectsSnapshot(
       source: "saved",
       ...(project.sidebarTitle ? { sidebarTitle: project.sidebarTitle } : {}),
       lastOpenedAt,
-      folderModifiedAt: getFolderModifiedAt(project.localPath),
+      folderModifiedAt: folderModifiedAt(project.localPath),
       chatCount: chats.length,
     })
   }

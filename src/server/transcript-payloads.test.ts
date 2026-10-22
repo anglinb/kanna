@@ -2,10 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { Effect, Result } from "effect"
 import type { TranscriptEntry } from "../shared/types"
+import { runTest } from "./effect/testing"
 import {
+  loadTranscriptPayloadIndex,
   mergeTranscriptPayload,
   readAllTranscriptPayloads,
+  readTranscriptPayloads,
+  readTranscriptPayloadsById,
   serializeTranscriptPayload,
   splitTranscriptEntry,
   TranscriptPayloadIndex,
@@ -142,5 +147,56 @@ describe("TranscriptPayloadIndex", () => {
     const index = new TranscriptPayloadIndex("/nonexistent/c.payloads.jsonl")
     expect(index.has("x")).toBe(false)
     expect(index.read("x")).toBeNull()
+  })
+})
+
+describe("Effect readers", () => {
+  test("read what the synchronous readers read, through FileSystem", async () => {
+    const dir = await makeDir()
+    const sidecar = join(dir, "c.payloads.jsonl")
+    await writeFile(sidecar, [
+      serializeTranscriptPayload({ _id: "r1", content: "first" }),
+      "garbage line\n",
+      serializeTranscriptPayload({ _id: "r2", content: "héllo wörld" }),
+      serializeTranscriptPayload({ _id: "r1", content: "rewritten" }),
+    ].join(""))
+
+    const { byId, all } = await runTest(Effect.gen(function* () {
+      const index = yield* loadTranscriptPayloadIndex(sidecar)
+      const line = serializeTranscriptPayload({ _id: "r3", content: "appended" })
+      yield* Effect.promise(() => appendFile(sidecar, line))
+      index.noteAppended("r3", Buffer.byteLength(line, "utf8"))
+      return {
+        byId: yield* readTranscriptPayloadsById(index, ["r1", "r2", "r3", "nope"]),
+        all: yield* readTranscriptPayloads(sidecar),
+      }
+    }))
+
+    const sync = new TranscriptPayloadIndex(sidecar)
+    expect(byId).toEqual(new Map([["r1", sync.read("r1")!], ["r2", sync.read("r2")!], ["r3", sync.read("r3")!]]))
+    expect(byId.get("r2")).toEqual({ _id: "r2", content: "héllo wörld" })
+    expect(all).toEqual(readAllTranscriptPayloads(sidecar))
+  })
+
+  test("a missing sidecar reads as empty", async () => {
+    const missing = "/nonexistent/c.payloads.jsonl"
+    const { index, byId, all } = await runTest(Effect.gen(function* () {
+      const index = yield* loadTranscriptPayloadIndex(missing)
+      return { index, byId: yield* readTranscriptPayloadsById(index, ["x"]), all: yield* readTranscriptPayloads(missing) }
+    }))
+    expect(index.has("x")).toBe(false)
+    expect(byId.size).toBe(0)
+    expect(all.size).toBe(0)
+  })
+
+  test("a sidecar that cannot be read fails with a TranscriptPayloadReadError", async () => {
+    const dir = await makeDir()
+    // A directory where the sidecar should be: not missing, but unreadable.
+    const result = await runTest(Effect.result(readTranscriptPayloads(dir)))
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("@kanna/server/transcript-payloads/TranscriptPayloadReadError")
+      expect(result.failure.sidecarPath).toBe(dir)
+    }
   })
 })

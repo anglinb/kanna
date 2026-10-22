@@ -5,7 +5,11 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import type { TranscriptEntry } from "../shared/types"
 import type { SnapshotFile } from "./events"
-import { EventStore } from "./event-store"
+import { Effect, Layer, Result } from "effect"
+import { runTest } from "./effect/testing"
+import { defaultEventStoreDataDir, EventStore } from "./event-store"
+import { PerformanceLog } from "./performance-log"
+import { openEventStore } from "./event-store-bridge"
 import { deriveLocalProjectsSnapshot } from "./read-models"
 
 const originalRuntimeProfile = process.env.KANNA_RUNTIME_PROFILE
@@ -53,9 +57,7 @@ describe("EventStore", () => {
   test("uses the runtime profile for the default data dir", () => {
     process.env.KANNA_RUNTIME_PROFILE = "dev"
 
-    const store = new EventStore()
-
-    expect(store.dataDir).toEndWith("/.kanna-dev/data")
+    expect(defaultEventStoreDataDir()).toEndWith("/.kanna-dev/data")
   })
 
   test("migrates legacy snapshot and messages log transcripts into per-chat files", async () => {
@@ -104,8 +106,7 @@ describe("EventStore", () => {
       entry: entry("assistant_text", 101, { content: "world" }),
     })}\n`, "utf8")
 
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const progress: string[] = []
     const migrated = await store.migrateLegacyTranscripts((message) => {
@@ -128,8 +129,7 @@ describe("EventStore", () => {
 
   test("appends new transcript entries only to the per-chat transcript file", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -150,8 +150,7 @@ describe("EventStore", () => {
 
   test("getTranscriptPath points at the per-chat transcript file", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -163,8 +162,7 @@ describe("EventStore", () => {
 
   test("persists queued messages across restart and removes promoted entries", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -191,8 +189,7 @@ describe("EventStore", () => {
       "second queued",
     ])
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getQueuedMessages(chat.id).map((message) => message.content)).toEqual([
       "first queued",
       "second queued",
@@ -204,8 +201,7 @@ describe("EventStore", () => {
 
   test("marks chats unread on completed turns and clears unread when marked read", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -226,15 +222,13 @@ describe("EventStore", () => {
 
     await store.compact()
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getChat(chat.id)?.unread).toBe(true)
   })
 
   test("stores and resolves a read anchor across restart", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -252,8 +246,7 @@ describe("EventStore", () => {
       atEnd: false,
     })
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: false,
@@ -262,8 +255,7 @@ describe("EventStore", () => {
 
   test("survives compaction", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -274,8 +266,7 @@ describe("EventStore", () => {
 
     await store.compact()
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: true,
@@ -284,8 +275,7 @@ describe("EventStore", () => {
 
   test("resolves a read anchor to null when the anchored message is gone", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -299,8 +289,7 @@ describe("EventStore", () => {
 
   test("skips redundant read anchor writes", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -326,8 +315,7 @@ describe("EventStore", () => {
 
   test("preserves read state after a finished turn across restart", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -337,16 +325,14 @@ describe("EventStore", () => {
 
     expect(store.getChat(chat.id)?.unread).toBe(false)
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
 
     expect(reloaded.getChat(chat.id)?.unread).toBe(false)
   })
 
   test("preserves read state after a failed turn across restart", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -356,8 +342,7 @@ describe("EventStore", () => {
 
     expect(store.getChat(chat.id)?.unread).toBe(false)
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
 
     expect(reloaded.getChat(chat.id)?.unread).toBe(false)
   })
@@ -398,8 +383,7 @@ describe("EventStore", () => {
       "",
     ].join("\n"), "utf8")
 
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     expect(store.getChat(chatId)?.unread).toBe(false)
   })
@@ -434,16 +418,14 @@ describe("EventStore", () => {
 
     await writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8")
 
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     expect(store.getChat("chat-1")?.unread).toBe(false)
   })
 
   test("persists sidebar project order across restart and compaction", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const first = await store.openProject("/tmp/project-a")
     const second = await store.openProject("/tmp/project-b")
@@ -457,15 +439,13 @@ describe("EventStore", () => {
     const snapshot = JSON.parse(await readFile(join(dataDir, "snapshot.json"), "utf8")) as SnapshotFile
     expect(snapshot.sidebarProjectOrder).toBeUndefined()
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getSidebarProjectOrder()).toEqual([second.id, first.id])
   })
 
   test("renames a project sidebar title without changing project metadata or local path", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     await store.renameProjectSidebarTitle(project.id, "Sidebar Name")
@@ -475,8 +455,7 @@ describe("EventStore", () => {
     expect(store.getProject(project.id)?.localPath).toBe("/tmp/project")
     expect(store.state.projectIdsByPath.get("/tmp/project")).toBe(project.id)
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
 
     expect(reloaded.getProject(project.id)?.title).toBe("project")
     expect(reloaded.getProject(project.id)?.sidebarTitle).toBe("Sidebar Name")
@@ -491,8 +470,7 @@ describe("EventStore", () => {
 
   test("pins and unpins a project, and keeps a carried-over pin's own time", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const other = await store.openProject("/tmp/other")
@@ -505,8 +483,7 @@ describe("EventStore", () => {
     await store.setProjectPinned(other.id, true, 9999)
     expect(store.getProject(other.id)?.pinnedAt).toBe(1234)
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getProject(other.id)?.pinnedAt).toBe(1234)
 
     await reloaded.setProjectPinned(other.id, false)
@@ -553,8 +530,7 @@ describe("EventStore", () => {
       "",
     ].join("\n"), "utf8")
 
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     expect(store.getSidebarProjectOrder()).toEqual(["project-2", "project-1"])
     expect(JSON.parse(await readFile(join(dataDir, "sidebar-order.json"), "utf8"))).toEqual(["project-2", "project-1"])
@@ -567,13 +543,11 @@ describe("EventStore", () => {
     const originalWarn = console.warn
     console.warn = () => {}
     try {
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
 
       const project = await store.openProject("/tmp/project")
 
-      const reloaded = new EventStore(dataDir)
-      await reloaded.initialize()
+      const reloaded = await openEventStore(dataDir)
 
       expect(reloaded.getProject(project.id)?.localPath).toBe("/tmp/project")
       expect(reloaded.getSidebarProjectOrder()).toEqual([])
@@ -584,8 +558,7 @@ describe("EventStore", () => {
 
   test("prunes stale empty chats after five minutes", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -599,8 +572,7 @@ describe("EventStore", () => {
 
   test("does not prune recent empty chats", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -612,8 +584,7 @@ describe("EventStore", () => {
 
   test("does not prune chats once they have transcript messages", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -627,8 +598,7 @@ describe("EventStore", () => {
 
   test("does not prune stale chats that are currently active", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -644,8 +614,7 @@ describe("EventStore", () => {
 
   test("does not prune stale chats with protected draft state", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -663,8 +632,7 @@ describe("EventStore", () => {
 
   test("auto-archives chats thirty days behind the latest chat activity", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const old = await store.createChat(project.id)
@@ -684,8 +652,7 @@ describe("EventStore", () => {
 
   test("measures staleness against the latest chat, not the clock — an idle month archives nothing", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -702,8 +669,7 @@ describe("EventStore", () => {
 
   test("does not auto-archive chats within thirty days of the latest activity", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const old = await store.createChat(project.id)
@@ -719,8 +685,7 @@ describe("EventStore", () => {
 
   test("leaves stale empty chats for the prune sweep instead of archiving them", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const empty = await store.createChat(project.id) // never messaged
@@ -735,8 +700,7 @@ describe("EventStore", () => {
 
   test("skips active/protected chats and already-archived chats when auto-archiving", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const active = await store.createChat(project.id)
@@ -763,8 +727,7 @@ describe("EventStore", () => {
 
   test("hard-deletes chats ninety days behind the latest activity, archived or not", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const plain = await store.createChat(project.id)
@@ -792,8 +755,7 @@ describe("EventStore", () => {
 
   test("measures deletion against the latest chat, not the clock — an idle year deletes nothing", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -808,8 +770,7 @@ describe("EventStore", () => {
 
   test("does not hard-delete active or protected stale chats", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const active = await store.createChat(project.id)
@@ -831,8 +792,7 @@ describe("EventStore", () => {
 
   test("auto plan defaults to false and survives a replay", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -843,15 +803,13 @@ describe("EventStore", () => {
     await store.setAutoPlan(chat.id, true)
     expect(store.requireChat(chat.id).autoPlan).toBe(true)
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.requireChat(chat.id).autoPlan).toBe(true)
   })
 
   test("forks a chat with copied transcript and pending fork session token", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const source = await store.createChat(project.id)
@@ -881,8 +839,7 @@ describe("EventStore", () => {
 
   test("forking mid-turn branches from the last completed turn", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const source = await store.createChat(project.id)
@@ -915,15 +872,13 @@ describe("EventStore", () => {
     // The source is untouched: its turn is still running.
     expect(store.getMessages(source.id)).toHaveLength(5)
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getMessages(forked.id)).toHaveLength(3)
   })
 
   test("refuses a mid-turn fork when no turn has completed yet", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const source = await store.createChat(project.id)
@@ -940,8 +895,7 @@ describe("EventStore", () => {
 
   test("the resume marker survives a restart and a compaction", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -953,8 +907,7 @@ describe("EventStore", () => {
     expect(store.requireChat(chat.id).resumePending).toBe(true)
     expect(store.requireChat(chat.id).lastTurnOutcome).toBe("cancelled")
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.requireChat(chat.id).resumePending).toBe(true)
 
     // Cleared by the boot that acts on it, and the clear sticks the same way.
@@ -962,15 +915,13 @@ describe("EventStore", () => {
     await reloaded.compact()
     expect(reloaded.requireChat(chat.id).resumePending).toBeUndefined()
 
-    const afterCompaction = new EventStore(dataDir)
-    await afterCompaction.initialize()
+    const afterCompaction = await openEventStore(dataDir)
     expect(afterCompaction.requireChat(chat.id).resumePending).toBeUndefined()
   })
 
   test("lastAgentMessageAt tracks agent entries mid-turn, ignoring user prompts", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -991,15 +942,13 @@ describe("EventStore", () => {
     expect(store.requireChat(chat.id).lastAgentMessageAt).toBe(2_000)
 
     // Rebuilt from the transcript on boot, like lastMessageAt.
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.requireChat(chat.id).lastAgentMessageAt).toBe(2_000)
   })
 
   test("a fork inherits the source's touched paths", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const source = await store.createChat(project.id)
@@ -1021,8 +970,7 @@ describe("EventStore", () => {
       { path: "src/util.ts", baseBlob: null },
     ]
     expect(forked.touchedFiles).toEqual(inherited)
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.requireChat(forked.id).touchedFiles).toEqual(inherited)
   })
 
@@ -1031,8 +979,7 @@ describe("EventStore", () => {
     // the claim must be measured against — otherwise a chat with live work in a
     // file it had previously landed would read as settled.
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1040,8 +987,7 @@ describe("EventStore", () => {
     await store.recordFilesTouched(chat.id, [{ path: "src/app.ts", baseBlob: "blob-second" }])
 
     expect(store.requireChat(chat.id).touchedFiles).toEqual([{ path: "src/app.ts", baseBlob: "blob-second" }])
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.requireChat(chat.id).touchedFiles).toEqual([{ path: "src/app.ts", baseBlob: "blob-second" }])
   })
 
@@ -1050,8 +996,7 @@ describe("EventStore", () => {
     // file has written the sum of them — while its *position* (the base blob)
     // is only ever the most recent commit it worked from.
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1060,8 +1005,7 @@ describe("EventStore", () => {
 
     const expected = [{ path: "src/app.ts", baseBlob: "blob-second", additions: 15, deletions: 5 }]
     expect(store.requireChat(chat.id).touchedFiles).toEqual(expected)
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.requireChat(chat.id).touchedFiles).toEqual(expected)
   })
 
@@ -1069,8 +1013,7 @@ describe("EventStore", () => {
     // The backfill re-records paths to date them, carrying no numstat of its
     // own; dating a claim must not erase how much the chat wrote there.
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1083,8 +1026,7 @@ describe("EventStore", () => {
 
   test("re-recording the same file with the same base writes nothing", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1099,8 +1041,7 @@ describe("EventStore", () => {
 
   test("a fork inherits lastTurnEndedAt, so it keeps the conversation's recency", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const source = await store.createChat(project.id)
@@ -1115,8 +1056,7 @@ describe("EventStore", () => {
     expect(forked.lastTurnEndedAt).toBe(sourceTurnEndedAt!)
     // A fork has no turn events of its own, so the timestamp has to ride on
     // chat_created to survive a replay of the log.
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.requireChat(forked.id).lastTurnEndedAt).toBe(sourceTurnEndedAt!)
     // The fork itself hasn't run a turn — only the timestamp is inherited.
     expect(reloaded.requireChat(forked.id).lastTurnOutcome).toBeNull()
@@ -1124,8 +1064,7 @@ describe("EventStore", () => {
 
   test("hidden projects stay absent after restart until reopened with their existing chats", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1136,8 +1075,7 @@ describe("EventStore", () => {
     expect(store.getProject(project.id)).toBeNull()
     expect(deriveLocalProjectsSnapshot(store.state, discovered, "Machine").projects).toEqual([])
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, "Machine").projects).toEqual([])
 
     const reopened = await reloaded.openProject("/tmp/project")
@@ -1151,8 +1089,7 @@ describe("EventStore", () => {
 
   test("archives chats without deleting their transcript", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1172,8 +1109,7 @@ describe("EventStore", () => {
 
   test("rehydrates message metadata from transcripts after a restart without compaction", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1181,8 +1117,7 @@ describe("EventStore", () => {
     await store.appendMessage(chat.id, entry("assistant_text", 2_000, { text: "Done, the fix is in auth.ts" }))
 
     // No compact() — a restart between compactions must not lose transcript-derived metadata.
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
 
     const reloadedChat = reloaded.getChat(chat.id)
     expect(reloadedChat?.hasMessages).toBe(true)
@@ -1203,16 +1138,14 @@ describe("EventStore", () => {
       // and the chat comes back with no timestamp — invisible in every
       // recency-driven sidebar section despite a full conversation.
       const dataDir = await createTempDataDir()
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
 
       const project = await store.openProject("/tmp/project")
       const chat = await store.createChat(project.id)
       await store.appendMessage(chat.id, entry("user_prompt", 1_000, { content: "start the big refactor" }))
       await store.appendMessage(chat.id, bulkyEntry(2_000))
 
-      const reloaded = new EventStore(dataDir)
-      await reloaded.initialize()
+      const reloaded = await openEventStore(dataDir)
 
       // The prompt's own timestamp, from the log — not the trailing entry's.
       expect(reloaded.getChat(chat.id)?.lastMessageAt).toBe(1_000)
@@ -1224,8 +1157,7 @@ describe("EventStore", () => {
       // was recorded. Dating it by its last entry is a turn's length off and
       // still puts it back in the sidebar.
       const dataDir = await createTempDataDir()
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const project = await store.openProject("/tmp/project")
       const chat = await store.createChat(project.id)
 
@@ -1238,8 +1170,7 @@ describe("EventStore", () => {
         "utf8"
       )
 
-      const reloaded = new EventStore(dataDir)
-      await reloaded.initialize()
+      const reloaded = await openEventStore(dataDir)
 
       expect(reloaded.getChat(chat.id)?.lastMessageAt).toBe(3_000)
       expect(reloaded.getChat(chat.id)?.hasMessages).toBe(true)
@@ -1247,8 +1178,7 @@ describe("EventStore", () => {
 
     test("the fallback never overrides a prompt the tail still holds", async () => {
       const dataDir = await createTempDataDir()
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const project = await store.openProject("/tmp/project")
       const chat = await store.createChat(project.id)
 
@@ -1259,8 +1189,7 @@ describe("EventStore", () => {
         "utf8"
       )
 
-      const reloaded = new EventStore(dataDir)
-      await reloaded.initialize()
+      const reloaded = await openEventStore(dataDir)
 
       // The agent replied later, but "when you last messaged" is the prompt.
       expect(reloaded.getChat(chat.id)?.lastMessageAt).toBe(1_000)
@@ -1270,21 +1199,18 @@ describe("EventStore", () => {
       // An empty new chat must stay hidden; the fallback only speaks for chats
       // that actually have entries.
       const dataDir = await createTempDataDir()
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const project = await store.openProject("/tmp/project")
       const chat = await store.createChat(project.id)
 
-      const reloaded = new EventStore(dataDir)
-      await reloaded.initialize()
+      const reloaded = await openEventStore(dataDir)
 
       expect(reloaded.getChat(chat.id)?.lastMessageAt).toBeUndefined()
     })
 
     test("stamps once per prompt, never per entry", async () => {
       const dataDir = await createTempDataDir()
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const project = await store.openProject("/tmp/project")
       const chat = await store.createChat(project.id)
 
@@ -1311,8 +1237,7 @@ describe("EventStore", () => {
 
     test("a fork keeps its inherited recency across a restart", async () => {
       const dataDir = await createTempDataDir()
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
 
       const project = await store.openProject("/tmp/project")
       const source = await store.createChat(project.id)
@@ -1324,8 +1249,7 @@ describe("EventStore", () => {
       const forked = await store.forkChat(source.id)
       expect(forked.lastMessageAt).toBe(2_000)
 
-      const reloaded = new EventStore(dataDir)
-      await reloaded.initialize()
+      const reloaded = await openEventStore(dataDir)
       expect(reloaded.getChat(forked.id)?.lastMessageAt).toBe(2_000)
     })
   })
@@ -1336,8 +1260,7 @@ describe("EventStore", () => {
     // transcript tail on top of an already-loaded snapshot. Put it there and a
     // restart inflates every chat.
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1350,16 +1273,14 @@ describe("EventStore", () => {
 
     expect(store.getChat(chat.id)?.turnCount).toBe(2)
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
 
     expect(reloaded.getChat(chat.id)?.turnCount).toBe(2)
   })
 
   test("a fork inherits the turns behind the conversation it copied", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const source = await store.createChat(project.id)
@@ -1382,8 +1303,7 @@ describe("EventStore", () => {
     // by the time the client sees it. Getting this wrong shows up as `##` and
     // `- ` stranded mid-sentence in the sidebar's hover card.
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1397,8 +1317,7 @@ describe("EventStore", () => {
 
   test("advances each preview independently, so a new prompt keeps the old reply", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1417,8 +1336,7 @@ describe("EventStore", () => {
 
   test("marks chats done until a new turn starts, surviving reads and reloads", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
 
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
@@ -1432,8 +1350,7 @@ describe("EventStore", () => {
     expect(store.getChat(chat.id)?.unread).toBe(false)
     expect(store.getChat(chat.id)?.doneAt).toBeNumber()
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.getChat(chat.id)?.doneAt).toBeNumber()
 
     // A new turn means the user re-engaged, clearing the done state.
@@ -1449,8 +1366,7 @@ describe("EventStore", () => {
 describe("on-demand tool payloads", () => {
   test("returns the requested entries with their payloads, minus debugRaw", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "payloads")
     const chat = await store.createChat(project.id)
 
@@ -1480,8 +1396,7 @@ describe("on-demand tool payloads", () => {
 
   test("silently omits ids that are not in the transcript", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "payloads")
     const chat = await store.createChat(project.id)
     await store.appendMessage(chat.id, entry("assistant_text", 1, { text: "hi" }))
@@ -1494,8 +1409,7 @@ describe("on-demand tool payloads", () => {
 describe("transcript windows", () => {
   test("sizes the first window by assistant messages, reaching the read anchor, and widens from there", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "windows")
     const chat = await store.createChat(project.id)
     // Three turns of prompt + two assistant messages: indexes 0..8.
@@ -1527,8 +1441,7 @@ describe("transcript windows", () => {
 describe("payload sidecar", () => {
   test("appends headers to the transcript and bodies to the sidecar, and merges them back on demand", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "sidecar")
     const chat = await store.createChat(project.id)
     const body = "x".repeat(10_000)
@@ -1567,8 +1480,7 @@ describe("payload sidecar", () => {
     expect((full[3] as unknown as { content: unknown }).content).toEqual({ ok: true })
 
     // A cold store rebuilds the index from the sidecar alone.
-    const reopened = new EventStore(dataDir)
-    await reopened.initialize()
+    const reopened = await openEventStore(dataDir)
     expect((reopened.getEntriesById(chat.id, ["result-1"])[0] as unknown as { content: unknown }).content).toBe("written")
 
     // A fork carries the bodies with it.
@@ -1580,8 +1492,7 @@ describe("payload sidecar", () => {
 
   test("the slim sweep splits a transcript written before the sidecar", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "legacy")
     const chat = await store.createChat(project.id)
     const legacy = [
@@ -1605,8 +1516,7 @@ describe("tool result images", () => {
 
   test("appendMessage stores the bytes on disk and the transcript keeps a URL", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "media")
     const chat = await store.createChat(project.id)
 
@@ -1643,8 +1553,7 @@ describe("tool result images", () => {
 describe("slimTranscripts", () => {
   test("rewrites tool results on disk, drops the cache, and runs once", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "slim")
     const chat = await store.createChat(project.id)
 
@@ -1701,8 +1610,7 @@ describe("stale empty chat pruning", () => {
     // can be stale — it is metadata, repaired by peeking at the transcript —
     // so a chat with entries must survive, transcript and all.
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "prune")
     const chat = await store.createChat(project.id)
     await store.appendMessage(chat.id, entry("user_prompt", 1, { content: "hello" }))
@@ -1726,8 +1634,7 @@ describe("stale empty chat pruning", () => {
 describe("getClientTranscript window and outline", () => {
   test("clones from the requested index and keeps the outline whole", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(join(dataDir, "project"))
     const chat = await store.createChat(project.id)
     const at = Date.now()
@@ -1760,8 +1667,7 @@ describe("stateVersion", () => {
    */
   test("agent entries inside one activity bucket do not bump it", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "proj")
     const chat = await store.createChat(project.id)
 
@@ -1779,8 +1685,7 @@ describe("stateVersion", () => {
 
   test("still bumps when a sidebar-visible field moves", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(dataDir, "proj")
     const chat = await store.createChat(project.id)
 
@@ -1806,8 +1711,7 @@ describe("stateVersion", () => {
 describe("chat pins", () => {
   test("persists pin and unpin through replay and compaction", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
     await store.setChatPinned(chat.id, true)
@@ -1816,23 +1720,19 @@ describe("chat pins", () => {
     await store.setChatPinned(chat.id, true)
     expect(store.getChat(chat.id)!.pinnedAt).toBe(pinnedAt)
 
-    const replayed = new EventStore(dataDir)
-    await replayed.initialize()
+    const replayed = await openEventStore(dataDir)
     expect(replayed.getChat(chat.id)!.pinnedAt).toBe(pinnedAt)
     await replayed.compact()
-    const compacted = new EventStore(dataDir)
-    await compacted.initialize()
+    const compacted = await openEventStore(dataDir)
     expect(compacted.getChat(chat.id)!.pinnedAt).toBe(pinnedAt)
     await compacted.setChatPinned(chat.id, false)
-    const unpinned = new EventStore(dataDir)
-    await unpinned.initialize()
+    const unpinned = await openEventStore(dataDir)
     expect(unpinned.getChat(chat.id)!.pinnedAt).toBeUndefined()
   })
 
   test("replay preserves repinning after archive within the same millisecond", async () => {
     const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
     const timestamp = Date.now()
@@ -1845,15 +1745,13 @@ describe("chat pins", () => {
     } finally {
       clock.mockRestore()
     }
-    const replayed = new EventStore(dataDir)
-    await replayed.initialize()
+    const replayed = await openEventStore(dataDir)
     expect(replayed.getChat(chat.id)!.pinnedAt).toBe(timestamp)
     expect(replayed.getChat(chat.id)!.archivedAt).toBeUndefined()
   })
 
   test("cleanup preserves pinned chats, including empty chats", async () => {
-    const store = new EventStore(await createTempDataDir())
-    await store.initialize()
+    const store = await openEventStore(await createTempDataDir())
     const project = await store.openProject("/tmp/project")
     const empty = await store.createChat(project.id)
     const old = await store.createChat(project.id)
@@ -1871,8 +1769,7 @@ describe("chat pins", () => {
   })
 
   test("manual archive clears the pin and restore keeps it unpinned", async () => {
-    const store = new EventStore(await createTempDataDir())
-    await store.initialize()
+    const store = await openEventStore(await createTempDataDir())
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
     await store.setChatPinned(chat.id, true)
@@ -1882,5 +1779,137 @@ describe("chat pins", () => {
     expect(store.getChat(chat.id)!.pinnedAt).toBeUndefined()
     await store.unarchiveChat(chat.id)
     expect(store.getChat(chat.id)!.pinnedAt).toBeUndefined()
+  })
+})
+
+describe("EventStore service", () => {
+  const withStore = <A, E>(dataDir: string, body: (store: EventStore["Service"]) => Effect.Effect<A, E>) =>
+    runTest(Effect.gen(function* () {
+      return yield* body(yield* EventStore)
+    }).pipe(Effect.provide(EventStore.layer({ dataDir }))))
+
+  test("fails writes with tagged errors that keep the old messages", async () => {
+    const dataDir = await createTempDataDir()
+    const describeFailure = <A, E extends { readonly _tag: string; readonly message: string }>(effect: Effect.Effect<A, E>) =>
+      Effect.map(Effect.result(effect), (result) => Result.isFailure(result) ? [result.failure._tag, result.failure.message] : ["succeeded"])
+    const described = await withStore(dataDir, (store) => Effect.gen(function* () {
+      const project = yield* store.openProject("/tmp/project")
+      const chat = yield* store.createChat(project.id)
+      return [
+        yield* describeFailure(store.renameChat("missing", "x")),
+        yield* describeFailure(store.removeProject("missing")),
+        yield* describeFailure(store.deleteSchedule("missing")),
+        yield* describeFailure(store.removeQueuedMessage(chat.id, "missing")),
+        yield* describeFailure(store.createChat(project.id, undefined, { chatId: "../escape" })),
+        yield* describeFailure(store.createChat(project.id, undefined, { chatId: chat.id })),
+        yield* describeFailure(store.forkChat(chat.id)),
+      ]
+    }))
+    expect(described).toEqual([
+      ["@kanna/server/event-store/EventStoreNotFoundError", "Chat not found"],
+      ["@kanna/server/event-store/EventStoreNotFoundError", "Project not found"],
+      ["@kanna/server/event-store/EventStoreNotFoundError", "Schedule not found"],
+      ["@kanna/server/event-store/EventStoreNotFoundError", "Queued message not found"],
+      ["@kanna/server/event-store/EventStoreRejectedError", "Invalid chat id"],
+      ["@kanna/server/event-store/EventStoreRejectedError", "Chat already exists"],
+      ["@kanna/server/event-store/EventStoreRejectedError", "Chat cannot be forked"],
+    ])
+  })
+
+  test("lands concurrent writes on disk in the order they started", async () => {
+    const dataDir = await createTempDataDir()
+    const titles = Array.from({ length: 40 }, (_, index) => `Title ${index}`)
+    const chatId = await withStore(dataDir, (store) => Effect.gen(function* () {
+      const project = yield* store.openProject("/tmp/project")
+      const chat = yield* store.createChat(project.id)
+      // Interleaved with transcript appends, which do more IO per write.
+      yield* Effect.forEach(titles, (title, index) => Effect.all([
+        store.renameChat(chat.id, title),
+        store.appendMessage(chat.id, entry("assistant_text", index + 1, { text: title })),
+      ]), { concurrency: "unbounded", discard: true })
+      expect(store.getChat(chat.id)?.title).toBe("Title 39")
+      expect(store.getResourceCounts().storeQueuedWrites).toBe(0)
+      return chat.id
+    }))
+    const renames = (await readFile(join(dataDir, "chats.jsonl"), "utf8")).trim().split("\n")
+      .map((line) => JSON.parse(line) as { type: string; title?: string })
+      .filter((event) => event.type === "chat_renamed")
+    expect(renames.map((event) => event.title)).toEqual(titles)
+    const transcript = (await readFile(join(dataDir, "transcripts", `${chatId}.jsonl`), "utf8")).trim().split("\n")
+    expect(transcript.map((line) => (JSON.parse(line) as { text: string }).text)).toEqual(titles)
+  })
+
+  test("runs hooks before the write's caller resumes", async () => {
+    const dataDir = await createTempDataDir()
+    const seen = await withStore(dataDir, (store) => Effect.gen(function* () {
+      const events: string[] = []
+      store.hooks.onTurnStarted = (chatId) => { events.push(`started:${store.getChat(chatId)?.turnCount}`) }
+      store.hooks.onTurnEnded = (chatId) => { events.push(`ended:${store.getChat(chatId)?.lastTurnOutcome}`) }
+      store.hooks.onQueuedMessageRemoved = (_chatId, queuedMessageId, taken) => { events.push(`removed:${queuedMessageId}:${taken}`) }
+      const project = yield* store.openProject("/tmp/project")
+      const chat = yield* store.createChat(project.id)
+      const queued = yield* store.enqueueMessage(chat.id, { content: "hi", attachments: [], id: "q1" })
+      yield* store.removeQueuedMessage(chat.id, queued.id, { taken: true })
+      events.push("caller")
+      yield* store.recordTurnStarted(chat.id)
+      events.push("caller")
+      yield* store.recordTurnFailed(chat.id, "boom")
+      return events
+    }))
+    expect(seen).toEqual(["removed:q1:true", "caller", "started:1", "caller", "ended:failed"])
+  })
+
+  test("reads tool bodies asynchronously as the synchronous readers do", async () => {
+    const dataDir = await createTempDataDir()
+    const read = await withStore(dataDir, (store) => Effect.gen(function* () {
+      const project = yield* store.openProject("/tmp/project")
+      const chat = yield* store.createChat(project.id)
+      yield* store.appendMessage(chat.id, { _id: "call-1", createdAt: 1, kind: "tool_call", tool: { kind: "tool", toolKind: "bash", toolName: "Bash", toolId: "t1", input: { command: "ls" } } } as unknown as TranscriptEntry)
+      yield* store.appendMessage(chat.id, { _id: "result-1", createdAt: 2, kind: "tool_result", toolId: "t1", content: "a\nb" } as unknown as TranscriptEntry)
+      const first = yield* store.readEntriesById(chat.id, ["result-1"])
+      // The index is built now; a later append has to be found through it.
+      yield* store.appendMessage(chat.id, { _id: "result-2", createdAt: 3, kind: "tool_result", toolId: "t1", content: "later" } as unknown as TranscriptEntry)
+      return {
+        first,
+        second: yield* store.readEntriesById(chat.id, ["result-1", "result-2", "nope"]),
+        sync: store.getEntriesById(chat.id, ["result-1", "result-2"]),
+        messages: yield* store.readMessages(chat.id),
+        syncMessages: store.getMessages(chat.id),
+        missing: yield* Effect.result(store.readEntriesById("missing", ["x"])),
+      }
+    }))
+    expect((read.first[0] as unknown as { content: unknown }).content).toBe("a\nb")
+    expect(read.second).toEqual(read.sync)
+    expect(read.second.map((found) => (found as unknown as { content: unknown }).content)).toEqual(["a\nb", "later"])
+    expect(read.messages).toEqual(read.syncMessages)
+    expect(Result.isFailure(read.missing) && read.missing.failure._tag).toBe("@kanna/server/event-store/EventStoreNotFoundError")
+  })
+
+  test("records write diagnostics into the PerformanceLog it is given", async () => {
+    const dataDir = await createTempDataDir()
+    const recorded: string[] = []
+    const diagnostics: PerformanceLog["Service"] = {
+      directory: join(dataDir, "diagnostics"),
+      record: (name) => Effect.sync(() => { recorded.push(name) }),
+      mergeClientSummary: () => Effect.void,
+      start: () => Effect.void,
+      flush: Effect.void,
+    }
+    await runTest(Effect.gen(function* () {
+      const store = yield* EventStore
+      const project = yield* store.openProject("/tmp/project")
+      yield* store.createChat(project.id)
+    }).pipe(Effect.provide(EventStore.layer({ dataDir }).pipe(Layer.provide(Layer.succeed(PerformanceLog, diagnostics))))))
+    expect(recorded.filter((name) => name === "store_queue_wait_ms")).toHaveLength(2)
+  })
+
+  test("fails the layer when the data dir cannot be created", async () => {
+    const dataDir = await createTempDataDir()
+    const blocked = join(dataDir, "file")
+    await writeFile(blocked, "")
+    const result = await runTest(Effect.result(Effect.gen(function* () {
+      yield* EventStore
+    }).pipe(Effect.provide(EventStore.layer({ dataDir: join(blocked, "data") })))))
+    expect(Result.isFailure(result) && result.failure._tag).toBe("@kanna/server/event-store/EventStoreFileError")
   })
 })

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect, Layer, ManagedRuntime, Stream } from "effect"
 import { TestPlatform } from "./effect/testing"
-import { EventStore } from "./event-store"
+import { openEventStore, type EventStoreBridge as EventStore } from "./event-store-bridge"
 import { createEmptyState, type StoreState } from "./events"
 import { deriveSidebarData } from "./read-models"
 import { extractRemoteOwner, WorktreeProbe } from "./worktree-probe"
@@ -274,8 +274,7 @@ describe("WorktreeProbe integration", () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-data-"))
     tempDirs.push(dataDir)
 
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(repoRoot)
     const chat = await store.createChat(project.id)
 
@@ -317,8 +316,7 @@ describe("WorktreeProbe integration", () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-data-"))
     tempDirs.push(dataDir)
 
-    const store = new EventStore(dataDir)
-    await store.initialize()
+    const store = await openEventStore(dataDir)
     const project = await store.openProject(repoRoot)
     const chat = await store.createChat(project.id)
 
@@ -601,8 +599,7 @@ async function createTrackedProject() {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-worktree-probe-data-"))
   tempDirs.push(dataDir)
 
-  const store = new EventStore(dataDir)
-  await store.initialize()
+  const store = await openEventStore(dataDir)
   const project = await store.openProject(repoRoot)
   const probe = await makeProbe(() => store.state)
   const { turnStarted, turnEnded } = await wireTurnTracking(store, probe)
@@ -700,8 +697,7 @@ describe("uncommitted-work claims", () => {
     await tracked.commitAll("chat A's work")
     await tracked.runTurn(chatB.id, () => tracked.write("app.txt", "chat B\n"))
 
-    const reloaded = new EventStore(tracked.dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(tracked.dataDir)
 
     expect(tracked.flaggedChatIds(reloaded.state)).toEqual([chatB.id])
   })

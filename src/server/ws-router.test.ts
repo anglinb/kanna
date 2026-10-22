@@ -14,7 +14,7 @@ import { applySidebarPatch, type SidebarPatch } from "../shared/sidebar-patch"
 import { PROTOCOL_VERSION } from "../shared/types"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
-import { EventStore } from "./event-store"
+import { openEventStore } from "./event-store-bridge"
 import { deriveLocalProjectsSnapshot } from "./read-models"
 import { SERVER_PROVIDERS, applyCodexModels, resetServerProvidersForTests } from "./provider-catalog"
 import { createWsRouter } from "./ws-router"
@@ -231,8 +231,7 @@ describe("ws-router", () => {
   test("renames a discovered project by path and updates all project lists", async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), "kanna-rename-project-"))
     try {
-      const store = new EventStore(path.join(projectPath, "data"))
-      await store.initialize()
+      const store = await openEventStore(path.join(projectPath, "data"))
       const discovered = [{ localPath: projectPath, title: "Project", modifiedAt: 1 }]
       const router = createTestRouter({ store, getDiscoveredProjects: () => discovered })
       const ws = new FakeWebSocket()
@@ -269,8 +268,7 @@ describe("ws-router", () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), "kanna-hide-project-"))
     try {
       const dataDir = path.join(projectPath, "data")
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const savedProject = source === "saved" ? await store.openProject(projectPath) : null
       const discovered = [{ localPath: projectPath, title: "Project", modifiedAt: 1 }]
       const router = createTestRouter({ store, getDiscoveredProjects: () => discovered })
@@ -303,8 +301,7 @@ describe("ws-router", () => {
         },
       })
 
-      const reloaded = new EventStore(dataDir)
-      await reloaded.initialize()
+      const reloaded = await openEventStore(dataDir)
       expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, "Machine").projects).toEqual([])
       expect((await stat(projectPath)).isDirectory()).toBe(true)
     } finally {
@@ -2545,8 +2542,7 @@ describe("transcript windows", () => {
   test.each(["create first", "subscribe first"])("a chat made with the client's id reaches a subscription sent alongside it (%s)", async (order) => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-client-chat-id-"))
     try {
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const project = await store.openProject(dataDir)
       const router = createTestRouter({ store })
       const ws = new FakeWebSocket()
@@ -2578,8 +2574,7 @@ describe("transcript windows", () => {
   test("what names a chat still being made waits for it", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-client-chat-id-"))
     try {
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const project = await store.openProject(dataDir)
       const router = createTestRouter({ store })
       const ws = new FakeWebSocket()
@@ -2607,8 +2602,7 @@ describe("transcript windows", () => {
   test("a chat that could not be made fails what waited on it, and holds nothing back afterwards", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-client-chat-id-"))
     try {
-      const store = new EventStore(dataDir)
-      await store.initialize()
+      const store = await openEventStore(dataDir)
       const router = createTestRouter({ store })
       const ws = new FakeWebSocket()
       router.handleOpen(ws as never)
