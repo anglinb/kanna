@@ -9,7 +9,7 @@ import type {
   UsageLimitWindow,
   UsageLimitsSnapshot,
 } from "../shared/types"
-import { grokProductUsageWindows, moneyVal, type GrokBillingRaw, type GrokUserRaw } from "./grok-cli"
+import { grokProductUsageWindows, moneyVal, type GrokBillingRaw, type GrokUsageError, type GrokUserRaw } from "./grok-cli"
 
 // ---------------------------------------------------------------------------
 // Raw provider shapes (subset of what the SDK / app-server return). We keep
@@ -600,8 +600,8 @@ export interface UsageLimitsDeps {
   fetchClaudeUsage?: () => Promise<ClaudeUsageRaw | null>
   /** Fetch a fresh Codex rate-limit read, or null when unavailable. */
   fetchCodexRateLimits?: () => Promise<CodexRateLimitsRaw | null>
-  /** Fetch Grok Build billing + subscription from cli-chat-proxy. */
-  fetchGrokUsage?: () => Promise<GrokUsageRaw | null>
+  /** Fetch Grok Build billing + subscription from cli-chat-proxy (`fetchGrokAccountUsage`). */
+  fetchGrokUsage?: () => Effect.Effect<GrokUsageRaw | null, GrokUsageError, FileSystem.FileSystem>
   now?: () => Date
 }
 
@@ -746,10 +746,11 @@ const makeUsageLimits = Effect.fn("UsageLimits.make")(function* (filePath: strin
   const refreshGrok = Effect.fn("UsageLimits.refreshGrok")(function* () {
     const fetchGrokUsage = deps.fetchGrokUsage
     if (!fetchGrokUsage) return
-    const fresh = yield* fetchRaw("grok", fetchGrokUsage).pipe(
+    const fresh = yield* fetchGrokUsage().pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
       Effect.map((raw) => normalizeGrokAccountUsage(raw, nowIso())),
-      Effect.catchTag("@kanna/server/usage-limits/UsageReadError", (error) => {
-        const message = errorMessage(error.cause)
+      Effect.catchTag("@kanna/server/grok-cli/GrokUsageError", (error) => {
+        const message = error.message
         return Effect.succeed(unavailable("grok", /401|403|auth|login|sign/i.test(message)
           ? "Sign in to Grok Build to see usage limits."
           : `Failed to read Grok usage: ${message}`))

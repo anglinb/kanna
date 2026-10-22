@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Deferred, Effect, Fiber, type Scope, Stream } from "effect"
 import { runTest } from "./effect/testing"
+import { GrokUsageError } from "./grok-cli"
 import {
   UsageLimits,
   type UsageLimitsDeps,
@@ -389,6 +390,42 @@ describe("UsageLimits", () => {
     expect(claude?.windows).toHaveLength(1)
     expect(claude?.windows[0]?.usedPercent).toBe(42)
     expect(claude?.detail).toContain("probe timed out")
+  })
+
+  test("refreshes grok through its Effect read, and words a refused read as a sign-in", async () => {
+    const filePath = await createTempFilePath()
+    let refuse = false
+    const grok = await withUsageLimits(filePath, {
+      now: () => new Date(NOW),
+      fetchGrokUsage: () => refuse
+        ? Effect.fail(new GrokUsageError({ message: "Grok billing request failed (401).", url: "https://proxy.test/billing", status: 401, cause: null }))
+        : Effect.succeed({
+          billing: { config: { creditUsagePercent: 6, currentPeriod: { end: "2026-09-12T00:00:00Z" } } },
+          user: { subscriptionTier: "SuperGrok" },
+        }),
+    }, (usageLimits) => Effect.gen(function* () {
+      yield* usageLimits.refresh()
+      const fresh = (yield* usageLimits.snapshot).providers.find((p) => p.provider === "grok")
+      refuse = true
+      yield* usageLimits.refresh({ force: true })
+      return { fresh, refused: (yield* usageLimits.snapshot).providers.find((p) => p.provider === "grok") }
+    }))
+
+    expect(grok.fresh).toMatchObject({ status: "ok", plan: "SuperGrok", windows: [{ id: "credits", usedPercent: 6 }] })
+    // The failed read keeps the last-known windows and only says why.
+    expect(grok.refused?.windows).toHaveLength(1)
+    expect(grok.refused?.detail).toBe("Sign in to Grok Build to see usage limits.")
+  })
+
+  test("a grok read that fails otherwise says what failed", async () => {
+    const filePath = await createTempFilePath()
+    const grok = await withUsageLimits(filePath, {
+      fetchGrokUsage: () => Effect.fail(new GrokUsageError({ message: "Unable to connect", url: "https://proxy.test/billing", cause: null })),
+    }, (usageLimits) => usageLimits.refresh().pipe(
+      Effect.andThen(usageLimits.snapshot),
+      Effect.map((snapshot) => snapshot.providers.find((p) => p.provider === "grok")),
+    ))
+    expect(grok).toMatchObject({ status: "unavailable", detail: "Failed to read Grok usage: Unable to connect" })
   })
 
   test("non-forced refresh is throttled by TTL; force bypasses it", async () => {

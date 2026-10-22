@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { Effect, Stream } from "effect"
 import {
   AgentCoordinator,
   buildAttachmentHintText,
@@ -3008,13 +3009,25 @@ describe("shared display tool lifecycle", () => {
           return { provider, stream: events, interrupt: async () => { events.close() }, close: () => { events.close() } }
         },
       }
+      // Cursor's startTurn is an Effect in the turn's scope (harness-types' HarnessTurnEffect).
+      const cursorManager = {
+        startTurn: (args: { customTools?: import("./kanna-tools").KannaToolHost }) => Effect.gen(function* () {
+          if (args.customTools) capture(args)
+          yield* Effect.addFinalizer(() => Effect.sync(() => events.close()))
+          return {
+            provider,
+            events: Stream.fromAsyncIterable(events, (error) => error),
+            interrupt: Effect.sync(() => events.close()),
+          }
+        }),
+      }
       const dataDir = mkdtempSync(path.join(tmpdir(), "kanna-viz-host-"))
       const store = Object.assign(createFakeStore(), { dataDir })
       const coordinator = new AgentCoordinator({
         store: store as never,
         onStateChange: () => {},
         codexManager: manager as never,
-        cursorManager: manager as never,
+        cursorManager: cursorManager as never,
         piManager: manager as never,
         resolvePiConnection: async () => ({ provider: "openai", baseUrl: "https://example.invalid", apiKey: "test" }),
         generateTitle: async () => ({ title: "Tool test", usedFallback: false, failureMessage: null }),
@@ -3281,7 +3294,7 @@ describe("subagent activity", () => {
     // ends and are left to (see "waiting on a subagent").
     let release!: () => void
     const fakeGrokManager = {
-      async startTurn(): Promise<HarnessTurn> {
+      startTurn: () => Effect.sync(() => {
         async function* stream() {
           yield {
             type: "transcript" as const,
@@ -3297,8 +3310,12 @@ describe("subagent activity", () => {
           }
           await new Promise<void>((resolve) => { release = resolve })
         }
-        return { provider: "grok", stream: stream(), interrupt: async () => release(), close: () => {} }
-      },
+        return {
+          provider: "grok" as const,
+          events: Stream.fromAsyncIterable(stream(), (error) => error),
+          interrupt: Effect.sync(() => release()),
+        }
+      }),
     }
     const agent = new AgentCoordinator({
       store: createFakeStore() as never,
@@ -3486,7 +3503,7 @@ describe("waiting on a subagent", () => {
     // ends without the result would leave the chat waiting for good.
     let release!: () => void
     const fakeGrokManager = {
-      async startTurn(): Promise<HarnessTurn> {
+      startTurn: () => Effect.sync(() => {
         async function* stream() {
           yield {
             type: "transcript" as const,
@@ -3507,8 +3524,12 @@ describe("waiting on a subagent", () => {
           }
           await new Promise<void>((resolve) => { release = resolve })
         }
-        return { provider: "grok", stream: stream(), interrupt: async () => release(), close: () => {} }
-      },
+        return {
+          provider: "grok" as const,
+          events: Stream.fromAsyncIterable(stream(), (error) => error),
+          interrupt: Effect.sync(() => release()),
+        }
+      }),
     }
     const agent = new AgentCoordinator({
       store: createFakeStore() as never,

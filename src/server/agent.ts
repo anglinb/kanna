@@ -41,8 +41,9 @@ import { STRUCTURED_RESULT_TOOL_KINDS } from "./events"
 import { NoopAnalytics, type Analytics } from "./analytics"
 import { runKannaSync } from "./effect/bridge"
 import { CodexAppServerManager } from "./codex-app-server"
-import { CursorCliManager } from "./cursor-cli"
-import { fetchGrokAccountUsage, GrokCliManager } from "./grok-cli"
+import { makeCursorCli, type CursorCli } from "./cursor-cli"
+import { makeGrokCli, type GrokCli } from "./grok-cli"
+import { toHarnessTurn } from "./harness-bridge"
 import { PiAgentManager, resolvePiConnection } from "./pi-agent"
 import { type GenerateChatTitleResult, generateTitleForChatDetailed } from "./generate-title"
 import { withSharedQuickResponse } from "./quick-response"
@@ -270,8 +271,8 @@ interface AgentCoordinatorArgs {
   onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   analytics?: Analytics["Service"]
   codexManager?: CodexAppServerManager
-  cursorManager?: CursorCliManager
-  grokManager?: GrokCliManager
+  cursorManager?: CursorCli["Service"]
+  grokManager?: GrokCli["Service"]
   piManager?: PiAgentManager
   resolvePiConnection?: () => Promise<import("./pi-agent").PiConnection | null>
   generateTitle?: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
@@ -1094,8 +1095,8 @@ export class AgentCoordinator {
   private readonly onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   private readonly analytics: Analytics["Service"]
   private readonly codexManager: CodexAppServerManager
-  private readonly cursorManager: CursorCliManager
-  private readonly grokManager: GrokCliManager
+  private readonly cursorManager: CursorCli["Service"]
+  private readonly grokManager: GrokCli["Service"]
   private readonly piManager: PiAgentManager
   private readonly resolvePiConnection: () => Promise<import("./pi-agent").PiConnection | null>
   private readonly generateTitle: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
@@ -1157,8 +1158,8 @@ export class AgentCoordinator {
     this.codexManager = args.codexManager ?? new CodexAppServerManager()
     // Optional: test stand-ins for the manager predate it.
     this.codexManager.setTaskActivityListener?.((chatId, update) => this.applySubagentActivity(chatId, update))
-    this.cursorManager = args.cursorManager ?? new CursorCliManager()
-    this.grokManager = args.grokManager ?? new GrokCliManager()
+    this.cursorManager = args.cursorManager ?? runKannaSync(makeCursorCli().pipe(Effect.provide(ServerPlatform)))
+    this.grokManager = args.grokManager ?? runKannaSync(makeGrokCli().pipe(Effect.provide(ServerPlatform)))
     this.piManager = args.piManager ?? new PiAgentManager()
     this.resolvePiConnection = args.resolvePiConnection ?? resolvePiConnection
     this.generateTitle = args.generateTitle
@@ -1214,14 +1215,10 @@ export class AgentCoordinator {
     return await this.codexManager.readAccountRateLimits(homedir())
   }
 
-  async fetchGrokUsage() {
-    return await fetchGrokAccountUsage()
-  }
-
   async refreshGrokModelCatalog() {
     if (this.grokModelCatalogApplied) return
     try {
-      const models = await this.grokManager.listModels()
+      const models = await runKanna(this.grokManager.listModels())
       this.grokModelCatalogApplied = true
       if (applyGrokModels(models)) {
         this.emitStateChange(undefined, { immediate: true })
@@ -1622,7 +1619,7 @@ export class AgentCoordinator {
   async refreshCursorModelCatalog() {
     if (this.cursorModelCatalogApplied) return
     try {
-      const models = await this.cursorManager.listModels()
+      const models = await runKanna(this.cursorManager.listModels())
       this.cursorModelCatalogApplied = true
       if (applyCursorModels(models)) {
         this.emitStateChange(undefined, { immediate: true })
@@ -2166,13 +2163,13 @@ export class AgentCoordinator {
         buildKannaSystemMessage(buildKannaAgentId("cursor", args.model), { delegator })
       )
       // Cursor cannot fork (see canForkChat), so a turn always resumes its own session.
-      turn = await this.cursorManager.startTurn({
+      turn = await toHarnessTurn(this.cursorManager.startTurn({
         cwd: project.localPath,
         customTools,
         content: cursorContent,
         model: args.model,
         sessionToken: chat.sessionToken,
-      })
+      }))
     } else if (args.provider === "grok") {
       void this.refreshGrokModelCatalog()
       let grokContent = buildPromptText(wireContent, args.attachments)
@@ -2181,7 +2178,7 @@ export class AgentCoordinator {
         // Grok is not handed the Kanna tools, so it is not told about them.
         buildKannaSystemMessage(buildKannaAgentId("grok", args.model), { tools: false }),
       )
-      turn = await this.grokManager.startTurn({
+      turn = await toHarnessTurn(this.grokManager.startTurn({
         cwd: project.localPath,
         content: grokContent,
         model: args.model,
@@ -2189,8 +2186,8 @@ export class AgentCoordinator {
         planMode: args.planMode,
         sessionToken: chat.pendingForkSessionToken ?? chat.sessionToken,
         forkSession: Boolean(chat.pendingForkSessionToken),
-        onToolRequest,
-      })
+        onToolRequest: (request) => Effect.tryPromise(() => onToolRequest(request)),
+      }))
     } else if (args.provider === "pi") {
       // A missing connection or session boot failure surfaces as an error
       // result in the turn stream (like Cursor spawn failures) rather than throwing.
@@ -2609,7 +2606,7 @@ export class AgentCoordinator {
         // skill discovery roots, and invocation is failsafe-only by design.
         return { provider: "cursor", skills: await runKanna(scanCursorSkills({ cwd }).pipe(Effect.provide(ServerPlatform))), origin: "filesystem" }
       case "grok": {
-        const live = await this.grokManager.listSkills({ cwd })
+        const live = await runKanna(this.grokManager.listSkills({ cwd }))
         if (live.length > 0) {
           return { provider: "grok", skills: live, origin: "live" }
         }
