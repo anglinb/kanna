@@ -106,23 +106,38 @@ export const runCommandWithTimeout = Effect.fn("Nightly.runCommand")(function* (
 ) {
   yield* Effect.annotateCurrentSpan("command", command)
   let output = ""
-  const finished = yield* Effect.callback<boolean>((resume) => {
+  // The timeout is the child's own timer, not an Effect timeout: the global
+  // install runs uninterruptibly (see `replaceGlobalInstall`), where an
+  // Effect timeout could not stop it.
+  const finished = yield* Effect.callback<Option.Option<boolean>>((resume) => {
+    let settled = false
+    const settle = (result: Option.Option<boolean>) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resume(Effect.succeed(result))
+    }
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       ...(env ? { env: { ...process.env, ...env } } : {}),
     })
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      settle(Option.none())
+    }, STEP_TIMEOUT_MS)
     child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString() })
     child.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString() })
     child.once("error", (error) => {
       output += `\n${error.message}`
-      resume(Effect.succeed(false))
+      settle(Option.some(false))
     })
-    child.once("exit", (code) => resume(Effect.succeed(code === 0)))
+    child.once("exit", (code) => settle(Option.some(code === 0)))
     return Effect.sync(() => {
+      clearTimeout(timer)
       child.kill("SIGKILL")
     })
-  }).pipe(Effect.timeoutOption(STEP_TIMEOUT_MS))
+  })
   if (Option.isNone(finished)) {
     output += `\n[timed out after ${STEP_TIMEOUT_MS / 60_000} minutes]`
     return { ok: false, output } satisfies RunCommandResult
@@ -323,31 +338,40 @@ export const installNightlyBuild = Effect.fn("Nightly.install")(function* (deps:
   // is never left without a global install. (The reverse direction — a
   // registry install over a tarball entry — works in place, so the stable
   // updater needs no such dance.)
-  yield* runCommand("bun", ["remove", "-g", packageName], srcDir)
-  const rollbackFailure = Effect.fn("Nightly.rollback")(function* (message: string) {
-    const rollback = yield* runCommand("bun", ["install", "-g", `${packageName}@latest`], srcDir)
-    return failure(`${message}${rollback.ok ? `\nThe latest ${packageName} release was reinstalled.` : `\nRestoring the release also failed — run \`bun install -g ${packageName}@latest\` to recover.`}`)
-  })
-  const install = yield* runCommand("bun", ["install", "-g", packedTarball], srcDir)
-  if (!install.ok) {
-    return yield* rollbackFailure(`Nightly install step failed.\n${outputTail(install.output)}`)
-  }
+  // From the remove until the new install is verified the machine has no
+  // global `kanna`, so a stop in between must not cut it short: stopping
+  // Kanna closes the update manager's scope, which would kill the install
+  // and skip the rollback. Each step keeps its own timeout.
+  const replaceGlobalInstall = Effect.gen(function* () {
+    yield* runCommand("bun", ["remove", "-g", packageName], srcDir)
+    const rollbackFailure = Effect.fn("Nightly.rollback")(function* (message: string) {
+      const rollback = yield* runCommand("bun", ["install", "-g", `${packageName}@latest`], srcDir)
+      return failure(`${message}${rollback.ok ? `\nThe latest ${packageName} release was reinstalled.` : `\nRestoring the release also failed — run \`bun install -g ${packageName}@latest\` to recover.`}`)
+    })
+    const install = yield* runCommand("bun", ["install", "-g", packedTarball], srcDir)
+    if (!install.ok) {
+      return Option.some(yield* rollbackFailure(`Nightly install step failed.\n${outputTail(install.output)}`))
+    }
 
-  // `bun install -g` can exit 0 without replacing the package (that's how
-  // 0.57.0's dot-path install silently no-opped) — trust only the installed
-  // manifest reporting the stamped version.
-  const installedManifestPath = path.join(
-    deps.bunGlobalDir ?? bunGlobalDir(),
-    "install", "global", "node_modules", packageName, "package.json"
-  )
-  const installed = yield* Effect.result(readJsonObject(installedManifestPath).pipe(Effect.flatMap(decodePackageIdentity)))
-  if (Result.isFailure(installed)) {
-    return yield* rollbackFailure(`Could not verify the installed build: ${installed.failure.message}`)
-  }
-  const installedVersion = installed.success.version
-  if (installedVersion !== version) {
-    return yield* rollbackFailure(`The install finished but the global package still reports ${installedVersion ?? "no version"} instead of ${version}.`)
-  }
+    // `bun install -g` can exit 0 without replacing the package (that's how
+    // 0.57.0's dot-path install silently no-opped) — trust only the installed
+    // manifest reporting the stamped version.
+    const installedManifestPath = path.join(
+      deps.bunGlobalDir ?? bunGlobalDir(),
+      "install", "global", "node_modules", packageName, "package.json"
+    )
+    const installed = yield* Effect.result(readJsonObject(installedManifestPath).pipe(Effect.flatMap(decodePackageIdentity)))
+    if (Result.isFailure(installed)) {
+      return Option.some(yield* rollbackFailure(`Could not verify the installed build: ${installed.failure.message}`))
+    }
+    const installedVersion = installed.success.version
+    if (installedVersion !== version) {
+      return Option.some(yield* rollbackFailure(`The install finished but the global package still reports ${installedVersion ?? "no version"} instead of ${version}.`))
+    }
+    return Option.none<NightlyInstallResult>()
+  })
+  const replaced = yield* Effect.uninterruptible(replaceGlobalInstall)
+  if (Option.isSome(replaced)) return replaced.value
 
   yield* Effect.logInfo(`nightly: installed ${version}`)
   return {

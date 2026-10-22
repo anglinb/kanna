@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Effect, Result } from "effect"
+import { Deferred, Effect, Fiber, Result } from "effect"
+import { ServerPlatform } from "./effect/runtime"
 import { runTest } from "./effect/testing"
 import {
   fetchMainCommitSha,
@@ -270,6 +271,63 @@ describe("installNightlyBuild", () => {
     expect(result.userMessage).toContain("registry is down")
     expect(result.userMessage).toContain("release was reinstalled")
     expect(commands.at(-1)).toBe("bun install -g kanna-code@latest")
+  })
+
+  test("a stop during the global install waits for it, so the machine keeps a kanna", async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "kanna-nightly-"))
+    const tarball = createSourceTarball(tempDir)
+    const workDir = path.join(tempDir, "nightly")
+    const srcDir = path.join(workDir, "src")
+    const bunGlobalDir = path.join(tempDir, "bun-global")
+    const installedDir = path.join(bunGlobalDir, "install", "global", "node_modules", "kanna-code")
+
+    const commands: string[] = []
+    const installing = Effect.runSync(Deferred.make<void>())
+    const release = Effect.runSync(Deferred.make<void>())
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes("api.github.com")) return new Response(SHA)
+      return new Response(new Uint8Array(tarball))
+    }) as unknown as typeof fetch
+
+    const fiber = Effect.runFork(installNightlyBuild({
+      workDir,
+      bunGlobalDir,
+      fetchImpl,
+      runCommand: (command, args, cwd) => Effect.suspend((): Effect.Effect<RunCommandResult> => {
+        commands.push([command, ...args].join(" "))
+        if (command === "tar") {
+          const extract = spawnSync(command, args, { cwd, stdio: "ignore" })
+          return Effect.succeed({ ok: extract.status === 0, output: "" })
+        }
+        if (args.includes("--version")) return Effect.succeed({ ok: true, output: "0.56.7-nightly.0123456\n" })
+        if (args[0] === "pm" && args[1] === "pack") {
+          writeFileSync(path.join(srcDir, "kanna-code-0.56.7-nightly.0123456.tgz"), "tarball")
+          return Effect.succeed({ ok: true, output: "" })
+        }
+        if (args[0] === "install" && args[1] === "-g" && args[2]?.endsWith(".tgz")) {
+          // The install lands only after the stop has been asked for.
+          return Deferred.succeed(installing, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(Effect.sync(() => {
+              mkdirSync(installedDir, { recursive: true })
+              writeFileSync(path.join(installedDir, "package.json"), JSON.stringify({ name: "kanna-code", version: "0.56.7-nightly.0123456" }))
+              return { ok: true, output: "" }
+            })),
+          )
+        }
+        return Effect.succeed({ ok: true, output: "" })
+      }),
+    }).pipe(Effect.provide(ServerPlatform)))
+
+    await Effect.runPromise(Deferred.await(installing))
+    const stopped = Effect.runPromise(Fiber.interrupt(fiber))
+    await Effect.runPromise(Deferred.succeed(release, undefined))
+    await stopped
+
+    // The install ran to the end and was not rolled back.
+    expect(JSON.parse(readFileSync(path.join(installedDir, "package.json"), "utf8")).version).toBe("0.56.7-nightly.0123456")
+    expect(commands).not.toContain("bun install -g kanna-code@latest")
   })
 
   test("a build that fails its startup check is never installed", async () => {
