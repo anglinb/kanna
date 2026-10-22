@@ -3,15 +3,17 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AgentCoordinator } from "./agent"
+import { fakeCodexAppServer } from "./codex-app-server.fake"
 import { NoopAnalytics } from "./analytics"
-import { AsyncQueue } from "./async-queue"
+import { Cause, Queue, Stream } from "effect"
 import { ChatAgent } from "./chat-agent"
 import { createChatCommands } from "./chat-commands"
-import { runKanna } from "./effect/bridge"
+import { runKanna, runKannaSync } from "./effect/bridge"
 import { openEventStore, type EventStoreBridge as EventStore } from "./event-store-bridge"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
-import { MAX_CHAT_DEPTH, MAX_LIVE_CHATS, openChatOrchestrator } from "./orchestrator"
+import { MAX_CHAT_DEPTH, MAX_LIVE_CHATS } from "./orchestrator"
+import { openChatOrchestrator } from "./orchestrator-bridge"
 import type { ChatChange } from "./chat-commands"
 import { deriveChatSnapshot, deriveSidebarData } from "./read-models"
 import { timestamped } from "./transcript"
@@ -31,7 +33,7 @@ interface FakeTurn {
   planMode: boolean
   delegator?: boolean
   skipPlanApproval?: boolean
-  events: AsyncQueue<HarnessEvent>
+  events: Queue.Queue<HarnessEvent, Cause.Done>
   open: boolean
 }
 
@@ -44,13 +46,13 @@ class FakeCodex {
   getResourceCounts() { return {} }
 
   async startTurn(args: { chatId: string; content: string; planMode: boolean; delegator?: boolean; skipPlanApproval?: boolean }): Promise<HarnessTurn> {
-    const turn: FakeTurn = { chatId: args.chatId, content: args.content, planMode: args.planMode, delegator: args.delegator, skipPlanApproval: args.skipPlanApproval, events: new AsyncQueue(), open: true }
+    const turn: FakeTurn = { chatId: args.chatId, content: args.content, planMode: args.planMode, delegator: args.delegator, skipPlanApproval: args.skipPlanApproval, events: runKannaSync(Queue.unbounded<HarnessEvent, Cause.Done>()), open: true }
     this.turns.push(turn)
     const end = () => {
       turn.open = false
-      turn.events.finish()
+      Queue.endUnsafe(turn.events)
     }
-    return { provider: "codex", stream: turn.events, interrupt: async () => end(), close: end }
+    return { provider: "codex", stream: Stream.toAsyncIterable(Stream.fromQueue(turn.events)), interrupt: async () => end(), close: end }
   }
 
   /** The chat's open turn. */
@@ -66,22 +68,22 @@ class FakeCodex {
 
   /** Puts an entry in the chat's open turn, as the provider streaming it. */
   emit(chatId: string, entry: TranscriptEntry) {
-    this.turn(chatId).events.push({ type: "transcript", entry })
+    Queue.offerUnsafe(this.turn(chatId).events, { type: "transcript", entry })
   }
 
   finish(chatId: string, text: string) {
     const turn = this.turn(chatId)
-    turn.events.push({ type: "transcript", entry: timestamped({ kind: "assistant_text", text }) })
-    turn.events.push({ type: "transcript", entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "" }) })
+    Queue.offerUnsafe(turn.events, { type: "transcript", entry: timestamped({ kind: "assistant_text", text }) })
+    Queue.offerUnsafe(turn.events, { type: "transcript", entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "" }) })
     turn.open = false
-    turn.events.finish()
+    Queue.endUnsafe(turn.events)
   }
 
   fail(chatId: string, message: string) {
     const turn = this.turn(chatId)
-    turn.events.push({ type: "transcript", entry: timestamped({ kind: "result", subtype: "error", isError: true, durationMs: 0, result: message }) })
+    Queue.offerUnsafe(turn.events, { type: "transcript", entry: timestamped({ kind: "result", subtype: "error", isError: true, durationMs: 0, result: message }) })
     turn.open = false
-    turn.events.finish()
+    Queue.endUnsafe(turn.events)
   }
 }
 
@@ -107,7 +109,7 @@ async function setup(options?: { closeOutGraceMs?: number }) {
   const agent = new AgentCoordinator({
     store,
     onStateChange: () => {},
-    codexManager: codex as never,
+    codexManager: fakeCodexAppServer(codex),
     generateTitle: async () => ({ title: null, usedFallback: true, failureMessage: null }),
   })
   let clock: number | null = null
@@ -125,7 +127,7 @@ async function setup(options?: { closeOutGraceMs?: number }) {
   store.onTurnStarted = (chatId) => orchestrator.handleTurnStarted(chatId)
   cleanups.push(async () => {
     orchestrator.dispose()
-    agent.dispose()
+    await agent.dispose()
     await rm(dataDir, { recursive: true, force: true })
     await rm(projectDir, { recursive: true, force: true })
   })
@@ -1767,7 +1769,7 @@ describe("delegators", () => {
 
     // A fork too. This one copies a chat that has a session to resume.
     const source = await userChat("something else")
-    codex.turn(source).events.push({ type: "session_token", sessionToken: "thread-1" })
+    Queue.offerUnsafe(codex.turn(source).events, { type: "session_token", sessionToken: "thread-1" })
     codex.finish(source, "done")
     await until(() => orchestrator.readChat({ chatId: source }).chat.status === "completed")
     const fork = await orchestrator.forkChat(root, { chatId: source, subchat: false })
@@ -2145,7 +2147,7 @@ describe("adopting", () => {
       cwd: "/tmp",
       emit: async () => {},
       requestInput: async () => ({}),
-      orchestration: orchestrator,
+      orchestration: orchestrator.service,
     })
     const refused = await runtime.execute("send_message", { chatId: other, message: "rebase", adopted: true })
     expect(refused.isError).toBe(true)
@@ -2168,7 +2170,7 @@ describe("the tools", () => {
       cwd: "/tmp",
       emit: async (entry) => { emitted.push(entry) },
       requestInput: async () => ({}),
-      orchestration: orchestrator,
+      orchestration: orchestrator.service,
     })
     const call = async (name: string, input: unknown) => {
       const result = await runtime.execute(name, input)

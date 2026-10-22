@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect, Option } from "effect"
 import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
@@ -8,6 +9,7 @@ import { PROTOCOL_VERSION } from "../shared/types"
 import type { TicketDetail } from "../shared/tickets"
 import { createEmptyState } from "./events"
 import { createWsRouter } from "./ws-router"
+import type { Orchestrator } from "./orchestrator"
 
 /**
  * The `ticket` topic and the `ticket.*` commands, against a stand-in for the
@@ -49,17 +51,20 @@ function setup() {
   let current = detail()
   const calls: Array<[string, unknown]> = []
   const tickets = {
-    ticketBoard: () => null,
-    ticketDetail: (chatId: string, ticketId: string) => (chatId === "delegator" && ticketId === current.id ? current : null),
-    ticketAttentionByChat: () => new Map<string, number>(),
-    replyToTicketAsUser: async (input: unknown) => {
+    ticketBoard: () => Effect.succeed(Option.none()),
+    ticketDetail: (chatId: string, ticketId: string) =>
+      Effect.succeed(Option.fromNullOr(chatId === "delegator" && ticketId === current.id ? current : null)),
+    ticketAttentionByChat: Effect.succeed(new Map<string, number>()),
+    replyToTicketAsUser: (input: Parameters<Orchestrator["Service"]["replyToTicketAsUser"]>[0]) => Effect.sync(() => {
       calls.push(["reply", input])
       current = { ...current, replyCount: 1, awaitingDelegator: true }
       return { replyId: "rp_1" }
-    },
-    setTicketStatusAsUser: async (input: unknown) => { calls.push(["status", input]) },
-    setTicketReadAsUser: async (input: unknown) => { calls.push(["read", input]) },
-  }
+    }),
+    setTicketStatusAsUser: (input: Parameters<Orchestrator["Service"]["setTicketStatusAsUser"]>[0]) =>
+      Effect.sync(() => { calls.push(["status", input]) }),
+    setTicketReadAsUser: (input: Parameters<Orchestrator["Service"]["setTicketReadAsUser"]>[0]) =>
+      Effect.sync(() => { calls.push(["read", input]) }),
+  } satisfies Pick<Orchestrator["Service"], "ticketBoard" | "ticketDetail" | "ticketAttentionByChat" | "replyToTicketAsUser" | "setTicketStatusAsUser" | "setTicketReadAsUser">
   const router = createWsRouter({
     store: { state: createEmptyState(), getSidebarProjectOrder: () => [], pruneStaleEmptyChats: async () => [] } as never,
     diffStore: makeFakeDiffStore(),
@@ -68,12 +73,12 @@ function setup() {
     terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),
     appSettings: makeFakeAppSettings(),
-    llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,
-    refreshDiscovery: async () => [],
+    llmProvider: { read: () => Effect.succeed({}), write: () => Effect.succeed({}), validate: () => Effect.succeed({ ok: true, error: null }) } as never,
+    refreshDiscovery: () => Effect.succeed([]),
     getDiscoveredProjects: () => [],
     machineDisplayName: "Local Machine",
     updateManager: null,
-    tickets: tickets as never,
+    tickets,
   })
   const ws = new FakeWebSocket()
   router.handleOpen(ws as never)

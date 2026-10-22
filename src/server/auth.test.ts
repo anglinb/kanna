@@ -74,7 +74,7 @@ async function startPasswordServer(options: { trustProxy?: boolean; port?: numbe
     password: "secret",
     trustProxy: options.trustProxy ?? false,
   })
-  const project = await server.store.openProject(projectDir, "Project")
+  const project = await Effect.runPromise(server.store.openProject(projectDir, "Project"))
   return { server, projectDir, project }
 }
 

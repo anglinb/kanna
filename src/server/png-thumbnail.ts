@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs"
-import { Readable, Writable } from "node:stream"
+import { Transform, Writable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { crc32, createInflate, deflateSync } from "node:zlib"
 import { Effect, FileSystem, Option, Schema } from "effect"
@@ -17,8 +17,8 @@ import { Effect, FileSystem, Option, Schema } from "effect"
  * Interlaced PNGs deliver rows in seven passes rather than in order, so they
  * are refused (`UnsupportedPngError`) and the caller finds another way.
  *
- * The row work is plain code driven by node's zlib stream; only the two entry
- * points (`readPngHeader`, `writePngThumbnail`) are Effects.
+ * The row work is plain code driven by node's zlib stream; the pipeline is
+ * cancelled through `writePngThumbnail`'s Effect interruption signal.
  */
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -97,67 +97,86 @@ interface PngParts {
 }
 
 /**
- * Walks the file's chunks and yields the IDAT payloads, which together are
+ * Walks the file's chunks and emits the IDAT payloads, which together are
  * one zlib stream. Fills `parts` from the chunks ahead of the first IDAT.
  */
-async function* readImageData(filePath: string, parts: PngParts): AsyncGenerator<Buffer> {
-  let pending: Buffer = Buffer.alloc(0)
-  let signatureSeen = false
+class ImageDataReader extends Transform {
+  private pending: Buffer = Buffer.alloc(0)
+  private signatureSeen = false
   // Bytes of the current chunk's payload still to come, and its trailing CRC.
-  let payloadLeft = 0
-  let skipLeft = 0
-  let chunkType = ""
-  let collected: Buffer[] = []
+  private payloadLeft = 0
+  private skipLeft = 0
+  private chunkType = ""
+  private collected: Buffer[] = []
+  private done = false
 
-  for await (const piece of createReadStream(filePath, { highWaterMark: READ_CHUNK_BYTES }) as AsyncIterable<Buffer>) {
-    pending = pending.length ? Buffer.concat([pending, piece]) : piece
+  constructor(private readonly parts: PngParts) {
+    super()
+  }
+
+  override _transform(piece: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+    // Node's stream callback is the boundary for parser exceptions.
+    try {
+      this.consume(piece)
+      callback()
+    } catch (error) {
+      callback(error as Error)
+    }
+  }
+
+  private consume(piece: Buffer) {
+    if (this.done) return
+    const pending = this.pending.length ? Buffer.concat([this.pending, piece]) : piece
     let offset = 0
     while (offset < pending.length) {
-      if (!signatureSeen) {
+      if (!this.signatureSeen) {
         if (pending.length - offset < 8) break
         if (!pending.subarray(offset, offset + 8).equals(PNG_SIGNATURE)) throw new PngFormatError("Not a PNG")
-        signatureSeen = true
+        this.signatureSeen = true
         offset += 8
         continue
       }
-      if (skipLeft > 0) {
-        const skipped = Math.min(skipLeft, pending.length - offset)
-        skipLeft -= skipped
+      if (this.skipLeft > 0) {
+        const skipped = Math.min(this.skipLeft, pending.length - offset)
+        this.skipLeft -= skipped
         offset += skipped
         continue
       }
-      if (payloadLeft > 0) {
-        const taken = Math.min(payloadLeft, pending.length - offset)
+      if (this.payloadLeft > 0) {
+        const taken = Math.min(this.payloadLeft, pending.length - offset)
         const payload = pending.subarray(offset, offset + taken)
-        payloadLeft -= taken
+        this.payloadLeft -= taken
         offset += taken
-        if (chunkType === "IDAT") {
-          yield payload
-        } else if (chunkType === "IHDR" || chunkType === "PLTE" || chunkType === "tRNS") {
-          collected.push(payload)
+        if (this.chunkType === "IDAT") {
+          this.push(payload)
+        } else if (this.chunkType === "IHDR" || this.chunkType === "PLTE" || this.chunkType === "tRNS") {
+          this.collected.push(payload)
         }
-        if (payloadLeft === 0) {
-          skipLeft = 4
-          if (chunkType === "IHDR") {
-            parts.header = parseIhdrPayload(Buffer.concat(collected))
-          } else if (chunkType === "PLTE") {
-            parts.palette = Buffer.concat(collected)
-          } else if (chunkType === "tRNS") {
-            parts.paletteAlpha = Buffer.concat(collected)
+        if (this.payloadLeft === 0) {
+          this.skipLeft = 4
+          if (this.chunkType === "IHDR") {
+            this.parts.header = parseIhdrPayload(Buffer.concat(this.collected))
+          } else if (this.chunkType === "PLTE") {
+            this.parts.palette = Buffer.concat(this.collected)
+          } else if (this.chunkType === "tRNS") {
+            this.parts.paletteAlpha = Buffer.concat(this.collected)
           }
-          collected = []
+          this.collected = []
         }
         continue
       }
       if (pending.length - offset < 8) break
-      payloadLeft = pending.readUInt32BE(offset)
-      chunkType = pending.toString("latin1", offset + 4, offset + 8)
+      this.payloadLeft = pending.readUInt32BE(offset)
+      this.chunkType = pending.toString("latin1", offset + 4, offset + 8)
       offset += 8
-      if (chunkType === "IEND") return
-      if (payloadLeft === 0) skipLeft = 4
+      if (this.chunkType === "IEND") {
+        this.done = true
+        break
+      }
+      if (this.payloadLeft === 0) this.skipLeft = 4
     }
     // Copied, not sliced: a slice would pin the whole 64 KB piece.
-    pending = offset < pending.length ? Buffer.from(pending.subarray(offset)) : Buffer.alloc(0)
+    this.pending = !this.done && offset < pending.length ? Buffer.from(pending.subarray(offset)) : Buffer.alloc(0)
   }
 }
 
@@ -474,7 +493,15 @@ export const writePngThumbnail = Effect.fn("PngThumbnail.writePngThumbnail")(fun
   const parts: PngParts = { header: null, palette: null, paletteAlpha: null }
   const averager = new RowAverager(parts, maxSize, background ?? null)
   yield* Effect.tryPromise({
-    try: (signal) => pipeline(Readable.from(readImageData(sourcePath, parts)), createInflate(), averager, { signal }),
+    // Node's file stream feeds zlib with bounded chunks; the Effect signal
+    // closes the whole pipeline on interruption.
+    try: (signal) => pipeline(
+      createReadStream(sourcePath, { highWaterMark: READ_CHUNK_BYTES }),
+      new ImageDataReader(parts),
+      createInflate(),
+      averager,
+      { signal },
+    ),
     // A zlib or read error is a broken file, which is the caller's "find
     // another way" too.
     catch: (error) => new UnsupportedPngError({

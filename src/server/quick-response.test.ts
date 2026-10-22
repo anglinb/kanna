@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Result } from "effect"
 import type { LlmProviderSnapshot } from "../shared/types"
+import { CodexRequestError } from "./codex-app-server"
 import { runTest } from "./effect/testing"
 import { fallbackTitleFromMessage, generateTitleForChatDetailed } from "./generate-title"
 import { LlmProviderFileError } from "./llm-provider"
@@ -94,6 +95,26 @@ describe("QuickResponse", () => {
     expect(result).toBe("Codex title")
   })
 
+  test("falls back when the caller's parser throws", async () => {
+    const result = await runTest(Effect.gen(function* () {
+      const quickResponse = yield* QuickResponse
+      return yield* quickResponse.generateStructuredWithDiagnostics({
+        ...TITLE_ARGS,
+        parse: (value) => {
+          if (value && typeof value === "object" && "bad" in value) throw new Error("invalid title")
+          return TITLE_ARGS.parse(value)
+        },
+      })
+    }).pipe(Effect.provide(QuickResponse.layer({
+      readLlmProvider: llmProvider(),
+      runClaudeStructured: () => Effect.succeed({ bad: true }),
+      runCodexStructured: () => Effect.succeed({ title: "Codex title" }),
+    }))))
+
+    expect(result.value).toBe("Codex title")
+    expect(result.failures).toEqual([{ provider: "claude", reason: "claude returned invalid structured output for title generation" }])
+  })
+
   test("falls back to Codex when Claude throws", async () => {
     const result = await generateTitle({
       readLlmProvider: llmProvider(),
@@ -134,10 +155,10 @@ describe("QuickResponse", () => {
     const result = await generateTitle({
       readLlmProvider: llmProvider(),
       codexManager: {
-        async generateStructured(args) {
+        generateStructured: (args) => Effect.sync(() => {
           requests.push(args)
           return "{\"title\":\"Codex title\"}"
-        },
+        }),
       },
       runClaudeStructured: () => Effect.succeed(null),
     })
@@ -151,7 +172,7 @@ describe("QuickResponse", () => {
     const result = await generateTitle({
       readLlmProvider: llmProvider(),
       codexManager: {
-        generateStructured: async () => "Here you go:\n```json\n{\"title\":\"Fenced title\"}\n```",
+        generateStructured: () => Effect.succeed("Here you go:\n```json\n{\"title\":\"Fenced title\"}\n```"),
       },
       runClaudeStructured: () => Effect.succeed(null),
     })
@@ -166,9 +187,8 @@ describe("QuickResponse", () => {
     }).pipe(Effect.provide(QuickResponse.layer({
       readLlmProvider: llmProvider(),
       codexManager: {
-        generateStructured: async () => {
-          throw new Error("app-server exited")
-        },
+        generateStructured: () =>
+          Effect.fail(new CodexRequestError({ chatId: "quick-1", method: "turn/start", message: "app-server exited" })),
       },
       runClaudeStructured: () => Effect.succeed(null),
     }))))

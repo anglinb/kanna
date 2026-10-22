@@ -21,7 +21,7 @@ type PromiseStore = Partial<Record<(typeof WRITES)[number], (...args: never[]) =
 /**
  * The store chat commands use (`createChatCommands`), over a test's
  * hand-written Promise store: the shape router tests give the router, which
- * builds its own commands from `store.service`. A write the fake lacks, or
+ * builds its own commands from the Effect store. A write the fake lacks, or
  * one that throws, fails as a defect with the fake's own error, so its message
  * reaches the client as it did.
  */
@@ -35,6 +35,32 @@ export function fakeChatCommandsStore(store: PromiseStore) {
       if (!write) return Promise.reject(new Error(`The fake store has no ${name}`))
       return write(...args)
     })
+  }
+  return service
+}
+
+const ROUTER_WRITES = [
+  "pruneStaleEmptyChats",
+  "autoArchiveStaleChats",
+  "deleteStaleChats",
+  "prepareTranscript",
+  "openProject",
+  "renameProjectSidebarTitle",
+  "setProjectPinned",
+  "removeProject",
+  "setSidebarProjectOrder",
+  "setChatReadAnchor",
+  "readEntriesById",
+  "readMessages",
+] as const
+
+/** Adapts Promise-shaped router test stores to the Effect EventStore service. */
+export function fakeRouterStore<Store extends PromiseStore>(store: Store) {
+  const service: Record<string, unknown> = { ...store, ...fakeChatCommandsStore(store) }
+  for (const name of ROUTER_WRITES) {
+    const method = (store as Record<string, unknown>)[name]
+    if (typeof method !== "function") continue
+    service[name] = (...args: unknown[]) => Effect.promise(() => Promise.resolve(method.apply(store, args)))
   }
   return service
 }

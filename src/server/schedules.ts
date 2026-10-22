@@ -61,14 +61,14 @@ export type ScheduleFireResult =
   /** The chat or project it targets no longer exists. */
   | { outcome: "gone" }
 
-export interface ScheduleRunnerDeps<E = never> {
+export interface ScheduleRunnerDeps<E = never, FireError = never> {
   store: {
     listSchedules: () => ChatSchedule[]
     getSchedule: (scheduleId: string) => ChatSchedule | null
     setSchedule: (schedule: ChatSchedule) => Effect.Effect<ChatSchedule, E>
   }
   /** A failure here is a failed run (`onError`), not a failed pass. */
-  fire: (schedule: ChatSchedule) => Effect.Effect<ScheduleFireResult, unknown>
+  fire: (schedule: ChatSchedule) => Effect.Effect<ScheduleFireResult, FireError>
   onFired?: (schedule: ChatSchedule, result: ScheduleFireResult) => void
   onError?: (schedule: ChatSchedule, error: unknown) => void
   now?: () => number
@@ -98,8 +98,8 @@ export interface ScheduleRunner<E = never> {
  * pass starts after that. A pass already firing finishes, as its message may
  * be on its way and the schedule has to record that it ran.
  */
-export const makeScheduleRunner = Effect.fn("ScheduleRunner.make")(function* <E = never>(
-  deps: ScheduleRunnerDeps<E>,
+export const makeScheduleRunner = Effect.fn("ScheduleRunner.make")(function* <E = never, FireError = never>(
+  deps: ScheduleRunnerDeps<E, FireError>,
 ): Effect.fn.Return<ScheduleRunner<E>, never, Scope.Scope> {
   // Detached, not scoped: closing the scope must not wait on (or cut short)
   // a pass in flight. The finalizer below is what stops the timer.

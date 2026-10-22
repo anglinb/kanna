@@ -6,7 +6,7 @@ import { Effect, Result } from "effect"
 import { runTest } from "./effect/testing"
 import { deleteProjectUpload, inferAttachmentContentType, persistProjectUpload } from "./uploads"
 import { getProjectUploadDir } from "./paths"
-import { persistUploadedFiles, startKannaServer } from "./server"
+import { persistUploadedFiles, startKannaServer, UploadBatchError } from "./server"
 
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yF9sAAAAASUVORK5CYII="
@@ -118,7 +118,7 @@ describe("uploads", () => {
     const server = await startIsolatedServer({ port: 4310 })
 
     try {
-      const project = await server.store.openProject(projectDir, "Project")
+      const project = await Effect.runPromise(server.store.openProject(projectDir, "Project"))
       const attachment = await runTest(persistProjectUpload({
         projectId: project.id,
         localPath: projectDir,
@@ -143,7 +143,7 @@ describe("uploads", () => {
     const server = await startIsolatedServer({ port: 4314 })
 
     try {
-      const project = await server.store.openProject(projectDir, "Project")
+      const project = await Effect.runPromise(server.store.openProject(projectDir, "Project"))
       const attachment = await runTest(persistProjectUpload({
         projectId: project.id,
         localPath: projectDir,
@@ -168,7 +168,7 @@ describe("uploads", () => {
     const server = await startIsolatedServer({ port: 4312 })
 
     try {
-      const project = await server.store.openProject(projectDir, "Project")
+      const project = await Effect.runPromise(server.store.openProject(projectDir, "Project"))
       const attachment = await runTest(persistProjectUpload({
         projectId: project.id,
         localPath: projectDir,
@@ -192,7 +192,7 @@ describe("uploads", () => {
     const server = await startIsolatedServer({ port: 4313 })
 
     try {
-      const project = await server.store.openProject(projectDir, "Project")
+      const project = await Effect.runPromise(server.store.openProject(projectDir, "Project"))
       const formData = new FormData()
       formData.append("files", new File([new Uint8Array(100 * 1024 * 1024 + 1)], "big.bin", { type: "application/octet-stream" }))
 
@@ -220,7 +220,7 @@ describe("uploads", () => {
     ]
 
     await expect(
-      persistUploadedFiles({
+      runTest(persistUploadedFiles({
         projectId: "project-4",
         localPath: projectDir,
         files,
@@ -231,11 +231,32 @@ describe("uploads", () => {
 
           return runTest(persistProjectUpload(args))
         },
-      })
+      }))
     ).rejects.toThrow("disk full")
 
     expect(await Bun.file(path.join(projectDir, ".kanna/uploads/first.txt")).exists()).toBe(false)
     expect(await Bun.file(path.join(projectDir, ".kanna/uploads/second.txt")).exists()).toBe(false)
+  })
+
+  test("keeps the batch failure typed after rolling back earlier files", async () => {
+    const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-upload-failed-read-"))
+    tempDirs.push(projectDir)
+    const first = new File(["first"], "first.txt")
+    const second = new File(["second"], "second.txt")
+    second.arrayBuffer = async () => { throw new Error("read failed") }
+
+    const result = await runTest(Effect.result(persistUploadedFiles({
+      projectId: "project-4",
+      localPath: projectDir,
+      files: [first, second],
+    })))
+
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(UploadBatchError)
+      expect(result.failure.message).toBe("read failed")
+    }
+    expect(await Bun.file(path.join(projectDir, ".kanna/uploads/first.txt")).exists()).toBe(false)
   })
 
   test("deletes uploaded attachments from the project uploads directory", async () => {
@@ -304,7 +325,7 @@ describe("uploads", () => {
     const server = await startIsolatedServer({ port: 4311 })
 
     try {
-      const project = await server.store.openProject(projectDir, "Project")
+      const project = await Effect.runPromise(server.store.openProject(projectDir, "Project"))
       const attachment = await runTest(persistProjectUpload({
         projectId: project.id,
         localPath: projectDir,

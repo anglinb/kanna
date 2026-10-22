@@ -36,9 +36,14 @@ export interface HarnessTurn {
  * `events` fails with the provider's own tagged errors where the old
  * AsyncIterable threw; the agent reads those as it read the throws.
  */
-export interface HarnessTurnEffect<E = never> {
+export interface HarnessTurnEffect<E = never, IE = never, AE = never> {
   readonly provider: AgentProvider
   readonly events: Stream.Stream<HarnessEvent, E>
-  readonly accountInfo?: Effect.Effect<AccountInfo | null>
-  readonly interrupt: Effect.Effect<void>
+  readonly accountInfo?: Effect.Effect<AccountInfo | null, AE>
+  readonly interrupt: Effect.Effect<void, IE>
+}
+
+/** A provider turn whose owning scope can be closed by the coordinator. */
+export interface ManagedHarnessTurn<E = never, IE = never, AE = never> extends HarnessTurnEffect<E, IE, AE> {
+  readonly close: Effect.Effect<void>
 }

@@ -1,15 +1,7 @@
 import { Effect, Fiber, Stream } from "effect"
 import { KannaLoggerLayer } from "./logger"
 
-/**
- * Where Promise code still calls an Effect service, during the migration.
- *
- * A migrated service's methods have no requirements left (its layer resolved
- * them), so a caller that has not moved to Effect yet runs them here. Each
- * call site is a seam to remove when its caller migrates; once
- * `startKannaServer` and the router are Effect programs nothing should import
- * this file. See docs/effect-migration.md.
- */
+/** Runs an Effect service at a Bun, SDK, or test API that requires a Promise. */
 export const runKanna = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
   Effect.runPromise(effect.pipe(Effect.provide(KannaLoggerLayer)))
 

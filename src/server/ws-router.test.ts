@@ -17,7 +17,7 @@ import { PROTOCOL_VERSION } from "../shared/types"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
 import { openEventStore } from "./event-store-bridge"
-import { fakeChatCommandsStore } from "./chat-commands.fake"
+import { fakeRouterStore } from "./chat-commands.fake"
 import { deriveLocalProjectsSnapshot } from "./read-models"
 import { SERVER_PROVIDERS, applyCodexModels, resetServerProvidersForTests } from "./provider-catalog"
 import { createWsRouter } from "./ws-router"
@@ -195,14 +195,13 @@ function createFakeStore(overrides: Record<string, unknown> = {}) {
     widenTranscriptWindowStart: (_chatId: string, current: number) => current,
     ...overrides,
   }
-  // The router's chat commands run on the store's Effect service.
-  return { ...store, service: fakeChatCommandsStore(store) } as never
+  return fakeRouterStore(store) as never
 }
 
 function createFakeLlmProvider(): CreateWsRouterArgs["llmProvider"] {
   return {
-    read: async () => DEFAULT_LLM_PROVIDER_SNAPSHOT,
-    write: async (value) => ({
+    read: () => Effect.succeed(DEFAULT_LLM_PROVIDER_SNAPSHOT),
+    write: (value) => Effect.succeed({
       ...DEFAULT_LLM_PROVIDER_SNAPSHOT,
       provider: value.provider,
       apiKey: value.apiKey,
@@ -210,7 +209,7 @@ function createFakeLlmProvider(): CreateWsRouterArgs["llmProvider"] {
       baseUrl: value.baseUrl,
       faveModels: value.faveModels ?? [],
     }),
-    validate: async () => ({ ok: true, error: null }),
+    validate: () => Effect.succeed({ ok: true, error: null }),
   }
 }
 
@@ -225,7 +224,7 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
     keybindings: makeFakeKeybindings(DEFAULT_KEYBINDINGS_SNAPSHOT),
     appSettings: makeFakeAppSettings(DEFAULT_APP_SETTINGS_SNAPSHOT),
     llmProvider: createFakeLlmProvider(),
-    refreshDiscovery: async () => [],
+    refreshDiscovery: () => Effect.succeed([]),
     getDiscoveredProjects: () => [],
     machineDisplayName: "Local Machine",
     updateManager: null,
@@ -234,12 +233,120 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
 }
 
 describe("ws-router", () => {
+  test("keeps JSON and envelope errors distinct at the WebSocket boundary", async () => {
+    const router = createTestRouter()
+    const ws = new FakeWebSocket()
+    await router.handleMessage(ws as never, "{bad")
+    await router.handleMessage(ws as never, "42")
+    await router.handleMessage(ws as never, JSON.stringify({ v: 2, type: "command", id: "wrong-version" }))
+    expect(ws.sent).toEqual([
+      { v: 1, type: "error", message: "Invalid JSON" },
+      { v: 1, type: "error", message: "Invalid envelope" },
+      { v: 1, type: "error", message: "Invalid envelope" },
+    ])
+    router.dispose()
+  })
+
+  test("dispatches unknown and incomplete commands without changing their responses", async () => {
+    const router = createTestRouter({ store: createFakeStore({ getProject: () => null }) })
+    const ws = new FakeWebSocket()
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "command", id: "future", command: { type: "future.command" } }))
+    expect(ws.sent).toEqual([])
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "command", id: "incomplete", command: { type: "project.readCommit", projectId: "missing" } }))
+    expect(ws.sent).toEqual([{ v: 1, type: "error", id: "incomplete", message: "Project not found" }])
+    router.dispose()
+  })
+
+  test("native agent command failures keep their wire error text", async () => {
+    const router = createTestRouter({
+      agent: {
+        getActiveStatuses: () => new Map(),
+        getDrainingChatIds: () => new Set(),
+        stopDrainingEffect: () => Effect.fail(new Error("Cannot stop draining")),
+      } as never,
+    })
+    const ws = new FakeWebSocket()
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "command", id: "stop", command: { type: "chat.stopDraining", chatId: "chat-1" },
+    }))
+    expect(ws.sent).toEqual([{ v: 1, type: "error", id: "stop", message: "Cannot stop draining" }])
+    router.dispose()
+  })
+
+  test("skill listing uses the agent's native Effect operation", async () => {
+    const calls: unknown[] = []
+    const snapshot = { provider: "claude", skills: [], origin: "filesystem" }
+    const router = createTestRouter({
+      agent: {
+        getActiveStatuses: () => new Map(),
+        getDrainingChatIds: () => new Set(),
+        listSkillsEffect: (command: unknown) => Effect.sync(() => {
+          calls.push(command)
+          return snapshot
+        }),
+      } as never,
+    })
+    const ws = new FakeWebSocket()
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "command", id: "skills",
+      command: { type: "chat.listSkills", provider: "claude", projectId: "project-1" },
+    }))
+    expect(calls).toEqual([{ type: "chat.listSkills", provider: "claude", projectId: "project-1" }])
+    expect(ws.sent).toEqual([{ v: 1, type: "ack", id: "skills", result: snapshot }])
+    router.dispose()
+  })
+
+  test("passes nested and extra fields through to the command handler", async () => {
+    const router = createTestRouter()
+    const ws = new FakeWebSocket()
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "command", id: "patch", extra: "outer",
+      command: { type: "settings.writeAppSettingsPatch", patch: { theme: "sepia", futureSetting: 7 }, extra: "inner" },
+    }))
+    expect(ws.sent).toContainEqual(expect.objectContaining({
+      v: 1, type: "ack", id: "patch", result: expect.objectContaining({ theme: "sepia", futureSetting: 7 }),
+    }))
+    router.dispose()
+  })
+
+  test("disposal stops the router's scoped terminal event listener", async () => {
+    const terminals = makeFakeTerminals()
+    const router = createTestRouter({ terminals })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+    ws.data.subscriptions.set("terminal-sub", { type: "terminal", terminalId: "t1" })
+    terminals.emit({ type: "terminal.output", terminalId: "t1", data: "before" })
+    await Bun.sleep(5)
+    expect(ws.sent).toEqual([{ v: 1, type: "event", id: "terminal-sub", event: { type: "terminal.output", terminalId: "t1", data: "before" } }])
+    router.dispose()
+    await Bun.sleep(5)
+    terminals.emit({ type: "terminal.output", terminalId: "t1", data: "after" })
+    await Bun.sleep(5)
+    expect(ws.sent).toHaveLength(1)
+  })
+
+  test("git lookup failures retain their command error messages", async () => {
+    const router = createTestRouter({ store: createFakeStore({ getChat: () => null, getProject: () => null }) })
+    const ws = new FakeWebSocket()
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "command", id: "chat-git", command: { type: "chat.refreshDiffs", chatId: "missing" },
+    }))
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "command", id: "project-git", command: { type: "project.generateCommitMessage", projectId: "missing", paths: [] },
+    }))
+    expect(ws.sent).toEqual([
+      { v: 1, type: "error", id: "chat-git", message: "Chat not found" },
+      { v: 1, type: "error", id: "project-git", message: "Project not found" },
+    ])
+    router.dispose()
+  })
+
   test("renames a discovered project by path and updates all project lists", async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), "kanna-rename-project-"))
     try {
       const store = await openEventStore(path.join(projectPath, "data"))
       const discovered = [{ localPath: projectPath, title: "Project", modifiedAt: 1 }]
-      const router = createTestRouter({ store, getDiscoveredProjects: () => discovered })
+      const router = createTestRouter({ store: store.service, getDiscoveredProjects: () => discovered })
       const ws = new FakeWebSocket()
       router.handleOpen(ws as never)
       ws.data.subscriptions.set("projects", { type: "local-projects" })
@@ -277,7 +384,7 @@ describe("ws-router", () => {
       const store = await openEventStore(dataDir)
       const savedProject = source === "saved" ? await store.openProject(projectPath) : null
       const discovered = [{ localPath: projectPath, title: "Project", modifiedAt: 1 }]
-      const router = createTestRouter({ store, getDiscoveredProjects: () => discovered })
+      const router = createTestRouter({ store: store.service, getDiscoveredProjects: () => discovered })
       const ws = new FakeWebSocket()
       router.handleOpen(ws as never)
       ws.data.subscriptions.set("projects", { type: "local-projects" })
@@ -344,8 +451,8 @@ describe("ws-router", () => {
     const writes: Array<Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl"> & Partial<Pick<LlmProviderSnapshot, "faveModels">>> = []
     const router = createTestRouter({
       llmProvider: {
-        read: async () => DEFAULT_LLM_PROVIDER_SNAPSHOT,
-        write: async (value) => {
+        read: () => Effect.succeed(DEFAULT_LLM_PROVIDER_SNAPSHOT),
+        write: (value) => Effect.sync(() => {
           writes.push(value)
           return {
             ...DEFAULT_LLM_PROVIDER_SNAPSHOT,
@@ -354,8 +461,8 @@ describe("ws-router", () => {
             faveModels: [],
             enabled: Boolean(value.apiKey && value.model),
           }
-        },
-        validate: async () => ({
+        }),
+        validate: () => Effect.succeed({
           ok: true,
           error: null,
         }),
@@ -2418,6 +2525,24 @@ describe("transcript windows", () => {
     expect(ws.sent[4]).toEqual({ v: PROTOCOL_VERSION, type: "ack", id: "older-2", result: { startIndex: 0 } })
   })
 
+  test("transcript window failures retain their command errors", async () => {
+    const router = createWindowedRouter([...turn(1)])
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "command", id: "missing-chat",
+      command: { type: "chat.loadOlder", chatId: "missing" },
+    }))
+    expect(ws.sent.at(-1)).toEqual({ v: PROTOCOL_VERSION, type: "error", id: "missing-chat", message: "Chat not found" })
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "command", id: "too-many-entries",
+      command: { type: "chat.getToolEntries", chatId: "chat-1", entryIds: Array.from({ length: 257 }, (_, index) => String(index)) },
+    }))
+    expect(ws.sent.at(-1)).toEqual({ v: PROTOCOL_VERSION, type: "error", id: "too-many-entries", message: "Too many entry ids (max 256)" })
+  })
+
   test("a cached span reaching further back than the default keeps the client's window", async () => {
     const router = createWindowedRouter([...turn(1), ...turn(2), ...turn(3)])
     const ws = new FakeWebSocket()
@@ -2548,7 +2673,7 @@ describe("transcript windows", () => {
     try {
       const store = await openEventStore(dataDir)
       const project = await store.openProject(dataDir)
-      const router = createTestRouter({ store })
+      const router = createTestRouter({ store: store.service })
       const ws = new FakeWebSocket()
       router.handleOpen(ws as never)
       const chatId = "0b9c4d0e-6f0a-4a57-9d55-1f3a6c1d2e77"
@@ -2580,7 +2705,7 @@ describe("transcript windows", () => {
     try {
       const store = await openEventStore(dataDir)
       const project = await store.openProject(dataDir)
-      const router = createTestRouter({ store })
+      const router = createTestRouter({ store: store.service })
       const ws = new FakeWebSocket()
       router.handleOpen(ws as never)
       const chatId = "5d2f8a10-3c4b-4e6f-8a9b-0c1d2e3f4a5b"
@@ -2607,7 +2732,7 @@ describe("transcript windows", () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-client-chat-id-"))
     try {
       const store = await openEventStore(dataDir)
-      const router = createTestRouter({ store })
+      const router = createTestRouter({ store: store.service })
       const ws = new FakeWebSocket()
       router.handleOpen(ws as never)
       const chatId = "7e1a9b22-4d5c-4f70-9b8a-1d2e3f4a5b6c"

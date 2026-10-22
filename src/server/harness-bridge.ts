@@ -2,16 +2,36 @@ import { Effect, Exit, Scope, Stream } from "effect"
 import { runKanna } from "./effect/bridge"
 import type { HarnessTurn, HarnessTurnEffect } from "./harness-types"
 
+/** Open a provider turn in its own scope without converting its stream to an iterator. */
+export const openHarnessTurn = Effect.fn("Harness.openTurn")(function* <E, SE, IE, AE>(
+  startTurn: Effect.Effect<HarnessTurnEffect<E, IE, AE>, SE, Scope.Scope>,
+) {
+  return yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    const turn = yield* restore(Scope.provide(startTurn, scope)).pipe(
+      Effect.onError(() => Scope.close(scope, Exit.void)),
+    )
+    let closed = false
+    return {
+      ...turn,
+      close: Effect.suspend(() => {
+        if (closed) return Effect.void
+        closed = true
+        return Scope.close(scope, Exit.void)
+      }),
+    }
+  }))
+})
+
 /**
- * The Promise-shaped `HarnessTurn` the agent still consumes, over a
- * provider turn already on Effect. `startTurn` runs in a scope this owns;
+ * Compatibility for older tests and callers that still consume `HarnessTurn`.
+ * `startTurn` runs in a scope this owns;
  * `close()` closes it, which stops the provider and ends the stream.
  *
- * Temporary: it goes when agent.ts reads `HarnessTurnEffect` directly
- * (wave 4 of docs/effect-migration.md).
+ * The coordinator now uses `openHarnessTurn` and reads the Effect stream.
  */
-export async function toHarnessTurn<E, SE>(
-  startTurn: Effect.Effect<HarnessTurnEffect<E>, SE, Scope.Scope>,
+export async function toHarnessTurn<E, SE, IE, AE>(
+  startTurn: Effect.Effect<HarnessTurnEffect<E, IE, AE>, SE, Scope.Scope>,
 ): Promise<HarnessTurn> {
   const scope = await runKanna(Scope.make())
   const turn = await runKanna(Scope.provide(startTurn, scope)).catch(async (error: unknown) => {

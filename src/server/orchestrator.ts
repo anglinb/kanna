@@ -1791,7 +1791,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   // Its own scope, so `stop` can end it ahead of the layer's.
   const schedulesScope = yield* Scope.make()
   yield* Effect.addFinalizer(() => Scope.close(schedulesScope, Exit.void))
-  const schedules = yield* makeScheduleRunner<EventStoreFileError>({
+  const schedules = yield* makeScheduleRunner<EventStoreFileError, ChatWriteError>({
     store: {
       listSchedules: () => store.listSchedules(),
       getSchedule: (scheduleId) => store.getSchedule(scheduleId),
@@ -2694,5 +2694,3 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     listTickets,
   } satisfies Orchestrator["Service"]
 })
-
-export { ChatOrchestrator, openChatOrchestrator } from "./orchestrator-bridge"

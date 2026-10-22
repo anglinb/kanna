@@ -11,7 +11,7 @@ import { WorktreeProbe } from "./worktree-probe"
 
 const tempDirs: string[] = []
 
-const backfillTouchedFileBases = (store: EventStore) => runTest(backfillEffect(store))
+const backfillTouchedFileBases = (store: EventStore) => runTest(backfillEffect(store.service))
 
 /** A fresh probe's readings after it refreshed the chat's project, as the sidebar would get them. */
 function probeWorkingTrees(store: EventStore, chatId: string) {

@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import type { EventStoreBridge as EventStore } from "./event-store-bridge"
+import type { EventStore } from "./event-store"
 import type { ChatRecord, TouchedFile } from "./events"
 import { git, resolveLocation, treeBlobs } from "./worktree-git"
 
@@ -70,7 +70,7 @@ export interface TouchedFileBackfillResult {
  * and survives restart without a second pass.
  */
 export const backfillTouchedFileBases = Effect.fn("TouchedFileBackfill.run")(function* (
-  store: Pick<EventStore, "state" | "recordFilesTouched">,
+  store: Pick<EventStore["Service"], "state" | "recordFilesTouched">,
 ) {
   const pending = new Map<string, ChatRecord[]>()
   for (const chat of store.state.chatsById.values()) {
@@ -103,10 +103,10 @@ export const backfillTouchedFileBases = Effect.fn("TouchedFileBackfill.run")(fun
       path: filePath,
       baseBlob: blobs.value.get(filePath) ?? null,
     }))
-    yield* Effect.tryPromise({
-      try: () => store.recordFilesTouched(chat.id, files),
-      catch: (cause) => new TouchedFileBackfillError({ chatId: chat.id, cause }),
-    })
+    yield* store.recordFilesTouched(chat.id, files).pipe(
+      Effect.catchTag("@kanna/server/event-store/EventStoreFileError", (cause) =>
+        Effect.fail(new TouchedFileBackfillError({ chatId: chat.id, cause }))),
+    )
     result.chats += 1
     result.files += files.length
   })

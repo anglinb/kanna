@@ -1,22 +1,23 @@
 import type { PerformanceLog } from "./performance-log"
 import type { ServerWebSocket } from "bun"
 import { homedir } from "node:os"
-import { Effect } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Result, Schema, Scope, Stream } from "effect"
 import { PROTOCOL_VERSION } from "../shared/types"
-import type { ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
-import { isClientEnvelope } from "../shared/protocol"
+import type { ClientCommand, ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
+import { ClientFrameJsonSchema, CompatibleClientEnvelopeSchema } from "../shared/protocol-schema"
 import { diffSidebarIndex, indexSidebarData, type SidebarIndex } from "../shared/sidebar-patch"
 import type { AgentCoordinator } from "./agent"
 import { ChatAgent } from "./chat-agent"
 import { createChatCommands, type ChatChange, type ChatCommandOutcome, type ChatCommands } from "./chat-commands"
 import { NoopAnalytics, type Analytics } from "./analytics"
 import type { AppSettings } from "./app-settings"
-import type { DiscoveredProject } from "./discovery"
+import type { DiscoveredProject, ProjectDiscoveryError } from "./discovery"
+import type { LlmProviderFileError } from "./llm-provider"
 import type { DiffStore } from "./diff-store"
-import type { EventStoreBridge } from "./event-store-bridge"
+import type { EventStore } from "./event-store"
 import { openExternal } from "./external-open"
 import type { Keybindings } from "./keybindings"
-import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
+import { runKanna, runKannaSync } from "./effect/bridge"
 import { ServerPlatform } from "./effect/runtime"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
 import type { PortTunnels } from "./port-tunnels"
@@ -33,7 +34,8 @@ import type { ProviderAuth } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimits } from "./usage-limits"
 import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
-import type { ChatOrchestrator } from "./orchestrator"
+import type { Orchestrator } from "./orchestrator"
+import { sendEnvelope as send, sendSerializedSnapshot, shouldIncludeTopic, type SnapshotBroadcastFilter } from "./ws-transport"
 import type {
   AppSettingsSnapshot,
   ChatSnapshot,
@@ -61,6 +63,24 @@ const CHAT_BROADCAST_INTERVAL_MS = 16
  * chats nobody is looking at on every streamed entry.
  */
 const BACKGROUND_CHAT_PUSH_INTERVAL_MS = 2_000
+
+class TerminalProjectNotFoundError extends Schema.TaggedError<TerminalProjectNotFoundError>()(
+  "@kanna/server/ws-router/TerminalProjectNotFoundError",
+  { projectId: Schema.String, message: Schema.String },
+) {}
+
+class GitProjectLookupError extends Schema.TaggedError<GitProjectLookupError>()(
+  "@kanna/server/ws-router/GitProjectLookupError",
+  { message: Schema.String, projectId: Schema.String, cause: Schema.Defect() },
+) {}
+
+class RouterCommandError extends Schema.TaggedError<RouterCommandError>()(
+  "@kanna/server/ws-router/RouterCommandError",
+  { message: Schema.String },
+) {}
+
+const decodeFrameJson = Schema.decodeUnknownEffect(ClientFrameJsonSchema)
+const decodeCompatibleEnvelope = Schema.decodeUnknownEffect(CompatibleClientEnvelopeSchema)
 
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
@@ -102,12 +122,12 @@ export interface ClientState {
    * When each background chat subscription was last pushed, and the trailing
    * push waiting out the interval, if any.
    */
-  chatBackgroundPushes?: Map<string, { at: number; timer: ReturnType<typeof setTimeout> | null }>
+  chatBackgroundPushes?: Map<string, { at: number; timer: Fiber.Fiber<void, never> | null }>
 }
 
 interface CreateWsRouterArgs {
   diagnostics?: PerformanceLog["Service"]
-  store: EventStoreBridge
+  store: EventStore["Service"]
   diffStore: Pick<DiffStore["Service"], "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
   worktreeProbe: Pick<WorktreeProbe["Service"], "states" | "repoLabels" | "projectsWithoutRepo">
   projectIcons?: Pick<ProjectIcons["Service"], "urls">
@@ -118,11 +138,11 @@ interface CreateWsRouterArgs {
   appSettings: AppSettings["Service"]
   analytics?: Analytics["Service"]
   llmProvider: {
-    read: () => Promise<LlmProviderSnapshot>
-    write: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl"> & Partial<Pick<LlmProviderSnapshot, "faveModels">>) => Promise<LlmProviderSnapshot>
-    validate: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) => Promise<LlmProviderValidationResult>
+    read: () => Effect.Effect<LlmProviderSnapshot, LlmProviderFileError>
+    write: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl"> & Partial<Pick<LlmProviderSnapshot, "faveModels">>) => Effect.Effect<LlmProviderSnapshot, LlmProviderFileError>
+    validate: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) => Effect.Effect<LlmProviderValidationResult>
   }
-  refreshDiscovery: () => Promise<DiscoveredProject[]>
+  refreshDiscovery: () => Effect.Effect<DiscoveredProject[], ProjectDiscoveryError>
   /** Re-probe which editors and terminals are installed; results reach clients via app-settings. */
   refreshInstalledApps?: () => void
   getDiscoveredProjects: () => DiscoveredProject[]
@@ -143,22 +163,9 @@ interface CreateWsRouterArgs {
 
 /** What the router reads and does of a delegator's tickets. See `shared/tickets.ts`. */
 type TicketService = Pick<
-  ChatOrchestrator,
+  Orchestrator["Service"],
   "ticketBoard" | "ticketDetail" | "ticketAttentionByChat" | "replyToTicketAsUser" | "setTicketStatusAsUser" | "setTicketReadAsUser"
 >
-
-interface SnapshotBroadcastFilter {
-  includeSidebar?: boolean
-  includeLocalProjects?: boolean
-  includeUpdate?: boolean
-  includeKeybindings?: boolean
-  includeAppSettings?: boolean
-  includeUsageLimits?: boolean
-  includeProviderAuth?: boolean
-  chatIds?: Set<string>
-  projectIds?: Set<string>
-  terminalIds?: Set<string>
-}
 
 interface SidebarSnapshotEntry {
   data: ReturnType<typeof deriveSidebarData>
@@ -182,31 +189,6 @@ interface SnapshotComputationCache {
    * is the expensive half; serializing an incremental body is cheap.
    */
   chat?: Map<string, ChatSnapshot | null>
-}
-
-/**
- * Frames at least this long are sent with per-message deflate when the
- * socket negotiated it. Below it (acks, pings, keystrokes) the deflate
- * header costs more than it saves and adds latency to typing.
- */
-const COMPRESS_FRAME_MIN_BYTES = 1024
-
-function sendFrame(ws: ServerWebSocket<ClientState>, payload: string) {
-  ws.send(payload, payload.length >= COMPRESS_FRAME_MIN_BYTES)
-}
-
-function send(ws: ServerWebSocket<ClientState>, message: ServerEnvelope) {
-  const payload = JSON.stringify(message)
-  sendFrame(ws, payload)
-  return payload.length
-}
-
-/**
- * Send a snapshot whose body was already serialized once for this broadcast,
- * so N subscribers cost one JSON.stringify instead of N.
- */
-function sendSerializedSnapshot(ws: ServerWebSocket<ClientState>, id: string, snapshotJson: string) {
-  sendFrame(ws, `{"v":${PROTOCOL_VERSION},"type":"snapshot","id":${JSON.stringify(id)},"snapshot":${snapshotJson}}`)
 }
 
 function ensureChatEntrySpans(ws: ServerWebSocket<ClientState>) {
@@ -258,7 +240,7 @@ export function createWsRouter({
   tickets,
 }: CreateWsRouterArgs) {
   const sockets = new Set<ServerWebSocket<ClientState>>()
-  let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingBroadcastTimer: Fiber.Fiber<void, never> | null = null
   let pendingBroadcastAll = false
   const pendingBroadcastChatIds = new Set<string>()
   // Chats being made under an id their client chose, until they are written.
@@ -266,13 +248,29 @@ export function createWsRouter({
   // that page sends next (its subscription, a git refresh, a first message)
   // can be handled while the create is still on its way to disk, and would
   // find no such chat. Whatever names one of these ids waits for it instead.
-  const chatCreations = new Map<string, Promise<unknown>>()
-  async function chatCreated(chatId: string) {
+  const chatCreations = new Map<string, Deferred.Deferred<void>>()
+  // One scope owns every change-stream listener attached by this router.
+  const listenerScope = runKannaSync(Scope.make())
+  const listen = <A, E>(stream: Stream.Stream<A, E>, listener: (value: A) => void) =>
+    // Started on the spot, so the listener is subscribed before this returns
+    // (as `subscribeKanna` was) and no change published right after is missed.
+    runKannaSync(Stream.runForEach(stream, (value) => Effect.sync(() => listener(value))).pipe(
+      Effect.forkIn(listenerScope, { startImmediately: true }),
+    ))
+  const forkRouter = <A, E>(operation: string, effect: Effect.Effect<A, E>) =>
+    runKannaSync(effect.pipe(
+      Effect.catchCause((cause) => Cause.hasInterruptsOnly(cause)
+        ? Effect.void
+        : Effect.logError(`router ${operation} failed`, { cause })),
+      Effect.forkIn(listenerScope),
+    ))
+  const chatCreatedEffect = Effect.fn("WsRouter.chatCreated")(function* (chatId: string) {
+    const creation = chatCreations.get(chatId)
     // A create that failed leaves no chat, and the caller says so in its own words.
-    await chatCreations.get(chatId)?.catch(() => {})
-  }
+    if (creation) yield* Deferred.await(creation)
+  })
   const resolvedAnalytics = analytics ?? NoopAnalytics
-  const chatCommands = providedChatCommands ?? createChatCommands({ store: store.service, agent: ChatAgent.fromCoordinator(() => agent), analytics: resolvedAnalytics })
+  const chatCommands = providedChatCommands ?? createChatCommands({ store, agent: ChatAgent.fromCoordinator(() => agent), analytics: resolvedAnalytics })
 
   /**
    * Every chat that is not at rest: a turn in flight, or waiting on a
@@ -311,76 +309,38 @@ export function createWsRouter({
     return protectedChatIds
   }
 
-  async function maybePruneStaleEmptyChats(extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
+  const pruneStaleEmptyChatsEffect = Effect.fn("WsRouter.pruneStaleEmptyChats")(function* (extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
     const activeChatIds = getProtectedChatIds()
     const protectedDraftChatIds = getProtectedDraftChatIds(extraSockets)
-    return await store.pruneStaleEmptyChats({
+    return yield* store.pruneStaleEmptyChats({
       activeChatIds,
       protectedChatIds: protectedDraftChatIds,
     })
-  }
+  })
+  const maybePruneStaleEmptyChats = (extraSockets?: Iterable<ServerWebSocket<ClientState>>) =>
+    runKanna(pruneStaleEmptyChatsEffect(extraSockets))
 
-  async function maybeAutoArchiveStaleChats(extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
+  const autoArchiveStaleChatsEffect = Effect.fn("WsRouter.autoArchiveStaleChats")(function* (extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
     const activeChatIds = getProtectedChatIds()
     const protectedDraftChatIds = getProtectedDraftChatIds(extraSockets)
-    return await store.autoArchiveStaleChats({
+    return yield* store.autoArchiveStaleChats({
       activeChatIds,
       protectedChatIds: protectedDraftChatIds,
     })
-  }
+  })
+  const maybeAutoArchiveStaleChats = (extraSockets?: Iterable<ServerWebSocket<ClientState>>) =>
+    runKanna(autoArchiveStaleChatsEffect(extraSockets))
 
-  async function maybeDeleteStaleChats(extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
+  const deleteStaleChatsEffect = Effect.fn("WsRouter.deleteStaleChats")(function* (extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
     const activeChatIds = getProtectedChatIds()
     const protectedDraftChatIds = getProtectedDraftChatIds(extraSockets)
-    return await store.deleteStaleChats({
+    return yield* store.deleteStaleChats({
       activeChatIds,
       protectedChatIds: protectedDraftChatIds,
     })
-  }
-
-  function shouldIncludeTopic(topic: SubscriptionTopic, filter?: SnapshotBroadcastFilter) {
-    if (!filter) {
-      return true
-    }
-
-    if (topic.type === "sidebar") {
-      return Boolean(filter.includeSidebar)
-    }
-    if (topic.type === "local-projects") {
-      return Boolean(filter.includeLocalProjects)
-    }
-    if (topic.type === "update") {
-      return Boolean(filter.includeUpdate)
-    }
-    if (topic.type === "keybindings") {
-      return Boolean(filter.includeKeybindings)
-    }
-    if (topic.type === "app-settings") {
-      return Boolean(filter.includeAppSettings)
-    }
-    if (topic.type === "usage-limits") {
-      return Boolean(filter.includeUsageLimits)
-    }
-    if (topic.type === "provider-auth") {
-      return Boolean(filter.includeProviderAuth)
-    }
-    if (topic.type === "chat") {
-      return filter.chatIds?.has(topic.chatId) ?? false
-    }
-    if (topic.type === "project-git") {
-      return filter.projectIds?.has(topic.projectId) ?? false
-    }
-    if (topic.type === "terminal") {
-      return filter.terminalIds?.has(topic.terminalId) ?? false
-    }
-    // A ticket is part of its delegator's chat: whatever pushes that chat
-    // (a reply, a hand-off, a chat on the ticket changing state) pushes it.
-    if (topic.type === "ticket") {
-      return filter.chatIds?.has(topic.chatId) ?? false
-    }
-
-    return true
-  }
+  })
+  const maybeDeleteStaleChats = (extraSockets?: Iterable<ServerWebSocket<ClientState>>) =>
+    runKanna(deleteStaleChatsEffect(extraSockets))
 
   /**
    * Bumped whenever the worktree probe reports a change. With the store's
@@ -425,7 +385,7 @@ export function createWsRouter({
     }
     // Each delegator's count for its compass button. It moves with its
     // tickets and with its chats' states, so it is in the key itself.
-    const ticketAttention = tickets?.ticketAttentionByChat() ?? new Map<string, number>()
+    const ticketAttention = tickets ? runKannaSync(tickets.ticketAttentionByChat) : new Map<string, number>()
     // Every input to the derive, in one string. `stateVersion` now moves only
     // when an append changed something the sidebar can show (see
     // `sidebarVisibleSignature` in event-store), so a streaming turn re-derives
@@ -654,7 +614,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "ticket",
-          data: tickets?.ticketDetail(topic.chatId, topic.ticketId) ?? null,
+          data: tickets ? Option.getOrNull(runKannaSync(tickets.ticketDetail(topic.chatId, topic.ticketId))) : null,
         },
       }
     }
@@ -715,7 +675,7 @@ export function createWsRouter({
    */
   function withTicketBoard(data: ChatSnapshot | null): ChatSnapshot | null {
     if (!data || !tickets) return data
-    const board = tickets.ticketBoard(data.runtime.chatId)
+    const board = Option.getOrNull(runKannaSync(tickets.ticketBoard(data.runtime.chatId)))
     return board ? { ...data, ...board } : data
   }
 
@@ -865,21 +825,24 @@ export function createWsRouter({
       entry.at = now
       return true
     }
-    entry.timer = setTimeout(() => {
-      entry.timer = null
-      if (pushes.get(subscriptionId) !== entry || !ws.data.subscriptions.has(subscriptionId)) return
-      void pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: subscriptionId })
-    }, wait)
+    entry.timer = runKannaSync(Effect.sleep(wait).pipe(
+      Effect.andThen(Effect.sync(() => {
+        entry.timer = null
+        if (pushes.get(subscriptionId) !== entry || !ws.data.subscriptions.has(subscriptionId)) return
+        forkRouter("background chat push", pushSnapshotsEffect(ws, { skipPrune: true, onlySubscriptionId: subscriptionId }))
+      })),
+      Effect.forkIn(listenerScope),
+    ))
     return false
   }
 
   function clearBackgroundChatPush(ws: ServerWebSocket<ClientState>, subscriptionId: string) {
     const entry = ws.data.chatBackgroundPushes?.get(subscriptionId)
-    if (entry?.timer) clearTimeout(entry.timer)
+    if (entry?.timer) Effect.runFork(Fiber.interrupt(entry.timer))
     ws.data.chatBackgroundPushes?.delete(subscriptionId)
   }
 
-  async function pushSnapshots(
+  const pushSnapshotsEffect = Effect.fn("WsRouter.pushSnapshots")(function* (
     ws: ServerWebSocket<ClientState>,
     options?: {
       skipPrune?: boolean
@@ -890,7 +853,7 @@ export function createWsRouter({
     }
   ) {
     if (!options?.skipPrune) {
-      await maybePruneStaleEmptyChats([ws])
+      yield* pruneStaleEmptyChatsEffect([ws])
     }
     const snapshotSignatures = ensureSnapshotSignatures(ws)
     for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -916,7 +879,7 @@ export function createWsRouter({
       }
       if (topic.type === "chat") {
         if (topic.background && !admitBackgroundChatPush(ws, id)) continue
-        if (store.prepareTranscript && store.getChat(topic.chatId)) await store.prepareTranscript(topic.chatId)
+        if (store.prepareTranscript && store.getChat(topic.chatId)) yield* store.prepareTranscript(topic.chatId)
         if (ws.data.subscriptions.get(id) !== topic) continue
         const started = performance.now()
         const spans = ensureChatEntrySpans(ws)
@@ -982,11 +945,11 @@ export function createWsRouter({
         }
         sendSerializedSnapshot(ws, id, snapshotJson)
         if (diagnostics) {
-          runKannaSync(Effect.all([
+          yield* Effect.all([
             diagnostics.record("chat_snapshot_ms", performance.now() - started),
             diagnostics.record("chat_snapshot_bytes", snapshotJson.length),
             diagnostics.record("chat_window_entries", Math.max(0, (end ?? 0) - windowStart)),
-          ], { discard: true }))
+          ], { discard: true })
         }
         continue
       }
@@ -1007,21 +970,23 @@ export function createWsRouter({
       snapshotSignatures.set(id, signature)
       send(ws, envelope)
     }
-  }
+  })
 
-  async function broadcastSnapshots() {
+  const broadcastSnapshotsEffect = Effect.fn("WsRouter.broadcastSnapshots")(function* () {
     const cache: SnapshotComputationCache = {}
     for (const ws of sockets) {
-      await pushSnapshots(ws, { skipPrune: true, cache })
+      yield* pushSnapshotsEffect(ws, { skipPrune: true, cache })
     }
-  }
+  })
+  const broadcastSnapshots = () => runKanna(broadcastSnapshotsEffect())
 
-  async function broadcastFilteredSnapshots(filter: SnapshotBroadcastFilter) {
+  const broadcastFilteredSnapshotsEffect = Effect.fn("WsRouter.broadcastFilteredSnapshots")(function* (filter: SnapshotBroadcastFilter) {
     const cache: SnapshotComputationCache = {}
     for (const ws of sockets) {
-      await pushSnapshots(ws, { skipPrune: true, filter, cache })
+      yield* pushSnapshotsEffect(ws, { skipPrune: true, filter, cache })
     }
-  }
+  })
+  const broadcastFilteredSnapshots = (filter: SnapshotBroadcastFilter) => runKanna(broadcastFilteredSnapshotsEffect(filter))
 
   function flushPendingBroadcast() {
     pendingBroadcastTimer = null
@@ -1030,7 +995,7 @@ export function createWsRouter({
     pendingBroadcastAll = false
     pendingBroadcastChatIds.clear()
     if (shouldBroadcastAll) {
-      void broadcastSnapshots()
+      forkRouter("broadcast", broadcastSnapshotsEffect())
       return
     }
     if (chatIds.size > 0) {
@@ -1042,7 +1007,7 @@ export function createWsRouter({
       // remains are real changes — status flips, the unread dot, a new title —
       // and those must land at event speed: a 400 ms throttle here once made
       // every turn ending feel stuck.
-      void broadcastFilteredSnapshots({ includeSidebar: true, chatIds })
+      forkRouter("chat broadcast", broadcastFilteredSnapshotsEffect({ includeSidebar: true, chatIds }))
     }
   }
 
@@ -1050,7 +1015,10 @@ export function createWsRouter({
     if (pendingBroadcastTimer) {
       return
     }
-    pendingBroadcastTimer = setTimeout(flushPendingBroadcast, CHAT_BROADCAST_INTERVAL_MS)
+    pendingBroadcastTimer = runKannaSync(Effect.sleep(CHAT_BROADCAST_INTERVAL_MS).pipe(
+      Effect.andThen(Effect.sync(flushPendingBroadcast)),
+      Effect.forkIn(listenerScope),
+    ))
   }
 
   function scheduleBroadcast() {
@@ -1066,36 +1034,64 @@ export function createWsRouter({
     armPendingBroadcastTimer()
   }
 
-  async function broadcastChatAndSidebar(chatId: string) {
-    await broadcastFilteredSnapshots({
-      includeSidebar: true,
-      chatIds: new Set([chatId]),
-    })
-  }
-
-  async function broadcastChatStateImmediately(chatId: string) {
-    await broadcastChatAndSidebar(chatId)
-  }
+  const broadcastChatStateImmediately = (chatId: string) => runKanna(broadcastFilteredSnapshotsEffect({
+    includeSidebar: true,
+    chatIds: new Set([chatId]),
+  }))
 
   /** Push what a chat command says it changed. */
-  async function broadcastChatChange(change: ChatChange) {
-    await broadcastFilteredSnapshots({
+  const broadcastChatChangeEffect = Effect.fn("WsRouter.broadcastChatChange")(function* (change: ChatChange) {
+    yield* broadcastFilteredSnapshotsEffect({
       includeSidebar: change.sidebar,
       includeLocalProjects: change.localProjects,
       ...(change.chatIds?.length ? { chatIds: new Set(change.chatIds) } : {}),
     })
-  }
+  })
+  const broadcastChatChange = (change: ChatChange) => runKanna(broadcastChatChangeEffect(change))
 
   /** Ack a chat command, then push what it changed: the ack first, so the sender never sees its own push before its answer. */
-  async function finishChatCommand(ws: ServerWebSocket<ClientState>, id: string, outcome: ChatCommandOutcome<unknown>) {
-    send(ws, {
+  const finishChatCommandEffect = Effect.fn("WsRouter.finishChatCommand")(function* (
+    ws: ServerWebSocket<ClientState>, id: string, outcome: ChatCommandOutcome<unknown>,
+  ) {
+    yield* Effect.sync(() => send(ws, {
       v: PROTOCOL_VERSION,
       type: "ack",
       id,
       ...(outcome.result === undefined ? {} : { result: outcome.result }),
-    })
-    if (outcome.changed) await broadcastChatChange(outcome.changed)
-  }
+    }))
+    if (outcome.changed) yield* broadcastChatChangeEffect(outcome.changed)
+  })
+  const createChatEffect = Effect.fn("WsRouter.createChat")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "chat.create" }>,
+  ) {
+    const requestedId = command.chatId
+    const completion = requestedId === undefined ? null : Deferred.makeUnsafe<void>()
+    if (requestedId !== undefined && completion) chatCreations.set(requestedId, completion)
+    const outcome = yield* chatCommands.create(command.projectId, undefined, {
+      delegator: command.delegator, chatId: requestedId,
+    }).pipe(Effect.ensuring(Effect.sync(() => {
+      if (requestedId !== undefined && completion) {
+        Deferred.doneUnsafe(completion, Exit.void)
+        if (chatCreations.get(requestedId) === completion) chatCreations.delete(requestedId)
+      }
+    })))
+    yield* finishChatCommandEffect(ws, id, outcome)
+  })
+
+  const ackResultEffect = Effect.fn("WsRouter.ackResult")(function* <A, E>(
+    ws: ServerWebSocket<ClientState>, id: string, operation: Effect.Effect<A, E>,
+  ) {
+    const result = yield* operation
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
+  })
+
+  const ackVoidEffect = Effect.fn("WsRouter.ackVoid")(function* <A, E>(
+    ws: ServerWebSocket<ClientState>, id: string, operation: Effect.Effect<A, E>,
+  ) {
+    yield* operation
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
+  })
 
   function broadcastError(message: string) {
     for (const ws of sockets) {
@@ -1143,11 +1139,11 @@ export function createWsRouter({
     }
   }
 
-  const disposeTerminalEvents = subscribeKanna(terminals.events, (event) => {
+  listen(terminals.events, (event) => {
     pushTerminalEvent(event.terminalId, event)
   })
 
-  const disposeKeybindingEvents = subscribeKanna(keybindings.changes, () => {
+  listen(keybindings.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1162,7 +1158,7 @@ export function createWsRouter({
     }
   })
 
-  const disposeAppSettingsEvents = subscribeKanna(appSettings.changes, () => {
+  listen(appSettings.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1177,7 +1173,7 @@ export function createWsRouter({
     }
   })
 
-  const disposeUpdateEvents = updateManager ? subscribeKanna(updateManager.changes, () => {
+  if (updateManager) listen(updateManager.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1190,9 +1186,9 @@ export function createWsRouter({
         send(ws, envelope)
       }
     }
-  }) : () => {}
+  })
 
-  const disposeUsageLimitsEvents = usageLimits ? subscribeKanna(usageLimits.changes, () => {
+  if (usageLimits) listen(usageLimits.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1205,9 +1201,9 @@ export function createWsRouter({
         send(ws, envelope)
       }
     }
-  }) : (() => {})
+  })
 
-  const disposeProviderAuthEvents = providerAuth ? subscribeKanna(providerAuth.changes, () => {
+  if (providerAuth) listen(providerAuth.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1220,9 +1216,311 @@ export function createWsRouter({
         send(ws, envelope)
       }
     }
-  }) : (() => {})
+  })
 
   agent.setBackgroundErrorReporter?.(broadcastError)
+
+  const openProjectEffect = Effect.fn("WsRouter.openProject")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "project.open" }>,
+  ) {
+    yield* ensureProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform))
+    const normalizedPath = resolveLocalPath(command.localPath)
+    const existingProjectId = store.state.projectIdsByPath.get(normalizedPath)
+    const project = yield* store.openProject(command.localPath)
+    yield* refreshDiscovery()
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id } }))
+    if (!existingProjectId) yield* resolvedAnalytics.track("project_opened")
+    yield* broadcastFilteredSnapshotsEffect({ includeSidebar: true, includeLocalProjects: true })
+  })
+
+  const createProjectEffect = Effect.fn("WsRouter.createProject")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "project.create" }>,
+  ) {
+    const resolved = yield* initializeProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform))
+    const existingProjectId = store.state.projectIdsByPath.get(resolved)
+    const project = yield* store.openProject(resolved, command.title)
+    yield* refreshDiscovery()
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: resolved } }))
+    if (!existingProjectId) yield* resolvedAnalytics.track("project_opened")
+    yield* broadcastFilteredSnapshotsEffect({ includeSidebar: true, includeLocalProjects: true })
+  })
+
+  const cloneProjectEffect = Effect.fn("WsRouter.cloneProject")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "project.clone" }>,
+  ) {
+    const cloneDest = yield* resolveClonePath(command.localPath, command.fallbackPath).pipe(Effect.provide(ServerPlatform))
+    yield* cloneRepository(command.cloneUrl, cloneDest).pipe(Effect.provide(ServerPlatform))
+    const project = yield* store.openProject(cloneDest, command.title)
+    yield* refreshDiscovery()
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: cloneDest } }))
+    yield* broadcastFilteredSnapshotsEffect({ includeSidebar: true, includeLocalProjects: true })
+  })
+
+  const renameProjectEffect = Effect.fn("WsRouter.renameProject")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "project.rename" }>,
+  ) {
+    const projectId = "projectId" in command
+      ? command.projectId
+      : (yield* store.openProject(command.localPath)).id
+    yield* store.renameProjectSidebarTitle(projectId, command.title)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
+    yield* broadcastFilteredSnapshotsEffect({ includeSidebar: true, includeLocalProjects: true })
+  })
+
+  const pinProjectEffect = Effect.fn("WsRouter.pinProject")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "project.setPinned" }>,
+  ) {
+    const pinnedAt = typeof command.pinnedAt === "number" && Number.isFinite(command.pinnedAt)
+      ? command.pinnedAt
+      : undefined
+    yield* store.setProjectPinned(command.projectId, command.pinned, pinnedAt)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
+    yield* broadcastFilteredSnapshotsEffect({ includeSidebar: true })
+  })
+
+  const removeProjectEffect = Effect.fn("WsRouter.removeProject")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "project.remove" }>,
+  ) {
+    // Discovered folders need a saved record so Hide survives discovery and restarts.
+    const projectId = "projectId" in command
+      ? command.projectId
+      : (yield* store.openProject(command.localPath)).id
+    yield* store.removeProject(projectId)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId } }))
+    yield* resolvedAnalytics.track("project_removed")
+    // Hidden projects also hide their chats, so refresh every subscription.
+    yield* broadcastSnapshotsEffect()
+  })
+
+  const reorderProjectGroupsEffect = Effect.fn("WsRouter.reorderProjectGroups")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "sidebar.reorderProjectGroups" }>,
+  ) {
+    yield* store.setSidebarProjectOrder(command.projectIds)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
+    yield* broadcastFilteredSnapshotsEffect({ includeSidebar: true })
+  })
+
+  const createTerminalEffect = Effect.fn("WsRouter.createTerminal")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "terminal.create" }>,
+  ) {
+    // A null projectId is the dev-box home terminal.
+    let projectPath: string
+    if (command.projectId === null) {
+      projectPath = homedir()
+    } else {
+      const project = store.getProject(command.projectId)
+      if (!project) {
+        return yield* Effect.fail(new TerminalProjectNotFoundError({
+          projectId: command.projectId,
+          message: "Project not found",
+        }))
+      }
+      projectPath = project.localPath
+    }
+    const snapshot = yield* terminals.create({
+      projectPath,
+      terminalId: command.terminalId,
+      cols: command.cols,
+      rows: command.rows,
+      scrollback: command.scrollback,
+    })
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
+  })
+
+  const writeTerminalEffect = Effect.fn("WsRouter.writeTerminal")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "terminal.input" }>,
+  ) {
+    yield* terminals.write(command.terminalId, command.data)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
+  })
+
+  const resizeTerminalEffect = Effect.fn("WsRouter.resizeTerminal")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "terminal.resize" }>,
+  ) {
+    yield* terminals.resize(command.terminalId, command.cols, command.rows)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
+  })
+
+  const closeTerminalEffect = Effect.fn("WsRouter.closeTerminal")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "terminal.close" }>,
+  ) {
+    yield* terminals.close(command.terminalId)
+    yield* Effect.sync(() => {
+      send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+      pushTerminalSnapshot(command.terminalId, { force: true })
+    })
+  })
+
+  const tailTerminalEffect = Effect.fn("WsRouter.tailTerminal")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "terminal.tail" }>,
+  ) {
+    const result = yield* terminals.tail(command.terminalId, command.sinceVersion)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
+  })
+
+  const listLocalHttpServersEffect = Effect.fn("WsRouter.listLocalHttpServers")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "browser.listLocalHttpServers" }>,
+  ) {
+    const project = command.projectId ? store.getProject(command.projectId) : null
+    const projectTerminalRootPids = project ? yield* terminals.rootPidsByCwd(project.localPath) : []
+    const servers = yield* listLocalHttpServers({
+      projectPath: project?.localPath,
+      projectTerminalRootPids,
+    })
+    // The scan is cached; stamp current tunnel URLs after reading it.
+    const result: typeof servers = []
+    for (const server of servers) {
+      const publicUrl = portTunnels ? yield* portTunnels.publicUrl(server.port) : undefined
+      result.push(publicUrl ? { ...server, publicUrl } : server)
+    }
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
+  })
+
+  const killLocalHttpServerEffect = Effect.fn("WsRouter.killLocalHttpServer")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "browser.killLocalHttpServer" }>,
+  ) {
+    const result = yield* killLocalHttpServer(command.port)
+    if (portTunnels) yield* portTunnels.unexpose(command.port)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
+  })
+
+  const exportStandaloneEffect = Effect.fn("WsRouter.exportStandalone")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "chat.exportStandalone" }>,
+  ) {
+    const { chat, project } = resolveChatProject(command.chatId)
+    const messages = yield* store.readMessages(command.chatId)
+    const result = yield* writeStandaloneTranscriptExport({
+      chatId: chat.id,
+      title: chat.title,
+      localPath: project.localPath,
+      theme: command.theme,
+      sourceOrigin: command.sourceOrigin,
+      attachmentMode: command.attachmentMode,
+      messages,
+      resolveMediaPath: (url) => store.resolveTranscriptMediaPath(url),
+    }).pipe(Effect.provide(ServerPlatform))
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
+  })
+
+  const writeAppSettingsPatchEffect = Effect.fn("WsRouter.writeAppSettingsPatch")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "settings.writeAppSettingsPatch" }>,
+  ) {
+    const previousAnalyticsEnabled = (yield* appSettings.snapshot).analyticsEnabled
+    const snapshot = yield* appSettings.writePatch(command.patch)
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) }))
+    if (command.patch.analyticsEnabled !== undefined && previousAnalyticsEnabled && !snapshot.analyticsEnabled) {
+      yield* resolvedAnalytics.track("analytics_disabled")
+    }
+    if (command.patch.analyticsEnabled !== undefined && !previousAnalyticsEnabled && snapshot.analyticsEnabled) {
+      yield* resolvedAnalytics.track("analytics_enabled")
+    }
+  })
+
+  const writeAnalyticsSettingsEffect = Effect.fn("WsRouter.writeAnalyticsSettings")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "settings.writeAppSettings" }>,
+  ) {
+    const previousAnalyticsEnabled = (yield* appSettings.snapshot).analyticsEnabled
+    if (previousAnalyticsEnabled && !command.analyticsEnabled) {
+      yield* resolvedAnalytics.track("analytics_disabled")
+    }
+    const snapshot = yield* appSettings.write({ analyticsEnabled: command.analyticsEnabled })
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) }))
+    if (!previousAnalyticsEnabled && command.analyticsEnabled) {
+      yield* resolvedAnalytics.track("analytics_enabled")
+    }
+  })
+
+  const refreshUsageEffect = Effect.fn("WsRouter.refreshUsage")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "usage.refresh" }>,
+  ) {
+    if (!usageLimits) {
+      yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { providers: [] } satisfies UsageLimitsSnapshot }))
+      return
+    }
+    yield* usageLimits.refresh({ force: command.force ?? false })
+    const snapshot = yield* usageLimits.snapshot
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
+  })
+
+  const refreshAuthEffect = Effect.fn("WsRouter.refreshAuth")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "auth.refresh" }>,
+  ) {
+    if (!providerAuth) {
+      yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { services: [] } }))
+      return
+    }
+    yield* providerAuth.refresh({ force: command.force ?? false })
+    const snapshot = yield* providerAuth.snapshot
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
+  })
+
+  const exchangeOpenRouterEffect = Effect.fn("WsRouter.exchangeOpenRouter")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "auth.openrouter.exchange" }>,
+  ) {
+    if (!providerAuth) throw new Error("Provider auth unavailable.")
+    const snapshot = yield* providerAuth.exchangeOpenRouterCode(command.code)
+    if (applyPiFaveModels(snapshot.faveModels)) forkRouter("model broadcast", broadcastSnapshotsEffect())
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
+  })
+
+  const readLlmProviderEffect = Effect.fn("WsRouter.readLlmProvider")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+  ) {
+    const snapshot = yield* llmProvider.read()
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
+  })
+
+  const writeLlmProviderEffect = Effect.fn("WsRouter.writeLlmProvider")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "settings.writeLlmProvider" }>,
+  ) {
+    const faveModels = command.faveModels ?? (yield* llmProvider.read()).faveModels
+    const snapshot = yield* llmProvider.write({
+      provider: command.provider,
+      apiKey: command.apiKey,
+      model: command.model,
+      baseUrl: command.baseUrl,
+      // Writers that don't manage faves must not wipe the saved list.
+      faveModels,
+    })
+    // Catalog updates are intentionally fired before the ack, as before.
+    if (applyPiFaveModels(snapshot.faveModels)) forkRouter("model broadcast", broadcastSnapshotsEffect())
+    if (providerAuth) forkRouter("provider probe", providerAuth.probeService("openrouter"))
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
+  })
+
+  const validateLlmProviderEffect = Effect.fn("WsRouter.validateLlmProvider")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "settings.validateLlmProvider" }>,
+  ) {
+    const result = yield* llmProvider.validate({
+      provider: command.provider,
+      apiKey: command.apiKey,
+      model: command.model,
+      baseUrl: command.baseUrl,
+    })
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
+  })
 
   function resolveChatProject(chatId: string) {
     const chat = store.getChat(chatId)
@@ -1238,39 +1536,48 @@ export function createWsRouter({
    * and fire-and-forget a full snapshot broadcast when the operation reports
    * the git snapshot changed.
    */
-  async function handleChatGitCommand(
+  const handleChatGitCommandEffect = Effect.fn("WsRouter.handleChatGitCommand")(function* <E>(
     ws: ServerWebSocket<ClientState>,
     id: string,
     chatId: string,
-    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Promise<{ result?: unknown; changed?: boolean }>,
+    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Effect.Effect<{ result?: unknown; changed?: boolean }, E>,
   ) {
-    const { project } = resolveChatProject(chatId)
-    await runProjectGitCommand(ws, id, project, run)
-  }
+    const { project } = yield* Effect.try({
+      try: () => resolveChatProject(chatId),
+      catch: (cause) => new GitProjectLookupError({
+        message: cause instanceof Error ? cause.message : String(cause),
+        projectId: store.getChat(chatId)?.projectId ?? "",
+        cause,
+      }),
+    })
+    yield* runProjectGitCommandEffect(ws, id, project, run)
+  })
 
   /**
    * The same shape for git commands the client addresses by project — the ones
    * driven by the diff panel's own file selection, which must land on the
    * project that produced that selection even if the active chat has moved on.
    */
-  async function handleProjectGitCommand(
+  const handleProjectGitCommandEffect = Effect.fn("WsRouter.handleProjectGitCommand")(function* <E>(
     ws: ServerWebSocket<ClientState>,
     id: string,
     projectId: string,
-    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Promise<{ result?: unknown; changed?: boolean }>,
+    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Effect.Effect<{ result?: unknown; changed?: boolean }, E>,
   ) {
     const project = store.getProject(projectId)
-    if (!project) throw new Error("Project not found")
-    await runProjectGitCommand(ws, id, project, run)
-  }
+    if (!project) return yield* Effect.fail(new GitProjectLookupError({
+      message: "Project not found", projectId, cause: null,
+    }))
+    yield* runProjectGitCommandEffect(ws, id, project, run)
+  })
 
-  async function runProjectGitCommand(
+  const runProjectGitCommandEffect = Effect.fn("WsRouter.runProjectGitCommand")(function* <E>(
     ws: ServerWebSocket<ClientState>,
     id: string,
     project: ReturnType<typeof resolveChatProject>["project"],
-    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Promise<{ result?: unknown; changed?: boolean }>,
+    run: (project: ReturnType<typeof resolveChatProject>["project"]) => Effect.Effect<{ result?: unknown; changed?: boolean }, E>,
   ) {
-    const { result, changed } = await run(project)
+    const { result, changed } = yield* run(project)
     if (result === undefined) {
       send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
     } else {
@@ -1282,19 +1589,91 @@ export function createWsRouter({
       // It cannot move terminal snapshots, whose serializer walks the whole
       // scrollback (~15 ms and ~350 KB at max scrollback) — and the 5 s diff
       // poll lands here, so an unfiltered broadcast paid that every poll.
-      void broadcastFilteredSnapshots({ includeSidebar: true, projectIds: new Set([project.id]) })
+      forkRouter("project broadcast", broadcastFilteredSnapshotsEffect({ includeSidebar: true, projectIds: new Set([project.id]) }))
     }
-  }
+  })
 
-  async function handleCommand(ws: ServerWebSocket<ClientState>, message: Extract<ClientEnvelope, { type: "command" }>) {
+  const setChatReadAnchorEffect = Effect.fn("WsRouter.setChatReadAnchor")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "chat.setReadAnchor" }>,
+  ) {
+    // The anchor is absent from snapshots, so scrolling has no fan-out.
+    for (const [subscriptionId, topic] of ws.data.subscriptions) {
+      if (topic.type === "chat" && topic.chatId === command.chatId && !topic.background) {
+        (ws.data.chatFollowing ??= new Map()).set(subscriptionId, command.atEnd)
+      }
+    }
+    yield* store.setChatReadAnchor(command.chatId, command.messageId, command.atEnd, {
+      transcriptWidth: command.transcriptWidth,
+      offsetFromMessage: command.offsetFromMessage,
+    })
+    send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+  })
+
+  const getChatToolEntriesEffect = Effect.fn("WsRouter.getChatToolEntries")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "chat.getToolEntries" }>,
+  ) {
+    if (command.entryIds.length > MAX_TOOL_ENTRY_REQUEST) {
+      return yield* Effect.fail(new Error(`Too many entry ids (max ${MAX_TOOL_ENTRY_REQUEST})`))
+    }
+    const result = yield* store.readEntriesById(command.chatId, command.entryIds)
+    send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+  })
+
+  const checkForUpdatesEffect = Effect.fn("WsRouter.checkForUpdates")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "update.check" }>,
+  ) {
+    const snapshot = updateManager
+      ? yield* updateManager.checkForUpdates({ force: command.force })
+      : {
+          currentVersion: "unknown",
+          latestVersion: null,
+          status: "error" as const,
+          updateAvailable: false,
+          lastCheckedAt: Date.now(),
+          error: "Update manager unavailable.",
+          installAction: "restart" as const,
+          reloadRequestedAt: null,
+        }
+    send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+  })
+
+  const loadOlderChatEffect = Effect.fn("WsRouter.loadOlderChat")(function* (
+    ws: ServerWebSocket<ClientState>, id: string,
+    command: Extract<ClientCommand, { type: "chat.loadOlder" }>,
+  ) {
+    // Only this socket's foreground subscriptions widen. Each older slice
+    // must reach the socket before the command ack.
+    if (!store.getChat(command.chatId)) return yield* Effect.fail(new Error("Chat not found"))
+    const starts = ensureChatWindowStarts(ws)
+    let startIndex = 0
+    for (const [subscriptionId, topic] of ws.data.subscriptions.entries()) {
+      if (topic.type !== "chat" || topic.chatId !== command.chatId || topic.background) continue
+      const current = getChatWindowStart(ws, subscriptionId, command.chatId)
+      const next = store.widenTranscriptWindowStart(command.chatId, current, {
+        assistantMessages: transcriptWindowAssistantMessages(),
+        ...(command.untilMessageId !== undefined ? { untilMessageId: command.untilMessageId } : {}),
+        ...(command.all ? { all: true } : {}),
+      })
+      starts.set(subscriptionId, next)
+      ws.data.chatFollowing?.set(subscriptionId, false)
+      startIndex = next
+      yield* pushSnapshotsEffect(ws, { skipPrune: true, onlySubscriptionId: subscriptionId })
+    }
+    send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { startIndex } })
+  })
+
+  const handleCommandEffect = Effect.fn("WsRouter.handleCommand")(function* (ws: ServerWebSocket<ClientState>, message: Extract<ClientEnvelope, { type: "command" }>) {
     const { command, id } = message
-    try {
+    return yield* Effect.gen(function* () {
       if (command.type !== "chat.create" && "chatId" in command && typeof command.chatId === "string") {
-        await chatCreated(command.chatId)
+        yield* (chatCreatedEffect(command.chatId))
       }
       if ("chatId" in command && typeof command.chatId === "string" && store.prepareTranscript && store.getChat(command.chatId)) {
         if (["chat.getEntryDebugRaw", "chat.getToolEntries", "chat.loadOlder", "chat.getReadAnchor"].includes(command.type)) {
-          await store.prepareTranscript(command.chatId)
+          yield* (store.prepareTranscript(command.chatId))
         }
       }
       switch (command.type) {
@@ -1303,109 +1682,70 @@ export function createWsRouter({
           return
         }
         case "fs.list": {
-          const result = await runKanna(listDirectory(command.path, { nearest: command.nearest }).pipe(Effect.provide(ServerPlatform)))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, listDirectory(command.path, { nearest: command.nearest }).pipe(Effect.provide(ServerPlatform))))
           return
         }
         case "fs.mkdir": {
-          const result = await runKanna(createDirectory(command.path).pipe(Effect.provide(ServerPlatform)))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, createDirectory(command.path).pipe(Effect.provide(ServerPlatform))))
           return
         }
         case "browser.listLocalHttpServers": {
-          const project = command.projectId ? store.getProject(command.projectId) : null
-          const servers = await runKanna(listLocalHttpServers({
-            projectPath: project?.localPath,
-            projectTerminalRootPids: project ? runKannaSync(terminals.rootPidsByCwd(project.localPath)) : [],
-          }))
-          // The scan result is cached for 30 s; the tunnel URL is stamped on
-          // afterwards so an expose shows up on the next poll, not the next scan.
-          const result = servers.map((server) => {
-            const publicUrl = portTunnels ? runKannaSync(portTunnels.publicUrl(server.port)) : undefined
-            return publicUrl ? { ...server, publicUrl } : server
-          })
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (listLocalHttpServersEffect(ws, id, command))
           return
         }
         case "browser.killLocalHttpServer": {
-          const result = await runKanna(killLocalHttpServer(command.port))
-          if (portTunnels) await runKanna(portTunnels.unexpose(command.port))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (killLocalHttpServerEffect(ws, id, command))
           return
         }
         case "browser.exposeLocalHttpServer": {
-          if (!portTunnels) throw new Error("Port tunnels are not available.")
-          const result = await runKanna(portTunnels.expose(command.port))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          if (!portTunnels) return yield* Effect.fail(new RouterCommandError({ message: "Port tunnels are not available." }))
+          yield* (ackResultEffect(ws, id, portTunnels.expose(command.port)))
           return
         }
         case "browser.unexposeLocalHttpServer": {
-          if (!portTunnels) throw new Error("Port tunnels are not available.")
-          const result = await runKanna(portTunnels.unexpose(command.port))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          if (!portTunnels) return yield* Effect.fail(new RouterCommandError({ message: "Port tunnels are not available." }))
+          yield* (ackResultEffect(ws, id, portTunnels.unexpose(command.port)))
           return
         }
         case "project.readQuickActions": {
           const project = store.getProject(command.projectId)
           if (!project) {
-            throw new Error("Project not found")
+            return yield* Effect.fail(new RouterCommandError({ message: "Project not found" }))
           }
-          const result = await runKanna(readProjectQuickActions(project.localPath).pipe(Effect.provide(ServerPlatform)))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, readProjectQuickActions(project.localPath).pipe(Effect.provide(ServerPlatform))))
           return
         }
         case "project.writeQuickActions": {
           const project = store.getProject(command.projectId)
           if (!project) {
-            throw new Error("Project not found")
+            return yield* Effect.fail(new RouterCommandError({ message: "Project not found" }))
           }
-          const result = await runKanna(writeProjectQuickActions(project.localPath, command.quickActions).pipe(Effect.provide(ServerPlatform)))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, writeProjectQuickActions(project.localPath, command.quickActions).pipe(Effect.provide(ServerPlatform))))
           return
         }
         case "update.check": {
-          const snapshot = updateManager
-            ? await runKanna(updateManager.checkForUpdates({ force: command.force }))
-            : {
-                currentVersion: "unknown",
-                latestVersion: null,
-                status: "error",
-                updateAvailable: false,
-                lastCheckedAt: Date.now(),
-                error: "Update manager unavailable.",
-                installAction: "restart",
-                reloadRequestedAt: null,
-              }
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          yield* (checkForUpdatesEffect(ws, id, command))
           return
         }
         case "update.installNightly": {
           if (!updateManager) {
-            throw new Error("Update manager unavailable.")
+            return yield* Effect.fail(new RouterCommandError({ message: "Update manager unavailable." }))
           }
-          const result = await runKanna(updateManager.installNightly)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, updateManager.installNightly))
           return
         }
         case "update.installStable": {
           if (!updateManager) {
-            throw new Error("Update manager unavailable.")
+            return yield* Effect.fail(new RouterCommandError({ message: "Update manager unavailable." }))
           }
-          const result = await runKanna(updateManager.installStable)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, updateManager.installStable))
           return
         }
         case "update.install": {
           if (!updateManager) {
-            throw new Error("Update manager unavailable.")
+            return yield* Effect.fail(new RouterCommandError({ message: "Update manager unavailable." }))
           }
-          const result = await runKanna(updateManager.installUpdate)
-          send(ws, {
-            v: PROTOCOL_VERSION,
-            type: "ack",
-            id,
-            result,
-          })
+          yield* (ackResultEffect(ws, id, updateManager.installUpdate))
           return
         }
         case "settings.readKeybindings": {
@@ -1413,8 +1753,7 @@ export function createWsRouter({
           return
         }
         case "settings.writeKeybindings": {
-          const snapshot = await runKanna(keybindings.write(command.bindings))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          yield* (ackResultEffect(ws, id, keybindings.write(command.bindings)))
           return
         }
         case "settings.readAppSettings": {
@@ -1422,318 +1761,197 @@ export function createWsRouter({
           return
         }
         case "usage.refresh": {
-          if (usageLimits) {
-            // Auto-refresh (page/palette open) respects the read TTL; the
-            // manual Refresh button forces past it.
-            await runKanna(usageLimits.refresh({ force: command.force ?? false }))
-            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: runKannaSync(usageLimits.snapshot) })
-          } else {
-            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { providers: [] } satisfies UsageLimitsSnapshot })
-          }
+          yield* (refreshUsageEffect(ws, id, command))
           return
         }
         case "auth.refresh": {
-          if (providerAuth) {
-            await runKanna(providerAuth.refresh({ force: command.force ?? false }))
-            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: runKannaSync(providerAuth.snapshot) })
-          } else {
-            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { services: [] } })
-          }
+          yield* (refreshAuthEffect(ws, id, command))
           return
         }
         case "auth.install": {
-          if (!providerAuth) throw new Error("Provider auth unavailable.")
+          if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
           // Fire-and-forget: progress travels via provider-auth snapshots.
-          void runKanna(providerAuth.install(command.service))
+          forkRouter("provider install", providerAuth.install(command.service))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "auth.login.start": {
-          if (!providerAuth) throw new Error("Provider auth unavailable.")
-          await runKanna(providerAuth.startLogin(command.service))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
+          yield* (ackVoidEffect(ws, id, providerAuth.startLogin(command.service)))
           return
         }
         case "auth.login.submitCode": {
-          if (!providerAuth) throw new Error("Provider auth unavailable.")
-          await runKanna(providerAuth.submitLoginCode(command.service, command.code))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
+          yield* (ackVoidEffect(ws, id, providerAuth.submitLoginCode(command.service, command.code)))
           return
         }
         case "auth.login.cancel": {
-          if (!providerAuth) throw new Error("Provider auth unavailable.")
-          await runKanna(providerAuth.cancelLogin(command.service))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
+          yield* (ackVoidEffect(ws, id, providerAuth.cancelLogin(command.service)))
           return
         }
         case "auth.openrouter.start": {
-          if (!providerAuth) throw new Error("Provider auth unavailable.")
-          const result = await runKanna(providerAuth.startOpenRouterAuth(command.callbackUrl))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
+          yield* (ackResultEffect(ws, id, providerAuth.startOpenRouterAuth(command.callbackUrl)))
           return
         }
         case "auth.openrouter.exchange": {
-          if (!providerAuth) throw new Error("Provider auth unavailable.")
-          const snapshot = await runKanna(providerAuth.exchangeOpenRouterCode(command.code))
-          // The exchanged key is a full Model Registry write — refresh the pi
-          // model picker exactly like settings.writeLlmProvider does.
-          if (applyPiFaveModels(snapshot.faveModels)) {
-            void broadcastSnapshots()
-          }
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          yield* (exchangeOpenRouterEffect(ws, id, command))
           return
         }
         case "settings.writeAppSettings": {
-          const previousAnalyticsEnabled = runKannaSync(appSettings.snapshot).analyticsEnabled
-          if (previousAnalyticsEnabled && !command.analyticsEnabled) {
-            runKannaSync(resolvedAnalytics.track("analytics_disabled"))
-          }
-          const snapshot = await runKanna(appSettings.write({ analyticsEnabled: command.analyticsEnabled }))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) })
-          if (!previousAnalyticsEnabled && command.analyticsEnabled) {
-            runKannaSync(resolvedAnalytics.track("analytics_enabled"))
-          }
+          yield* (writeAnalyticsSettingsEffect(ws, id, command))
           return
         }
         case "settings.writeAppSettingsPatch": {
-          const previousAnalyticsEnabled = runKannaSync(appSettings.snapshot).analyticsEnabled
-          const snapshot = await runKanna(appSettings.writePatch(command.patch))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) })
-          if (command.patch.analyticsEnabled !== undefined && previousAnalyticsEnabled && !snapshot.analyticsEnabled) {
-            runKannaSync(resolvedAnalytics.track("analytics_disabled"))
-          }
-          if (command.patch.analyticsEnabled !== undefined && !previousAnalyticsEnabled && snapshot.analyticsEnabled) {
-            runKannaSync(resolvedAnalytics.track("analytics_enabled"))
-          }
+          yield* (writeAppSettingsPatchEffect(ws, id, command))
           return
         }
         case "settings.readLlmProvider": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await llmProvider.read() })
+          yield* (readLlmProviderEffect(ws, id))
           return
         }
         case "settings.writeLlmProvider": {
-          const snapshot = await llmProvider.write({
-            provider: command.provider,
-            apiKey: command.apiKey,
-            model: command.model,
-            baseUrl: command.baseUrl,
-            // Writers that don't manage faves must not wipe the saved list.
-            faveModels: command.faveModels ?? (await llmProvider.read()).faveModels,
-          })
-          // Fave models feed the pi provider's model picker, which clients read
-          // from chat snapshots — refresh them when the catalog changes.
-          if (applyPiFaveModels(snapshot.faveModels)) {
-            void broadcastSnapshots()
-          }
-          // Manually entering/clearing an OpenRouter key changes the auth card.
-          if (providerAuth) void runKanna(providerAuth.probeService("openrouter")).catch(() => undefined)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          yield* (writeLlmProviderEffect(ws, id, command))
           return
         }
         case "settings.validateLlmProvider": {
-          const result = await llmProvider.validate({
-            provider: command.provider,
-            apiKey: command.apiKey,
-            model: command.model,
-            baseUrl: command.baseUrl,
-          })
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (validateLlmProviderEffect(ws, id, command))
           return
         }
         case "chat.listSkills": {
-          const snapshot = await agent.listSkills(command)
+          const snapshot = yield* agent.listSkillsEffect(command)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
         case "skills.search": {
-          const snapshot = await runKanna(searchSkills(command.query, command.limit))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          yield* (ackResultEffect(ws, id, searchSkills(command.query, command.limit)))
           return
         }
         case "skills.install": {
-          const result = await runKanna(installSkill(command.source, command.skillId))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, installSkill(command.source, command.skillId)))
           return
         }
         case "skills.uninstall": {
-          const result = await runKanna(uninstallSkill(command.skillId))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, uninstallSkill(command.skillId)))
           return
         }
         case "skills.listInstalled": {
-          const result = await runKanna(listInstalledSkills().pipe(Effect.provide(ServerPlatform)))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, listInstalledSkills().pipe(Effect.provide(ServerPlatform))))
           return
         }
         case "skills.listGlobal": {
-          const result = await runKanna(listGlobalSkillsWithSources().pipe(Effect.provide(ServerPlatform)))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, listGlobalSkillsWithSources().pipe(Effect.provide(ServerPlatform))))
           return
         }
         case "project.open": {
-          await runKanna(ensureProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform)))
-          const normalizedPath = resolveLocalPath(command.localPath)
-          const existingProjectId = store.state.projectIdsByPath.get(normalizedPath)
-          const project = await store.openProject(command.localPath)
-          await refreshDiscovery()
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id } })
-          if (!existingProjectId) {
-            runKannaSync(resolvedAnalytics.track("project_opened"))
-          }
-          await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
+          yield* (openProjectEffect(ws, id, command))
           return
         }
         case "project.create": {
-          const resolved = await runKanna(initializeProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform)))
-          const existingProjectId = store.state.projectIdsByPath.get(resolved)
-          const project = await store.openProject(resolved, command.title)
-          await refreshDiscovery()
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: resolved } })
-          if (!existingProjectId) {
-            runKannaSync(resolvedAnalytics.track("project_opened"))
-          }
-          await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
+          yield* (createProjectEffect(ws, id, command))
           return
         }
         case "github.listRecentRepos": {
-          const result = await runKanna(listRecentGitHubRepos())
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (ackResultEffect(ws, id, listRecentGitHubRepos()))
           return
         }
         case "project.rename": {
-          const projectId = "projectId" in command
-            ? command.projectId
-            : (await store.openProject(command.localPath)).id
-          await store.renameProjectSidebarTitle(projectId, command.title)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
+          yield* (renameProjectEffect(ws, id, command))
           return
         }
         case "project.setPinned": {
-          const pinnedAt = typeof command.pinnedAt === "number" && Number.isFinite(command.pinnedAt)
-            ? command.pinnedAt
-            : undefined
-          await store.setProjectPinned(command.projectId, command.pinned, pinnedAt)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          await broadcastFilteredSnapshots({ includeSidebar: true })
+          yield* (pinProjectEffect(ws, id, command))
           return
         }
         case "project.clone": {
-          const cloneDest = await runKanna(resolveClonePath(command.localPath, command.fallbackPath).pipe(Effect.provide(ServerPlatform)))
-          await runKanna(cloneRepository(command.cloneUrl, cloneDest).pipe(Effect.provide(ServerPlatform)))
-          const project = await store.openProject(cloneDest, command.title)
-          await refreshDiscovery()
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: cloneDest } })
-          await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
+          yield* (cloneProjectEffect(ws, id, command))
           return
         }
         case "project.remove": {
-          // Discovered folders need a saved record so Hide survives discovery and restarts.
-          const projectId = "projectId" in command
-            ? command.projectId
-            : (await store.openProject(command.localPath)).id
-          await store.removeProject(projectId)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId } })
-          runKannaSync(resolvedAnalytics.track("project_removed"))
-          // Hidden projects also hide their chats, so refresh every subscription.
-          await broadcastSnapshots()
+          yield* (removeProjectEffect(ws, id, command))
           return
         }
         case "sidebar.reorderProjectGroups": {
-          await store.setSidebarProjectOrder(command.projectIds)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          await broadcastFilteredSnapshots({ includeSidebar: true })
+          yield* (reorderProjectGroupsEffect(ws, id, command))
           return
         }
         case "project.readDiffPatch": {
           const project = store.getProject(command.projectId)
           if (!project) {
-            throw new Error("Project not found")
+            return yield* Effect.fail(new RouterCommandError({ message: "Project not found" }))
           }
-          const result = await runKanna(diffStore.readPatch({
+          yield* (ackResultEffect(ws, id, diffStore.readPatch({
             projectPath: project.localPath,
             path: command.path,
             fullContext: command.fullContext === true,
-          }))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          })))
           return
         }
         case "project.readBranch": {
           const project = store.getProject(command.projectId)
           if (!project) {
-            throw new Error("Project not found")
+            return yield* Effect.fail(new RouterCommandError({ message: "Project not found" }))
           }
-          const result = await runKanna(diffStore.readBranch({
+          yield* (ackResultEffect(ws, id, diffStore.readBranch({
             projectPath: project.localPath,
             branch: command.branch,
-          }))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          })))
           return
         }
         case "project.readCommit": {
           const project = store.getProject(command.projectId)
           if (!project) {
-            throw new Error("Project not found")
+            return yield* Effect.fail(new RouterCommandError({ message: "Project not found" }))
           }
-          const result = await runKanna(diffStore.readCommit({
+          yield* (ackResultEffect(ws, id, diffStore.readCommit({
             projectPath: project.localPath,
             sha: command.sha,
-          }))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          })))
           return
         }
         case "system.openExternal": {
-          await runKanna(openExternal(command).pipe(Effect.provide(ServerPlatform)))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          yield* (ackVoidEffect(ws, id, openExternal(command).pipe(Effect.provide(ServerPlatform))))
           return
         }
         // The chat actions are defined in chat-commands.ts, where the agents'
         // tools reach them too. Only the ack and the push are done here.
         case "chat.create": {
-          const creation = runKanna(chatCommands.create(command.projectId, undefined, { delegator: command.delegator, chatId: command.chatId }))
-          if (command.chatId !== undefined) {
-            const requestedId = command.chatId
-            chatCreations.set(requestedId, creation)
-            const forget = () => {
-              if (chatCreations.get(requestedId) === creation) chatCreations.delete(requestedId)
-            }
-            creation.then(forget, forget)
-          }
-          await finishChatCommand(ws, id, await creation)
+          yield* (createChatEffect(ws, id, command))
           return
         }
         case "chat.setDelegator": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.setDelegator(command.chatId, command.delegator)))
+          yield* (chatCommands.setDelegator(command.chatId, command.delegator).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.fork": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.fork(command.chatId)))
+          yield* (chatCommands.fork(command.chatId).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.rename": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.rename(command.chatId, command.title)))
+          yield* (chatCommands.rename(command.chatId, command.title).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.setPinned": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.setPinned(command.chatId, command.pinned)))
+          yield* (chatCommands.setPinned(command.chatId, command.pinned).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.archive": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.archive(command.chatId)))
+          yield* (chatCommands.archive(command.chatId).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.unarchive": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.unarchive(command.chatId)))
+          yield* (chatCommands.unarchive(command.chatId).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.delete": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.delete(command.chatId)))
+          yield* (chatCommands.delete(command.chatId).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.touchedFiles": {
           const chat = store.getChat(command.chatId)
           if (!chat) {
-            throw new Error("Chat not found")
+            return yield* Effect.fail(new RouterCommandError({ message: "Chat not found" }))
           }
           // Ack-only: nothing about reading a list changes any snapshot, and
           // this fires on every hover.
@@ -1746,27 +1964,15 @@ export function createWsRouter({
           return
         }
         case "chat.markRead": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.markRead(command.chatId)))
+          yield* (chatCommands.markRead(command.chatId).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.setDone": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.setDone(command.chatId, command.done)))
+          yield* (chatCommands.setDone(command.chatId, command.done).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.setReadAnchor": {
-          // No broadcast on purpose. The anchor is not part of any snapshot,
-          // so scrolling stays free of fan-out, and a device sitting on an
-          // open chat never gets its viewport yanked by another device.
-          for (const [subscriptionId, topic] of ws.data.subscriptions) {
-            if (topic.type === "chat" && topic.chatId === command.chatId && !topic.background) {
-              (ws.data.chatFollowing ??= new Map()).set(subscriptionId, command.atEnd)
-            }
-          }
-          await store.setChatReadAnchor(command.chatId, command.messageId, command.atEnd, {
-            transcriptWidth: command.transcriptWidth,
-            offsetFromMessage: command.offsetFromMessage,
-          })
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          yield* (setChatReadAnchorEffect(ws, id, command))
           return
         }
         case "chat.getReadAnchor": {
@@ -1792,37 +1998,11 @@ export function createWsRouter({
           return
         }
         case "chat.getToolEntries": {
-          // Bounded so a malformed client cannot ask for the whole transcript
-          // one id at a time; the largest real request is one tool group.
-          if (command.entryIds.length > MAX_TOOL_ENTRY_REQUEST) {
-            throw new Error(`Too many entry ids (max ${MAX_TOOL_ENTRY_REQUEST})`)
-          }
-          const result = await store.readEntriesById(command.chatId, command.entryIds)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (getChatToolEntriesEffect(ws, id, command))
           return
         }
         case "chat.loadOlder": {
-          // Per socket: only this socket's subscriptions on the chat widen,
-          // and each gets the older slice pushed to it alone.
-          if (!store.getChat(command.chatId)) {
-            throw new Error("Chat not found")
-          }
-          const starts = ensureChatWindowStarts(ws)
-          let startIndex = 0
-          for (const [subscriptionId, topic] of ws.data.subscriptions.entries()) {
-            if (topic.type !== "chat" || topic.chatId !== command.chatId || topic.background) continue
-            const current = getChatWindowStart(ws, subscriptionId, command.chatId)
-            const next = store.widenTranscriptWindowStart(command.chatId, current, {
-              assistantMessages: transcriptWindowAssistantMessages(),
-              ...(command.untilMessageId !== undefined ? { untilMessageId: command.untilMessageId } : {}),
-              ...(command.all ? { all: true } : {}),
-            })
-            starts.set(subscriptionId, next)
-            ws.data.chatFollowing?.set(subscriptionId, false)
-            startIndex = next
-            await pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: subscriptionId })
-          }
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { startIndex } })
+          yield* (loadOlderChatEffect(ws, id, command))
           return
         }
         case "chat.setDraftProtection": {
@@ -1832,279 +2012,221 @@ export function createWsRouter({
           return
         }
         case "chat.send": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.send(command)))
+          yield* (chatCommands.send(command).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.refreshDiffs": {
           // Acks without a result; broadcasts when the refresh reported a change.
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            changed: await runKanna(diffStore.refreshSnapshot(project.id, project.localPath)),
-          }))
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.refreshSnapshot(project.id, project.localPath).pipe(Effect.map((changed) => ({ changed })))) )
           return
         }
         case "chat.initGit": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.initializeGit({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.initializeGit({
               projectId: project.id,
               projectPath: project.localPath,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.getGitHubPublishInfo": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            result: await runKanna(diffStore.getGitHubPublishInfo({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.getGitHubPublishInfo({
               projectPath: project.localPath,
-            })),
-          }))
+            }).pipe(Effect.map((result) => ({ result }))) ))
           return
         }
         case "chat.checkGitHubRepoAvailability": {
-          const result = await runKanna(diffStore.checkGitHubRepoAvailability({
+          yield* (ackResultEffect(ws, id, diffStore.checkGitHubRepoAvailability({
             owner: command.owner,
             name: command.name,
-          }))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          })))
           return
         }
         case "chat.publishToGitHub": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.publishToGitHub({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.publishToGitHub({
               projectId: project.id,
               projectPath: project.localPath,
               owner: command.owner,
               name: command.name,
               visibility: command.visibility,
               description: command.description,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.listBranches": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            result: await runKanna(diffStore.listBranches({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.listBranches({
               projectPath: project.localPath,
-            })),
-          }))
+            }).pipe(Effect.map((result) => ({ result }))) ))
           return
         }
         case "chat.previewMergeBranch": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            result: await runKanna(diffStore.previewMergeBranch({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.previewMergeBranch({
               projectPath: project.localPath,
               branch: command.branch,
-            })),
-          }))
+            }).pipe(Effect.map((result) => ({ result }))) ))
           return
         }
         case "chat.mergeBranch": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.mergeBranch({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.mergeBranch({
               projectId: project.id,
               projectPath: project.localPath,
               branch: command.branch,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.checkoutBranch": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.checkoutBranch({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.checkoutBranch({
               projectId: project.id,
               projectPath: project.localPath,
               branch: command.branch,
               bringChanges: command.bringChanges,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.syncBranch": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.syncBranch({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.syncBranch({
               projectId: project.id,
               projectPath: project.localPath,
               action: command.action,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.createBranch": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.createBranch({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.createBranch({
               projectId: project.id,
               projectPath: project.localPath,
               name: command.name,
               baseBranchName: command.baseBranchName,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "project.generateCommitMessage": {
-          await handleProjectGitCommand(ws, id, command.projectId, async (project) => ({
-            result: await runKanna(diffStore.generateCommitMessage({
+          yield* (handleProjectGitCommandEffect(ws, id, command.projectId, (project) =>
+            diffStore.generateCommitMessage({
               projectPath: project.localPath,
               paths: command.paths,
-            })),
-          }))
+            }).pipe(Effect.map((result) => ({ result }))) ))
           return
         }
         case "project.commitDiffs": {
-          await handleProjectGitCommand(ws, id, command.projectId, async (project) => {
-            const result = await runKanna(diffStore.commitFiles({
+          yield* (handleProjectGitCommandEffect(ws, id, command.projectId, (project) =>
+            diffStore.commitFiles({
               projectId: project.id,
               projectPath: project.localPath,
               paths: command.paths,
               summary: command.summary,
               description: command.description,
               mode: command.mode,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.discardDiffFile": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.discardFile({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.discardFile({
               projectId: project.id,
               projectPath: project.localPath,
               path: command.path,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.ignoreDiffFile": {
-          await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await runKanna(diffStore.ignoreFile({
+          yield* (handleChatGitCommandEffect(ws, id, command.chatId, (project) =>
+            diffStore.ignoreFile({
               projectId: project.id,
               projectPath: project.localPath,
               path: command.path,
-            }))
-            return { result, changed: result.snapshotChanged }
-          })
+            }).pipe(Effect.map((result) => ({ result, changed: result.snapshotChanged }))) ))
           return
         }
         case "chat.cancel": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.cancel(command.chatId)))
+          yield* (chatCommands.cancel(command.chatId).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "chat.stopDraining": {
-          await agent.stopDraining(command.chatId)
+          yield* agent.stopDrainingEffect(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "chat.stopTask": {
           // No broadcast: the task's end arrives on the session's stream and
           // updates the registry, which pushes the chat like any task report.
-          await agent.stopBackgroundTask(command.chatId, command.taskId)
+          yield* agent.stopBackgroundTaskEffect(command.chatId, command.taskId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "chat.exportStandalone": {
-          const { chat, project } = resolveChatProject(command.chatId)
-          const result = await runKanna(Effect.provide(writeStandaloneTranscriptExport({
-            chatId: chat.id,
-            title: chat.title,
-            localPath: project.localPath,
-            theme: command.theme,
-            sourceOrigin: command.sourceOrigin,
-            attachmentMode: command.attachmentMode,
-            messages: await store.readMessages(command.chatId),
-            resolveMediaPath: (url) => store.resolveTranscriptMediaPath(url),
-          }), ServerPlatform))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (exportStandaloneEffect(ws, id, command))
           return
         }
         case "chat.respondTool": {
-          await agent.respondTool(command)
+          yield* agent.respondToolEffect(command)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "message.enqueue": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.enqueue(command)))
+          yield* (chatCommands.enqueue(command).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "message.steer": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.steer(command)))
+          yield* (chatCommands.steer(command).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "message.dequeue": {
-          await finishChatCommand(ws, id, await runKanna(chatCommands.dequeue(command)))
+          yield* (chatCommands.dequeue(command).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
         case "terminal.create": {
-          // projectId null → the dev-box home terminal (full-screen Terminal
-          // page): a shell at $HOME instead of a project directory.
-          let projectPath: string
-          if (command.projectId === null) {
-            projectPath = homedir()
-          } else {
-            const project = store.getProject(command.projectId)
-            if (!project) {
-              throw new Error("Project not found")
-            }
-            projectPath = project.localPath
-          }
-          const snapshot = await runKanna(terminals.create({
-            projectPath,
-            terminalId: command.terminalId,
-            cols: command.cols,
-            rows: command.rows,
-            scrollback: command.scrollback,
-          }))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          yield* (createTerminalEffect(ws, id, command))
           return
         }
         case "terminal.input": {
-          runKannaSync(terminals.write(command.terminalId, command.data))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          yield* (writeTerminalEffect(ws, id, command))
           return
         }
         case "terminal.resize": {
-          runKannaSync(terminals.resize(command.terminalId, command.cols, command.rows))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          yield* (resizeTerminalEffect(ws, id, command))
           return
         }
         case "terminal.close": {
-          runKannaSync(terminals.close(command.terminalId))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          pushTerminalSnapshot(command.terminalId, { force: true })
+          yield* (closeTerminalEffect(ws, id, command))
           return
         }
         case "terminal.tail": {
-          const result = runKannaSync(terminals.tail(command.terminalId, command.sinceVersion))
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          yield* (tailTerminalEffect(ws, id, command))
           return
         }
         // Each changes the delegator's board, which its chat snapshot and
         // its ticket subscriptions carry, and the compass count on its row.
         case "ticket.reply": {
-          if (!tickets) throw new Error("Tickets are not available.")
-          const result = await tickets.replyToTicketAsUser(command)
-          await finishChatCommand(ws, id, { result, changed: { sidebar: true, chatIds: [command.chatId] } })
+          if (!tickets) return yield* Effect.fail(new RouterCommandError({ message: "Tickets are not available." }))
+          yield* (tickets.replyToTicketAsUser(command).pipe(Effect.flatMap((result) =>
+            finishChatCommandEffect(ws, id, { result, changed: { sidebar: true, chatIds: [command.chatId] } }))))
           return
         }
         case "ticket.setStatus": {
-          if (!tickets) throw new Error("Tickets are not available.")
-          await tickets.setTicketStatusAsUser(command)
-          await finishChatCommand(ws, id, { result: undefined, changed: { sidebar: true, chatIds: [command.chatId] } })
+          if (!tickets) return yield* Effect.fail(new RouterCommandError({ message: "Tickets are not available." }))
+          yield* (tickets.setTicketStatusAsUser(command).pipe(Effect.andThen(
+            finishChatCommandEffect(ws, id, { result: undefined, changed: { sidebar: true, chatIds: [command.chatId] } }))))
           return
         }
         case "ticket.markRead":
         case "ticket.markUnread": {
-          if (!tickets) throw new Error("Tickets are not available.")
-          await tickets.setTicketReadAsUser({ chatId: command.chatId, ticketId: command.ticketId, read: command.type === "ticket.markRead" })
-          await finishChatCommand(ws, id, { result: undefined, changed: { sidebar: true, chatIds: [command.chatId] } })
+          if (!tickets) return yield* Effect.fail(new RouterCommandError({ message: "Tickets are not available." }))
+          yield* (tickets.setTicketReadAsUser({ chatId: command.chatId, ticketId: command.ticketId, read: command.type === "ticket.markRead" }).pipe(Effect.andThen(
+            finishChatCommandEffect(ws, id, { result: undefined, changed: { sidebar: true, chatIds: [command.chatId] } }))))
           return
         }
       }
-    } catch (error) {
+    }).pipe(Effect.catchCause((cause) => Effect.sync(() => {
+      const error = Cause.squash(cause)
       const messageText = error instanceof Error ? error.message : String(error)
       console.error("[ws-router] command failed", {
         id,
@@ -2112,8 +2234,109 @@ export function createWsRouter({
         message: messageText,
       })
       send(ws, { v: PROTOCOL_VERSION, type: "error", id, message: messageText })
+    })))
+  })
+
+  const subscribeEffect = Effect.fn("WsRouter.subscribe")(function* (
+    ws: ServerWebSocket<ClientState>,
+    message: Extract<ClientEnvelope, { type: "subscribe" }>,
+  ) {
+    const snapshotSignatures = ensureSnapshotSignatures(ws)
+    ws.data.subscriptions.set(message.id, message.topic)
+    snapshotSignatures.delete(message.id)
+    // A (re)subscribe starts from nothing, so the next push sends a full window.
+    ws.data.chatEntrySpans?.delete(message.id)
+    ws.data.chatWindowStarts?.delete(message.id)
+    ws.data.chatOutlineCounts?.delete(message.id)
+    ws.data.chatProvidersSent?.delete(message.id)
+    ws.data.chatFollowing?.delete(message.id)
+    ws.data.chatWindowChecks?.delete(message.id)
+    ws.data.sidebarPatchBases?.delete(message.id)
+    clearBackgroundChatPush(ws, message.id)
+    // Register first so an unsubscribe arriving during either wait removes it.
+    if (message.topic.type === "chat" && chatCreations.has(message.topic.chatId)) {
+      const chatId = message.topic.chatId
+      yield* chatCreatedEffect(chatId)
+      if (ws.data.subscriptions.get(message.id) !== message.topic) return
     }
-  }
+    if (message.topic.type === "chat" && store.prepareTranscript && store.getChat(message.topic.chatId)) {
+      const prepared = yield* Effect.exit(store.prepareTranscript(message.topic.chatId))
+      if (Exit.isFailure(prepared)) {
+        send(ws, { v: PROTOCOL_VERSION, type: "error", id: message.id, message: "Cannot read transcript" })
+        return
+      }
+      if (ws.data.subscriptions.get(message.id) !== message.topic) return
+    }
+    seedChatEntrySpanFromClient(ws, message.id, message.topic)
+    if (message.topic.type === "local-projects") {
+      runKannaSync(Effect.gen(function* () {
+        yield* refreshDiscovery()
+        if (ws.data.subscriptions.has(message.id)) {
+          yield* pushSnapshotsEffect(ws, { skipPrune: true, onlySubscriptionId: message.id })
+        }
+      }).pipe(Effect.forkIn(listenerScope)))
+      return
+    }
+    // Only the subscription just made; other topics change via broadcasts.
+    yield* pushSnapshotsEffect(ws, { skipPrune: true, onlySubscriptionId: message.id })
+    // Paint cached state first, then refresh values whose providers have a TTL.
+    if (message.topic.type === "usage-limits" && usageLimits) {
+      forkRouter("usage refresh", usageLimits.refresh())
+    }
+    if (message.topic.type === "provider-auth" && providerAuth) {
+      forkRouter("provider refresh", providerAuth.refresh())
+    }
+    if (message.topic.type === "app-settings") {
+      refreshInstalledApps?.()
+    }
+  })
+
+  const handleMessageEffect = Effect.fn("WsRouter.handleMessage")(function* (
+    ws: ServerWebSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array,
+  ) {
+    const json = yield* Effect.result(decodeFrameJson(String(raw)))
+    if (Result.isFailure(json)) {
+      send(ws, { v: PROTOCOL_VERSION, type: "error", message: "Invalid JSON" })
+      return
+    }
+
+    const decoded = yield* Effect.result(decodeCompatibleEnvelope(json.success))
+    if (Result.isFailure(decoded)) {
+      send(ws, { v: PROTOCOL_VERSION, type: "error", message: "Invalid envelope" })
+      return
+    }
+    const parsed = decoded.success
+
+    if (parsed.type === "subscribe") {
+      yield* subscribeEffect(ws, parsed)
+      return
+    }
+
+    if (parsed.type === "unsubscribe") {
+      const snapshotSignatures = ensureSnapshotSignatures(ws)
+      ws.data.subscriptions.delete(parsed.id)
+      snapshotSignatures.delete(parsed.id)
+      // A (re)subscribe starts from nothing, so the next push sends a full window.
+      ws.data.chatEntrySpans?.delete(parsed.id)
+      ws.data.chatWindowStarts?.delete(parsed.id)
+      ws.data.chatOutlineCounts?.delete(parsed.id)
+      ws.data.chatProvidersSent?.delete(parsed.id)
+      ws.data.chatFollowing?.delete(parsed.id)
+      ws.data.chatWindowChecks?.delete(parsed.id)
+      ws.data.sidebarPatchBases?.delete(parsed.id)
+      clearBackgroundChatPush(ws, parsed.id)
+      send(ws, { v: PROTOCOL_VERSION, type: "ack", id: parsed.id })
+      return
+    }
+
+    yield* handleCommandEffect(ws, parsed)
+  })
+
+  const disposeEffect = Effect.fn("WsRouter.dispose")(function* () {
+    if (pendingBroadcastTimer) yield* Fiber.interrupt(pendingBroadcastTimer)
+    agent.setBackgroundErrorReporter?.(null)
+    yield* Scope.close(listenerScope, Exit.void)
+  })
 
   return {
     getResourceCounts() {
@@ -2157,111 +2380,10 @@ export function createWsRouter({
     pruneStaleEmptyChats: () => maybePruneStaleEmptyChats(),
     autoArchiveStaleChats: () => maybeAutoArchiveStaleChats(),
     deleteStaleChats: () => maybeDeleteStaleChats(),
-    async handleMessage(ws: ServerWebSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(String(raw))
-      } catch {
-        send(ws, { v: PROTOCOL_VERSION, type: "error", message: "Invalid JSON" })
-        return
-      }
-
-      if (!isClientEnvelope(parsed)) {
-        send(ws, { v: PROTOCOL_VERSION, type: "error", message: "Invalid envelope" })
-        return
-      }
-
-      if (parsed.type === "subscribe") {
-        const snapshotSignatures = ensureSnapshotSignatures(ws)
-        ws.data.subscriptions.set(parsed.id, parsed.topic)
-        snapshotSignatures.delete(parsed.id)
-        // A (re)subscribe starts from nothing, so the next push sends a full window.
-        ws.data.chatEntrySpans?.delete(parsed.id)
-        ws.data.chatWindowStarts?.delete(parsed.id)
-        ws.data.chatOutlineCounts?.delete(parsed.id)
-        ws.data.chatProvidersSent?.delete(parsed.id)
-        ws.data.chatFollowing?.delete(parsed.id)
-        ws.data.chatWindowChecks?.delete(parsed.id)
-        ws.data.sidebarPatchBases?.delete(parsed.id)
-        clearBackgroundChatPush(ws, parsed.id)
-        // After the subscription is on the books, so an unsubscribe that
-        // arrives during the wait finds it and takes it off.
-        if (parsed.topic.type === "chat" && chatCreations.has(parsed.topic.chatId)) {
-          await chatCreated(parsed.topic.chatId)
-          if (ws.data.subscriptions.get(parsed.id) !== parsed.topic) return
-        }
-        if (parsed.topic.type === "chat" && store.prepareTranscript && store.getChat(parsed.topic.chatId)) {
-          try {
-            await store.prepareTranscript(parsed.topic.chatId)
-          } catch {
-            send(ws, { v: PROTOCOL_VERSION, type: "error", id: parsed.id, message: "Cannot read transcript" })
-            return
-          }
-          if (ws.data.subscriptions.get(parsed.id) !== parsed.topic) return
-        }
-        seedChatEntrySpanFromClient(ws, parsed.id, parsed.topic)
-        if (parsed.topic.type === "local-projects") {
-          void refreshDiscovery().then(() => {
-            if (ws.data.subscriptions.has(parsed.id)) {
-              void pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: parsed.id })
-            }
-          })
-          return
-        }
-        // Only the subscription just made. Opening a chat used to answer every
-        // topic on the socket, so the transcript queued behind a full sidebar
-        // derive and re-serialization — and the sidebar is iterated first,
-        // because the new subscription is appended last. Nothing else asked for
-        // an update, and anything that changes meanwhile is broadcast anyway.
-        await pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: parsed.id })
-        // Kick a fresh usage read on subscribe so the page opens accurate;
-        // the onChange fanout delivers the result to all subscribers.
-        if (parsed.topic.type === "usage-limits" && usageLimits) {
-          void runKanna(usageLimits.refresh())
-        }
-        // Same shape for provider auth: cached state paints instantly, the
-        // TTL-respecting probe pushes fresh results to all subscribers.
-        if (parsed.topic.type === "provider-auth" && providerAuth) {
-          void runKanna(providerAuth.refresh()).catch(() => undefined)
-        }
-        // And for installed editors and terminals: cached until the TTL lapses,
-        // so an app installed while Kanna ran shows up on the next page load.
-        if (parsed.topic.type === "app-settings") {
-          refreshInstalledApps?.()
-        }
-        return
-      }
-
-      if (parsed.type === "unsubscribe") {
-        const snapshotSignatures = ensureSnapshotSignatures(ws)
-        ws.data.subscriptions.delete(parsed.id)
-        snapshotSignatures.delete(parsed.id)
-        // A (re)subscribe starts from nothing, so the next push sends a full window.
-        ws.data.chatEntrySpans?.delete(parsed.id)
-        ws.data.chatWindowStarts?.delete(parsed.id)
-        ws.data.chatOutlineCounts?.delete(parsed.id)
-        ws.data.chatProvidersSent?.delete(parsed.id)
-        ws.data.chatFollowing?.delete(parsed.id)
-        ws.data.chatWindowChecks?.delete(parsed.id)
-        ws.data.sidebarPatchBases?.delete(parsed.id)
-        clearBackgroundChatPush(ws, parsed.id)
-        send(ws, { v: PROTOCOL_VERSION, type: "ack", id: parsed.id })
-        return
-      }
-
-      await handleCommand(ws, parsed)
+    handleMessage(ws: ServerWebSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array) {
+      return runKanna(handleMessageEffect(ws, raw))
     },
-    dispose() {
-      if (pendingBroadcastTimer) {
-        clearTimeout(pendingBroadcastTimer)
-      }
-      agent.setBackgroundErrorReporter?.(null)
-      disposeTerminalEvents()
-      disposeKeybindingEvents()
-      disposeAppSettingsEvents()
-      disposeUpdateEvents()
-      disposeUsageLimitsEvents()
-      disposeProviderAuthEvents()
-    },
+    disposeEffect,
+    dispose: () => { void runKanna(disposeEffect()) },
   }
 }

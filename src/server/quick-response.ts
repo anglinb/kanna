@@ -1,11 +1,11 @@
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { homedir } from "node:os"
 import OpenAI from "openai"
-import { Context, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Schema, Scope, Stream } from "effect"
 import { getDataRootDir } from "../shared/branding"
 import type { LlmProviderSnapshot } from "../shared/types"
 import { type ClaudeExecutableError, requireClaudeExecutable } from "./claude-executable"
-import { CodexAppServerManager } from "./codex-app-server"
+import { CodexAppServer, makeCodexAppServer } from "./codex-app-server"
 import { runKannaSync } from "./effect/bridge"
 import { ServerPlatform } from "./effect/runtime"
 import { type LlmProviderFileError, readLlmProviderSnapshot } from "./llm-provider"
@@ -44,13 +44,22 @@ export class QuickResponseRequestError extends Schema.TaggedError<QuickResponseR
   },
 ) {}
 
+export class QuickResponseParseError extends Schema.TaggedError<QuickResponseParseError>()(
+  "@kanna/server/quick-response/QuickResponseParseError",
+  {
+    provider: Schema.Literals(["openai", "claude", "codex"]),
+    task: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
+
 /** Any way a provider can fail; each one becomes a failure reason and the next provider is tried. */
 export type QuickResponseRunError = QuickResponseRequestError | ClaudeExecutableError | CommandSpawnError
 
 type QuickResponseRunner = (request: QuickResponseRequest) => Effect.Effect<unknown | null, QuickResponseRunError>
 
 export interface QuickResponseOptions {
-  codexManager?: Pick<CodexAppServerManager, "generateStructured">
+  codexManager?: Pick<CodexAppServer["Service"], "generateStructured">
   readLlmProvider?: Effect.Effect<LlmProviderSnapshot, LlmProviderFileError>
   runOpenAIStructured?: (
     config: LlmProviderSnapshot,
@@ -84,6 +93,10 @@ export class QuickResponse extends Context.Service<QuickResponse, {
   ) => Effect.Effect<StructuredQuickResponseResult<T>, LlmProviderFileError>
 }>()("@kanna/server/QuickResponse") {
   static readonly layer = (options: QuickResponseOptions = {}) => Layer.effect(this, makeQuickResponse(options))
+  static readonly layerWithCodex = Layer.effect(this, Effect.gen(function* () {
+    const codexManager = yield* CodexAppServer
+    return yield* makeQuickResponse({ codexManager })
+  }))
 }
 
 export function getQuickResponseWorkspace(env: Record<string, string | undefined> = process.env) {
@@ -149,24 +162,27 @@ const requestError = (provider: QuickResponseProvider) => (cause: unknown) =>
 export const runClaudeStructured = Effect.fn("QuickResponse.runClaude")(function* (request: QuickResponseRequest) {
   const pathToClaudeCodeExecutable = yield* requireClaudeExecutable()
   return yield* Effect.acquireUseRelease(
-    Effect.sync(() => query({
-      prompt: request.prompt,
-      options: {
-        cwd: request.cwd,
-        pathToClaudeCodeExecutable,
-        // Family alias — the harness resolves it to the latest haiku release.
-        model: "haiku",
-        tools: [],
-        systemPrompt: "",
-        effort: "low",
-        permissionMode: "bypassPermissions",
-        outputFormat: {
-          type: "json_schema",
-          schema: request.schema,
+    Effect.try({
+      try: () => query({
+        prompt: request.prompt,
+        options: {
+          cwd: request.cwd,
+          pathToClaudeCodeExecutable,
+          // Family alias — the harness resolves it to the latest haiku release.
+          model: "haiku",
+          tools: [],
+          systemPrompt: "",
+          effort: "low",
+          permissionMode: "bypassPermissions",
+          outputFormat: {
+            type: "json_schema",
+            schema: request.schema,
+          },
+          env: { ...process.env },
         },
-        env: { ...process.env },
-      },
-    })),
+      }),
+      catch: requestError("claude"),
+    }),
     (q) => Stream.fromAsyncIterable(q, requestError("claude")).pipe(
       Stream.map(structuredOutputFromSdkMessage),
       Stream.filter((output) => output !== null),
@@ -207,24 +223,27 @@ export const runOpenAIStructured = Effect.fn("QuickResponse.runOpenAI")(function
 })
 
 export const runCodexStructured = Effect.fn("QuickResponse.runCodex")(function* (
-  codexManager: Pick<CodexAppServerManager, "generateStructured">,
+  codexManager: Pick<CodexAppServer["Service"], "generateStructured">,
   request: QuickResponseRequest,
 ) {
-  const response = yield* Effect.tryPromise({
-    try: () => codexManager.generateStructured({
-      cwd: request.cwd,
-      model: CODEX_STRUCTURED_MODEL,
-      prompt: `${request.prompt}\n\nReturn JSON only that matches this schema:\n${JSON.stringify(request.schema, null, 2)}`,
+  const response = yield* codexManager.generateStructured({
+    cwd: request.cwd,
+    model: CODEX_STRUCTURED_MODEL,
+    prompt: `${request.prompt}\n\nReturn JSON only that matches this schema:\n${JSON.stringify(request.schema, null, 2)}`,
+  }).pipe(
+    Effect.catchTags({
+      "@kanna/server/codex-app-server/CodexSpawnError": (error) => Effect.fail(requestError("codex")(error)),
+      "@kanna/server/codex-app-server/CodexRequestError": (error) => Effect.fail(requestError("codex")(error)),
     }),
-    catch: requestError("codex"),
-  })
+  )
   if (typeof response !== "string") return null
   return parseJsonText(response)
 })
 
 const makeQuickResponse = Effect.fn("QuickResponse.make")(function* (options: QuickResponseOptions) {
   const fs = yield* FileSystem.FileSystem
-  const codexManager = options.codexManager ?? new CodexAppServerManager()
+  // Its sessions are killed when the layer closes.
+  const codexManager = options.codexManager ?? (yield* makeCodexAppServer())
   const readLlmProvider = options.readLlmProvider
     ?? readLlmProviderSnapshot().pipe(Effect.provideService(FileSystem.FileSystem, fs))
   const runOpenAI = options.runOpenAIStructured ?? runOpenAIStructured
@@ -245,18 +264,23 @@ const makeQuickResponse = Effect.fn("QuickResponse.make")(function* (options: Qu
       failure: { provider, reason: `${provider} failed ${task}: ${error.message}` },
     })
     return run.pipe(
-      Effect.map((result) => {
+      Effect.flatMap((result) => {
         if (result === null) {
-          return { value: null, failure: { provider, reason: `${provider} returned no result for ${task}` } }
+          return Effect.succeed({ value: null, failure: { provider, reason: `${provider} returned no result for ${task}` } })
         }
-        const parsed = parse(result)
-        if (parsed === null) {
-          return { value: null, failure: { provider, reason: `${provider} returned invalid structured output for ${task}` } }
-        }
-        return { value: parsed, failure: null }
+        return Effect.try({
+          try: () => parse(result),
+          catch: (cause) => new QuickResponseParseError({ provider, task, cause }),
+        }).pipe(Effect.map((parsed) => parsed === null
+          ? { value: null, failure: { provider, reason: `${provider} returned invalid structured output for ${task}` } }
+          : { value: parsed, failure: null }))
       }),
       Effect.catchTags({
         "@kanna/server/quick-response/QuickResponseRequestError": failed,
+        "@kanna/server/quick-response/QuickResponseParseError": () => Effect.succeed({
+          value: null,
+          failure: { provider, reason: `${provider} returned invalid structured output for ${task}` },
+        }),
         "@kanna/server/claude-executable/ClaudeExecutableError": failed,
         "@kanna/server/process-utils/CommandSpawnError": failed,
       }),
@@ -304,11 +328,12 @@ let sharedQuickResponse: QuickResponse["Service"] | null = null
 /**
  * One process-wide `QuickResponse` for callers still on Promises (the agent's
  * title generation, diff-store's commit messages), so they share one
- * CodexAppServerManager instead of building a fallback stack per request.
+ * CodexAppServer instead of building a fallback stack per request.
  * Goes away when those callers get the service from the server's runtime.
  */
 export function getSharedQuickResponse(): QuickResponse["Service"] {
-  sharedQuickResponse ??= runKannaSync(makeQuickResponse({}).pipe(Effect.provide(ServerPlatform)))
+  // A scope never closed, as the process-wide instance lives as long as the process.
+  sharedQuickResponse ??= runKannaSync(makeQuickResponse({}).pipe(Effect.provide(ServerPlatform), Scope.provide(Scope.makeUnsafe())))
   return sharedQuickResponse
 }
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect, Result } from "effect"
 import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
@@ -6,7 +7,7 @@ import { makeFakeTerminals } from "./terminal-manager.fake"
 import { makeFakeWorktreeProbe } from "./worktree-probe.fake"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
-import { handleChatWindow, type ChatWindowRouteDeps } from "./chat-window-route"
+import { ChatWindowPreparationError, handleChatWindow, type ChatWindowRouteDeps } from "./chat-window-route"
 import { createWsRouter } from "./ws-router"
 
 /** prompt, text, text: three entries, two assistant messages. */
@@ -57,7 +58,7 @@ async function firstSocketSnapshot(deps: ReturnType<typeof createDeps>) {
     keybindings: makeFakeKeybindings({} as never),
     appSettings: deps.appSettings,
     llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,
-    refreshDiscovery: async () => [],
+    refreshDiscovery: () => Effect.succeed([]),
     getDiscoveredProjects: () => [],
     machineDisplayName: "Local Machine",
     updateManager: null,
@@ -72,21 +73,21 @@ const url = new URL("http://localhost/api/chats/chat-1/window")
 describe("chat window route", () => {
   test("ignores other paths and methods", async () => {
     const deps = createDeps(turn(1)) as unknown as ChatWindowRouteDeps
-    expect(await handleChatWindow(new Request("http://localhost/api/chats/chat-1"), new URL("http://localhost/api/chats/chat-1"), deps)).toBeNull()
-    const post = await handleChatWindow(new Request(url, { method: "POST" }), url, deps)
+    expect(await Effect.runPromise(handleChatWindow(new Request("http://localhost/api/chats/chat-1"), new URL("http://localhost/api/chats/chat-1"), deps))).toBeNull()
+    const post = await Effect.runPromise(handleChatWindow(new Request(url, { method: "POST" }), url, deps))
     expect(post?.status).toBe(405)
   })
 
   test("404s a chat the store does not have", async () => {
     const deps = createDeps(turn(1)) as unknown as ChatWindowRouteDeps
     const missing = new URL("http://localhost/api/chats/nope/window")
-    const response = await handleChatWindow(new Request(missing), missing, deps)
+    const response = await Effect.runPromise(handleChatWindow(new Request(missing), missing, deps))
     expect(response?.status).toBe(404)
   })
 
   test("identity body equals the socket's first snapshot", async () => {
     const deps = createDeps([...turn(1), ...turn(2), ...turn(3)])
-    const response = await handleChatWindow(new Request(url), url, deps as unknown as ChatWindowRouteDeps)
+    const response = await Effect.runPromise(handleChatWindow(new Request(url), url, deps as unknown as ChatWindowRouteDeps))
     expect(response?.status).toBe(200)
     expect(response?.headers.get("content-encoding")).toBeNull()
     expect(response?.headers.get("content-type")).toBe("application/json")
@@ -102,7 +103,7 @@ describe("chat window route", () => {
     // only the socket knew would show the chat at rest for that long.
     const deps = createDeps(turn(1))
     const waiting = { ...deps, agent: { ...deps.agent, getChatStatuses: () => new Map([["chat-1", "waiting_on_subagent" as const]]) } }
-    const response = await handleChatWindow(new Request(url), url, waiting as unknown as ChatWindowRouteDeps)
+    const response = await Effect.runPromise(handleChatWindow(new Request(url), url, waiting as unknown as ChatWindowRouteDeps))
     const body = await response!.json()
     expect(body.runtime.status).toBe("waiting_on_subagent")
     expect(body).toEqual(await firstSocketSnapshot(waiting))
@@ -111,7 +112,7 @@ describe("chat window route", () => {
   test("gzips when the client accepts it", async () => {
     const deps = createDeps([...turn(1), ...turn(2), ...turn(3)])
     const request = new Request(url, { headers: { "Accept-Encoding": "br, gzip;q=0.8" } })
-    const response = await handleChatWindow(request, url, deps as unknown as ChatWindowRouteDeps)
+    const response = await Effect.runPromise(handleChatWindow(request, url, deps as unknown as ChatWindowRouteDeps))
     expect(response?.headers.get("content-encoding")).toBe("gzip")
     expect(response?.headers.get("content-type")).toBe("application/json")
     const raw = new Uint8Array(await response!.arrayBuffer())
@@ -119,5 +120,26 @@ describe("chat window route", () => {
     expect(raw[1]).toBe(0x8b)
     const body = JSON.parse(Buffer.from(Bun.gunzipSync(raw)).toString("utf8"))
     expect(body).toEqual(await firstSocketSnapshot(deps))
+  })
+
+  test("prepares a stored transcript before reading and tags preparation failures", async () => {
+    const deps = createDeps(turn(1))
+    const prepared: string[] = []
+    const store = {
+      ...deps.store,
+      prepareTranscript: (chatId: string) => Effect.sync(() => { prepared.push(chatId) }),
+    }
+    const routeDeps = { ...deps, store } as unknown as ChatWindowRouteDeps
+    expect((await Effect.runPromise(handleChatWindow(new Request(url), url, routeDeps)))?.status).toBe(200)
+    expect(prepared).toEqual(["chat-1"])
+
+    const cause = new Error("transcript unavailable")
+    store.prepareTranscript = () => Effect.die(cause)
+    const result = await Effect.runPromise(Effect.result(handleChatWindow(new Request(url), url, routeDeps)))
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(ChatWindowPreparationError)
+      expect(result.failure.cause).toBe(cause)
+    }
   })
 })

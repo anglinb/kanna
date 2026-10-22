@@ -8,14 +8,14 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AgentCoordinator } from "./agent"
-import { AsyncQueue } from "./async-queue"
+import { fakeCodexAppServer } from "./codex-app-server.fake"
 import { openEventStore } from "./event-store-bridge"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
-import { openChatOrchestrator } from "./orchestrator"
+import { openChatOrchestrator } from "./orchestrator-bridge"
 import { TicketStore } from "./ticket-store"
 import { TestPlatform } from "./effect/testing"
-import { Layer, ManagedRuntime, Option } from "effect"
+import { Cause, Effect, Layer, ManagedRuntime, Option, Queue, Stream } from "effect"
 import { runKannaSync } from "./effect/bridge"
 import type { TicketBoard } from "./ticket-board"
 import { createWsRouter } from "./ws-router"
@@ -36,7 +36,7 @@ interface FakeTurn {
   content: string
   model?: string
   planMode?: boolean
-  events: AsyncQueue<HarnessEvent>
+  events: Queue.Queue<HarnessEvent, Cause.Done>
   open: boolean
 }
 
@@ -50,13 +50,13 @@ class FakeCodex {
   async listSkills() { return [] }
 
   async startTurn(args: { chatId: string; content: string; model?: string; planMode?: boolean }): Promise<HarnessTurn> {
-    const turn: FakeTurn = { chatId: args.chatId, content: args.content, model: args.model, planMode: args.planMode, events: new AsyncQueue(), open: true }
+    const turn: FakeTurn = { chatId: args.chatId, content: args.content, model: args.model, planMode: args.planMode, events: runKannaSync(Queue.unbounded<HarnessEvent, Cause.Done>()), open: true }
     this.turns.push(turn)
     const end = () => {
       turn.open = false
-      turn.events.finish()
+      Queue.endUnsafe(turn.events)
     }
-    return { provider: "codex", stream: turn.events, interrupt: async () => end(), close: end }
+    return { provider: "codex", stream: Stream.toAsyncIterable(Stream.fromQueue(turn.events)), interrupt: async () => end(), close: end }
   }
 
   turn(chatId: string) {
@@ -71,17 +71,17 @@ class FakeCodex {
 
   finish(chatId: string, text: string) {
     const turn = this.turn(chatId)
-    turn.events.push({ type: "transcript", entry: timestamped({ kind: "assistant_text", text }) })
-    turn.events.push({ type: "transcript", entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "" }) })
+    Queue.offerUnsafe(turn.events, { type: "transcript", entry: timestamped({ kind: "assistant_text", text }) })
+    Queue.offerUnsafe(turn.events, { type: "transcript", entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "" }) })
     turn.open = false
-    turn.events.finish()
+    Queue.endUnsafe(turn.events)
   }
 
   fail(chatId: string, message: string) {
     const turn = this.turn(chatId)
-    turn.events.push({ type: "transcript", entry: timestamped({ kind: "result", subtype: "error", isError: true, durationMs: 0, result: message }) })
+    Queue.offerUnsafe(turn.events, { type: "transcript", entry: timestamped({ kind: "result", subtype: "error", isError: true, durationMs: 0, result: message }) })
     turn.open = false
-    turn.events.finish()
+    Queue.endUnsafe(turn.events)
   }
 }
 
@@ -109,7 +109,7 @@ async function setup() {
   const agent = new AgentCoordinator({
     store,
     onStateChange: () => {},
-    codexManager: codex as never,
+    codexManager: fakeCodexAppServer(codex),
     generateTitle: async () => ({ title: null, usedFallback: true, failureMessage: null }),
   })
   const orchestrator = await openChatOrchestrator({
@@ -125,7 +125,7 @@ async function setup() {
   store.onQueuedMessageRemoved = (chatId, queuedMessageId, taken) => orchestrator.handleQueuedMessageRemoved(chatId, queuedMessageId, taken)
   cleanups.push(async () => {
     orchestrator.dispose()
-    agent.dispose()
+    await agent.dispose()
     await ticketsRuntime.runPromise(tickets.flush)
     await ticketsRuntime.dispose()
     await rm(dataDir, { recursive: true, force: true })
@@ -148,7 +148,7 @@ async function setup() {
       dataDir,
       emit: async () => {},
       requestInput: async () => ({}),
-      orchestration: orchestrator,
+      orchestration: orchestrator.service,
     })
     return async (name: string, input: Record<string, unknown>) => {
       const result = await runtime.execute(name, input)
@@ -217,7 +217,7 @@ describe("hand-offs from a delegator", () => {
 
     const first = await call("create_chat", { message: "tag it", ticketId })
     // A session to fork from.
-    codex.turn(first.chatId).events.push({ type: "session_token", sessionToken: "thread-1" })
+    Queue.offerUnsafe(codex.turn(first.chatId).events, { type: "session_token", sessionToken: "thread-1" })
     codex.finish(first.chatId, "Tagged.")
     await until(() => !agent.isBusy(first.chatId), "the first chat at rest")
     await until(() => board.summary(board.get(delegator, ticketId)!).state === "done", "the ticket done")
@@ -597,7 +597,7 @@ describe("the user's ticket replies", () => {
     expect(board.summary(board.require(delegator, ticketId))).toMatchObject({ state: "waiting_on_you", statusLine: "Asks you" })
 
     const router = createWsRouter({
-      store,
+      store: store.service,
       diffStore: makeFakeDiffStore(),
       worktreeProbe: makeFakeWorktreeProbe(),
       agent,
@@ -605,11 +605,11 @@ describe("the user's ticket replies", () => {
       keybindings: makeFakeKeybindings({ bindings: {}, warning: null } as never),
       appSettings: makeFakeAppSettings({ transcript: { windowAssistantMessages: 50 } }),
       llmProvider: { read: async () => ({}), write: async () => ({}), validate: async () => ({ ok: true, error: null }) } as never,
-      refreshDiscovery: async () => [],
+      refreshDiscovery: () => Effect.succeed([]),
       getDiscoveredProjects: () => [],
       machineDisplayName: "Local Machine",
       updateManager: null,
-      tickets: orchestrator,
+      tickets: orchestrator.service,
     })
     const ws = { sent: [] as Array<Record<string, any>>, data: { subscriptions: new Map(), protectedDraftChatIds: new Set<string>() }, send(message: string) { this.sent.push(JSON.parse(message)) } }
     router.handleOpen(ws as never)

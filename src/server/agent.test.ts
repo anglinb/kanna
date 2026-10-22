@@ -23,6 +23,7 @@ import type { ChatAttachment, TranscriptEntry } from "../shared/types"
 import type { SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
 import { makeFakeAnalytics } from "./analytics.fake"
+import { fakeCodexAppServer } from "./codex-app-server.fake"
 
 async function waitFor(condition: () => boolean, timeoutMs = 2000) {
   const start = Date.now()
@@ -422,7 +423,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
       generateTitle: async () => {
         await titleGate
         return {
@@ -493,7 +494,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
       generateTitle: async () => {
         await titleGate
         return {
@@ -562,7 +563,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
       generateTitle: async () => ({
         title: "first message",
         usedFallback: true,
@@ -642,7 +643,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -727,7 +728,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -849,7 +850,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -941,7 +942,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -1015,7 +1016,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -1095,7 +1096,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -1166,7 +1167,7 @@ describe("AgentCoordinator codex integration", () => {
       onStateChange: () => {
         stateChanges.push(Date.now())
       },
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -1234,7 +1235,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -1306,7 +1307,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -1400,7 +1401,7 @@ describe("AgentCoordinator codex integration", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -1615,7 +1616,43 @@ describe("AgentCoordinator claude integration", () => {
       { delegator: true, sessionToken: "claude-session-1" },
       { delegator: false, sessionToken: "claude-session-1" },
     ])
-    coordinator.dispose()
+    await coordinator.dispose()
+  })
+
+  test("closing a Claude chat closes the agents its session left running", async () => {
+    const store = createFakeStore()
+    const coordinator = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      startClaudeSession: async () => {
+        const events = new AsyncEventQueue<any>()
+        return {
+          provider: "claude",
+          stream: events,
+          getAccountInfo: async () => null,
+          interrupt: async () => {},
+          close: () => events.close(),
+          setModel: async () => {},
+          setPermissionMode: async () => {},
+          sendPrompt: async () => {
+            events.push({
+              type: "transcript" as const,
+              entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "done" }),
+            })
+          },
+        }
+      },
+    })
+    await coordinator.send({ type: "chat.send", chatId: "chat-1", provider: "claude", content: "one", model: "claude-opus-4-1" })
+    await waitFor(() => store.turnFinishedCount === 1)
+    coordinator.applySubagentActivity("chat-1", { kind: "started", id: "a1", type: "subagent", label: "reviewer" }, 1000)
+    expect(coordinator.hasDelegatedWork("chat-1")).toBe(true)
+
+    // The session leaves the map before its stream ends, with no replacement:
+    // the stream's cleanup still owns what the session spawned.
+    await coordinator.closeChat("chat-1")
+    await waitFor(() => !coordinator.hasDelegatedWork("chat-1"))
+    await coordinator.dispose()
   })
 
   test("a Claude turn the CLI started on its own does not end the user's turn", async () => {
@@ -2435,7 +2472,7 @@ describe("mid-conversation provider switch", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     return { store, coordinator, sentContents, stoppedCodexSessions }
@@ -2639,7 +2676,7 @@ describe("session restore on lost native session", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -2696,7 +2733,7 @@ describe("AgentCoordinator restart resume", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -2765,7 +2802,7 @@ describe("AgentCoordinator restart resume", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -2804,7 +2841,7 @@ describe("AgentCoordinator restart resume", () => {
     const coordinator = new AgentCoordinator({
       store: store as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      codexManager: fakeCodexAppServer(fakeCodexManager),
     })
 
     await coordinator.send({
@@ -3009,7 +3046,6 @@ describe("shared display tool lifecycle", () => {
           return { provider, stream: events, interrupt: async () => { events.close() }, close: () => { events.close() } }
         },
       }
-      // Cursor's startTurn is an Effect in the turn's scope (harness-types' HarnessTurnEffect).
       const cursorManager = {
         startTurn: (args: { customTools?: import("./kanna-tools").KannaToolHost }) => Effect.gen(function* () {
           if (args.customTools) capture(args)
@@ -3021,14 +3057,20 @@ describe("shared display tool lifecycle", () => {
           }
         }),
       }
+      const piManager = {
+        startTurn: (args: { customTools?: import("./kanna-tools").KannaToolHost }) => Effect.sync(() => {
+          capture(args)
+          return { provider, events: Stream.fromAsyncIterable(events, (cause) => cause), interrupt: Effect.sync(() => events.close()) }
+        }),
+      }
       const dataDir = mkdtempSync(path.join(tmpdir(), "kanna-viz-host-"))
       const store = Object.assign(createFakeStore(), { dataDir })
       const coordinator = new AgentCoordinator({
         store: store as never,
         onStateChange: () => {},
-        codexManager: manager as never,
+        codexManager: fakeCodexAppServer(manager),
         cursorManager: cursorManager as never,
-        piManager: manager as never,
+        piManager: piManager as never,
         resolvePiConnection: async () => ({ provider: "openai", baseUrl: "https://example.invalid", apiKey: "test" }),
         generateTitle: async () => ({ title: "Tool test", usedFallback: false, failureMessage: null }),
         startClaudeSession: async (args) => {
@@ -3563,7 +3605,7 @@ describe("waiting on a subagent", () => {
       async stopAgents() { stopped.push("all") },
     }
     const store = createFakeStore()
-    const agent = new AgentCoordinator({ store: store as never, onStateChange: () => {}, codexManager: manager as never })
+    const agent = new AgentCoordinator({ store: store as never, onStateChange: () => {}, codexManager: fakeCodexAppServer(manager) })
     const agentStarted = (id: string) => report!("chat-1", { kind: "started", id, type: "subagent", label: "audit parser", stoppable: true })
     const finishTurn = () => {
       events.push({

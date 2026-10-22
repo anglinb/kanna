@@ -1,7 +1,7 @@
 import path from "node:path"
-import { Effect, FileSystem, Schema } from "effect"
+import { Effect, Exit, FileSystem, Schema, Scope } from "effect"
 import type { KannaToolHost } from "./kanna-tools"
-import { createKannaMcpServer } from "./kanna-mcp"
+import { serveKannaMcp } from "./kanna-mcp"
 
 export class CursorKannaToolsError extends Schema.TaggedError<CursorKannaToolsError>()(
   "@kanna/server/cursor-kanna-tools/CursorKannaToolsError",
@@ -39,12 +39,10 @@ export const createCursorKannaTools = Effect.fn("CursorKannaTools.create")(funct
     ),
     removeDirectory,
   )
-  const server = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => createKannaMcpServer(host),
-      catch: (cause) => new CursorKannaToolsError({ operation: "start-server", directory, cause }),
-    }),
-    (server) => Effect.sync(() => server.close()),
+  const serverScope = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+  const server = yield* Scope.provide(serveKannaMcp(host), serverScope).pipe(
+    Effect.catchDefect((cause) =>
+      Effect.fail(new CursorKannaToolsError({ operation: "start-server", directory, cause }))),
   )
 
   const write = (file: string, contents: string, options?: { readonly mode: number }) =>
@@ -69,6 +67,6 @@ export const createCursorKannaTools = Effect.fn("CursorKannaTools.create")(funct
 
   return {
     directory,
-    close: Effect.sync(() => server.close()).pipe(Effect.andThen(removeDirectory(directory))),
+    close: Scope.close(serverScope, Exit.void).pipe(Effect.andThen(removeDirectory(directory))),
   } satisfies CursorKannaTools
 })

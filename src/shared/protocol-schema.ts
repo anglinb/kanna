@@ -1,4 +1,5 @@
 import { Effect, Schema, Struct } from "effect"
+import { isClientEnvelope, type ClientEnvelope } from "./protocol"
 
 /**
  * Schemas for what a client sends the server: the `ClientEnvelope` and
@@ -7,10 +8,9 @@ import { Effect, Schema, Struct } from "effect"
  * checked against them in `protocol-schema.test.ts`, both ways, so a change
  * to one that is not made to the other fails the build.
  *
- * Nested payloads (settings patches, model options) are checked to their
- * declared types too. The server's normalizers used to absorb a value outside
- * them, such as an effort a newer client knows; decoded with these, such a
- * frame fails instead.
+ * The strict schemas describe the declared protocol types. The WebSocket
+ * boundary uses `CompatibleClientEnvelopeSchema` below to preserve the
+ * router's permissive dispatch and leave nested normalization to handlers.
  */
 
 const AgentProvider = Schema.Literals(["claude", "codex", "cursor", "grok", "pi"])
@@ -348,3 +348,16 @@ export const ClientEnvelopeSchema = Schema.Union([
 
 /** A WebSocket text frame: JSON holding a `ClientEnvelope`. */
 export const ClientEnvelopeFromJson = Schema.fromJsonString(ClientEnvelopeSchema)
+
+/**
+ * The router historically accepts any JSON object with version 1 and a string
+ * type. Keep that exact boundary while letting Schema decode the untrusted
+ * value. In particular, do not strip extra fields or validate nested payloads
+ * here: handlers may normalize them or return their own command errors.
+ */
+export const CompatibleClientEnvelopeSchema = Schema.declare(
+  (input: unknown): input is ClientEnvelope => isClientEnvelope(input),
+)
+
+/** Parse JSON separately so the router can retain its distinct error messages. */
+export const ClientFrameJsonSchema = Schema.fromJsonString(Schema.Unknown)

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -23,7 +24,7 @@ async function project() {
 
 function runtime(dir: string, fetchImpl: (url: string, init?: RequestInit) => Promise<Response>) {
   const entries: TranscriptEntry[] = []
-  const tool = createGenerateImagesTool({ readCredentials: async () => ({ apiKey: "key", baseUrl: "https://openrouter.test/api/v1/" }), fetchImpl })
+  const tool = createGenerateImagesTool({ readCredentials: Effect.succeed({ apiKey: "key", baseUrl: "https://openrouter.test/api/v1/" }), fetchImpl })
   const host = new KannaToolRuntime({ chatId: "chat-1", cwd: dir, dataDir: dir,
     emit: async entry => { entries.push(entry) },
     requestInput: async () => ({}),

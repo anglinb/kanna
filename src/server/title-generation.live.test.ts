@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { CodexAppServerManager } from "./codex-app-server"
 import { runTest } from "./effect/testing"
 import { fallbackTitleFromMessage, generateTitleForChatDetailed } from "./generate-title"
-import { QuickResponse, QuickResponseRequestError, runCodexStructured } from "./quick-response"
+import { QuickResponse, QuickResponseRequestError } from "./quick-response"
 
 const shouldRunLiveTests = process.env.KANNA_RUN_LIVE_TITLE_TESTS === "1"
 const LIVE_MESSAGE = "Please help me debug a websocket reconnection issue in a Bun server app"
@@ -27,11 +26,10 @@ if (shouldRunLiveTests) {
     }, 15_000)
 
     test("generates a title with Codex", async () => {
-      const codexManager = new CodexAppServerManager()
+      // The layer's own CodexAppServer, killed when the test's scope closes.
       const result = await runTest(generateTitleForChatDetailed(LIVE_MESSAGE, process.cwd()).pipe(
         Effect.provide(QuickResponse.layer({
           runClaudeStructured: () => unexpected("claude", "Claude should not be used in the Codex live title test"),
-          runCodexStructured: (args) => runCodexStructured(codexManager, args),
         })),
       ))
 

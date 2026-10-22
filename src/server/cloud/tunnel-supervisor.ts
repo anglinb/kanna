@@ -12,7 +12,6 @@
 
 import { Clock, Duration, Effect, Option, Ref, Schedule, Schema } from "effect"
 import { startShareTunnel, type StartedShareTunnel } from "../share"
-import { runKanna } from "../effect/bridge"
 import { describeError, isRevoked, type CloudApiClient } from "./api-client"
 import { REVOKED_WARNING } from "./heartbeat-loop"
 import type { CloudIdentity } from "./identity"
@@ -103,12 +102,6 @@ export const runCloudTunnelSupervisor = Effect.fn("CloudTunnelSupervisor.run")(f
   // plain callback; it lands in the same log as everything here.
   const runFork = Effect.runForkWith(yield* Effect.context<never>())
   const startTunnelImpl = args.deps?.startTunnelImpl
-    ?? ((localUrl: string, tunnelToken: string) =>
-      runKanna(startShareTunnel(localUrl, { kind: "token", token: tunnelToken }, {
-        log: (message) => {
-          runFork(Effect.logInfo(message))
-        },
-      })))
 
   const state = yield* Ref.make<SupervisorState>({
     hasEverConnected: false,
@@ -120,13 +113,34 @@ export const runCloudTunnelSupervisor = Effect.fn("CloudTunnelSupervisor.run")(f
   // connector is stopped when the attempt's scope closes. Stopping while it
   // is still coming up doesn't wait for it; it is stopped as it arrives.
   const startTunnel = Effect.uninterruptibleMask((restore) =>
-    restore(Effect.tryPromise({
-      try: (signal) => startTunnelImpl(args.localUrl, identity.tunnelToken).then((tunnel) => {
-        if (signal.aborted) tunnel.stop()
-        return tunnel
-      }),
-      catch: (cause) => new CloudTunnelStartError({ message: describeError(cause), tunnelHost: identity.tunnelHost, cause }),
-    })).pipe(
+    restore(startTunnelImpl
+      // Compatibility edge for callers that inject a Promise connector. A
+      // late result still needs stopping after the supervising fiber exits.
+      ? Effect.tryPromise({
+          try: (signal) => startTunnelImpl(args.localUrl, identity.tunnelToken).then((tunnel) => {
+            if (signal.aborted) tunnel.stop()
+            return tunnel
+          }),
+          catch: (cause) => new CloudTunnelStartError({ message: describeError(cause), tunnelHost: identity.tunnelHost, cause }),
+        })
+      : startShareTunnel(args.localUrl, { kind: "token", token: identity.tunnelToken }, {
+        log: (message) => {
+          runFork(Effect.logInfo(message))
+        },
+      }).pipe(
+        Effect.catchTags({
+          "@kanna/server/share/CloudflaredInstallError": (cause) =>
+            Effect.fail(new CloudTunnelStartError({ message: describeError(cause), tunnelHost: identity.tunnelHost, cause })),
+          "@kanna/server/share/ShareTunnelError": (cause) =>
+            Effect.fail(new CloudTunnelStartError({ message: describeError(cause), tunnelHost: identity.tunnelHost, cause })),
+          "@kanna/server/share/ShareTunnelExitedError": (cause) =>
+            Effect.fail(new CloudTunnelStartError({ message: describeError(cause), tunnelHost: identity.tunnelHost, cause })),
+        }),
+        // A throw inside the connector is retried like any failed start, as it
+        // was when the start ran behind a Promise; otherwise supervision ends.
+        Effect.catchDefect((cause) =>
+          Effect.fail(new CloudTunnelStartError({ message: describeError(cause), tunnelHost: identity.tunnelHost, cause }))),
+      )).pipe(
       Effect.tap((tunnel) => Effect.addFinalizer(() => Effect.sync(() => tunnel.stop()))),
     ))
 

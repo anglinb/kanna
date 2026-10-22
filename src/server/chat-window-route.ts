@@ -1,8 +1,13 @@
-import type { ChatSnapshot, KannaStatus, SubagentActivity, WaitingOn } from "../shared/types"
+import { Cause, Effect, Schema } from "effect"
+import type { KannaStatus, SubagentActivity, WaitingOn } from "../shared/types"
 import type { AppSettings } from "./app-settings"
-import { runKannaSync } from "./effect/bridge"
-import type { EventStoreBridge } from "./event-store-bridge"
+import type { EventStore } from "./event-store"
 import { deriveChatSnapshot } from "./read-models"
+
+export class ChatWindowPreparationError extends Schema.TaggedError<ChatWindowPreparationError>()(
+  "@kanna/server/chat-window-route/ChatWindowPreparationError",
+  { chatId: Schema.String, cause: Schema.Defect() },
+) {}
 
 /**
  * `GET /api/chats/:chatId/window`: the first chat snapshot a cold
@@ -20,7 +25,7 @@ import { deriveChatSnapshot } from "./read-models"
  * cut down to what begins there. Keep the two in step.
  */
 export interface ChatWindowRouteDeps {
-  store: Pick<EventStoreBridge, "state" | "getChat" | "getClientTranscript" | "getInitialTranscriptWindowStart"> & Partial<Pick<EventStoreBridge, "prepareTranscript">>
+  store: Pick<EventStore["Service"], "state" | "getChat" | "getClientTranscript" | "getInitialTranscriptWindowStart"> & Partial<Pick<EventStore["Service"], "prepareTranscript">>
   agent: {
     getActiveStatuses: () => Map<string, KannaStatus>
     /** Optional for the same reason as `getSubagents`. Preferred: it also has the chats waiting on a subagent. */
@@ -37,10 +42,10 @@ export interface ChatWindowRouteDeps {
 export const CHAT_WINDOW_ROUTE_PATTERN = /^\/api\/chats\/([^/]+)\/window$/
 
 /** The window a socket with no cache gets, or null for a chat that is gone. */
-export function readChatWindow(chatId: string, deps: ChatWindowRouteDeps): ChatSnapshot | null {
+export const readChatWindow = Effect.fn("ChatWindowRoute.readChatWindow")(function* (chatId: string, deps: ChatWindowRouteDeps) {
   const { store, agent, appSettings } = deps
   const windowStart = store.getChat(chatId)
-    ? store.getInitialTranscriptWindowStart(chatId, runKannaSync(appSettings.snapshot).transcript.windowAssistantMessages)
+    ? store.getInitialTranscriptWindowStart(chatId, (yield* appSettings.snapshot).transcript.windowAssistantMessages)
     : 0
   const full = deriveChatSnapshot(
     store.state,
@@ -55,7 +60,7 @@ export function readChatWindow(chatId: string, deps: ChatWindowRouteDeps): ChatS
   const offset = Math.max(0, Math.min(windowStart - full.startIndex, full.messages.length))
   if (offset === 0) return full
   return { ...full, messages: full.messages.slice(offset), startIndex: full.startIndex + offset }
-}
+})
 
 function acceptsGzip(req: Request) {
   return (req.headers.get("accept-encoding") ?? "")
@@ -63,15 +68,19 @@ function acceptsGzip(req: Request) {
     .some((token) => token.trim().split(";")[0]?.trim().toLowerCase() === "gzip")
 }
 
-export async function handleChatWindow(req: Request, url: URL, deps: ChatWindowRouteDeps): Promise<Response | null> {
+export const handleChatWindow = Effect.fn("ChatWindowRoute.handleChatWindow")(function* (req: Request, url: URL, deps: ChatWindowRouteDeps) {
   const match = url.pathname.match(CHAT_WINDOW_ROUTE_PATTERN)
   if (!match) return null
   if (req.method !== "GET") {
     return new Response(null, { status: 405, headers: { Allow: "GET" } })
   }
   const chatId = decodeURIComponent(match[1])
-  if (deps.store.getChat(chatId)) await deps.store.prepareTranscript?.(chatId)
-  const data = readChatWindow(chatId, deps)
+  const prepareTranscript = deps.store.prepareTranscript
+  if (deps.store.getChat(chatId) && prepareTranscript) {
+    yield* prepareTranscript(chatId).pipe(Effect.catchCause((cause) =>
+      Effect.fail(new ChatWindowPreparationError({ chatId, cause: Cause.squash(cause) }))))
+  }
+  const data = yield* readChatWindow(chatId, deps)
   if (!data) {
     return Response.json({ error: "Chat not found" }, { status: 404 })
   }
@@ -86,4 +95,4 @@ export async function handleChatWindow(req: Request, url: URL, deps: ChatWindowR
   }
   headers.set("Content-Encoding", "gzip")
   return new Response(Bun.gzipSync(Buffer.from(json)), { headers })
-}
+})

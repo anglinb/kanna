@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { Effect } from "effect"
 import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
@@ -18,11 +19,11 @@ test("stream updates read only the new tail and release subscription maps", asyn
   const project = await store.openProject(directory)
   const chat = await store.createChat(project.id)
   const router = createWsRouter({
-    store,
+    store: store.service,
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() },
     diffStore: makeFakeDiffStore(), worktreeProbe: makeFakeWorktreeProbe(), terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings({} as never), appSettings: makeFakeAppSettings({ transcript: { windowAssistantMessages: 5 } }),
-    llmProvider: {}, refreshDiscovery: async () => [], getDiscoveredProjects: () => [],
+    llmProvider: {}, refreshDiscovery: () => Effect.succeed([]), getDiscoveredProjects: () => [],
     machineDisplayName: "test", updateManager: null,
   } as never)
   const data: ClientState = { subscriptions: new Map(), snapshotSignatures: new Map() }
@@ -34,8 +35,10 @@ test("stream updates read only the new tail and release subscription maps", asyn
     for (let i = 0; i < 20; i++) await store.appendMessage(chat.id, { _id: `${i}`, kind: "assistant_text", createdAt: i, text: "test" })
     await send({ type: "subscribe", id: "chat", topic: { type: "chat", chatId: chat.id } })
     const starts: number[] = []
-    const original = store.getClientTranscript.bind(store)
-    store.getClientTranscript = (id, start = 0) => { starts.push(start); return original(id, start) }
+    const original = store.service.getClientTranscript
+    Object.assign(store.service, {
+      getClientTranscript: (id: string, start = 0) => { starts.push(start); return original(id, start) },
+    })
     await store.appendMessage(chat.id, { _id: "20", kind: "assistant_text", createdAt: 20, text: "test" })
     await router.broadcastSnapshots()
     expect(starts).toEqual([20])

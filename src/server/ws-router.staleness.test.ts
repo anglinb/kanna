@@ -12,7 +12,7 @@ import type { SubscriptionTopic } from "../shared/protocol"
 import type { ChatSnapshot, TranscriptEntry } from "../shared/types"
 import { applyIncrementalChatSnapshot } from "../client/app/snapshotEquality"
 import { createEmptyState } from "./events"
-import { fakeChatCommandsStore } from "./chat-commands.fake"
+import { fakeRouterStore } from "./chat-commands.fake"
 import { createWsRouter } from "./ws-router"
 
 /**
@@ -336,8 +336,7 @@ function createWorld(options?: { projectPath?: string }) {
   const keybindings = makeFakeKeybindings(keybindingsSnapshot as never)
 
   const router = createWsRouter({
-    // The router's chat commands run on the store's Effect service.
-    store: { ...store, service: fakeChatCommandsStore(store) } as never,
+    store: fakeRouterStore(store) as never,
     diffStore,
     worktreeProbe: makeFakeWorktreeProbe(),
     agent: agent as never,
@@ -345,13 +344,11 @@ function createWorld(options?: { projectPath?: string }) {
     keybindings: keybindings as never,
     appSettings,
     llmProvider: {
-      read: async () => ({ provider: "openai", apiKey: "", model: "", baseUrl: "", resolvedBaseUrl: "", faveModels: [], enabled: false, warning: null, filePathDisplay: "" }),
-      write: async () => {
-        throw new Error("not used")
-      },
-      validate: async () => ({ ok: true, error: null }),
+      read: () => Effect.succeed({ provider: "openai", apiKey: "", model: "", baseUrl: "", resolvedBaseUrl: "", faveModels: [], enabled: false, warning: null, filePathDisplay: "" }),
+      write: () => Effect.die(new Error("not used")),
+      validate: () => Effect.succeed({ ok: true, error: null }),
     } as never,
-    refreshDiscovery: async () => [],
+    refreshDiscovery: () => Effect.succeed([]),
     getDiscoveredProjects: () => [],
     machineDisplayName: "Staleness Machine",
     updateManager: null,

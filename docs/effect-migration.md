@@ -1,6 +1,6 @@
 # Effect migration
 
-Kanna's server (`src/server`) and the parsing in `src/shared` are moving to
+Kanna's server (`src/server`) and the parsing in `src/shared` use
 [Effect 4](https://effect.website) (`effect@4.0.5`, `@effect/platform-bun`).
 The style follows superwall/paywall-next and its `effect-review` skill,
 adapted to Effect 4's API and to `bun test`.
@@ -17,9 +17,10 @@ compatible: this is a refactor, not a behaviour change.
 |---|---|
 | `runtime.ts` | `ServerPlatform`: Bun's FileSystem, Path and process services plus the logger. Every service layer is provided with it. |
 | `logger.ts` | Keeps the `[kanna] message` console shape for `Effect.log*`. Don't prefix messages with `LOG_PREFIX` yourself. |
-| `bridge.ts` | `runKanna` / `runKannaSync` / `subscribeKanna`: how not-yet-migrated Promise code calls a migrated service. Temporary; it is deleted at the end. |
+| `bridge.ts` | `runKanna` / `runKannaSync` / `subscribeKanna`: the boundary for Bun, SDK, and test APIs that require Promise or listener interfaces. Service-to-service calls use Effects directly. |
 | `testing.ts` | `runTest(effect)`: runs an Effect test body scoped, with `ServerPlatform`. Stands in for `it.effect`/`it.scoped`. |
 | `main.ts` | `runKannaMain(program)`: runs a `kanna` process (cli.ts, cli-supervisor.ts). The program's result is the exit code and the process exits when it ends, so Effect timers inside it can't keep a finished process alive. Signals stay with the program. |
+| `startup-slot.ts` | Explicit one-time bindings for the narrow coordinator, router, store, and usage ports while the composition root is being built. An early read or duplicate binding fails instead of using an uninitialized value. |
 
 `startKannaServer` (`server.ts`) builds one `ManagedRuntime` from the
 merged service layers, reads each service out of it, and disposes it at
@@ -28,8 +29,10 @@ shutdown. Add your layer to that `Layer.mergeAll(...)`.
 ## Notes from wave 1
 
 - A layer whose construction needs a value built later in `startKannaServer`
-  takes it as a lazy `Effect.sync(() => ...)` or a closure, and only reads it
-  after startup (see `ProjectIcons`' `projectPaths`, `UsageLimits`' reads).
+  reads a named startup slot from a lazy `Effect.sync(() => ...)` or a closure.
+  Bind the slot before starting listeners, agents, or schedules; the slot
+  fails on an early read or second binding. This is for the remaining
+  coordinator/router cycle, not a pattern to add to independent services.
 - Where a synchronous caller needs a value, keep a synchronous accessor
   (`runKannaSync` over `SubscriptionRef.get`) until the caller migrates;
   don't make it async just to fit.
@@ -43,12 +46,9 @@ shutdown. Add your layer to that `Layer.mergeAll(...)`.
 
 Provider adapters return `HarnessTurnEffect` (`harness-types.ts`) from an
 Effect `startTurn` that runs in a `Scope`: the scope's close is the old
-`close()`, `events` is a `Stream`, `interrupt` an Effect. Until agent.ts
-migrates (wave 4) it reads them through `toHarnessTurn`
-(`harness-bridge.ts`), which turns one back into the Promise `HarnessTurn`.
-Callbacks the agent hands an adapter (tool requests, approvals) become
-Effect-returning in the adapter's args; agent.ts adapts its Promise
-callbacks at the call site with `Effect.tryPromise`.
+`close()`, `events` is a `Stream`, `interrupt` an Effect. `AgentCoordinator`
+consumes those provider streams directly. Claude's SDK and injected test
+fakes retain Promise entry points at their boundaries.
 
 ## Rules
 
@@ -167,14 +167,39 @@ callbacks at the call site with `Effect.tryPromise`.
 | Storage leaves | events, transcript, transcript-media, transcript-payloads, transcript-slim, performance-log, ticket-store, schedules, uploads, standalone-export | done |
 | Terminals & serving | terminal-manager, local-http-servers, port-tunnels, share, auth, transcribe, png-thumbnail, project-icons | done |
 | Cloud | cloud/*, discovery, background-tasks | done |
-| Harness helpers & shared | harness-skills, skills, harness-instructions, visualization-*, handoff, agent-to-agent, session-artifacts, async-queue; Schema for `shared/protocol.ts` client envelopes and `shared/tools.ts` parsing | done |
+| Harness helpers & shared | harness-skills, skills, harness-instructions, visualization-*, handoff, agent-to-agent, session-artifacts; Schema for `shared/protocol.ts` client envelopes and `shared/tools.ts` parsing | done |
 | Event store | event-store, read-models, transcript-payloads (sync readers) | done |
 | Git | diff-store, github, github-branch-pr, github-checks | done |
 | Derived state | worktree-probe, worktree-snapshot, ticket-board, ticket-messages, touched-file-backfill, visualization-heights | done |
 | Provider plumbing | provider-auth, claude-executable, quick-response, generate-commit-message, generate-title | done |
 | CLI | cli-runtime, cli, cli-supervisor, nightly, update-manager, share (CLI output), process-utils (`resolveCommandPath`) | done |
-| Codex | codex-app-server, codex-app-server-protocol | wave 3 |
-| CLI providers | grok-cli, cursor-cli, cursor-kanna-tools, async-queue | wave 3 |
-| Pi & Kanna tools | pi-agent, kanna-tools, kanna-display-tools, kanna-image-tools, kanna-visualization-tool, kanna-tool-adapters, kanna-mcp | wave 3 |
-| Orchestration | orchestrator, kanna-orchestration-tools, chat-commands, schedules wiring | wave 3 |
-| Composition | agent, ws-router, server, entry, chat-window-route, resume-turns; wire `protocol-schema.ts` into the router; delete `bridge.ts` | wave 4 |
+| Codex | codex-app-server, codex-app-server-protocol | done; scoped service in the runtime |
+| CLI providers | grok-cli, cursor-cli, cursor-kanna-tools | done; scoped turns consumed by the coordinator |
+| Pi & Kanna tools | pi-agent, kanna-tools, kanna-display-tools, kanna-image-tools, kanna-visualization-tool, kanna-tool-adapters, kanna-mcp | done; scoped turns and Effect tool execution |
+| Orchestration | orchestrator, kanna-orchestration-tools, chat-commands, schedules wiring | done; native service and Effect tool definitions |
+| Composition | agent, ws-router, server, entry; preserve wire compatibility | done; provider turns, command dispatch, HTTP routes, startup recovery, and shutdown run through Effects |
+
+The router decodes frames with `ClientFrameJsonSchema` and
+`CompatibleClientEnvelopeSchema`. This preserves the old permissive guard:
+unknown or incomplete commands and extra fields reach the individual handler
+unchanged. Do not replace it with strict `ClientEnvelopeFromJson` decoding.
+
+The Bun server, provider SDKs, MCP SDK, and existing test helpers still expose
+Promise or callback interfaces. Their adapters use `runKanna` or
+`Effect.tryPromise` at those boundaries; they are not service-to-service
+bridges. `event-store-bridge.ts`, `orchestrator-bridge.ts`, and
+`toHarnessTurn` remain only for tests that exercise the former interface.
+
+## Ownership and test boundaries
+
+- The coordinator owns its background fibers and interrupts them during
+  disposal. The WebSocket router owns its broadcast, refresh, and listener
+  fibers in one scope; server shutdown awaits that scope's close.
+- `claude-usage.ts` keeps pure Claude usage normalization separate from turn
+  coordination. `ws-transport.ts` owns snapshot filtering and frame encoding;
+  `ws-router.ts` owns subscriptions and commands. Continue splitting by
+  responsibility rather than file length.
+- `testing/isolated-server.ts` starts a server with an independent data and
+  project directory. Its integration test exercises an actual HTTP request,
+  WebSocket command, project creation, and shutdown. Keep `bun test`; use
+  `TestClock` for Effect timers, and this fixture for protocol boundaries.

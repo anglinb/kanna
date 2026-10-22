@@ -1,10 +1,9 @@
-import { Effect, Layer, ManagedRuntime, Option } from "effect"
+import { Effect, Fiber, Layer, ManagedRuntime, Option, Schema, Scope } from "effect"
 import { homedir } from "node:os"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
-import { stat } from "node:fs/promises"
-import { APP_NAME, getDataDir, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
-import type { ChatAttachment, EditorPreset, TerminalPreset } from "../shared/types"
+import { getDataDir, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
+import type { EditorPreset, TerminalPreset } from "../shared/types"
 import type { ShareMode } from "../shared/share"
 import {
   CLOUD_BROWSER_PATH_PREFIX,
@@ -20,9 +19,9 @@ import { CloudFleet } from "./cloud/fleet"
 import { writeCloudIdentity } from "./cloud/identity"
 import { createPairSessionManager, type PairSessionSnapshot } from "./cloud/pair-session"
 import { EventStore } from "./event-store"
-import { EventStoreBridge } from "./event-store-bridge"
 import { AgentCoordinator } from "./agent"
-import { CodexAppServerManager } from "./codex-app-server"
+import { CodexAppServer } from "./codex-app-server"
+import { PiAgent } from "./pi-agent"
 import { Analytics } from "./analytics"
 import { AppSettings } from "./app-settings"
 import { EditorDetection } from "./editor-detection"
@@ -34,20 +33,32 @@ import { WorktreeProbe } from "./worktree-probe"
 import { TurnFileRecordError, TurnFileTracker } from "./worktree-snapshot"
 import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { resumeInterruptedTurns } from "./resume-turns"
-import { ChatOrchestrator, Orchestrator } from "./orchestrator"
+import { startServerMaintenance, startServerRecovery, stopServerMaintenance } from "./server-maintenance"
+import { Orchestrator } from "./orchestrator"
 import { TicketStore } from "./ticket-store"
-import { ChatAgent } from "./chat-agent"
+import { ChatAgent, type CoordinatorLike } from "./chat-agent"
 import { ChatCommands } from "./chat-commands"
 import { ProjectDiscovery, type DiscoveredProject } from "./discovery"
 import { Keybindings } from "./keybindings"
 import { ServerPlatform } from "./effect/runtime"
 import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
-import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
+import { startupSlot } from "./effect/startup-slot"
+import { ProjectIcons } from "./project-icons"
 import { clearGitHubRepoCache } from "./github"
-import { fetchGrokAccountUsage } from "./grok-cli"
+import { CursorCli } from "./cursor-cli"
+import { GrokCli, fetchGrokAccountUsage } from "./grok-cli"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { handleTranscribe } from "./transcribe"
 import { handleChatWindow } from "./chat-window-route"
+import {
+  handleAttachmentContent as handleAttachmentContentEffect,
+  handleProjectFileContent as handleProjectFileContentEffect,
+  handleProjectIcon as handleProjectIconEffect,
+  handleProjectUpload as handleProjectUploadEffect,
+  handleProjectUploadDelete as handleProjectUploadDeleteEffect,
+  handleTranscriptMediaContent as handleTranscriptMediaContentEffect,
+  serveStatic as serveStaticEffect,
+} from "./http-file-routes"
 import { handleVisualizationHeights } from "./visualization-heights"
 import { applyPiFaveModels } from "./provider-catalog"
 import { LatestVersionError, ProviderAuth } from "./provider-auth"
@@ -59,18 +70,10 @@ import { UpdateManager } from "./update-manager"
 import { fetchMainCommitSha } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { instanceFingerprint } from "./instance"
-import {
-  deleteProjectUpload,
-  inferAttachmentContentType,
-  inferProjectFileContentType,
-  persistProjectUpload,
-  type PersistProjectUploadArgs,
-} from "./uploads"
-import { getProjectUploadDir } from "./paths"
 import { inheritShellPath } from "./process-utils"
 
-const MAX_UPLOAD_FILES = 50
-const MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024
+export { persistHttpUploadedFiles as persistUploadedFiles, UploadBatchError } from "./http-file-routes"
+
 const STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS = 60 * 1000
 const STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS = 6 * 60 * 60 * 1000
 const STALE_CHAT_DELETE_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -83,39 +86,15 @@ async function withOriginAgentCluster(response: Response | Promise<Response> | u
   return resolved
 }
 
-export async function persistUploadedFiles(args: {
-  projectId: string
-  localPath: string
-  files: File[]
-  persistUpload?: (upload: PersistProjectUploadArgs) => Promise<ChatAttachment>
-}): Promise<ChatAttachment[]> {
-  const persistUpload = args.persistUpload ?? ((upload) => runKanna(Effect.provide(persistProjectUpload(upload), ServerPlatform)))
-  const attachments: ChatAttachment[] = []
+export class ServerStartupError extends Schema.TaggedError<ServerStartupError>()(
+  "@kanna/server/ServerStartupError",
+  { operation: Schema.String, cause: Schema.Defect() },
+) {}
 
-  try {
-    for (const file of args.files) {
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      const attachment = await persistUpload({
-        projectId: args.projectId,
-        localPath: args.localPath,
-        fileName: file.name,
-        bytes,
-        fallbackMimeType: file.type || undefined,
-      })
-      attachments.push(attachment)
-    }
-  } catch (error) {
-    await Promise.allSettled(
-      attachments.map((attachment) => runKanna(Effect.provide(deleteProjectUpload({
-        localPath: args.localPath,
-        storedName: path.basename(attachment.absolutePath),
-      }), ServerPlatform)))
-    )
-    throw error
-  }
-
-  return attachments
-}
+export class ServerShutdownError extends Schema.TaggedError<ServerShutdownError>()(
+  "@kanna/server/ServerShutdownError",
+  { operation: Schema.String, cause: Schema.Defect() },
+) {}
 
 export interface StartKannaServerOptions {
   port?: number
@@ -152,8 +131,19 @@ export interface StartKannaServerOptions {
    */
   directCloud?: boolean
   onMigrationProgress?: (message: string) => void
+  /** Where keybindings live. Defaults to the user's home; tests point it at a temp dir. */
+  keybindingsPath?: string
   update?: Pick<CliUpdateOptions, "version" | "fetchLatestVersion" | "installVersion" | "installNightly">
 }
+
+type AgentStartupPort = CoordinatorLike & Pick<AgentCoordinator,
+  "fetchClaudeUsage" | "fetchCodexRateLimits" | "refreshCursorModelCatalog" | "refreshGrokModelCatalog" | "refreshCodexModelCatalog"
+>
+type RouterStartupPort = Pick<ReturnType<typeof createWsRouter>,
+  "broadcastChatChange" | "broadcastSidebar" | "broadcastChatStateImmediately" | "scheduleChatStateBroadcast" | "scheduleBroadcast"
+>
+type StoreStartupPort = Pick<EventStore["Service"], "state" | "recordFilesTouched">
+type UsageLimitsStartupPort = Pick<UsageLimits["Service"], "refresh">
 
 /** The self-updater for a server the CLI started, tracking through the server's Analytics. */
 function updateManagerLayer(update: NonNullable<StartKannaServerOptions["update"]>, devMode: boolean) {
@@ -171,14 +161,14 @@ function updateManagerLayer(update: NonNullable<StartKannaServerOptions["update"
   }))
 }
 
-export async function startKannaServer(options: StartKannaServerOptions = {}) {
+const startKannaServerEffect = Effect.fn("Server.start")(function* (options: StartKannaServerOptions) {
   const port = options.port ?? 3210
   const hostname = options.host ?? "127.0.0.1"
   const strictPort = options.strictPort ?? false
   const runtimeProfile = getRuntimeProfile()
   // Runs alongside the store setup below (~0.5 s for a zsh with nvm) and is
   // awaited before anything can start an agent.
-  const shellPathReady = runKanna(inheritShellPath())
+  const shellPathReady = yield* Effect.forkChild(inheritShellPath())
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
   const dataDir = options.dataDir ?? getDataDir(homedir())
   // Services already on Effect, built once and released at shutdown. The
@@ -189,12 +179,16 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
   const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
+  const agentSlot = startupSlot<AgentStartupPort>("agent")
+  const routerSlot = startupSlot<RouterStartupPort>("router")
+  const storeSlot = startupSlot<StoreStartupPort>("event store")
+  const usageLimitsSlot = startupSlot<UsageLimitsStartupPort>("usage limits")
   // Claude and Codex usage reads go through the agent, which is built below;
   // nothing asks for a read before the router exists. Grok's read takes the
   // grok CLI's token and asks cli-chat-proxy directly.
   const usageReads: UsageLimitsDeps = {
-    fetchClaudeUsage: () => agent.fetchClaudeUsage(),
-    fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
+    fetchClaudeUsage: () => agentSlot.get().fetchClaudeUsage(),
+    fetchCodexRateLimits: () => agentSlot.get().fetchCodexRateLimits(),
     fetchGrokUsage: () => fetchGrokAccountUsage(),
   }
   const analyticsLayer = Analytics.layer({
@@ -210,18 +204,24 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // chat actions (`ChatCommands`) for both callers: the router runs them for
   // the user, the orchestrator for an agent.
   const chatCommandsLayer = ChatCommands.layer.pipe(
-    Layer.provideMerge(ChatAgent.layerFromCoordinator((): AgentCoordinator => agent)),
+    Layer.provideMerge(ChatAgent.layerFromCoordinator(agentSlot.get)),
     Layer.provide([eventStoreLayer, analyticsLayer]),
   )
   const orchestratorLayer = Orchestrator.layer({
     push: (change) => {
-      void router.broadcastChatChange(change)
+      void routerSlot.get().broadcastChatChange(change)
     },
   }).pipe(Layer.provideMerge(chatCommandsLayer), Layer.provide([eventStoreLayer, ticketStoreLayer]))
+  const quickResponseLayer = QuickResponse.layerWithCodex.pipe(
+    Layer.provideMerge(CodexAppServer.layer()),
+  )
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      Keybindings.layer(),
-      DiffStore.layer.pipe(Layer.provide(QuickResponse.layer())),
+      Keybindings.layer(options.keybindingsPath),
+      CursorCli.layer(),
+      GrokCli.layer(),
+      PiAgent.layer(),
+      DiffStore.layer.pipe(Layer.provideMerge(quickResponseLayer)),
       eventStoreLayer,
       ticketStoreLayer,
       orchestratorLayer,
@@ -232,18 +232,18 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
         ),
         // Runs only after a sign-in, long after startup has built `agent`
         // and read `usageLimits` out of this runtime.
-        onSignedIn: (service) => Effect.sync(() => {
+        onSignedIn: (service) => Effect.gen(function* () {
           // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
           // flip from auth → usage) and the live Cursor/Codex model catalogs.
-          void runKanna(usageLimits.refresh({ force: true }))
+          yield* usageLimitsSlot.get().refresh({ force: true }).pipe(Effect.forkDetach)
           if (service === "cursor") {
-            void agent.refreshCursorModelCatalog()
+            void agentSlot.get().refreshCursorModelCatalog()
           }
           if (service === "grok") {
-            void agent.refreshGrokModelCatalog()
+            void agentSlot.get().refreshGrokModelCatalog()
           }
           if (service === "codex") {
-            void agent.refreshCodexModelCatalog()
+            void agentSlot.get().refreshCodexModelCatalog()
           }
           if (service === "gh") {
             // Never let a cached "unauthenticated" repo list outlive the sign-in
@@ -266,58 +266,59 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       ProjectIcons.layer({
         dataDir,
         projectPaths: Effect.sync((): string[] =>
-          [...store.state.projectsById.values()].filter((project) => !project.deletedAt).map((project) => project.localPath)),
+          [...storeSlot.get().state.projectsById.values()].filter((project) => !project.deletedAt).map((project) => project.localPath)),
       }),
       // Feeds the sidebar's muted "relevant to uncommitted work" dot. Derived and
       // in-memory; see worktree-probe.ts for why there's no `git status` sweep.
-      WorktreeProbe.layer({ state: Effect.sync(() => store.state) }),
+      WorktreeProbe.layer({ state: Effect.sync(() => storeSlot.get().state) }),
       // Snapshot the worktree either side of a turn and record what changed, so
       // the sidebar can ask "did this chat touch a file that's still uncommitted?"
       // instead of comparing timestamps. See worktree-snapshot.ts.
       TurnFileTracker.layer({
         resolveChatPath: (chatId) => {
-          const chat = store.state.chatsById.get(chatId)
-          const project = chat ? store.state.projectsById.get(chat.projectId) : undefined
+          const chat = storeSlot.get().state.chatsById.get(chatId)
+          const project = chat ? storeSlot.get().state.projectsById.get(chat.projectId) : undefined
           return project?.localPath ?? null
         },
-        recordFiles: (chatId, files) => Effect.tryPromise({
-          try: () => store.recordFilesTouched(chatId, files),
-          catch: (cause) => new TurnFileRecordError({ chatId, cause }),
-        }),
+        recordFiles: (chatId, files) => storeSlot.get().recordFilesTouched(chatId, files).pipe(
+          Effect.catchTag("@kanna/server/event-store/EventStoreFileError", (cause) =>
+            Effect.fail(new TurnFileRecordError({ chatId, cause }))),
+        ),
       }),
     ).pipe(Layer.provide(ServerPlatform)),
   )
-  const diagnostics = await runtime.runPromise(PerformanceLog)
-  const store: EventStoreBridge = new EventStoreBridge(await runtime.runPromise(EventStore))
-  const diffStore = await runtime.runPromise(DiffStore)
-  const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
+  const runtimeContext = yield* runtime.contextEffect
+  const diagnostics = yield* PerformanceLog.pipe(Effect.provideContext(runtimeContext))
+  const store = yield* EventStore.pipe(Effect.provideContext(runtimeContext))
+  storeSlot.bind(store)
+  const diffStore = yield* DiffStore.pipe(Effect.provideContext(runtimeContext))
+  const machineDisplayName = yield* getMachineDisplayName().pipe(Effect.provide(ServerPlatform))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
   // every request path below reads the current value.
   let cloud: CloudRuntime | null = options.cloud ?? null
   /** Only set when *this* process paired; the CLI owns a handed-in runtime. */
   let selfPairedCloud: CloudRuntime | null = null
-  await store.migrateLegacyTranscripts(options.onMigrationProgress)
+  yield* store.migrateLegacyTranscripts(options.onMigrationProgress)
   // Not awaited: this streams every transcript once per data dir, which on a
   // machine with a few 100 MB chats takes longer than a boot should. The
   // store queues each rewrite behind appends, so serving can start now.
-  void store.slimTranscripts({ onProgress: options.onMigrationProgress }).catch((error) => {
+  void runtime.runPromise(store.slimTranscripts({ onProgress: options.onMigrationProgress })).catch((error) => {
     console.warn(`${LOG_PREFIX} transcript slim failed:`, error)
   })
   let discoveredProjects: DiscoveredProject[] = []
 
-  async function refreshDiscovery() {
-    discoveredProjects = await runKanna(discovery.discover())
+  const refreshDiscoveryEffect = Effect.fn("Server.refreshDiscovery")(function* () {
+    discoveredProjects = yield* discovery.discover()
     return discoveredProjects
-  }
+  })
 
   let server: ReturnType<typeof Bun.serve<ClientState>>
-  let router: ReturnType<typeof createWsRouter>
-  const { worktreeProbe, turnFiles } = await runtime.runPromise(Effect.all({
+  const { worktreeProbe, turnFiles } = yield* Effect.all({
     worktreeProbe: WorktreeProbe,
     turnFiles: TurnFileTracker,
-  }))
+  }).pipe(Effect.provideContext(runtimeContext))
   const disposeWorktreeProbeChanges = subscribeKanna(worktreeProbe.changes, () => {
-    void router.broadcastSidebar()
+    void routerSlot.get().broadcastSidebar()
   })
   // Free updates: `performRefresh` already stats every dirty file, so the
   // client's active project stays current at no extra git cost — and the dot
@@ -325,20 +326,20 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const disposeWorkingTreeScans = subscribeKanna(diffStore.workingTreeScans, ({ projectId, scan }) => {
     void runKanna(worktreeProbe.recordExternalProbe(projectId, scan))
   })
-  store.onTurnStarted = (chatId) => {
+  store.hooks.onTurnStarted = (chatId) => {
     void runKanna(turnFiles.beginTurn(chatId))
-    orchestrator.handleTurnStarted(chatId)
+    runKannaSync(orchestratorService.handleTurnStarted(chatId))
   }
-  store.onQueuedMessageRemoved = (chatId, queuedMessageId, taken) => {
-    orchestrator.handleQueuedMessageRemoved(chatId, queuedMessageId, taken)
+  store.hooks.onQueuedMessageRemoved = (chatId, queuedMessageId, taken) => {
+    runKannaSync(orchestratorService.handleQueuedMessageRemoved(chatId, queuedMessageId, taken))
   }
   // A finished turn is the likeliest moment for the dirty set to have changed,
   // so probe that one project then — after recording the turn's own files, so
   // the broadcast that follows already reflects them.
-  store.onTurnEnded = (chatId) => {
+  store.hooks.onTurnEnded = (chatId) => {
     void runKanna(turnFiles.endTurn(chatId).pipe(Effect.andThen(worktreeProbe.refreshForChat(chatId))))
   }
-  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager } = await runtime.runPromise(Effect.gen(function* () {
+  const { keybindings, appSettings, analytics, usageLimits: resolvedUsageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager, codexManager, quickResponse, cursorManager, grokManager, piManager } = yield* Effect.gen(function* () {
     return {
       updateManager: Option.getOrNull(yield* Effect.serviceOption(UpdateManager)),
       keybindings: yield* Keybindings,
@@ -353,9 +354,15 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       discovery: yield* ProjectDiscovery,
       fleet: yield* CloudFleet,
       providerAuth: yield* ProviderAuth,
+      codexManager: yield* CodexAppServer,
+      quickResponse: yield* QuickResponse,
+      cursorManager: yield* CursorCli,
+      grokManager: yield* GrokCli,
+      piManager: yield* PiAgent,
     }
-  }))
-  const readLlmProvider = () => runKanna(readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform)))
+  }).pipe(Effect.provideContext(runtimeContext))
+  const usageLimits = resolvedUsageLimits
+  usageLimitsSlot.bind(usageLimits)
   // Which editors and terminals this machine has, for the "Open in…" menus.
   // Deliberately not awaited: it shells out per app, and the menus render
   // fine (nothing greyed out) until the result lands.
@@ -363,42 +370,46 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     setInstalledEditors: (editors: EditorPreset[]) => runKannaSync(appSettings.setInstalledEditors(editors)),
     setInstalledTerminals: (terminals: TerminalPreset[]) => runKannaSync(appSettings.setInstalledTerminals(terminals)),
   }
-  void runKanna(editorDetection.refresh(installedAppsTarget))
-  void runKanna(terminalDetection.refresh(installedAppsTarget))
+  yield* editorDetection.refresh(installedAppsTarget).pipe(Effect.forkDetach)
+  yield* terminalDetection.refresh(installedAppsTarget).pipe(Effect.forkDetach)
   const disposeProjectIconChanges = subscribeKanna(projectIcons.changes, () => {
-    void router.broadcastSidebar()
+    void routerSlot.get().broadcastSidebar()
   })
-  await refreshDiscovery()
-  const codexManager = new CodexAppServerManager()
+  yield* refreshDiscoveryEffect()
   const agent = new AgentCoordinator({
     store,
     analytics,
     codexManager,
+    quickResponse,
+    cursorManager,
+    grokManager,
+    piManager,
     onStateChange: (chatId?: string, options?: { immediate?: boolean }) => {
       if (chatId) {
         if (options?.immediate) {
-          void router.broadcastChatStateImmediately(chatId)
+          void routerSlot.get().broadcastChatStateImmediately(chatId)
           return
         }
-        router.scheduleChatStateBroadcast(chatId)
+        routerSlot.get().scheduleChatStateBroadcast(chatId)
         return
       }
-      router.scheduleBroadcast()
+      routerSlot.get().scheduleBroadcast()
     },
   })
-  const { chatCommands, orchestratorService } = await runtime.runPromise(Effect.all({
+  agentSlot.bind(agent)
+  const { chatCommands, orchestratorService } = yield* Effect.all({
     chatCommands: ChatCommands,
     orchestratorService: Orchestrator,
-  }))
-  // The coordinator, the router and the Kanna tools still call it as Promise code.
-  const orchestrator = new ChatOrchestrator(orchestratorService)
-  agent.orchestration = orchestrator
-  agent.onChatSettled = (chatId) => orchestrator.handleChatSettled(chatId)
-  agent.onChatStopped = (chatId) => orchestrator.handleChatStopped(chatId)
+  }).pipe(Effect.provideContext(runtimeContext))
+  agent.orchestration = orchestratorService
+  agent.onChatSettled = (chatId) => runKannaSync(orchestratorService.handleChatSettled(chatId))
+  agent.onChatStopped = (chatId) => runKannaSync(orchestratorService.handleChatStopped(chatId))
   agent.setClaudeRateLimitListener((info) => void runKanna(usageLimits.recordClaudeRateLimitPush(info)))
-  codexManager.setRateLimitsListener((snapshot) => void runKanna(usageLimits.recordCodexRateLimitPush(snapshot)))
+  const disposeCodexRateLimits = subscribeKanna(codexManager.rateLimitPushes, (snapshot) => {
+    void runKanna(usageLimits.recordCodexRateLimitPush(snapshot))
+  })
 
-  router = createWsRouter({
+  const router = createWsRouter({
     diagnostics,
     store,
     diffStore,
@@ -406,7 +417,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     projectIcons,
     agent,
     chatCommands,
-    tickets: orchestrator,
+    tickets: orchestratorService,
     terminals,
     portTunnels,
     keybindings,
@@ -414,11 +425,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     analytics,
     usageLimits,
     llmProvider: {
-      read: readLlmProvider,
-      write: (value) => runKanna(writeLlmProviderSnapshot(value).pipe(Effect.provide(ServerPlatform))),
-      validate: (value) => runKanna(validateLlmProviderCredentials(value)),
+      read: () => readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform)),
+      write: (value) => writeLlmProviderSnapshot(value).pipe(Effect.provide(ServerPlatform)),
+      validate: (value) => validateLlmProviderCredentials(value),
     },
-    refreshDiscovery,
+    refreshDiscovery: refreshDiscoveryEffect,
     refreshInstalledApps: () => {
       void runKanna(editorDetection.refresh(installedAppsTarget))
       void runKanna(terminalDetection.refresh(installedAppsTarget))
@@ -428,6 +439,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     updateManager,
     providerAuth,
   })
+  routerSlot.bind(router)
   // Overlay the account's live Cursor and Codex model lists on the static
   // catalog (no-op when the CLI is missing or logged out); broadcasts on change.
   void agent.refreshCursorModelCatalog()
@@ -435,98 +447,65 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   void agent.refreshGrokModelCatalog()
   // Seed the pi provider's model picker from saved fave models before the
   // first snapshots go out.
-  void readLlmProvider()
-    .then((snapshot) => {
-      if (applyPiFaveModels(snapshot.faveModels)) {
-        return router.broadcastSnapshots()
-      }
-    })
-    .catch(() => undefined)
+  void runtime.runPromise(Effect.gen(function* () {
+    const snapshot = yield* readLlmProviderSnapshot()
+    if (applyPiFaveModels(snapshot.faveModels)) {
+      yield* Effect.tryPromise({
+        try: () => router.broadcastSnapshots(),
+        catch: (cause) => new ServerStartupError({ operation: "broadcast model catalog", cause }),
+      })
+    }
+  }).pipe(Effect.provide(ServerPlatform))).catch(() => undefined)
 
   // Chat garbage collection, three tiers measured against the user's latest
   // chat activity: empty drafts are hard-deleted after 5 idle minutes, chats
   // 30+ days behind are auto-archived, and 90+ days behind are hard-deleted.
-  const runPruneStaleEmptyChats = () => {
-    void router.pruneStaleEmptyChats()
-      .then((prunedChatIds) => {
-        if (prunedChatIds.length > 0) {
-          return router.broadcastSnapshots()
-        }
-      })
-  }
-  const runAutoArchiveStaleChats = () => {
-    void router.autoArchiveStaleChats()
-      .then((archivedChatIds) => {
-        if (archivedChatIds.length > 0) {
-          return router.broadcastSnapshots()
-        }
-      })
-  }
-  const runDeleteStaleChats = () => {
-    void router.deleteStaleChats()
-      .then((deletedChatIds) => {
-        if (deletedChatIds.length > 0) {
-          return router.broadcastSnapshots()
-        }
-      })
-  }
-
   // All three run once at startup — a long-idle instance gets cleaned
   // immediately, not minutes or hours later. Lifecycle order: prune empties,
   // hard-delete 90d+ (so they aren't pointlessly archived first), then
   // archive 30d+. One broadcast at the end covers all changes.
-  const runStartupGc = async () => {
-    const pruned = await router.pruneStaleEmptyChats().catch(() => [])
-    const deleted = await router.deleteStaleChats().catch(() => [])
-    const archived = await router.autoArchiveStaleChats().catch(() => [])
-    if (pruned.length + deleted.length + archived.length > 0) {
-      await router.broadcastSnapshots()
-    }
-  }
-  await shellPathReady
+  yield* Fiber.join(shellPathReady)
   // After the shell path: an overdue schedule or a report held over from the
   // last run starts an agent straight away.
-  orchestrator.start()
+  yield* orchestratorService.start
   // Chats that were mid-turn when Kanna last exited pick up where they left
   // off. Not awaited — each resume starts a harness process, and boot should
   // not wait on them; chained onto the GC sweep so a chat about to be archived
   // or deleted for staleness isn't resumed on its way out.
-  void runStartupGc()
-    .then(() => resumeInterruptedTurns({
+  const maintenanceScope = yield* Scope.make()
+  const recoveryFiber = yield* Scope.provide(startServerRecovery(router,
+    resumeInterruptedTurns({
       store,
       agent,
       onError: (chatId, error) => {
         console.warn(`${LOG_PREFIX} could not resume chat ${chatId} after restart:`, error)
       },
-    }))
-    .then(async (resumedChatIds) => {
-      if (resumedChatIds.length > 0) {
-        console.log(`${LOG_PREFIX} resumed ${resumedChatIds.length} chat(s) interrupted by the last shutdown`)
-        await router.broadcastSnapshots()
-      }
-    })
-    .catch((error) => {
-      console.warn(`${LOG_PREFIX} resuming interrupted chats failed:`, error)
-    })
+    })), maintenanceScope)
 
   // Then keep sweeping for the lifetime of the (potentially months-long)
   // process: empties every minute, deletes daily, archives every 6 hours.
-  const staleEmptyChatPruneInterval = setInterval(runPruneStaleEmptyChats, STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS)
-  const staleChatAutoArchiveInterval = setInterval(runAutoArchiveStaleChats, STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS)
-  const staleChatDeleteInterval = setInterval(runDeleteStaleChats, STALE_CHAT_DELETE_INTERVAL_MS)
-  void runKanna(worktreeProbe.start)
-  void runtime.runPromise(projectIcons.start)
+  yield* Scope.provide(startServerMaintenance(router, {
+    pruneMs: STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS,
+    archiveMs: STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS,
+    deleteMs: STALE_CHAT_DELETE_INTERVAL_MS,
+  }), maintenanceScope)
+  yield* worktreeProbe.start
+  yield* projectIcons.start
   // Claims recorded before base blobs never expire on their own, so a chat
   // whose work shipped months ago keeps returning to Relevant on someone
   // else's edit. Dating them is two git calls per affected chat and only
   // happens once, so it runs in the background rather than delaying boot.
-  void runKanna(backfillTouchedFileBases(store))
-    .then((result) => {
-      if (result.chats > 0) void router.broadcastSidebar()
-    })
-    .catch((error) => {
+  void runtime.runPromise(Effect.gen(function* () {
+    const result = yield* backfillTouchedFileBases(store)
+    if (result.chats > 0) {
+      yield* Effect.tryPromise({
+        try: () => router.broadcastSidebar(),
+        catch: (cause) => new ServerStartupError({ operation: "broadcast sidebar", cause }),
+      })
+    }
+  })).catch((error) => {
       console.warn(`${LOG_PREFIX} touched-file backfill failed:`, error)
-    })
+  })
 
   const distDir = path.join(import.meta.dir, "..", "..", "dist", "client")
 
@@ -538,7 +517,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // to ~/.kanna/cloud.json and the tunnel up, without restarting kanna.
   const pairSession =
     options.allowCloudPairing && !cloud
-      ? await runKanna(createPairSessionManager({
+      ? yield* createPairSessionManager({
           machineName: machineDisplayName,
           onPaired: (identity) => Effect.gen(function* () {
             yield* writeCloudIdentity(identity).pipe(Effect.provide(ServerPlatform))
@@ -555,7 +534,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               localUrl: `http://localhost:${actualPort}`,
             })
           }),
-        }))
+        })
       : null
 
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
@@ -763,7 +742,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(Response.json(payload, { headers: { "Cache-Control": "no-store" } }))
           }
 
-          const uploadResponse = await handleProjectUpload(req, url, store)
+          const uploadResponse = await runKanna(handleProjectUploadEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
           if (uploadResponse) {
             return withOriginAgentCluster(uploadResponse)
           }
@@ -773,12 +752,12 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(transcribeResponse)
           }
 
-          const deleteUploadResponse = await handleProjectUploadDelete(req, url, store)
+          const deleteUploadResponse = await runKanna(handleProjectUploadDeleteEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
           if (deleteUploadResponse) {
             return withOriginAgentCluster(deleteUploadResponse)
           }
 
-          const attachmentContentResponse = await handleAttachmentContent(req, url, store)
+          const attachmentContentResponse = await runKanna(handleAttachmentContentEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
           if (attachmentContentResponse) {
             return withOriginAgentCluster(attachmentContentResponse)
           }
@@ -788,27 +767,27 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(visualizationHeightsResponse)
           }
 
-          const transcriptMediaResponse = await handleTranscriptMediaContent(req, url, store)
+          const transcriptMediaResponse = await runKanna(handleTranscriptMediaContentEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
           if (transcriptMediaResponse) {
             return withOriginAgentCluster(transcriptMediaResponse)
           }
 
-          const projectIconResponse = await handleProjectIcon(req, url, store.dataDir)
+          const projectIconResponse = await runKanna(handleProjectIconEffect(req, url, store.dataDir).pipe(Effect.provide(ServerPlatform)))
           if (projectIconResponse) {
             return withOriginAgentCluster(projectIconResponse)
           }
 
-          const projectFileContentResponse = await handleProjectFileContent(req, url, store)
+          const projectFileContentResponse = await runKanna(handleProjectFileContentEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
           if (projectFileContentResponse) {
             return withOriginAgentCluster(projectFileContentResponse)
           }
 
-          const chatWindowResponse = await handleChatWindow(req, url, { store, agent, appSettings })
+          const chatWindowResponse = await runKanna(handleChatWindow(req, url, { store, agent, appSettings }))
           if (chatWindowResponse) {
             return withOriginAgentCluster(chatWindowResponse)
           }
 
-          return withOriginAgentCluster(serveStatic(distDir, url.pathname))
+          return withOriginAgentCluster(runKanna(serveStaticEffect(distDir, url.pathname).pipe(Effect.provide(ServerPlatform))))
         },
         websocket: {
           // Negotiated per connection: browsers opt in and get 8-12x smaller
@@ -851,7 +830,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     }
   }
 
-  runKannaSync(analytics.trackLaunch({
+  yield* analytics.trackLaunch({
     port: actualPort,
     host: hostname,
     openBrowser: options.openBrowser ?? true,
@@ -859,40 +838,45 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     password: options.password ?? null,
     strictPort,
     cloud: Boolean(options.cloud),
-  }))
+  })
 
-  runKannaSync(diagnostics.start(() => ({
+  yield* diagnostics.start(() => ({
     ...store.getResourceCounts(),
     ...router.getResourceCounts(),
     ...agent.getResourceCounts(),
     ...runKannaSync(terminals.resourceCounts),
     ...diffStore.getResourceCounts(),
-  })))
+  }))
 
-  const shutdown = async () => {
-    if (pairSession) await runKanna(pairSession.stop)
+  const shutdown = Effect.fn("Server.shutdown")(function* () {
+    if (pairSession) yield* pairSession.stop
     // A runtime handed in by the CLI is stopped by the CLI; one this process
     // attached at pair time is ours to take down.
-    if (selfPairedCloud) await runKanna(selfPairedCloud.stop)
-    clearInterval(staleEmptyChatPruneInterval)
-    clearInterval(staleChatAutoArchiveInterval)
-    clearInterval(staleChatDeleteInterval)
+    if (selfPairedCloud) yield* selfPairedCloud.stop
+    yield* stopServerMaintenance(recoveryFiber, maintenanceScope)
     // The probe's passes stop with the runtime below; nothing hears them from here on.
-    disposeWorktreeProbeChanges()
-    disposeWorkingTreeScans()
-    disposeProjectIconChanges()
+    yield* Effect.sync(() => {
+      disposeWorktreeProbeChanges()
+      disposeWorkingTreeScans()
+      disposeProjectIconChanges()
+      disposeCodexRateLimits()
+    })
     // Cancels every in-flight turn *and* marks its chat, so the next boot
     // restarts the work instead of leaving it interrupted (see resume-turns.ts).
-    orchestrator.dispose()
-    try { await agent.interruptForShutdown() } finally { agent.dispose() }
-    router.dispose()
+    yield* orchestratorService.stop
+    yield* agent.interruptForShutdownEffect().pipe(Effect.ensuring(agent.disposeEffect()))
+    yield* router.disposeEffect()
     // runtime.dispose() below also stops the project icon passes, kills every
-    // terminal's shell, stops every port tunnel and kills any sign-in CLI.
-    await store.compact()
+    // terminal's shell, stops every port tunnel and kills any sign-in CLI
+    // (and any codex app-server agent.dispose() left).
+    yield* store.compact
     // After the store's last write, so the diagnostics' final line counts it.
-    await runtime.dispose()
-    server.stop(true)
-  }
+    yield* Effect.tryPromise({
+      try: () => runtime.dispose(),
+      catch: (cause) => new ServerShutdownError({ operation: "dispose runtime", cause }),
+    })
+    yield* Effect.sync(() => server.stop(true))
+  })
 
   return {
     port: actualPort,
@@ -900,354 +884,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     diffStore,
     updateManager,
     analytics,
-    stop: shutdown,
+    stop: () => runKanna(shutdown()),
     /** For the single-instance lock's status (instance-socket.ts), which the
      *  Mac app's quit dialog shows. */
     state: () => ({ runningChats: agent.activeTurns.size, cloud: Boolean(options.cloud ?? selfPairedCloud) }),
   }
-}
+})
 
-function describeUploadError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return String(error)
-  }
-  const cause = error.cause === undefined ? "" : `\ncause: ${String(error.cause)}`
-  return `${error.name}: ${error.message}${cause}\n${error.stack ?? "(no stack)"}`
-}
-
-async function handleProjectUpload(req: Request, url: URL, store: EventStoreBridge) {
-  if (req.method !== "POST") {
-    return null
-  }
-
-  const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads$/)
-  if (!match) {
-    return null
-  }
-
-  const project = store.getProject(match[1])
-  if (!project) {
-    return Response.json({ error: "Project not found" }, { status: 404 })
-  }
-
-  // Parsing is its own failure mode, so it gets its own report. A drag-sourced
-  // File on iOS is backed by a temporary drag-session file. If the system
-  // releases it before the client reads it, Safari sends a multipart header
-  // with an empty body (Content-Length: 0) and parsing throws here. The
-  // client copies dropped files into memory during the drop event to avoid
-  // this; see src/client/lib/snapshotDroppedFiles.ts.
-  let formData: FormData
-  try {
-    formData = await req.formData()
-  } catch (error) {
-    return Response.json({
-      error: "The server could not read the upload request body.",
-      stage: "parse-form-data",
-      detail: describeUploadError(error),
-      contentType: req.headers.get("content-type"),
-      contentLength: req.headers.get("content-length"),
-    }, { status: 400 })
-  }
-
-  const files = formData
-    .getAll("files")
-    .filter((value): value is File => value instanceof File)
-
-  if (files.length === 0) {
-    return Response.json({
-      error: "No files uploaded",
-      stage: "read-files",
-      detail: `The request parsed, but it carried no file parts.\nform fields: ${[...new Set(formData.keys())].join(", ") || "(none)"}`,
-      contentLength: req.headers.get("content-length"),
-    }, { status: 400 })
-  }
-
-  // The client reports each file's size before sending it. A shortfall here
-  // means the body was truncated in transit, which the parser cannot see.
-  const clientSizes = formData.getAll("clientFileSizes")
-  if (clientSizes.length === files.length) {
-    const truncated = files
-      .map((file, index) => ({ file, expected: Number(clientSizes[index]) }))
-      .filter((entry) => Number.isFinite(entry.expected) && entry.expected !== entry.file.size)
-    if (truncated.length > 0) {
-      return Response.json({
-        error: "The uploaded file arrived incomplete.",
-        stage: "size-mismatch",
-        detail: truncated
-          .map((entry) => `${entry.file.name}: client sent ${entry.expected} bytes, server received ${entry.file.size} bytes`)
-          .join("\n"),
-        contentLength: req.headers.get("content-length"),
-      }, { status: 400 })
-    }
-  }
-
-  if (files.length > MAX_UPLOAD_FILES) {
-    return Response.json({ error: `You can upload up to ${MAX_UPLOAD_FILES} files at a time.` }, { status: 400 })
-  }
-
-  for (const file of files) {
-    if (file.size > MAX_UPLOAD_SIZE_BYTES) {
-      return Response.json(
-        { error: `File "${file.name}" exceeds the ${Math.floor(MAX_UPLOAD_SIZE_BYTES / (1024 * 1024))} MB limit.` },
-        { status: 413 }
-      )
-    }
-  }
-
-  try {
-    const attachments = await persistUploadedFiles({
-      projectId: project.id,
-      localPath: project.localPath,
-      files,
-    })
-    return Response.json({ attachments })
-  } catch (error) {
-    console.error("[uploads] Upload failed:", error)
-    return Response.json({
-      error: "The server could not save the uploaded files.",
-      stage: "persist",
-      detail: describeUploadError(error),
-      files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })),
-    }, { status: 500 })
-  }
-}
-
-async function handleAttachmentContent(req: Request, url: URL, store: EventStoreBridge) {
-  const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/([^/]+)\/content$/)
-  if (!match) {
-    return null
-  }
-
-  if (req.method !== "GET") {
-    return new Response(null, {
-      status: 405,
-      headers: {
-        Allow: "GET",
-      },
-    })
-  }
-
-  const project = store.getProject(match[1])
-  if (!project) {
-    return Response.json({ error: "Project not found" }, { status: 404 })
-  }
-
-  const storedName = decodeURIComponent(match[2])
-  if (!storedName || storedName.includes("/") || storedName.includes("\\") || storedName === "." || storedName === "..") {
-    return Response.json({ error: "Invalid attachment path" }, { status: 400 })
-  }
-
-  const filePath = path.join(getProjectUploadDir(project.localPath), storedName)
-  const file = Bun.file(filePath)
-  try {
-    const info = await stat(filePath)
-    if (!info.isFile()) {
-      return Response.json({ error: "Attachment not found" }, { status: 404 })
-    }
-  } catch {
-    return Response.json({ error: "Attachment not found" }, { status: 404 })
-  }
-
-  return new Response(file, {
-    headers: {
-      "Content-Type": inferAttachmentContentType(storedName, file.type),
-    },
-  })
-}
-
-/**
- * Images the store moved out of tool results (`transcript-media.ts`). The
- * name embeds the entry id and never changes, so the browser may cache it
- * for as long as it likes.
- */
-async function handleTranscriptMediaContent(req: Request, url: URL, store: EventStoreBridge) {
-  const match = url.pathname.match(/^\/api\/chats\/([^/]+)\/media\/([^/]+)$/)
-  if (!match) {
-    return null
-  }
-
-  if (req.method !== "GET") {
-    return new Response(null, { status: 405, headers: { Allow: "GET" } })
-  }
-
-  const filePath = store.resolveTranscriptMediaPath(url.pathname)
-  if (!filePath) {
-    return Response.json({ error: "Media not found" }, { status: 404 })
-  }
-
-  const file = Bun.file(filePath)
-  try {
-    const info = await stat(filePath)
-    if (!info.isFile()) {
-      return Response.json({ error: "Media not found" }, { status: 404 })
-    }
-  } catch {
-    return Response.json({ error: "Media not found" }, { status: 404 })
-  }
-
-  return new Response(file, {
-    headers: {
-      "Content-Type": file.type || "application/octet-stream",
-      "X-Content-Type-Options": "nosniff",
-      ...(!/^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm|quicktime|ogg))$/.test(file.type)
-        ? { "Content-Disposition": "attachment", "Content-Security-Policy": "sandbox; default-src 'none'" } : {}),
-      "Cache-Control": "private, max-age=31536000, immutable",
-    },
-  })
-}
-
-/**
- * A project's stored icon (`project-icons.ts`). The name carries a hash of
- * the source file's path, size and time, so a changed icon is a new URL and
- * this one never changes.
- */
-async function handleProjectIcon(req: Request, url: URL, dataDir: string) {
-  if (!url.pathname.startsWith(PROJECT_ICON_URL_PREFIX)) {
-    return null
-  }
-
-  if (req.method !== "GET") {
-    return new Response(null, { status: 405, headers: { Allow: "GET" } })
-  }
-
-  const filePath = resolveProjectIconPath(dataDir, url.pathname)
-  const file = filePath ? Bun.file(filePath) : null
-  if (!file || !(await file.exists())) {
-    return Response.json({ error: "Icon not found" }, { status: 404 })
-  }
-
-  return new Response(file, {
-    headers: {
-      "Content-Type": file.type || "application/octet-stream",
-      "X-Content-Type-Options": "nosniff",
-      // An SVG is a copy of a file from the project. Drawn by an <img> it
-      // can't run script; opened in a tab of its own it could, so it is
-      // sandboxed there.
-      "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
-      "Cache-Control": "private, max-age=31536000, immutable",
-    },
-  })
-}
-
-async function handleProjectFileContent(req: Request, url: URL, store: EventStoreBridge) {
-  const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/files\/([^/]+)\/content$/)
-  if (!match) {
-    return null
-  }
-
-  if (req.method !== "GET") {
-    return new Response(null, {
-      status: 405,
-      headers: {
-        Allow: "GET",
-      },
-    })
-  }
-
-  const project = store.getProject(match[1])
-  if (!project) {
-    return Response.json({ error: "Project not found" }, { status: 404 })
-  }
-
-  const relativePath = path.posix.normalize(decodeURIComponent(match[2]).replaceAll("\\", "/"))
-  if (!relativePath || relativePath === "." || relativePath.startsWith("../") || relativePath.includes("/../") || path.posix.isAbsolute(relativePath)) {
-    return Response.json({ error: "Invalid project file path" }, { status: 400 })
-  }
-
-  const filePath = path.resolve(project.localPath, relativePath)
-  const projectRoot = path.resolve(project.localPath)
-  if (filePath !== projectRoot && !filePath.startsWith(`${projectRoot}${path.sep}`)) {
-    return Response.json({ error: "Invalid project file path" }, { status: 400 })
-  }
-
-  const file = Bun.file(filePath)
-  try {
-    const info = await stat(filePath)
-    if (!info.isFile()) {
-      return Response.json({ error: "File not found" }, { status: 404 })
-    }
-  } catch {
-    return Response.json({ error: "File not found" }, { status: 404 })
-  }
-
-  return new Response(file, {
-    headers: {
-      "Content-Type": inferProjectFileContentType(relativePath, file.type),
-    },
-  })
-}
-
-async function handleProjectUploadDelete(req: Request, url: URL, store: EventStoreBridge) {
-  if (req.method !== "DELETE") {
-    return null
-  }
-
-  const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/([^/]+)$/)
-  if (!match) {
-    return null
-  }
-
-  const project = store.getProject(match[1])
-  if (!project) {
-    return Response.json({ error: "Project not found" }, { status: 404 })
-  }
-
-  const storedName = decodeURIComponent(match[2])
-  if (!storedName || storedName.includes("/") || storedName.includes("\\") || storedName === "." || storedName === "..") {
-    return Response.json({ error: "Invalid attachment path" }, { status: 400 })
-  }
-
-  const deleted = await runKanna(Effect.provide(deleteProjectUpload({
-    localPath: project.localPath,
-    storedName,
-  }), ServerPlatform))
-
-  return Response.json({ ok: deleted })
-}
-
-async function serveStatic(distDir: string, pathname: string) {
-  const requestedPath = pathname === "/" ? "/index.html" : pathname
-  const filePath = path.join(distDir, requestedPath)
-  const indexPath = path.join(distDir, "index.html")
-
-  const file = Bun.file(filePath)
-  if (await file.exists()) {
-    return new Response(file, {
-      headers: getStaticHeaders(requestedPath),
-    })
-  }
-
-  const indexFile = Bun.file(indexPath)
-  if (await indexFile.exists()) {
-    return new Response(indexFile, {
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
-    })
-  }
-
-  return new Response(
-    `${APP_NAME} client bundle not found. Run \`bun run build\` inside workbench/ first.`,
-    { status: 503 }
-  )
-}
-
-function getStaticHeaders(requestedPath: string) {
-  if (requestedPath.endsWith(".html")) {
-    return {
-      "Cache-Control": "no-store",
-    }
-  }
-
-  // Vite emits content-hashed filenames under /assets/ — safe to cache
-  // forever. Matters most in cloud mode, where every uncached asset request
-  // pays proxy + D1 + tunnel latency on top of the local read.
-  if (requestedPath.startsWith("/assets/")) {
-    return {
-      "Cache-Control": "public, max-age=31536000, immutable",
-    }
-  }
-
-  return undefined
+export function startKannaServer(options: StartKannaServerOptions = {}) {
+  return runKanna(startKannaServerEffect(options))
 }

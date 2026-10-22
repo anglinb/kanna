@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Result, Schema } from "effect"
 import type { ClientCommand, ClientEnvelope, SubscriptionTopic } from "./protocol"
-import { ClientCommandSchema, ClientEnvelopeFromJson, ClientEnvelopeSchema, SubscriptionTopicSchema } from "./protocol-schema"
+import { ClientCommandSchema, ClientEnvelopeFromJson, ClientEnvelopeSchema, ClientFrameJsonSchema, CompatibleClientEnvelopeSchema, SubscriptionTopicSchema } from "./protocol-schema"
 import type { ChatAttachment, ModelOptions } from "./types"
 import { DEFAULT_KEYBINDINGS } from "./types"
 
@@ -361,6 +361,31 @@ const decodeFrame = Schema.decodeUnknownEffect(ClientEnvelopeFromJson)
 
 /** Decodes a frame the way the server receives one: as JSON text. */
 const decode = (frame: string) => Effect.runSync(Effect.result(decodeFrame(frame)))
+const decodeCompatible = (frame: string) => Effect.runSync(Effect.result(
+  Schema.decodeUnknownEffect(ClientFrameJsonSchema)(frame).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(CompatibleClientEnvelopeSchema)),
+  ),
+))
+
+describe("compatible WebSocket envelope", () => {
+  test.each([
+    { v: 1, type: "command", id: "unknown", command: { type: "future.command", value: 1 } },
+    { v: 1, type: "command", id: "incomplete", command: { type: "chat.rename", chatId: "c1" } },
+    { v: 1, type: "command", id: "nested", command: { type: "settings.writeAppSettingsPatch", patch: { theme: "sepia" } } },
+    { v: 1, type: "command", id: "extra", extra: { kept: true }, command: { type: "system.ping", extra: 42 } },
+    { v: 1, type: "future.envelope", anything: true },
+  ])("preserves the parsed envelope: $id", (envelope) => {
+    const result = decodeCompatible(JSON.stringify(envelope))
+    expect(Result.isSuccess(result)).toBe(true)
+    if (Result.isSuccess(result)) expect(JSON.stringify(result.success)).toBe(JSON.stringify(envelope))
+  })
+
+  test.each(["{bad", "42", "null", "[]", JSON.stringify({ v: 2, type: "command" }), JSON.stringify({ v: 1, type: 42 })])(
+    "rejects an invalid frame: %s", (frame) => {
+      expect(Result.isFailure(decodeCompatible(frame))).toBe(true)
+    },
+  )
+})
 
 describe("ClientEnvelopeFromJson", () => {
   const allCommands = Object.values(samples).flat() as ClientCommand[]
