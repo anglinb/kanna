@@ -17,6 +17,7 @@ import { PROTOCOL_VERSION } from "../shared/types"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
 import { openEventStore } from "./event-store-bridge"
+import { fakeChatCommandsStore } from "./chat-commands.fake"
 import { deriveLocalProjectsSnapshot } from "./read-models"
 import { SERVER_PROVIDERS, applyCodexModels, resetServerProvidersForTests } from "./provider-catalog"
 import { createWsRouter } from "./ws-router"
@@ -185,7 +186,7 @@ type CreateWsRouterArgs = Parameters<typeof createWsRouter>[0]
 
 /** In-memory EventStore stand-in covering the methods the router always calls. */
 function createFakeStore(overrides: Record<string, unknown> = {}) {
-  return {
+  const store = {
     state: createEmptyState(),
     getSidebarProjectOrder: () => [],
     pruneStaleEmptyChats: async () => [],
@@ -193,7 +194,9 @@ function createFakeStore(overrides: Record<string, unknown> = {}) {
     getInitialTranscriptWindowStart: () => 0,
     widenTranscriptWindowStart: (_chatId: string, current: number) => current,
     ...overrides,
-  } as never
+  }
+  // The router's chat commands run on the store's Effect service.
+  return { ...store, service: fakeChatCommandsStore(store) } as never
 }
 
 function createFakeLlmProvider(): CreateWsRouterArgs["llmProvider"] {

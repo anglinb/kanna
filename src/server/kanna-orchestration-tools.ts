@@ -1,8 +1,17 @@
+import { Effect, Schema } from "effect"
 import { z } from "zod"
 import type { AgentProvider } from "../shared/types"
+import { runKanna } from "./effect/bridge"
 import { attachmentItemSchema, resolveAttachments } from "./kanna-display-tools"
 import type { KannaToolDefinition, KannaToolResult } from "./kanna-tools"
-import { READ_CHAT_KINDS, type ChatOrchestrator } from "./orchestrator"
+import {
+  READ_CHAT_KINDS,
+  type ChatOrchestrator,
+  type ChatWriteError,
+  type Orchestrator,
+  type ScheduleNotFoundError,
+  type TicketActionError,
+} from "./orchestrator"
 
 /**
  * The chat tools: what a user can do to chats in Kanna, for an agent to do.
@@ -36,6 +45,70 @@ function orchestration(context: { orchestration?: ChatOrchestrator }) {
 }
 
 type Run = { provider?: AgentProvider; model?: string; effort?: string; planMode?: boolean }
+
+/** What a tool's handler is handed, as `kanna-tools.ts` passes it. */
+export type OrchestrationToolContext = Parameters<KannaToolDefinition["execute"]>[1]
+
+/**
+ * A tool's input did not match its schema, or the files a ticket reply names
+ * could not be read. The message is the cause's, as the agent read it before.
+ */
+export class OrchestrationToolError extends Schema.TaggedError<OrchestrationToolError>()(
+  "@kanna/server/kanna-orchestration-tools/OrchestrationToolError",
+  {
+    tool: Schema.String,
+    chatId: Schema.String,
+    stage: Schema.Literals(["input", "attachments"]),
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return this.cause instanceof Error ? this.cause.message : String(this.cause)
+  }
+}
+
+export type OrchestrationToolFailure = ChatWriteError | TicketActionError | ScheduleNotFoundError | OrchestrationToolError
+
+/**
+ * One chat tool. `run` is its work as an Effect over the orchestrator
+ * service, given the raw input (it parses with `schema` itself). `execute` is
+ * the Promise contract `kanna-tools.ts` calls today: it takes the
+ * orchestrator from the context and runs `run` with `runKanna`. A tool
+ * runtime that runs Effects calls `run` directly and turns its value into a
+ * result with `orchestrationToolResult`.
+ */
+export interface OrchestrationTool extends KannaToolDefinition {
+  readonly run: (
+    input: unknown,
+    orchestrator: Orchestrator["Service"],
+    context: OrchestrationToolContext,
+  ) => Effect.Effect<unknown, OrchestrationToolFailure>
+}
+
+/** A tool's value as the result a harness gets. See `reply`. */
+export const orchestrationToolResult = reply
+
+function tool<S extends z.ZodObject<z.ZodRawShape>>(spec: {
+  name: string
+  description: string
+  schema: S
+  run: (input: z.infer<S>, orchestrator: Orchestrator["Service"], context: OrchestrationToolContext) => Effect.Effect<unknown, OrchestrationToolFailure>
+}): OrchestrationTool {
+  const run = (input: unknown, orchestrator: Orchestrator["Service"], context: OrchestrationToolContext) =>
+    Effect.try({
+      try: () => spec.schema.parse(input),
+      catch: (cause) => new OrchestrationToolError({ tool: spec.name, chatId: context.chatId, stage: "input", cause }),
+    }).pipe(Effect.flatMap((parsed) => spec.run(parsed, orchestrator, context)))
+  return {
+    name: spec.name,
+    description: spec.description,
+    schema: spec.schema,
+    run,
+    async execute(input, context) {
+      return reply(await runKanna(run(input, orchestration(context).service, context)))
+    },
+  }
+}
 
 const getContext = z.strictObject({})
 
@@ -171,155 +244,123 @@ const listTickets = z.strictObject({
   limit: z.number().int().min(1).max(200).optional().describe("Default 50."),
 })
 
-export const ORCHESTRATION_TOOLS: readonly KannaToolDefinition[] = [
-  {
+export const ORCHESTRATION_TOOLS: readonly OrchestrationTool[] = [
+  tool({
     name: "get_context",
     description: "Where you are in Kanna: this chat's id, project, provider and model; the other projects; the providers and models a chat can run on; the current time.",
     schema: getContext,
-    async execute(_input, context) {
-      return reply(orchestration(context).getContext(context.chatId))
-    },
-  },
-  {
+    run: (_input, orchestrator, context) => orchestrator.getContext(context.chatId),
+  }),
+  tool({
     name: "list_chats",
     description: "List Kanna chats, newest first, with each one's status. Covers every project unless projectId is given.",
     schema: listChats,
-    async execute(input, context) {
-      return reply(orchestration(context).listChats(listChats.parse(input)))
-    },
-  },
-  {
+    run: (input, orchestrator) => orchestrator.listChats(input),
+  }),
+  tool({
     name: "read_chat",
     description: "Read a chat: its status, sub-chats, queue and transcript. Entries come whole, up to 50,000 characters a call. One longer than what is left is cut, marked truncated, and finished by passing next back. Each entry has an index. With no position given, returns the latest entries. after reads forward from an index, before reads back from one, and lastTurns keeps to the latest turns (1 is the last turn). kinds filters entries: the default is what was said (prompts, reports, the agent's text, failures and stops); [\"reply\"] is just the agent's final reply in each turn; add tool_call and tool_result for tool inputs and outputs. next and earlier, when present, are the arguments for the page after and the page before.",
     schema: readChat,
-    async execute(input, context) {
-      return reply(orchestration(context).readChat(readChat.parse(input)))
-    },
-  },
-  {
+    run: (input, orchestrator) => orchestrator.readChat(input),
+  }),
+  tool({
     name: "create_chat",
     description: "Start a new chat with a first message, on any provider and model. Returns at once. By default it is a sub-chat of this one: its reply arrives here as a message when its turn ends. If it is still waiting on work it handed off, the message says so and another follows when that work comes back.",
     schema: createChat,
-    async execute(input, context) {
-      const { message, title, subchat, projectId, ticketId, ticket, ...run } = createChat.parse(input)
-      return reply(await orchestration(context).createChat(context.chatId, { message, title, subchat, projectId, ticketId, ticket, ...(run as Run) }))
-    },
-  },
-  {
+    run: ({ message, title, subchat, projectId, ticketId, ticket, ...run }, orchestrator, context) =>
+      orchestrator.createChat(context.chatId, { message, title, subchat, projectId, ticketId, ticket, ...(run as Run) }),
+  }),
+  tool({
     name: "fork_chat",
     description: "Copy a chat, conversation included, into a new chat that continues separately. The original is untouched.",
     schema: forkChat,
-    async execute(input, context) {
-      const { chatId, message, title, subchat, ticketId, ticket, ...run } = forkChat.parse(input)
-      return reply(await orchestration(context).forkChat(context.chatId, { chatId, message, title, subchat, ticketId, ticket, ...(run as Run) }))
-    },
-  },
-  {
+    run: ({ chatId, message, title, subchat, ticketId, ticket, ...run }, orchestrator, context) =>
+      orchestrator.forkChat(context.chatId, { chatId, message, title, subchat, ticketId, ticket, ...(run as Run) }),
+  }),
+  tool({
     name: "send_message",
     description: "Send a message to another chat, as the user would. It starts a turn if the chat is idle and queues behind the current turn otherwise. A chat this one did not start sends nothing back when it finishes, unless this chat adopts it (adopt).",
     schema: sendMessage,
-    async execute(input, context) {
-      const { chatId, message, delivery, adopt, ticketId, ticket, ...run } = sendMessage.parse(input)
-      return reply(await orchestration(context).sendMessage(context.chatId, { chatId, message, delivery, adopt, ticketId, ticket, ...(run as Run) }))
-    },
-  },
-  {
+    run: ({ chatId, message, delivery, adopt, ticketId, ticket, ...run }, orchestrator, context) =>
+      orchestrator.sendMessage(context.chatId, { chatId, message, delivery, adopt, ticketId, ticket, ...(run as Run) }),
+  }),
+  tool({
     name: "cancel_chat",
     description: "Stop a chat's current turn, and every sub-chat running under it.",
     schema: cancelChat,
-    async execute(input, context) {
-      return reply(await orchestration(context).cancelChat(context.chatId, cancelChat.parse(input).chatId))
-    },
-  },
-  {
+    run: (input, orchestrator, context) => orchestrator.cancelChat(context.chatId, input.chatId),
+  }),
+  tool({
     name: "update_chat",
     description: "Rename a chat, pin it, mark it done, or archive it.",
     schema: updateChat,
-    async execute(input, context) {
-      return reply(await orchestration(context).updateChat(context.chatId, updateChat.parse(input)))
-    },
-  },
-  {
+    run: (input, orchestrator, context) => orchestrator.updateChat(context.chatId, input),
+  }),
+  tool({
     name: "update_queued_message",
     description: "Remove a message waiting in a chat's queue, or deliver it now.",
     schema: updateQueuedMessage,
-    async execute(input, context) {
-      return reply(await orchestration(context).updateQueuedMessage(updateQueuedMessage.parse(input)))
-    },
-  },
-  {
+    run: (input, orchestrator) => orchestrator.updateQueuedMessage(input),
+  }),
+  tool({
     name: "set_schedule",
     description: "Send a message later, once or on a repeat, to this chat, another chat, or a new chat each time. Give exactly one of inMinutes, runAt, everyMinutes or dailyAt. Pass scheduleId to change or pause one.",
     schema: setSchedule,
-    async execute(input, context) {
-      const parsed = setSchedule.parse(input)
-      return reply(await orchestration(context).setSchedule(context.chatId, { ...parsed, provider: parsed.provider as AgentProvider | undefined }))
-    },
-  },
-  {
+    run: (input, orchestrator, context) =>
+      orchestrator.setSchedule(context.chatId, { ...input, provider: input.provider as AgentProvider | undefined }),
+  }),
+  tool({
     name: "list_schedules",
     description: "List schedules and when each runs next.",
     schema: listSchedules,
-    async execute(input, context) {
-      return reply(orchestration(context).listSchedules(listSchedules.parse(input)))
-    },
-  },
-  {
+    run: (input, orchestrator) => orchestrator.listSchedules(input),
+  }),
+  tool({
     name: "delete_schedule",
     description: "Delete a schedule.",
     schema: deleteSchedule,
-    async execute(input, context) {
-      return reply(await orchestration(context).deleteSchedule(deleteSchedule.parse(input).scheduleId))
-    },
-  },
-  {
+    run: (input, orchestrator) => orchestrator.deleteSchedule(input.scheduleId),
+  }),
+  tool({
     name: "create_ticket",
     description: "Delegator chats only. Add a ticket to this chat's board: one piece of work the user follows there. The body says what the work is and what done looks like, never progress. Returns ticketId and number. create_chat, send_message and fork_chat can also create one in the same call (ticket).",
     schema: createTicket,
-    async execute(input, context) {
-      return reply(await orchestration(context).createTicket(context.chatId, createTicket.parse(input)))
-    },
-  },
-  {
+    run: (input, orchestrator, context) => orchestrator.createTicket(context.chatId, input),
+  }),
+  tool({
     name: "update_ticket",
     description: "Delegator chats only. Rename a ticket or replace its body when its ask changes, so both match the work. A ticket is Done by itself once its chats have reported and nothing is asked. status done closes one whose work ends without a report (answered here, dropped, superseded) and clears its question. status open reopens one only for a defect in what it delivered; a new ask is a new ticket. A chat on it that is still working or waiting on the user keeps it out of Done until it finishes.",
     schema: updateTicket,
-    async execute(input, context) {
-      return reply(await orchestration(context).updateTicket(context.chatId, updateTicket.parse(input)))
-    },
-  },
-  {
+    run: (input, orchestrator, context) => orchestrator.updateTicket(context.chatId, input),
+  }),
+  tool({
     name: "reply_to_ticket",
     description: "Delegator chats only. Post on a ticket. The user reads the ticket, not this chat, and this is the only way to write on one. Post when its work comes back: start with whether the body's done-when is met, then what the user should know or try. Or post when you decide something for the user. Do not post a plan, a hand-off (the ticket records it) or \"nothing new\". asksUser: true puts the ticket in Waiting on you until the user replies there. Use it only when the work cannot go on, or be called done, without the answer, and lead with the question. A choice with a sensible default is not a block: name the default in the text and go on. asksUser: false withdraws a question settled elsewhere. For a mockup or a chart, call show_visualization with ticketId. Returns replyId.",
     schema: replyToTicket,
-    async execute(input, context) {
-      const { ticketId, text, asksUser, attachments } = replyToTicket.parse(input)
-      const tickets = orchestration(context)
+    run: ({ ticketId, text, asksUser, attachments }, orchestrator, context) => Effect.gen(function* () {
       // Checked before any file is copied, so a wrong ticket leaves nothing behind.
-      tickets.checkTicket(context.chatId, ticketId)
-      const files = attachments?.length ? await resolveAttachments(attachments, context) : null
-      try {
-        return reply(await tickets.replyToTicket(context.chatId, { ticketId, text, asksUser, artifacts: files?.attachments }))
-      } catch (error) {
-        await files?.cleanup()
-        throw error
-      }
-    },
-  },
-  {
+      yield* orchestrator.checkTicket(context.chatId, ticketId)
+      if (!attachments?.length) return yield* orchestrator.replyToTicket(context.chatId, { ticketId, text, asksUser })
+      const files = yield* Effect.tryPromise({
+        try: () => resolveAttachments(attachments, context),
+        catch: (cause) => new OrchestrationToolError({ tool: "reply_to_ticket", chatId: context.chatId, stage: "attachments", cause }),
+      })
+      return yield* orchestrator.replyToTicket(context.chatId, { ticketId, text, asksUser, artifacts: files.attachments }).pipe(
+        // The reply did not land, so the copies it would have shown go.
+        Effect.tapError(() => Effect.promise(() => files.cleanup())),
+      )
+    }),
+  }),
+  tool({
     name: "read_ticket",
     description: "Delegator chats only. Read a ticket whole: its body, replies and history, and its chats with how each stands now.",
     schema: readTicket,
-    async execute(input, context) {
-      return reply(orchestration(context).readTicket(context.chatId, readTicket.parse(input).ticketId))
-    },
-  },
-  {
+    run: (input, orchestrator, context) => orchestrator.readTicket(context.chatId, input.ticketId),
+  }),
+  tool({
     name: "list_tickets",
     description: "Delegator chats only. This chat's tickets, latest activity first, each with its state (waiting_on_you, in_progress or done), a line of status, and its chats.",
     schema: listTickets,
-    async execute(input, context) {
-      return reply(orchestration(context).listTickets(context.chatId, listTickets.parse(input)))
-    },
-  },
+    run: (input, orchestrator, context) => orchestrator.listTickets(context.chatId, input),
+  }),
 ]

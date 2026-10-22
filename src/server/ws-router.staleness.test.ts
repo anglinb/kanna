@@ -12,6 +12,7 @@ import type { SubscriptionTopic } from "../shared/protocol"
 import type { ChatSnapshot, TranscriptEntry } from "../shared/types"
 import { applyIncrementalChatSnapshot } from "../client/app/snapshotEquality"
 import { createEmptyState } from "./events"
+import { fakeChatCommandsStore } from "./chat-commands.fake"
 import { createWsRouter } from "./ws-router"
 
 /**
@@ -335,7 +336,8 @@ function createWorld(options?: { projectPath?: string }) {
   const keybindings = makeFakeKeybindings(keybindingsSnapshot as never)
 
   const router = createWsRouter({
-    store: store as never,
+    // The router's chat commands run on the store's Effect service.
+    store: { ...store, service: fakeChatCommandsStore(store) } as never,
     diffStore,
     worktreeProbe: makeFakeWorktreeProbe(),
     agent: agent as never,

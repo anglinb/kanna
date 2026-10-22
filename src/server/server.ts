@@ -34,9 +34,10 @@ import { WorktreeProbe } from "./worktree-probe"
 import { TurnFileRecordError, TurnFileTracker } from "./worktree-snapshot"
 import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { resumeInterruptedTurns } from "./resume-turns"
-import { ChatOrchestrator } from "./orchestrator"
+import { ChatOrchestrator, Orchestrator } from "./orchestrator"
 import { TicketStore } from "./ticket-store"
-import { createChatCommands } from "./chat-commands"
+import { ChatAgent } from "./chat-agent"
+import { ChatCommands } from "./chat-commands"
 import { ProjectDiscovery, type DiscoveredProject } from "./discovery"
 import { Keybindings } from "./keybindings"
 import { ServerPlatform } from "./effect/runtime"
@@ -200,12 +201,30 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     currentVersion: options.update?.version ?? "unknown",
     environment: runtimeProfile === "dev" ? "dev" : "prod",
   }).pipe(Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi })))
+  const eventStoreLayer = EventStore.layer({ dataDir }).pipe(Layer.provideMerge(PerformanceLog.layer({ dataDir, version: options.update?.version })))
+  const ticketStoreLayer = TicketStore.layer({ dataDir })
+  // The agents' side of chat management: sub-chats, their reports, schedules,
+  // delegators' tickets. It reaches the coordinator, built further down,
+  // through `ChatAgent`, which reads `agent` on each call; its pushes go
+  // through `router`. Both exist by the time anything can fire. One set of
+  // chat actions (`ChatCommands`) for both callers: the router runs them for
+  // the user, the orchestrator for an agent.
+  const chatCommandsLayer = ChatCommands.layer.pipe(
+    Layer.provideMerge(ChatAgent.layerFromCoordinator((): AgentCoordinator => agent)),
+    Layer.provide([eventStoreLayer, analyticsLayer]),
+  )
+  const orchestratorLayer = Orchestrator.layer({
+    push: (change) => {
+      void router.broadcastChatChange(change)
+    },
+  }).pipe(Layer.provideMerge(chatCommandsLayer), Layer.provide([eventStoreLayer, ticketStoreLayer]))
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
       DiffStore.layer.pipe(Layer.provide(QuickResponse.layer())),
-      EventStore.layer({ dataDir }).pipe(Layer.provideMerge(PerformanceLog.layer({ dataDir, version: options.update?.version }))),
-      TicketStore.layer({ dataDir }),
+      eventStoreLayer,
+      ticketStoreLayer,
+      orchestratorLayer,
       ProviderAuth.layer({
         fetchLatestNpmVersion: (packageName) => fetchLatestPackageVersion(packageName).pipe(
           Effect.catchTag("@kanna/server/cli-runtime/PackageRegistryError", (cause) =>
@@ -367,22 +386,12 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       router.scheduleBroadcast()
     },
   })
-  // The agents' side of chat management: sub-chats, their reports, schedules.
-  // Its pushes go through `router`, which exists by the time anything can fire.
-  // One set of chat actions for both callers: the router runs them for the
-  // user, the orchestrator for an agent.
-  const chatCommands = createChatCommands({ store, agent, analytics })
-  const tickets = await runtime.runPromise(TicketStore)
-  const orchestrator = new ChatOrchestrator({
-    store,
-    agent,
-    commands: chatCommands,
-    tickets,
-    push: (change) => {
-      void router.broadcastChatChange(change)
-    },
-    onError: (message) => console.warn(`${LOG_PREFIX} ${message}`),
-  })
+  const { chatCommands, orchestratorService } = await runtime.runPromise(Effect.all({
+    chatCommands: ChatCommands,
+    orchestratorService: Orchestrator,
+  }))
+  // The coordinator, the router and the Kanna tools still call it as Promise code.
+  const orchestrator = new ChatOrchestrator(orchestratorService)
   agent.orchestration = orchestrator
   agent.onChatSettled = (chatId) => orchestrator.handleChatSettled(chatId)
   agent.onChatStopped = (chatId) => orchestrator.handleChatStopped(chatId)

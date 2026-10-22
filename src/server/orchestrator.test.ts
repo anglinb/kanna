@@ -5,11 +5,13 @@ import path from "node:path"
 import { AgentCoordinator } from "./agent"
 import { NoopAnalytics } from "./analytics"
 import { AsyncQueue } from "./async-queue"
+import { ChatAgent } from "./chat-agent"
 import { createChatCommands } from "./chat-commands"
+import { runKanna } from "./effect/bridge"
 import { openEventStore, type EventStoreBridge as EventStore } from "./event-store-bridge"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
-import { ChatOrchestrator, MAX_CHAT_DEPTH, MAX_LIVE_CHATS } from "./orchestrator"
+import { MAX_CHAT_DEPTH, MAX_LIVE_CHATS, openChatOrchestrator } from "./orchestrator"
 import type { ChatChange } from "./chat-commands"
 import { deriveChatSnapshot, deriveSidebarData } from "./read-models"
 import { timestamped } from "./transcript"
@@ -110,10 +112,9 @@ async function setup(options?: { closeOutGraceMs?: number }) {
   })
   let clock: number | null = null
   const pushes: ChatChange[] = []
-  const orchestrator = new ChatOrchestrator({
+  const orchestrator = await openChatOrchestrator({
     store,
     agent,
-    commands: createChatCommands({ store, agent, analytics: NoopAnalytics }),
     push: (change) => { pushes.push(change) },
     now: () => clock ?? Date.now(),
     closeOutGraceMs: options?.closeOutGraceMs,
@@ -1677,12 +1678,12 @@ describe("delegators", () => {
 
   test("the flag is set at creation, empty or by the first send, and reaches the sidebar and the chat's snapshot", async () => {
     const { store, project, agent, codex } = await setup()
-    const commands = createChatCommands({ store, agent, analytics: NoopAnalytics })
+    const commands = createChatCommands({ store: store.service, agent: ChatAgent.fromCoordinator(() => agent), analytics: NoopAnalytics })
     const snapshotOf = (chatId: string) => deriveChatSnapshot(store.state, agent.getChatStatuses(), new Set(), chatId, () => ({ messages: [], startIndex: 0, readAnchor: null }))
     const rowOf = (chatId: string) => deriveSidebarData(store.state, agent.getChatStatuses()).projectGroups[0]!.chats.find((chat) => chat.chatId === chatId)
 
     // Made empty, to be sent to later.
-    const made = await commands.create(project.id, undefined, { delegator: true })
+    const made = await runKanna(commands.create(project.id, undefined, { delegator: true }))
     expect(made.changed).toEqual({ sidebar: true, localProjects: true, chatIds: [made.result.chatId] })
     expect(store.getChat(made.result.chatId)).toMatchObject({ delegator: true, hasMessages: false })
     expect(rowOf(made.result.chatId)).toMatchObject({ delegator: true })
@@ -1694,7 +1695,7 @@ describe("delegators", () => {
     expect(store.getChat(sent.chatId)).toMatchObject({ delegator: true })
 
     // Every other chat has no such field, on the record or on the wire.
-    const plain = (await commands.create(project.id)).result.chatId
+    const plain = (await runKanna(commands.create(project.id))).result.chatId
     const plainSent = await agent.send({ type: "chat.send", projectId: project.id, provider: "codex", content: "hi" })
     // A send to a chat that exists does not change what it is.
     await agent.send({ type: "chat.send", chatId: plain, provider: "codex", content: "hi", delegator: true })
@@ -1707,14 +1708,14 @@ describe("delegators", () => {
 
   test("the flag can be changed later, survives a restart, and keeps an empty delegator from being cleared away", async () => {
     const { store, project, agent } = await setup()
-    const commands = createChatCommands({ store, agent, analytics: NoopAnalytics })
-    const born = (await commands.create(project.id, undefined, { delegator: true })).result.chatId
-    const made = (await commands.create(project.id)).result.chatId
-    const unmade = (await commands.create(project.id, undefined, { delegator: true })).result.chatId
-    const empty = (await commands.create(project.id)).result.chatId
+    const commands = createChatCommands({ store: store.service, agent: ChatAgent.fromCoordinator(() => agent), analytics: NoopAnalytics })
+    const born = (await runKanna(commands.create(project.id, undefined, { delegator: true }))).result.chatId
+    const made = (await runKanna(commands.create(project.id))).result.chatId
+    const unmade = (await runKanna(commands.create(project.id, undefined, { delegator: true }))).result.chatId
+    const empty = (await runKanna(commands.create(project.id))).result.chatId
 
-    expect((await commands.setDelegator(made, true)).changed).toEqual({ sidebar: true, chatIds: [made] })
-    await commands.setDelegator(unmade, false)
+    expect((await runKanna(commands.setDelegator(made, true))).changed).toEqual({ sidebar: true, chatIds: [made] })
+    await runKanna(commands.setDelegator(unmade, false))
     expect(store.getChat(made)).toMatchObject({ delegator: true })
     expect(store.getChat(unmade)).not.toHaveProperty("delegator")
 

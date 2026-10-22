@@ -7,6 +7,7 @@ import type { ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../share
 import { isClientEnvelope } from "../shared/protocol"
 import { diffSidebarIndex, indexSidebarData, type SidebarIndex } from "../shared/sidebar-patch"
 import type { AgentCoordinator } from "./agent"
+import { ChatAgent } from "./chat-agent"
 import { createChatCommands, type ChatChange, type ChatCommandOutcome, type ChatCommands } from "./chat-commands"
 import { NoopAnalytics, type Analytics } from "./analytics"
 import type { AppSettings } from "./app-settings"
@@ -135,7 +136,7 @@ interface CreateWsRouterArgs {
    * The chat actions, shared with the orchestrator so an agent's tools run
    * the same code as these commands. Built here when not handed in.
    */
-  chatCommands?: ChatCommands
+  chatCommands?: ChatCommands["Service"]
   /** Delegators' ticket boards (the orchestrator). Without it there are none to show. */
   tickets?: TicketService
 }
@@ -271,7 +272,7 @@ export function createWsRouter({
     await chatCreations.get(chatId)?.catch(() => {})
   }
   const resolvedAnalytics = analytics ?? NoopAnalytics
-  const chatCommands = providedChatCommands ?? createChatCommands({ store, agent, analytics: resolvedAnalytics })
+  const chatCommands = providedChatCommands ?? createChatCommands({ store: store.service, agent: ChatAgent.fromCoordinator(() => agent), analytics: resolvedAnalytics })
 
   /**
    * Every chat that is not at rest: a turn in flight, or waiting on a
@@ -1689,7 +1690,7 @@ export function createWsRouter({
         // The chat actions are defined in chat-commands.ts, where the agents'
         // tools reach them too. Only the ack and the push are done here.
         case "chat.create": {
-          const creation = chatCommands.create(command.projectId, undefined, { delegator: command.delegator, chatId: command.chatId })
+          const creation = runKanna(chatCommands.create(command.projectId, undefined, { delegator: command.delegator, chatId: command.chatId }))
           if (command.chatId !== undefined) {
             const requestedId = command.chatId
             chatCreations.set(requestedId, creation)
@@ -1702,31 +1703,31 @@ export function createWsRouter({
           return
         }
         case "chat.setDelegator": {
-          await finishChatCommand(ws, id, await chatCommands.setDelegator(command.chatId, command.delegator))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.setDelegator(command.chatId, command.delegator)))
           return
         }
         case "chat.fork": {
-          await finishChatCommand(ws, id, await chatCommands.fork(command.chatId))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.fork(command.chatId)))
           return
         }
         case "chat.rename": {
-          await finishChatCommand(ws, id, await chatCommands.rename(command.chatId, command.title))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.rename(command.chatId, command.title)))
           return
         }
         case "chat.setPinned": {
-          await finishChatCommand(ws, id, await chatCommands.setPinned(command.chatId, command.pinned))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.setPinned(command.chatId, command.pinned)))
           return
         }
         case "chat.archive": {
-          await finishChatCommand(ws, id, await chatCommands.archive(command.chatId))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.archive(command.chatId)))
           return
         }
         case "chat.unarchive": {
-          await finishChatCommand(ws, id, await chatCommands.unarchive(command.chatId))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.unarchive(command.chatId)))
           return
         }
         case "chat.delete": {
-          await finishChatCommand(ws, id, await chatCommands.delete(command.chatId))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.delete(command.chatId)))
           return
         }
         case "chat.touchedFiles": {
@@ -1745,11 +1746,11 @@ export function createWsRouter({
           return
         }
         case "chat.markRead": {
-          await finishChatCommand(ws, id, await chatCommands.markRead(command.chatId))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.markRead(command.chatId)))
           return
         }
         case "chat.setDone": {
-          await finishChatCommand(ws, id, await chatCommands.setDone(command.chatId, command.done))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.setDone(command.chatId, command.done)))
           return
         }
         case "chat.setReadAnchor": {
@@ -1831,7 +1832,7 @@ export function createWsRouter({
           return
         }
         case "chat.send": {
-          await finishChatCommand(ws, id, await chatCommands.send(command))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.send(command)))
           return
         }
         case "chat.refreshDiffs": {
@@ -1990,7 +1991,7 @@ export function createWsRouter({
           return
         }
         case "chat.cancel": {
-          await finishChatCommand(ws, id, await chatCommands.cancel(command.chatId))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.cancel(command.chatId)))
           return
         }
         case "chat.stopDraining": {
@@ -2026,15 +2027,15 @@ export function createWsRouter({
           return
         }
         case "message.enqueue": {
-          await finishChatCommand(ws, id, await chatCommands.enqueue(command))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.enqueue(command)))
           return
         }
         case "message.steer": {
-          await finishChatCommand(ws, id, await chatCommands.steer(command))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.steer(command)))
           return
         }
         case "message.dequeue": {
-          await finishChatCommand(ws, id, await chatCommands.dequeue(command))
+          await finishChatCommand(ws, id, await runKanna(chatCommands.dequeue(command)))
           return
         }
         case "terminal.create": {
