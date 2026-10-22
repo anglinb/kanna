@@ -3,6 +3,7 @@ import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeAnalytics } from "./analytics.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
+import { makeFakeWorktreeProbe } from "./worktree-probe.fake"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
@@ -236,7 +237,7 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
   return createWsRouter({
     store: createFakeStore(),
     diffStore: createFakeDiffStore(),
-    worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
+    worktreeProbe: makeFakeWorktreeProbe(),
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
     terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings(DEFAULT_KEYBINDINGS_SNAPSHOT),

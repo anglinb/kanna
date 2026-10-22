@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
+import { makeFakeWorktreeProbe } from "./worktree-probe.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -348,7 +349,7 @@ function createWorld(options?: { projectPath?: string }) {
   const router = createWsRouter({
     store: store as never,
     diffStore: diffStore as never,
-    worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
+    worktreeProbe: makeFakeWorktreeProbe(),
     agent: agent as never,
     terminals: makeFakeTerminals(),
     keybindings: keybindings as never,
