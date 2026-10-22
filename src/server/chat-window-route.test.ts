@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
@@ -48,7 +49,7 @@ async function firstSocketSnapshot(deps: ReturnType<typeof createDeps>) {
   const ws = { sent, data: { subscriptions: new Map(), protectedDraftChatIds: new Set<string>() }, send: (m: string) => { sent.push(JSON.parse(m)) } }
   const router = createWsRouter({
     store: deps.store as never,
-    diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
+    diffStore: makeFakeDiffStore(),
     worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
     agent: deps.agent as never,
     terminals: makeFakeTerminals(),

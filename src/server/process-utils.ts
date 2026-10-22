@@ -68,6 +68,8 @@ export const runCommand = Effect.fn("ProcessUtils.runCommand")(function* (
   options: {
     readonly cwd?: string
     readonly env?: Record<string, string | undefined>
+    /** Written to the command's stdin, which is otherwise closed. */
+    readonly stdin?: string
     readonly stdout?: boolean
     readonly stderr?: boolean
   } = {},
@@ -79,7 +81,7 @@ export const runCommand = Effect.fn("ProcessUtils.runCommand")(function* (
       try: () => Bun.spawn([...argv], {
         cwd: options.cwd,
         env: options.env,
-        stdin: "ignore",
+        stdin: options.stdin === undefined ? "ignore" : Buffer.from(options.stdin),
         stdout: options.stdout ? "pipe" : "ignore",
         stderr: options.stderr ? "pipe" : "ignore",
       }),

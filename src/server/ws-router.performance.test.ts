@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
@@ -19,7 +20,7 @@ test("stream updates read only the new tail and release subscription maps", asyn
   const router = createWsRouter({
     store,
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() },
-    diffStore: {}, worktreeProbe: {}, terminals: makeFakeTerminals(),
+    diffStore: makeFakeDiffStore(), worktreeProbe: {}, terminals: makeFakeTerminals(),
     keybindings: makeFakeKeybindings({} as never), appSettings: makeFakeAppSettings({ transcript: { windowAssistantMessages: 5 } }),
     llmProvider: {}, refreshDiscovery: async () => [], getDiscoveredProjects: () => [],
     machineDisplayName: "test", updateManager: null,

@@ -184,6 +184,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
+      DiffStore.layer,
       PerformanceLog.layer({ dataDir, version: options.update?.version }),
       TicketStore.layer({ dataDir }),
       Analytics.layer({
@@ -206,7 +207,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   )
   const diagnostics = await runtime.runPromise(PerformanceLog)
   const store: EventStore = new EventStore(options.dataDir, diagnostics)
-  const diffStore = new DiffStore(store.dataDir)
+  const diffStore = await runtime.runPromise(DiffStore)
   const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
   // every request path below reads the current value.
@@ -214,7 +215,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   /** Only set when *this* process paired; the CLI owns a handed-in runtime. */
   let selfPairedCloud: CloudRuntime | null = null
   await store.initialize()
-  await diffStore.initialize()
   await store.migrateLegacyTranscripts(options.onMigrationProgress)
   // Not awaited: this streams every transcript once per data dir, which on a
   // machine with a few 100 MB chats takes longer than a boot should. The
@@ -242,9 +242,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // Free updates: `performRefresh` already stats every dirty file, so the
   // client's active project stays current at no extra git cost — and the dot
   // clears the instant a commit goes through Kanna's git panel.
-  diffStore.onWorkingTreeProbe = (projectId, probe) => {
-    worktreeProbe.recordExternalProbe(projectId, probe)
-  }
+  const disposeWorkingTreeScans = subscribeKanna(diffStore.workingTreeScans, ({ projectId, scan }) => {
+    void worktreeProbe.recordExternalProbe(projectId, scan)
+  })
   // Snapshot the worktree either side of a turn and record what changed, so
   // the sidebar can ask "did this chat touch a file that's still uncommitted?"
   // instead of comparing timestamps. See worktree-snapshot.ts.
@@ -857,6 +857,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     clearInterval(staleChatAutoArchiveInterval)
     clearInterval(staleChatDeleteInterval)
     worktreeProbe.stop()
+    disposeWorkingTreeScans()
     disposeProjectIconChanges()
     // Cancels every in-flight turn *and* marks its chat, so the next boot
     // restarts the work instead of leaving it interrupted (see resume-turns.ts).

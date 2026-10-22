@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
@@ -587,7 +588,7 @@ describe("the user's ticket replies", () => {
 
     const router = createWsRouter({
       store,
-      diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
+      diffStore: makeFakeDiffStore(),
       worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
       agent,
       terminals: makeFakeTerminals(),

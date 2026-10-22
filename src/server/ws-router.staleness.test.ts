@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
+import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
@@ -252,37 +254,23 @@ function createWorld(options?: { projectPath?: string }) {
   const bumpDiffVersion = () => {
     diffVersion += 1
   }
-  const diffStore = {
-    getProjectSnapshot: () => ({ status: "ready", branchName: "main", diffVersion, files: [] }),
+  // The version rides in `aheadCount`, so each bump changes the snapshot's content too.
+  const diffStore = makeFakeDiffStore({
+    getProjectSnapshot: () => ({ status: "ready", branchName: "main", aheadCount: diffVersion, files: [], branchHistory: { entries: [] } }),
     getSnapshotVersion: () => diffVersion,
-    refreshSnapshot: async () => {
+    refreshSnapshot: () => Effect.sync(() => {
       bumpDiffVersion()
       return true
-    },
-    initializeGit: async () => ({ ok: true, branchName: undefined, snapshotChanged: false }),
-    getGitHubPublishInfo: async () => ({ ghInstalled: false, authenticated: false, activeAccountLogin: undefined, owners: [], suggestedRepoName: "repo" }),
-    checkGitHubRepoAvailability: async () => ({ available: false, message: "n/a" }),
-    publishToGitHub: async () => ({ ok: false, title: "n/a", message: "n/a", snapshotChanged: false }),
-    listBranches: async () => ({ recent: [], local: [], remote: [], pullRequests: [], pullRequestsStatus: "unavailable" }),
-    previewMergeBranch: async () => ({ currentBranchName: undefined, targetBranchName: "", targetDisplayName: "", status: "error", commitCount: 0, hasConflicts: false, message: "n/a" }),
-    mergeBranch: async () => ({ ok: false, title: "n/a", message: "n/a", snapshotChanged: false }),
-    syncBranch: async () => ({ ok: true, action: "fetch", branchName: undefined, snapshotChanged: false }),
-    checkoutBranch: async () => {
+    }),
+    checkoutBranch: () => Effect.sync(() => {
       bumpDiffVersion()
       return { ok: true, branchName: "feature/x", snapshotChanged: true }
-    },
-    createBranch: async () => ({ ok: true, branchName: "main", snapshotChanged: false }),
-    generateCommitMessage: async () => ({ subject: "Update", body: "", usedFallback: true, failureMessage: null }),
-    commitFiles: async () => {
+    }),
+    commitFiles: () => Effect.sync(() => {
       bumpDiffVersion()
       return { ok: true, mode: "commit_only", branchName: "main", pushed: false, snapshotChanged: true }
-    },
-    discardFile: async () => ({ snapshotChanged: false }),
-    ignoreFile: async () => ({ snapshotChanged: false }),
-    readPatch: async () => ({ patch: "" }),
-    readCommit: async () => ({ sha: "", parentCount: 1, files: [], totalFileCount: 0, additions: 0, deletions: 0 }),
-    readBranch: async () => ({}),
-  }
+    }),
+  })
 
   const agent = {
     getActiveStatuses: () => new Map(),
@@ -347,7 +335,7 @@ function createWorld(options?: { projectPath?: string }) {
 
   const router = createWsRouter({
     store: store as never,
-    diffStore: diffStore as never,
+    diffStore,
     worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
     agent: agent as never,
     terminals: makeFakeTerminals(),

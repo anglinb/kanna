@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
@@ -60,7 +61,7 @@ function setup() {
   }
   const router = createWsRouter({
     store: { state: createEmptyState(), getSidebarProjectOrder: () => [], pruneStaleEmptyChats: async () => [] } as never,
-    diffStore: { getProjectSnapshot: () => null, getSnapshotVersion: () => 0 } as never,
+    diffStore: makeFakeDiffStore(),
     worktreeProbe: { getStates: () => new Map(), getRepoLabels: () => new Map(), getProjectsWithoutRepo: () => new Set() },
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
     terminals: makeFakeTerminals(),
