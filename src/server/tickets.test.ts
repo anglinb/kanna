@@ -8,13 +8,11 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AgentCoordinator } from "./agent"
-import { NoopAnalytics } from "./analytics"
 import { AsyncQueue } from "./async-queue"
-import { createChatCommands } from "./chat-commands"
 import { openEventStore } from "./event-store-bridge"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
-import { ChatOrchestrator } from "./orchestrator"
+import { openChatOrchestrator } from "./orchestrator"
 import { TicketStore } from "./ticket-store"
 import { TestPlatform } from "./effect/testing"
 import { Layer, ManagedRuntime, Option } from "effect"
@@ -114,10 +112,9 @@ async function setup() {
     codexManager: codex as never,
     generateTitle: async () => ({ title: null, usedFallback: true, failureMessage: null }),
   })
-  const orchestrator = new ChatOrchestrator({
+  const orchestrator = await openChatOrchestrator({
     store,
     agent,
-    commands: createChatCommands({ store, agent, analytics: NoopAnalytics }),
     push: () => {},
     tickets,
   })
@@ -212,7 +209,7 @@ describe("hand-offs from a delegator", () => {
   })
 
   test("hand on follow-ups for an existing ticket with send_message and fork_chat", async () => {
-    const { startChat, toolsFor, board, codex, orchestrator } = await setup()
+    const { startChat, toolsFor, board, codex, agent } = await setup()
     const delegator = await startChat()
     const call = toolsFor(delegator)
     const { ticketId, number } = await call("create_ticket", { title: "Release", body: "Tag and publish." })
@@ -222,7 +219,7 @@ describe("hand-offs from a delegator", () => {
     // A session to fork from.
     codex.turn(first.chatId).events.push({ type: "session_token", sessionToken: "thread-1" })
     codex.finish(first.chatId, "Tagged.")
-    await until(() => !orchestrator["agent"].isBusy(first.chatId), "the first chat at rest")
+    await until(() => !agent.isBusy(first.chatId), "the first chat at rest")
     await until(() => board.summary(board.get(delegator, ticketId)!).state === "done", "the ticket done")
     const fork = await call("fork_chat", { chatId: first.chatId, ticketId })
     expect(fork.error).toBeUndefined()
@@ -504,11 +501,11 @@ describe("the nudge", () => {
   })
 
   test("after a user reply the delegator neither posted on nor handed work from", async () => {
-    const { startChat, toolsFor, orchestrator, codex, prompts, board } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, prompts, board, agent } = await setup()
     const delegator = await startChat()
     const { ticketId } = await toolsFor(delegator)("create_ticket", { title: "Escape hold" })
     codex.finish(delegator, "Made a ticket.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     await orchestrator.replyToTicketAsUser({ chatId: delegator, ticketId, text: "make it 500ms" })
     await until(() => codex.turnsFor(delegator).length === 2, "the reply's turn")
@@ -520,12 +517,12 @@ describe("the nudge", () => {
   })
 
   test("not after a user reply the delegator handed work on from", async () => {
-    const { startChat, toolsFor, orchestrator, codex, board } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, board, agent } = await setup()
     const delegator = await startChat()
     const call = toolsFor(delegator)
     const { ticketId } = await call("create_ticket", { title: "Escape hold" })
     codex.finish(delegator, "Made a ticket.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     await orchestrator.replyToTicketAsUser({ chatId: delegator, ticketId, text: "make it 500ms" })
     await until(() => codex.turnsFor(delegator).length === 2, "the reply's turn")
@@ -540,12 +537,12 @@ describe("the nudge", () => {
 
 describe("the user's ticket replies", () => {
   test("reach the delegator with a hidden header, as the user's words, with the ticket as source", async () => {
-    const { startChat, toolsFor, orchestrator, codex, prompts } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, prompts, agent } = await setup()
     const delegator = await startChat()
     const child = await toolsFor(delegator)("create_chat", { message: "fix it", title: "Flicker fix", ticket: { title: "Escape hold" } })
     const ticketId = child.ticket.id as string
     codex.finish(delegator, "Handed off.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     const { replyId } = await orchestrator.replyToTicketAsUser({ chatId: delegator, ticketId, text: "and on iOS too" })
     await until(() => codex.turnsFor(delegator).length === 2, "the reply's turn")
@@ -565,13 +562,13 @@ describe("the user's ticket replies", () => {
   })
 
   test("answering the delegator's question tells it the ticket is In progress, not still waiting", async () => {
-    const { startChat, toolsFor, orchestrator, codex, board } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, board, agent } = await setup()
     const delegator = await startChat()
     const { ticketId } = await toolsFor(delegator)("create_ticket", { title: "Escape hold" })
     await toolsFor(delegator)("reply_to_ticket", { ticketId, text: "Once per install, or per session?", asksUser: true })
     expect(board.stateOf(board.require(delegator, ticketId))).toBe("waiting_on_you")
     codex.finish(delegator, "Asked.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     await orchestrator.replyToTicketAsUser({ chatId: delegator, ticketId, text: "once per install" })
     await until(() => codex.turnsFor(delegator).length === 2, "the reply's turn")
@@ -637,11 +634,11 @@ describe("the user's ticket replies", () => {
   })
 
   test("keep their attachments, on the ticket and on the delegator's prompt", async () => {
-    const { startChat, toolsFor, orchestrator, codex, prompts } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, prompts, agent } = await setup()
     const delegator = await startChat()
     const { ticketId } = await toolsFor(delegator)("create_ticket", { title: "Escape hold" })
     codex.finish(delegator, "Made it.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     // The shape the composer's upload returns (`persistProjectUpload`).
     const attachment = {
@@ -662,11 +659,11 @@ describe("the user's ticket replies", () => {
   })
 
   test("that start with a slash command reach the harness starting with it, as a chat message does", async () => {
-    const { startChat, toolsFor, orchestrator, codex, prompts } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, prompts, agent } = await setup()
     const delegator = await startChat()
     const { ticketId } = await toolsFor(delegator)("create_ticket", { title: "Escape hold" })
     codex.finish(delegator, "Made it.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     await orchestrator.replyToTicketAsUser({ chatId: delegator, ticketId, text: "/emil-design-eng tighten the hold animation" })
     await until(() => codex.turnsFor(delegator).length === 2, "the reply's turn")
@@ -687,11 +684,11 @@ describe("the user's ticket replies", () => {
   })
 
   test("run the delegator's turn with the settings the ticket's composer chose", async () => {
-    const { startChat, toolsFor, orchestrator, codex } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, agent } = await setup()
     const delegator = await startChat()
     const { ticketId } = await toolsFor(delegator)("create_ticket", { title: "Escape hold" })
     codex.finish(delegator, "Made it.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
     const before = codex.turnsFor(delegator)[0]!.model
     const chosen = PROVIDERS.find((provider) => provider.id === "codex")!.models.find((model) => model.id !== before)!.id
 
@@ -711,7 +708,7 @@ describe("the user's ticket replies", () => {
   })
 
   test("reopen a Done ticket, and mark it read", async () => {
-    const { startChat, toolsFor, orchestrator, codex, board } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, board, agent } = await setup()
     const delegator = await startChat()
     const child = await toolsFor(delegator)("create_chat", { message: "fix it", ticket: { title: "Escape hold" } })
     const ticketId = child.ticket.id as string
@@ -722,7 +719,7 @@ describe("the user's ticket replies", () => {
     codex.finish(delegator, "Done.")
     await until(() => codex.turnsFor(delegator).length === 3, "the nudge's turn")
     codex.finish(delegator, "Ok.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     await orchestrator.replyToTicketAsUser({ chatId: delegator, ticketId, text: "it flickers again" })
     const ticket = board.get(delegator, ticketId)!
@@ -736,11 +733,11 @@ describe("the user's ticket replies", () => {
 
 describe("the user's other ticket commands", () => {
   test("closing is not forwarded; reopening a Done ticket is", async () => {
-    const { startChat, toolsFor, orchestrator, codex, prompts, board } = await setup()
+    const { startChat, toolsFor, orchestrator, codex, prompts, board, agent } = await setup()
     const delegator = await startChat()
     const { ticketId } = await toolsFor(delegator)("create_ticket", { title: "Escape hold" })
     codex.finish(delegator, "Made a ticket.")
-    await until(() => !orchestrator["agent"].isBusy(delegator), "the delegator at rest")
+    await until(() => !agent.isBusy(delegator), "the delegator at rest")
 
     await orchestrator.setTicketStatusAsUser({ chatId: delegator, ticketId, status: "done" })
     expect(board.get(delegator, ticketId)!.history.at(-1)).toMatchObject({ kind: "closed", by: "user" })
