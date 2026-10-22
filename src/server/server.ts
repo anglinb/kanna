@@ -43,6 +43,7 @@ import { ServerPlatform } from "./effect/runtime"
 import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
 import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
 import { clearGitHubRepoCache } from "./github"
+import { fetchGrokAccountUsage } from "./grok-cli"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { handleTranscribe } from "./transcribe"
 import { handleChatWindow } from "./chat-window-route"
@@ -187,12 +188,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
   const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
-  // Usage reads go through the agent, which is built below; nothing asks for
-  // a read before the router exists.
+  // Claude and Codex usage reads go through the agent, which is built below;
+  // nothing asks for a read before the router exists. Grok's read takes the
+  // grok CLI's token and asks cli-chat-proxy directly.
   const usageReads: UsageLimitsDeps = {
     fetchClaudeUsage: () => agent.fetchClaudeUsage(),
     fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
-    fetchGrokUsage: () => agent.fetchGrokUsage(),
+    fetchGrokUsage: () => fetchGrokAccountUsage(),
   }
   const analyticsLayer = Analytics.layer({
     currentVersion: options.update?.version ?? "unknown",
