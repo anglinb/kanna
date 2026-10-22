@@ -10,7 +10,7 @@ import type {
 import { stripSystemMessages } from "../shared/message-preview"
 import { buildAgentToAgentNote, type AgentToAgentTurn } from "./agent-to-agent"
 import type { ChatChange, ChatCommands } from "./chat-commands"
-import type { EventStore } from "./event-store"
+import type { EventStoreBridge } from "./event-store-bridge"
 import type { ChatRecord } from "./events"
 import { renderToolResultContent } from "./handoff"
 import { getServerProviderCatalog, SERVER_PROVIDERS } from "./provider-catalog"
@@ -146,7 +146,7 @@ export interface OrchestratorAgent {
 }
 
 interface OrchestratorArgs {
-  store: EventStore
+  store: EventStoreBridge
   agent: OrchestratorAgent
   commands: ChatCommands
   /** Push the snapshots an action changed. */
@@ -367,7 +367,7 @@ function errorMessage(error: unknown) {
 }
 
 export class ChatOrchestrator {
-  private readonly store: EventStore
+  private readonly store: EventStoreBridge
   private readonly agent: OrchestratorAgent
   private readonly commands: ChatCommands
   private readonly push: (change: ChatChange) => void

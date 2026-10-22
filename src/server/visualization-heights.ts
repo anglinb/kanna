@@ -36,7 +36,7 @@ export async function storeVisualizationHeight(documentPath: string, width: numb
   return heights
 }
 
-export async function handleVisualizationHeights(req: Request, url: URL, store: Pick<EventStore, "resolveTranscriptMediaPath">) {
+export async function handleVisualizationHeights(req: Request, url: URL, store: Pick<EventStore["Service"], "resolveTranscriptMediaPath">) {
   const match = url.pathname.match(ROUTE)
   if (!match) return null
   if (req.method !== "GET" && req.method !== "PUT") return new Response(null, { status: 405, headers: { Allow: "GET, PUT" } })

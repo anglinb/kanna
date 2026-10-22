@@ -20,6 +20,7 @@ import { CloudFleet } from "./cloud/fleet"
 import { writeCloudIdentity } from "./cloud/identity"
 import { createPairSessionManager, type PairSessionSnapshot } from "./cloud/pair-session"
 import { EventStore } from "./event-store"
+import { EventStoreBridge } from "./event-store-bridge"
 import { AgentCoordinator } from "./agent"
 import { CodexAppServerManager } from "./codex-app-server"
 import { Analytics } from "./analytics"
@@ -169,7 +170,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const dataDir = options.dataDir ?? getDataDir(homedir())
   // Services already on Effect, built once and released at shutdown. The
   // rest of startup still holds them as plain values until it migrates too.
-  // Built first: the store records diagnostics from its first read.
+  // The store loads (snapshot, log replay) as the runtime is built, with
+  // diagnostics from its first read.
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
@@ -184,7 +186,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
-      PerformanceLog.layer({ dataDir, version: options.update?.version }),
+      EventStore.layer({ dataDir }).pipe(Layer.provideMerge(PerformanceLog.layer({ dataDir, version: options.update?.version }))),
       TicketStore.layer({ dataDir }),
       Analytics.layer({
         currentVersion: options.update?.version ?? "unknown",
@@ -205,7 +207,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     ).pipe(Layer.provide(ServerPlatform)),
   )
   const diagnostics = await runtime.runPromise(PerformanceLog)
-  const store: EventStore = new EventStore(options.dataDir, diagnostics)
+  const store = new EventStoreBridge(await runtime.runPromise(EventStore))
   const diffStore = new DiffStore(store.dataDir)
   const machineDisplayName = await runKanna(getMachineDisplayName().pipe(Effect.provide(ServerPlatform)))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
@@ -213,7 +215,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   let cloud: CloudRuntime | null = options.cloud ?? null
   /** Only set when *this* process paired; the CLI owns a handed-in runtime. */
   let selfPairedCloud: CloudRuntime | null = null
-  await store.initialize()
   await diffStore.initialize()
   await store.migrateLegacyTranscripts(options.onMigrationProgress)
   // Not awaited: this streams every transcript once per data dir, which on a
@@ -893,7 +894,7 @@ function describeUploadError(error: unknown) {
   return `${error.name}: ${error.message}${cause}\n${error.stack ?? "(no stack)"}`
 }
 
-async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
+async function handleProjectUpload(req: Request, url: URL, store: EventStoreBridge) {
   if (req.method !== "POST") {
     return null
   }
@@ -990,7 +991,7 @@ async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
   }
 }
 
-async function handleAttachmentContent(req: Request, url: URL, store: EventStore) {
+async function handleAttachmentContent(req: Request, url: URL, store: EventStoreBridge) {
   const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/([^/]+)\/content$/)
   if (!match) {
     return null
@@ -1038,7 +1039,7 @@ async function handleAttachmentContent(req: Request, url: URL, store: EventStore
  * name embeds the entry id and never changes, so the browser may cache it
  * for as long as it likes.
  */
-async function handleTranscriptMediaContent(req: Request, url: URL, store: EventStore) {
+async function handleTranscriptMediaContent(req: Request, url: URL, store: EventStoreBridge) {
   const match = url.pathname.match(/^\/api\/chats\/([^/]+)\/media\/([^/]+)$/)
   if (!match) {
     return null
@@ -1107,7 +1108,7 @@ async function handleProjectIcon(req: Request, url: URL, dataDir: string) {
   })
 }
 
-async function handleProjectFileContent(req: Request, url: URL, store: EventStore) {
+async function handleProjectFileContent(req: Request, url: URL, store: EventStoreBridge) {
   const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/files\/([^/]+)\/content$/)
   if (!match) {
     return null
@@ -1155,7 +1156,7 @@ async function handleProjectFileContent(req: Request, url: URL, store: EventStor
   })
 }
 
-async function handleProjectUploadDelete(req: Request, url: URL, store: EventStore) {
+async function handleProjectUploadDelete(req: Request, url: URL, store: EventStoreBridge) {
   if (req.method !== "DELETE") {
     return null
   }

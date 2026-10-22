@@ -9,7 +9,7 @@ import { AgentCoordinator } from "./agent"
 import { NoopAnalytics } from "./analytics"
 import { AsyncQueue } from "./async-queue"
 import { createChatCommands } from "./chat-commands"
-import { EventStore } from "./event-store"
+import { openEventStore } from "./event-store-bridge"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
 import { ChatOrchestrator } from "./orchestrator"
@@ -99,8 +99,7 @@ afterEach(async () => {
 async function setup() {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-tickets-data-"))
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-tickets-project-"))
-  const store = new EventStore(dataDir)
-  await store.initialize()
+  const store = await openEventStore(dataDir)
   const ticketsRuntime = ManagedRuntime.make(TicketStore.layer({ dataDir }).pipe(Layer.provide(TestPlatform)))
   const tickets = await ticketsRuntime.runPromise(TicketStore)
   const project = await store.openProject(projectDir)

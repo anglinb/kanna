@@ -1,6 +1,6 @@
 import { LOG_PREFIX } from "../shared/branding"
 import { readTreeBlobs, resolveWorkingTreeLocation, runGit } from "./diff-store"
-import type { EventStore } from "./event-store"
+import type { EventStoreBridge as EventStore } from "./event-store-bridge"
 import type { ChatRecord, TouchedFile } from "./events"
 
 /**

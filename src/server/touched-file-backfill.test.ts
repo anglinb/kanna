@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { EventStore } from "./event-store"
+import { openEventStore, type EventStoreBridge as EventStore } from "./event-store-bridge"
 import { deriveSidebarData } from "./read-models"
 import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { WorktreeProbe } from "./worktree-probe"
@@ -66,8 +66,7 @@ async function createRepo() {
 async function createStore() {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-backfill-data-"))
   tempDirs.push(dataDir)
-  const store = new EventStore(dataDir)
-  await store.initialize()
+  const store = await openEventStore(dataDir)
   return { store, dataDir }
 }
 
@@ -210,8 +209,7 @@ describe("backfillTouchedFileBases", () => {
     await backfillTouchedFileBases(store)
     const dated = store.state.chatsById.get(chat.id)?.touchedFiles
 
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
+    const reloaded = await openEventStore(dataDir)
     expect(reloaded.state.chatsById.get(chat.id)?.touchedFiles).toEqual(dated)
     // Nothing left to date, so a second boot is a no-op.
     expect(await backfillTouchedFileBases(reloaded)).toEqual({ chats: 0, files: 0 })

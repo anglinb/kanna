@@ -6,7 +6,7 @@ import { AgentCoordinator } from "./agent"
 import { NoopAnalytics } from "./analytics"
 import { AsyncQueue } from "./async-queue"
 import { createChatCommands } from "./chat-commands"
-import { EventStore } from "./event-store"
+import { openEventStore, type EventStoreBridge as EventStore } from "./event-store-bridge"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
 import { ChatOrchestrator, MAX_CHAT_DEPTH, MAX_LIVE_CHATS } from "./orchestrator"
@@ -99,8 +99,7 @@ afterEach(async () => {
 async function setup(options?: { closeOutGraceMs?: number }) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-orchestrator-data-"))
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-orchestrator-project-"))
-  const store = new EventStore(dataDir)
-  await store.initialize()
+  const store = await openEventStore(dataDir)
   const project = await store.openProject(projectDir)
   const codex = new FakeCodex()
   const agent = new AgentCoordinator({
@@ -1092,8 +1091,7 @@ describe("schedules", () => {
 
     for (const compacted of [false, true]) {
       if (compacted) await store.compact()
-      const reopened = new EventStore(store.dataDir)
-      await reopened.initialize()
+      const reopened = await openEventStore(store.dataDir)
       expect(reopened.getChat(child.chatId)).toMatchObject({ parentChatId: root, createdByChatId: root, reportOwed: true })
       expect(reopened.getSchedule(schedule.scheduleId)).toMatchObject({
         content: "ping",
@@ -1500,8 +1498,7 @@ describe("reporting when a turn ends", () => {
 
     for (const compacted of [false, true]) {
       if (compacted) await store.compact()
-      const reopened = new EventStore(store.dataDir)
-      await reopened.initialize()
+      const reopened = await openEventStore(store.dataDir)
       expect(reopened.getChat(child.chatId)).toMatchObject({ reportOwed: true, reportedThrough: through })
       expect(reopened.getSchedule(schedule.scheduleId)).toMatchObject({ reportsToParent: true })
     }
@@ -1723,8 +1720,7 @@ describe("delegators", () => {
 
     for (const compacted of [false, true]) {
       if (compacted) await store.compact()
-      const reopened = new EventStore(store.dataDir)
-      await reopened.initialize()
+      const reopened = await openEventStore(store.dataDir)
       expect(reopened.getChat(born)).toMatchObject({ delegator: true })
       expect(reopened.getChat(made)).toMatchObject({ delegator: true })
       expect(reopened.getChat(unmade)).not.toHaveProperty("delegator")
@@ -1975,8 +1971,7 @@ describe("adopting", () => {
 
     for (const compacted of [false, true]) {
       if (compacted) await store.compact()
-      const reopened = new EventStore(store.dataDir)
-      await reopened.initialize()
+      const reopened = await openEventStore(store.dataDir)
       expect(reopened.getChat(other)).toMatchObject({ parentChatId: root, adopted: true, reportOwed: true })
       // A chat an old log made a sub-chat of is one still, with no mark.
       expect(reopened.getChat(child.chatId)).toMatchObject({ parentChatId: root })

@@ -3,7 +3,7 @@ import type { MessageSource } from "../shared/types"
 import type { AgentCoordinator } from "./agent"
 import type { Analytics } from "./analytics"
 import { runKannaSync } from "./effect/bridge"
-import type { EventStore } from "./event-store"
+import type { EventStoreBridge } from "./event-store-bridge"
 
 /**
  * What can be done to a chat, each action defined once.
@@ -46,7 +46,7 @@ type Command<TType extends ClientCommand["type"]> = Extract<ClientCommand, { typ
 
 interface ChatCommandsDeps {
   store: Pick<
-    EventStore,
+    EventStoreBridge,
     | "createChat"
     | "setChatDelegator"
     | "renameChat"

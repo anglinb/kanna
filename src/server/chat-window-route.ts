@@ -1,7 +1,7 @@
 import type { ChatSnapshot, KannaStatus, SubagentActivity, WaitingOn } from "../shared/types"
 import type { AppSettings } from "./app-settings"
 import { runKannaSync } from "./effect/bridge"
-import type { EventStore } from "./event-store"
+import type { EventStoreBridge } from "./event-store-bridge"
 import { deriveChatSnapshot } from "./read-models"
 
 /**
@@ -20,7 +20,7 @@ import { deriveChatSnapshot } from "./read-models"
  * cut down to what begins there. Keep the two in step.
  */
 export interface ChatWindowRouteDeps {
-  store: Pick<EventStore, "state" | "getChat" | "getClientTranscript" | "getInitialTranscriptWindowStart"> & Partial<Pick<EventStore, "prepareTranscript">>
+  store: Pick<EventStoreBridge, "state" | "getChat" | "getClientTranscript" | "getInitialTranscriptWindowStart"> & Partial<Pick<EventStoreBridge, "prepareTranscript">>
   agent: {
     getActiveStatuses: () => Map<string, KannaStatus>
     /** Optional for the same reason as `getSubagents`. Preferred: it also has the chats waiting on a subagent. */

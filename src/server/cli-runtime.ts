@@ -136,9 +136,8 @@ export interface SlimTranscriptsStats {
  * dir copied in from another machine.
  */
 async function slimTranscripts(log: (message: string) => void): Promise<SlimTranscriptsStats> {
-  const { EventStore } = await import("./event-store")
-  const store = new EventStore()
-  await store.initialize()
+  const { openEventStore } = await import("./event-store-bridge")
+  const store = await openEventStore()
   return await store.slimTranscripts({ force: true, onProgress: log })
 }
 

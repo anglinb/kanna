@@ -12,7 +12,7 @@ import { NoopAnalytics, type Analytics } from "./analytics"
 import type { AppSettings } from "./app-settings"
 import type { DiscoveredProject } from "./discovery"
 import { DiffStore } from "./diff-store"
-import { EventStore } from "./event-store"
+import type { EventStoreBridge } from "./event-store-bridge"
 import { openExternal } from "./external-open"
 import type { Keybindings } from "./keybindings"
 import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
@@ -106,7 +106,7 @@ export interface ClientState {
 
 interface CreateWsRouterArgs {
   diagnostics?: PerformanceLog["Service"]
-  store: EventStore
+  store: EventStoreBridge
   diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
   worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels" | "getProjectsWithoutRepo">
   projectIcons?: Pick<ProjectIcons["Service"], "urls">
@@ -1808,7 +1808,7 @@ export function createWsRouter({
           if (command.entryIds.length > MAX_TOOL_ENTRY_REQUEST) {
             throw new Error(`Too many entry ids (max ${MAX_TOOL_ENTRY_REQUEST})`)
           }
-          const result = store.getEntriesById(command.chatId, command.entryIds)
+          const result = await store.readEntriesById(command.chatId, command.entryIds)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -2026,7 +2026,7 @@ export function createWsRouter({
             theme: command.theme,
             sourceOrigin: command.sourceOrigin,
             attachmentMode: command.attachmentMode,
-            messages: store.getMessages(command.chatId),
+            messages: await store.readMessages(command.chatId),
             resolveMediaPath: (url) => store.resolveTranscriptMediaPath(url),
           }), ServerPlatform))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })

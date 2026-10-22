@@ -162,6 +162,20 @@ describe("read models", () => {
     }
   })
 
+  test("reads folder times through the reader it is given, so the derivation stays pure", () => {
+    const asked: string[] = []
+    const snapshot = deriveLocalProjectsSnapshot(createEmptyState(), [
+      { localPath: "/tmp/kanna-pure-a", title: "A", modifiedAt: 2 },
+      { localPath: "/tmp/kanna-pure-b", title: "B", modifiedAt: 1 },
+    ], "Machine", (localPath) => {
+      asked.push(localPath)
+      return localPath.endsWith("a") ? 123.5 : undefined
+    })
+
+    expect(asked).toEqual(["/tmp/kanna-pure-a", "/tmp/kanna-pure-b"])
+    expect(snapshot.projects.map((project) => project.folderModifiedAt)).toEqual([123.5, undefined])
+  })
+
   test("hidden (dot-directory) discovered projects are filtered; saved ones are kept", () => {
     const state = createEmptyState()
     state.projectsById.set("project-1", {

@@ -36,7 +36,7 @@ import { resolveClaudeExecutable } from "./claude-executable"
 import { KannaToolRuntime, KannaToolEventFilter, type KannaToolHost } from "./kanna-tools"
 import type { ChatOrchestrator } from "./orchestrator"
 import { createClaudeKannaTools } from "./kanna-tool-adapters"
-import { EventStore } from "./event-store"
+import type { EventStoreBridge } from "./event-store-bridge"
 import { STRUCTURED_RESULT_TOOL_KINDS } from "./events"
 import { NoopAnalytics, type Analytics } from "./analytics"
 import { runKannaSync } from "./effect/bridge"
@@ -265,7 +265,7 @@ interface ClaudeSessionState {
 }
 
 interface AgentCoordinatorArgs {
-  store: EventStore
+  store: EventStoreBridge
   onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   analytics?: Analytics["Service"]
   codexManager?: CodexAppServerManager
@@ -1089,7 +1089,7 @@ async function startClaudeSession(args: {
 }
 
 export class AgentCoordinator {
-  private readonly store: EventStore
+  private readonly store: EventStoreBridge
   private readonly onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   private readonly analytics: Analytics["Service"]
   private readonly codexManager: CodexAppServerManager

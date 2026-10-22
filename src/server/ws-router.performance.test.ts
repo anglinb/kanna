@@ -5,15 +5,14 @@ import { makeFakeTerminals } from "./terminal-manager.fake"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { EventStore } from "./event-store"
+import { openEventStore } from "./event-store-bridge"
 import { createWsRouter, type ClientState } from "./ws-router"
 import type { ChatSnapshot } from "../shared/types"
 
 
 test("stream updates read only the new tail and release subscription maps", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "kanna-router-performance-"))
-  const store = new EventStore(directory)
-  await store.initialize()
+  const store = await openEventStore(directory)
   const project = await store.openProject(directory)
   const chat = await store.createChat(project.id)
   const router = createWsRouter({
