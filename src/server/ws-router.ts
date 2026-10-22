@@ -11,7 +11,7 @@ import { createChatCommands, type ChatChange, type ChatCommandOutcome, type Chat
 import { NoopAnalytics, type Analytics } from "./analytics"
 import type { AppSettings } from "./app-settings"
 import type { DiscoveredProject } from "./discovery"
-import { DiffStore } from "./diff-store"
+import type { DiffStore } from "./diff-store"
 import { EventStore } from "./event-store"
 import { openExternal } from "./external-open"
 import type { Keybindings } from "./keybindings"
@@ -107,7 +107,7 @@ export interface ClientState {
 interface CreateWsRouterArgs {
   diagnostics?: PerformanceLog["Service"]
   store: EventStore
-  diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
+  diffStore: Pick<DiffStore["Service"], "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
   worktreeProbe: Pick<WorktreeProbe["Service"], "states" | "repoLabels" | "projectsWithoutRepo">
   projectIcons?: Pick<ProjectIcons["Service"], "urls">
   agent: AgentCoordinator
@@ -1607,7 +1607,7 @@ export function createWsRouter({
           return
         }
         case "github.listRecentRepos": {
-          const result = await listRecentGitHubRepos()
+          const result = await runKanna(listRecentGitHubRepos())
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1661,11 +1661,11 @@ export function createWsRouter({
           if (!project) {
             throw new Error("Project not found")
           }
-          const result = await diffStore.readPatch({
+          const result = await runKanna(diffStore.readPatch({
             projectPath: project.localPath,
             path: command.path,
             fullContext: command.fullContext === true,
-          })
+          }))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1674,10 +1674,10 @@ export function createWsRouter({
           if (!project) {
             throw new Error("Project not found")
           }
-          const result = await diffStore.readBranch({
+          const result = await runKanna(diffStore.readBranch({
             projectPath: project.localPath,
             branch: command.branch,
-          })
+          }))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1686,10 +1686,10 @@ export function createWsRouter({
           if (!project) {
             throw new Error("Project not found")
           }
-          const result = await diffStore.readCommit({
+          const result = await runKanna(diffStore.readCommit({
             projectPath: project.localPath,
             sha: command.sha,
-          })
+          }))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1849,154 +1849,154 @@ export function createWsRouter({
         case "chat.refreshDiffs": {
           // Acks without a result; broadcasts when the refresh reported a change.
           await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            changed: await diffStore.refreshSnapshot(project.id, project.localPath),
+            changed: await runKanna(diffStore.refreshSnapshot(project.id, project.localPath)),
           }))
           return
         }
         case "chat.initGit": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.initializeGit({
+            const result = await runKanna(diffStore.initializeGit({
               projectId: project.id,
               projectPath: project.localPath,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "chat.getGitHubPublishInfo": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            result: await diffStore.getGitHubPublishInfo({
+            result: await runKanna(diffStore.getGitHubPublishInfo({
               projectPath: project.localPath,
-            }),
+            })),
           }))
           return
         }
         case "chat.checkGitHubRepoAvailability": {
-          const result = await diffStore.checkGitHubRepoAvailability({
+          const result = await runKanna(diffStore.checkGitHubRepoAvailability({
             owner: command.owner,
             name: command.name,
-          })
+          }))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "chat.publishToGitHub": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.publishToGitHub({
+            const result = await runKanna(diffStore.publishToGitHub({
               projectId: project.id,
               projectPath: project.localPath,
               owner: command.owner,
               name: command.name,
               visibility: command.visibility,
               description: command.description,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "chat.listBranches": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            result: await diffStore.listBranches({
+            result: await runKanna(diffStore.listBranches({
               projectPath: project.localPath,
-            }),
+            })),
           }))
           return
         }
         case "chat.previewMergeBranch": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => ({
-            result: await diffStore.previewMergeBranch({
+            result: await runKanna(diffStore.previewMergeBranch({
               projectPath: project.localPath,
               branch: command.branch,
-            }),
+            })),
           }))
           return
         }
         case "chat.mergeBranch": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.mergeBranch({
+            const result = await runKanna(diffStore.mergeBranch({
               projectId: project.id,
               projectPath: project.localPath,
               branch: command.branch,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "chat.checkoutBranch": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.checkoutBranch({
+            const result = await runKanna(diffStore.checkoutBranch({
               projectId: project.id,
               projectPath: project.localPath,
               branch: command.branch,
               bringChanges: command.bringChanges,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "chat.syncBranch": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.syncBranch({
+            const result = await runKanna(diffStore.syncBranch({
               projectId: project.id,
               projectPath: project.localPath,
               action: command.action,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "chat.createBranch": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.createBranch({
+            const result = await runKanna(diffStore.createBranch({
               projectId: project.id,
               projectPath: project.localPath,
               name: command.name,
               baseBranchName: command.baseBranchName,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "project.generateCommitMessage": {
           await handleProjectGitCommand(ws, id, command.projectId, async (project) => ({
-            result: await diffStore.generateCommitMessage({
+            result: await runKanna(diffStore.generateCommitMessage({
               projectPath: project.localPath,
               paths: command.paths,
-            }),
+            })),
           }))
           return
         }
         case "project.commitDiffs": {
           await handleProjectGitCommand(ws, id, command.projectId, async (project) => {
-            const result = await diffStore.commitFiles({
+            const result = await runKanna(diffStore.commitFiles({
               projectId: project.id,
               projectPath: project.localPath,
               paths: command.paths,
               summary: command.summary,
               description: command.description,
               mode: command.mode,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "chat.discardDiffFile": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.discardFile({
+            const result = await runKanna(diffStore.discardFile({
               projectId: project.id,
               projectPath: project.localPath,
               path: command.path,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return
         }
         case "chat.ignoreDiffFile": {
           await handleChatGitCommand(ws, id, command.chatId, async (project) => {
-            const result = await diffStore.ignoreFile({
+            const result = await runKanna(diffStore.ignoreFile({
               projectId: project.id,
               projectPath: project.localPath,
               path: command.path,
-            })
+            }))
             return { result, changed: result.snapshotChanged }
           })
           return

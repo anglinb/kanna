@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
+import { makeFakeDiffStore } from "./diff-store.fake"
 import { makeFakeKeybindings } from "./keybindings.fake"
 import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeAnalytics } from "./analytics.fake"
@@ -191,32 +193,6 @@ function createFakeStore(overrides: Record<string, unknown> = {}) {
   } as never
 }
 
-function createFakeDiffStore(overrides: Record<string, unknown> = {}): CreateWsRouterArgs["diffStore"] {
-  return {
-    getProjectSnapshot: () => null,
-    getSnapshotVersion: () => 0,
-    refreshSnapshot: async () => false,
-    initializeGit: async () => ({ ok: true, branchName: undefined, snapshotChanged: false }),
-    getGitHubPublishInfo: async () => ({ ghInstalled: false, authenticated: false, activeAccountLogin: undefined, owners: [], suggestedRepoName: "my-repo" }),
-    checkGitHubRepoAvailability: async () => ({ available: false, message: "Unavailable" }),
-    publishToGitHub: async () => ({ ok: false, title: "Publish failed", message: "Unavailable", snapshotChanged: false }),
-    listBranches: async () => ({ recent: [], local: [], remote: [], pullRequests: [], pullRequestsStatus: "unavailable" }),
-    previewMergeBranch: async () => ({ currentBranchName: undefined, targetBranchName: "", targetDisplayName: "", status: "error", commitCount: 0, hasConflicts: false, message: "Merge preview unavailable." }),
-    mergeBranch: async () => ({ ok: false, title: "Merge failed", message: "Merge unavailable.", snapshotChanged: false }),
-    syncBranch: async () => ({ ok: true, action: "fetch", branchName: undefined, snapshotChanged: false }),
-    checkoutBranch: async () => ({ ok: true, branchName: undefined, snapshotChanged: false }),
-    createBranch: async () => ({ ok: true, branchName: "main", snapshotChanged: false }),
-    generateCommitMessage: async () => ({ subject: "Update selected files", body: "", usedFallback: true, failureMessage: null }),
-    commitFiles: async () => ({ ok: true, mode: "commit_only", branchName: undefined, pushed: false, snapshotChanged: false }),
-    discardFile: async () => ({ snapshotChanged: false }),
-    ignoreFile: async () => ({ snapshotChanged: false }),
-    readPatch: async () => ({ patch: "" }),
-    readCommit: async () => ({ sha: "", parentCount: 1, files: [], totalFileCount: 0, additions: 0, deletions: 0 }),
-    readBranch: async () => ({}),
-    ...overrides,
-  } as never
-}
-
 function createFakeLlmProvider(): CreateWsRouterArgs["llmProvider"] {
   return {
     read: async () => DEFAULT_LLM_PROVIDER_SNAPSHOT,
@@ -236,7 +212,7 @@ function createFakeLlmProvider(): CreateWsRouterArgs["llmProvider"] {
 function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
   return createWsRouter({
     store: createFakeStore(),
-    diffStore: createFakeDiffStore(),
+    diffStore: makeFakeDiffStore(),
     worktreeProbe: makeFakeWorktreeProbe(),
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
     terminals: makeFakeTerminals(),
@@ -1073,7 +1049,7 @@ describe("ws-router", () => {
         state,
         getProject: () => state.projectsById.get("project-1") ?? null,
       }),
-      diffStore: createFakeDiffStore({
+      diffStore: makeFakeDiffStore({
         getProjectSnapshot: () => ({
           status: "ready",
           branchName: "main",
@@ -1126,8 +1102,8 @@ describe("ws-router", () => {
         state,
         getProject: (projectId: string) => state.projectsById.get(projectId) ?? null,
       }),
-      diffStore: createFakeDiffStore({
-        readPatch: async () => ({ patch: "diff --git a/app.txt b/app.txt" }),
+      diffStore: makeFakeDiffStore({
+        readPatch: () => Effect.succeed({ patch: "diff --git a/app.txt b/app.txt" }),
       }),
     })
     const ws = new FakeWebSocket()
@@ -1184,10 +1160,10 @@ describe("ws-router", () => {
         getProject: (projectId: string) => state.projectsById.get(projectId) ?? null,
         getChat: (chatId: string) => state.chatsById.get(chatId) ?? null,
       }),
-      diffStore: createFakeDiffStore({
+      diffStore: makeFakeDiffStore({
         getProjectSnapshot: () => ({ status: "ready", branchName: "main", files: [], branchHistory: { entries: [] } }),
-        previewMergeBranch: async () => ({ currentBranchName: "main", targetBranchName: "feature/test", targetDisplayName: "feature/test", status: "mergeable", commitCount: 2, hasConflicts: false, message: "2 commits from feature/test will merge into main." }),
-        mergeBranch: async () => ({ ok: true, branchName: "main", snapshotChanged: true }),
+        previewMergeBranch: () => Effect.succeed({ currentBranchName: "main", targetBranchName: "feature/test", targetDisplayName: "feature/test", status: "mergeable", commitCount: 2, hasConflicts: false, message: "2 commits from feature/test will merge into main." }),
+        mergeBranch: () => Effect.succeed({ ok: true, branchName: "main", snapshotChanged: true }),
       }),
     })
     const ws = new FakeWebSocket()
@@ -2115,12 +2091,12 @@ describe("ws-router", () => {
         getProject: (projectId: string) => state.projectsById.get(projectId) ?? null,
         getClientTranscript: () => ({ messages: [], startIndex: 0, readAnchor: null }),
       }),
-      diffStore: createFakeDiffStore({
+      diffStore: makeFakeDiffStore({
         getProjectSnapshot: () => ({ status: "ready" as const, files: [], defaultBranchName: "main", originRepoSlug: "acme/repo", aheadCount: 0, behindCount: 0, lastFetchedAt: undefined }),
-        discardFile: async (args: { projectId: string; projectPath: string; path: string }) => {
+        discardFile: (args) => Effect.sync(() => {
           discardCalls.push(args)
           return { snapshotChanged: true }
-        },
+        }),
       }),
     })
     const ws = new FakeWebSocket()
@@ -2194,12 +2170,12 @@ describe("ws-router", () => {
         getChat: (chatId: string) => state.chatsById.get(chatId) ?? null,
         getProject: (projectId: string) => state.projectsById.get(projectId) ?? null,
       }),
-      diffStore: createFakeDiffStore({
+      diffStore: makeFakeDiffStore({
         getProjectSnapshot: () => ({ status: "ready" as const, files: [], defaultBranchName: "main", originRepoSlug: "acme/repo", aheadCount: 0, behindCount: 0, lastFetchedAt: undefined }),
-        ignoreFile: async (args: { projectId: string; projectPath: string; path: string }) => {
+        ignoreFile: (args) => Effect.sync(() => {
           ignoreCalls.push(args)
           return { snapshotChanged: false }
-        },
+        }),
       }),
     })
     const ws = new FakeWebSocket()
