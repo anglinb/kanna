@@ -33,11 +33,13 @@ import type {
   UpstreamStatus,
 } from "../shared/types"
 import { buildKannaCommitAttribution } from "./attribution"
+import { runKanna } from "./effect/bridge"
 import { generateCommitMessageDetailed } from "./generate-commit-message"
 import { getGhAuthInfo } from "./github"
 import { BranchPullRequestStore } from "./github-branch-pr"
 import { CommitChecksStore } from "./github-checks"
 import { resolveCommandPath } from "./process-utils"
+import { withSharedQuickResponse } from "./quick-response"
 import { inferProjectFileContentType } from "./uploads"
 
 interface StoredChatDiffState extends BranchMetadata, UpstreamStatus {
@@ -2952,11 +2954,11 @@ export class DiffStore {
     })
 
     const branchName = await getBranchName(repo.repoRoot)
-    return await generateCommitMessageDetailed({
+    return await runKanna(withSharedQuickResponse(generateCommitMessageDetailed({
       cwd: repo.repoRoot,
       branchName,
       files: selectedFiles,
-    })
+    })))
   }
 
   async commitFiles(args: {

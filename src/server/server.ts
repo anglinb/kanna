@@ -46,7 +46,7 @@ import { handleTranscribe } from "./transcribe"
 import { handleChatWindow } from "./chat-window-route"
 import { handleVisualizationHeights } from "./visualization-heights"
 import { applyPiFaveModels } from "./provider-catalog"
-import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
+import { LatestVersionError, ProviderAuth } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
 import { PortTunnels } from "./port-tunnels"
@@ -186,10 +186,39 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       Keybindings.layer(),
       PerformanceLog.layer({ dataDir, version: options.update?.version }),
       TicketStore.layer({ dataDir }),
-      Analytics.layer({
-        currentVersion: options.update?.version ?? "unknown",
-        environment: runtimeProfile === "dev" ? "dev" : "prod",
-      }).pipe(Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi }))),
+      ProviderAuth.layer({
+        fetchLatestNpmVersion: (packageName) => Effect.tryPromise({
+          try: () => fetchLatestPackageVersion(packageName),
+          catch: (cause) => new LatestVersionError({ packageName, cause }),
+        }),
+        // Runs only after a sign-in, long after startup has built `agent`
+        // and read `usageLimits` out of this runtime.
+        onSignedIn: (service) => Effect.sync(() => {
+          // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
+          // flip from auth → usage) and the live Cursor/Codex model catalogs.
+          void runKanna(usageLimits.refresh({ force: true }))
+          if (service === "cursor") {
+            void agent.refreshCursorModelCatalog()
+          }
+          if (service === "grok") {
+            void agent.refreshGrokModelCatalog()
+          }
+          if (service === "codex") {
+            void agent.refreshCodexModelCatalog()
+          }
+          if (service === "gh") {
+            // Never let a cached "unauthenticated" repo list outlive the sign-in
+            // (clone palette / home repos section fetch through this cache).
+            clearGitHubRepoCache()
+          }
+        }),
+      }).pipe(
+        Layer.provideMerge(Analytics.layer({
+          currentVersion: options.update?.version ?? "unknown",
+          environment: runtimeProfile === "dev" ? "dev" : "prod",
+        })),
+        Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi })),
+      ),
       UsageLimits.layer(path.join(dataDir, "usage-limits.json"), usageReads),
       EditorDetection.layer(),
       TerminalDetection.layer(),
@@ -269,7 +298,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   store.onTurnEnded = (chatId) => {
     void turnFiles.endTurn(chatId).finally(() => worktreeProbe.refreshForChat(chatId))
   }
-  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet } = await runtime.runPromise(Effect.gen(function* () {
+  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth } = await runtime.runPromise(Effect.gen(function* () {
     return {
       keybindings: yield* Keybindings,
       appSettings: yield* AppSettings,
@@ -282,6 +311,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       projectIcons: yield* ProjectIcons,
       discovery: yield* ProjectDiscovery,
       fleet: yield* CloudFleet,
+      providerAuth: yield* ProviderAuth,
     }
   }))
   const trackEvent = (eventName: string, properties?: Record<string, unknown>) =>
@@ -349,33 +379,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   agent.onChatStopped = (chatId) => orchestrator.handleChatStopped(chatId)
   agent.setClaudeRateLimitListener((info) => void runKanna(usageLimits.recordClaudeRateLimitPush(info)))
   codexManager.setRateLimitsListener((snapshot) => void runKanna(usageLimits.recordCodexRateLimitPush(snapshot)))
-
-  const providerAuth = new ProviderAuthManager({
-    ...createProcessAuthDeps(),
-    readLlmProvider,
-    writeLlmProvider: (value) => runKanna(writeLlmProviderSnapshot(value).pipe(Effect.provide(ServerPlatform))),
-    fetchLatestNpmVersion: fetchLatestPackageVersion,
-    trackEvent,
-    onSignedIn: (service) => {
-      // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
-      // flip from auth → usage) and the live Cursor/Codex model catalogs.
-      void runKanna(usageLimits.refresh({ force: true }))
-      if (service === "cursor") {
-        void agent.refreshCursorModelCatalog()
-      }
-      if (service === "grok") {
-        void agent.refreshGrokModelCatalog()
-      }
-      if (service === "codex") {
-        void agent.refreshCodexModelCatalog()
-      }
-      if (service === "gh") {
-        // Never let a cached "unauthenticated" repo list outlive the sign-in
-        // (clone palette / home repos section fetch through this cache).
-        clearGitHubRepoCache()
-      }
-    },
-  })
 
   router = createWsRouter({
     diagnostics,
@@ -863,9 +866,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     orchestrator.dispose()
     try { await agent.interruptForShutdown() } finally { agent.dispose() }
     router.dispose()
-    providerAuth.dispose()
     // runtime.dispose() below also stops the project icon passes, kills every
-    // terminal's shell and stops every port tunnel.
+    // terminal's shell, stops every port tunnel and kills any sign-in CLI.
     await store.compact()
     // After the store's last write, so the diagnostics' final line counts it.
     await runtime.dispose()

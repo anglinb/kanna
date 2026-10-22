@@ -28,7 +28,7 @@ import { writeStandaloneTranscriptExport } from "./standalone-export"
 import type { Terminals } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
 import type { ProjectIcons } from "./project-icons"
-import type { ProviderAuthManager } from "./provider-auth"
+import type { ProviderAuth } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimits } from "./usage-limits"
 import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
@@ -128,19 +128,7 @@ interface CreateWsRouterArgs {
   machineDisplayName: string
   updateManager: UpdateManager | null
   usageLimits?: Pick<UsageLimits["Service"], "snapshot" | "refresh" | "changes"> | null
-  providerAuth?: Pick<
-    ProviderAuthManager,
-    | "getSnapshot"
-    | "refresh"
-    | "probeService"
-    | "install"
-    | "startLogin"
-    | "submitLoginCode"
-    | "cancelLogin"
-    | "startOpenRouterAuth"
-    | "exchangeOpenRouterCode"
-    | "onChange"
-  > | null
+  providerAuth?: ProviderAuth["Service"] | null
   /** Overrides `BACKGROUND_CHAT_PUSH_INTERVAL_MS`; tests shorten it. */
   backgroundChatPushIntervalMs?: number
   /**
@@ -620,7 +608,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "provider-auth",
-          data: providerAuth?.getSnapshot() ?? { services: [] },
+          data: providerAuth ? runKannaSync(providerAuth.snapshot) : { services: [] },
         },
       }
     }
@@ -1218,7 +1206,7 @@ export function createWsRouter({
     }
   }) : (() => {})
 
-  const disposeProviderAuthEvents = providerAuth?.onChange(() => {
+  const disposeProviderAuthEvents = providerAuth ? subscribeKanna(providerAuth.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1231,7 +1219,7 @@ export function createWsRouter({
         send(ws, envelope)
       }
     }
-  }) ?? (() => {})
+  }) : (() => {})
 
   agent.setBackgroundErrorReporter?.(broadcastError)
 
@@ -1445,8 +1433,8 @@ export function createWsRouter({
         }
         case "auth.refresh": {
           if (providerAuth) {
-            await providerAuth.refresh({ force: command.force ?? false })
-            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: providerAuth.getSnapshot() })
+            await runKanna(providerAuth.refresh({ force: command.force ?? false }))
+            send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: runKannaSync(providerAuth.snapshot) })
           } else {
             send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { services: [] } })
           }
@@ -1455,37 +1443,37 @@ export function createWsRouter({
         case "auth.install": {
           if (!providerAuth) throw new Error("Provider auth unavailable.")
           // Fire-and-forget: progress travels via provider-auth snapshots.
-          void providerAuth.install(command.service)
+          void runKanna(providerAuth.install(command.service))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "auth.login.start": {
           if (!providerAuth) throw new Error("Provider auth unavailable.")
-          providerAuth.startLogin(command.service)
+          await runKanna(providerAuth.startLogin(command.service))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "auth.login.submitCode": {
           if (!providerAuth) throw new Error("Provider auth unavailable.")
-          providerAuth.submitLoginCode(command.service, command.code)
+          await runKanna(providerAuth.submitLoginCode(command.service, command.code))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "auth.login.cancel": {
           if (!providerAuth) throw new Error("Provider auth unavailable.")
-          providerAuth.cancelLogin(command.service)
+          await runKanna(providerAuth.cancelLogin(command.service))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           return
         }
         case "auth.openrouter.start": {
           if (!providerAuth) throw new Error("Provider auth unavailable.")
-          const result = providerAuth.startOpenRouterAuth(command.callbackUrl)
+          const result = await runKanna(providerAuth.startOpenRouterAuth(command.callbackUrl))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "auth.openrouter.exchange": {
           if (!providerAuth) throw new Error("Provider auth unavailable.")
-          const snapshot = await providerAuth.exchangeOpenRouterCode(command.code)
+          const snapshot = await runKanna(providerAuth.exchangeOpenRouterCode(command.code))
           // The exchanged key is a full Model Registry write — refresh the pi
           // model picker exactly like settings.writeLlmProvider does.
           if (applyPiFaveModels(snapshot.faveModels)) {
@@ -1537,7 +1525,7 @@ export function createWsRouter({
             void broadcastSnapshots()
           }
           // Manually entering/clearing an OpenRouter key changes the auth card.
-          void providerAuth?.probeService("openrouter").catch(() => undefined)
+          if (providerAuth) void runKanna(providerAuth.probeService("openrouter")).catch(() => undefined)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
@@ -2233,7 +2221,7 @@ export function createWsRouter({
         // Same shape for provider auth: cached state paints instantly, the
         // TTL-respecting probe pushes fresh results to all subscribers.
         if (parsed.topic.type === "provider-auth" && providerAuth) {
-          void providerAuth.refresh().catch(() => undefined)
+          void runKanna(providerAuth.refresh()).catch(() => undefined)
         }
         // And for installed editors and terminals: cached until the TTL lapses,
         // so an app installed while Kanna ran shows up on the next page load.

@@ -45,6 +45,7 @@ import { CursorCliManager } from "./cursor-cli"
 import { fetchGrokAccountUsage, GrokCliManager } from "./grok-cli"
 import { PiAgentManager, resolvePiConnection } from "./pi-agent"
 import { type GenerateChatTitleResult, generateTitleForChatDetailed } from "./generate-title"
+import { withSharedQuickResponse } from "./quick-response"
 import type { ClaudeRateLimitInfoRaw, ClaudeUsageRaw } from "./usage-limits"
 import type { HarnessEvent, HarnessToolRequest, HarnessTurn } from "./harness-types"
 import {
@@ -966,7 +967,7 @@ async function startClaudeSession(args: {
   }
 
   // The user's own `claude`, never the SDK's pinned copy (claude-executable.ts).
-  const claudeExecutable = await resolveClaudeExecutable()
+  const claudeExecutable = await runKanna(resolveClaudeExecutable().pipe(Effect.provide(ServerPlatform)))
   if (!claudeExecutable.ok) throw new Error(claudeExecutable.message)
   const promptQueue = new AsyncQueue<SDKUserMessage>()
   let promptQueueClosed = false
@@ -1160,7 +1161,8 @@ export class AgentCoordinator {
     this.grokManager = args.grokManager ?? new GrokCliManager()
     this.piManager = args.piManager ?? new PiAgentManager()
     this.resolvePiConnection = args.resolvePiConnection ?? resolvePiConnection
-    this.generateTitle = args.generateTitle ?? generateTitleForChatDetailed
+    this.generateTitle = args.generateTitle
+      ?? ((messageContent, cwd) => runKanna(withSharedQuickResponse(generateTitleForChatDetailed(messageContent, cwd))))
     this.startClaudeSessionFn = args.startClaudeSession ?? startClaudeSession
     this.checkSessionArtifactFn = args.checkSessionArtifact
       ?? ((provider, query) => runKanna(checkSessionArtifact(provider, query).pipe(Effect.provide(ServerPlatform))))
