@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { Layer, ManagedRuntime } from "effect"
+import { QuickResponse } from "./quick-response"
 import { DiffStore } from "./diff-store"
 import { runTest, TestPlatform } from "./effect/testing"
 
@@ -11,7 +12,7 @@ const runtimes: Array<ManagedRuntime.ManagedRuntime<DiffStore, never>> = []
 
 /** A real DiffStore on the platform services, released after the test. */
 async function openStore() {
-  const runtime = ManagedRuntime.make(DiffStore.layer.pipe(Layer.provide(TestPlatform)))
+  const runtime = ManagedRuntime.make(DiffStore.layer.pipe(Layer.provide(QuickResponse.layer()), Layer.provide(TestPlatform)))
   runtimes.push(runtime)
   return await runtime.runPromise(DiffStore)
 }

@@ -49,6 +49,7 @@ import { getGhAuthInfo } from "./github"
 import { BranchPullRequests } from "./github-branch-pr"
 import { CommitChecks } from "./github-checks"
 import { type CommandSpawnError, resolveCommandPath, runCommand } from "./process-utils"
+import { QuickResponse } from "./quick-response"
 import { inferProjectFileContentType } from "./uploads"
 
 export type { WorkingTreeLocation, WorkingTreeProbe, WorkingTreeScan } from "./git"
@@ -1702,6 +1703,7 @@ const makeDiffStore = Effect.fn("DiffStore.make")(function* () {
   const fs = yield* FileSystem.FileSystem
   const commitChecks = yield* CommitChecks
   const branchPullRequests = yield* BranchPullRequests
+  const quickResponse = yield* QuickResponse
   const scope = yield* Effect.scope
 
   const states = new Map<string, StoredChatDiffState>()
@@ -3038,14 +3040,15 @@ const makeDiffStore = Effect.fn("DiffStore.make")(function* () {
     }), { concurrency: 8 })
 
     const branchName = yield* getBranchName(repo.repoRoot)
-    return yield* Effect.tryPromise({
-      try: () => generateCommitMessageDetailed({
-        cwd: repo.repoRoot,
-        branchName,
-        files: selectedFiles,
-      }),
-      catch: (cause) => new CommitMessageError({ repoRoot: repo.repoRoot, message: errorMessage(cause), cause }),
-    })
+    return yield* generateCommitMessageDetailed({
+      cwd: repo.repoRoot,
+      branchName,
+      files: selectedFiles,
+    }).pipe(
+      Effect.provideService(QuickResponse, quickResponse),
+      Effect.catchTag("@kanna/server/llm-provider/LlmProviderFileError", (cause) =>
+        Effect.fail(new CommitMessageError({ repoRoot: repo.repoRoot, message: errorMessage(cause), cause }))),
+    )
   })
 
   const commitFiles = Effect.fn("DiffStore.commitFiles")(function* (args: {

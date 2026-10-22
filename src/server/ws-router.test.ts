@@ -6,6 +6,8 @@ import { makeFakeAppSettings } from "./app-settings.fake"
 import { makeFakeAnalytics } from "./analytics.fake"
 import { makeFakeTerminals } from "./terminal-manager.fake"
 import { makeFakeWorktreeProbe } from "./worktree-probe.fake"
+import { makeFakeProviderAuth } from "./provider-auth.fake"
+import { ProviderAuthError } from "./provider-auth"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
@@ -2227,48 +2229,14 @@ describe("ws-router provider auth", () => {
   }
 
   function createFakeProviderAuth() {
-    const calls: string[] = []
-    let changeListener: (() => void) | null = null
-    const manager = {
-      getSnapshot: () => AUTH_SERVICES_SNAPSHOT,
-      refresh: async () => {
-        calls.push("refresh")
-      },
-      probeService: async (service: string) => {
-        calls.push(`probe:${service}`)
-      },
-      install: async (service: string) => {
-        calls.push(`install:${service}`)
-      },
-      startLogin: (service: string) => {
-        calls.push(`start:${service}`)
-      },
-      submitLoginCode: (service: string, code: string) => {
-        calls.push(`submit:${service}:${code}`)
-      },
-      cancelLogin: (service: string) => {
-        calls.push(`cancel:${service}`)
-      },
-      startOpenRouterAuth: (callbackUrl: string) => ({
-        authUrl: `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callbackUrl)}&code_challenge=x&code_challenge_method=S256`,
-      }),
-      exchangeOpenRouterCode: async (code: string) => {
-        calls.push(`exchange:${code}`)
-        return { ...DEFAULT_LLM_PROVIDER_SNAPSHOT, provider: "openrouter" as const, apiKey: "sk-or-key" }
-      },
-      onChange: (listener: () => void) => {
-        changeListener = listener
-        return () => {
-          changeListener = null
-        }
-      },
-    }
-    return { manager: manager as never, calls, fireChange: () => changeListener?.() }
+    return makeFakeProviderAuth(AUTH_SERVICES_SNAPSHOT, {
+      openRouterSnapshot: { ...DEFAULT_LLM_PROVIDER_SNAPSHOT, provider: "openrouter", apiKey: "sk-or-key" },
+    })
   }
 
   test("subscribing pushes the snapshot and kicks a refresh; onChange fanout dedupes", async () => {
     const fake = createFakeProviderAuth()
-    const router = createTestRouter({ providerAuth: fake.manager })
+    const router = createTestRouter({ providerAuth: fake.providerAuth })
     const ws = new FakeWebSocket()
     router.handleOpen(ws as never)
 
@@ -2288,13 +2256,48 @@ describe("ws-router provider auth", () => {
     expect(fake.calls).toContain("refresh")
 
     // Unchanged snapshot on change → deduped, nothing new sent.
-    fake.fireChange()
+    fake.setSnapshot(AUTH_SERVICES_SNAPSHOT)
+    await new Promise((resolve) => setTimeout(resolve, 10))
     expect(ws.sent).toHaveLength(1)
+
+    // A changed one is pushed.
+    const signedIn = {
+      services: [{ ...AUTH_SERVICES_SNAPSHOT.services[0]!, authStatus: "signed_in" as const, account: "jakemny" }],
+    }
+    fake.setSnapshot(signedIn)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(ws.sent).toHaveLength(2)
+    expect(ws.sent[1]).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "snapshot",
+      id: "sub-auth",
+      snapshot: { type: "provider-auth", data: signedIn },
+    })
+  })
+
+  test("a refused login is an error reply with the service's message", async () => {
+    const fake = createFakeProviderAuth()
+    const router = createTestRouter({
+      providerAuth: {
+        ...fake.providerAuth,
+        startLogin: (service) =>
+          Effect.fail(new ProviderAuthError({ operation: "login", service, message: "Codex is not installed." })),
+      },
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(
+      ws as never,
+      JSON.stringify({ v: 1, type: "command", id: "c1", command: { type: "auth.login.start", service: "codex" } })
+    )
+
+    expect(ws.sent).toEqual([{ v: PROTOCOL_VERSION, type: "error", id: "c1", message: "Codex is not installed." }])
   })
 
   test("auth commands route to the manager and ack", async () => {
     const fake = createFakeProviderAuth()
-    const router = createTestRouter({ providerAuth: fake.manager })
+    const router = createTestRouter({ providerAuth: fake.providerAuth })
     const ws = new FakeWebSocket()
     router.handleOpen(ws as never)
 
