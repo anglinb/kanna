@@ -20,6 +20,7 @@ import { openEventStore } from "./event-store-bridge"
 import { deriveLocalProjectsSnapshot } from "./read-models"
 import { SERVER_PROVIDERS, applyCodexModels, resetServerProvidersForTests } from "./provider-catalog"
 import { createWsRouter } from "./ws-router"
+import { makeFakeUpdateManager } from "./update-manager.fake"
 
 function withSidebarGroupDefaults(group: {
   groupKey: string
@@ -1949,37 +1950,27 @@ describe("ws-router", () => {
   })
 
   test("subscribes to update snapshots and handles update.check commands", async () => {
-    const updateManager = {
-      snapshot: { ...DEFAULT_UPDATE_SNAPSHOT },
-      getSnapshot() {
-        return this.snapshot
+    const { updateManager } = makeFakeUpdateManager({ ...DEFAULT_UPDATE_SNAPSHOT }, {
+      check: (snapshot, force) => ({
+        ...snapshot,
+        latestVersion: force ? "0.13.0" : "0.12.1",
+        status: "available",
+        updateAvailable: true,
+        lastCheckedAt: 123,
+      }),
+      install: {
+        ok: false,
+        action: "restart",
+        errorCode: "version_not_live_yet",
+        userTitle: "Update not live yet",
+        userMessage: "This update is still propagating. Try again in a few minutes.",
       },
-      onChange: () => () => {},
-      async checkForUpdates({ force }: { force?: boolean }) {
-        this.snapshot = {
-          ...this.snapshot,
-          latestVersion: force ? "0.13.0" : "0.12.1",
-          status: "available",
-          updateAvailable: true,
-          lastCheckedAt: 123,
-        }
-        return this.snapshot
-      },
-      async installUpdate() {
-        return {
-          ok: false,
-          action: "restart",
-          errorCode: "version_not_live_yet",
-          userTitle: "Update not live yet",
-          userMessage: "This update is still propagating. Try again in a few minutes.",
-        }
-      },
-    }
-
-    const router = createTestRouter({
-      updateManager: updateManager as never,
     })
+
+    const router = createTestRouter({ updateManager })
     const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+    const sentWithId = (id: string) => ws.sent.find((message) => (message as { id?: string }).id === id && (message as { type?: string }).type === "ack")
 
     await router.handleMessage(
       ws as never,
@@ -2015,7 +2006,7 @@ describe("ws-router", () => {
     )
 
     await Promise.resolve()
-    expect(ws.sent[1]).toEqual({
+    expect(sentWithId("update-check-1")).toEqual({
       v: PROTOCOL_VERSION,
       type: "ack",
       id: "update-check-1",
@@ -2044,7 +2035,7 @@ describe("ws-router", () => {
     )
 
     await Promise.resolve()
-    expect(ws.sent[2]).toEqual({
+    expect(sentWithId("update-install-1")).toEqual({
       v: PROTOCOL_VERSION,
       type: "ack",
       id: "update-install-1",
@@ -2055,6 +2046,13 @@ describe("ws-router", () => {
         userTitle: "Update not live yet",
         userMessage: "This update is still propagating. Try again in a few minutes.",
       },
+    })
+
+    // The check changed the snapshot, so the subscriber was pushed the new one.
+    await Bun.sleep(0)
+    expect(ws.sent.filter((message) => (message as { id?: string }).id === "update-sub-1").at(-1)).toMatchObject({
+      type: "snapshot",
+      snapshot: { type: "update", data: { latestVersion: "0.13.0", status: "available" } },
     })
   })
 

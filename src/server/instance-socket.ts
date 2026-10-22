@@ -24,7 +24,7 @@ import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
-import { Clock, Effect, Option, Schema } from "effect"
+import { Clock, Deferred, Effect, Exit, Option, Schema, type Scope } from "effect"
 import { getDataDir, getDataRootDir } from "../shared/branding"
 import { instanceFingerprint } from "./instance"
 
@@ -392,11 +392,27 @@ function claimSocket(socketPath: string): (() => void) | null {
 
 /**
  * The server child's side, under a supervisor that holds the lock: report
- * the port once listening, and push the state the app's quit dialog shows.
+ * the port once listening, and push the state the app's quit dialog shows,
+ * each second, until the scope closes (detaching) or the supervisor goes.
+ *
+ * The push loop runs on Effect's clock, whose timers keep the process
+ * alive; that is fine because the scope is the server's, which ends with
+ * the process (cli.ts). The socket itself is unref'd.
  */
-export function attachToSupervisor(server: AttachedServer, options: { socketPath?: string } = {}) {
-  const socket = net.createConnection(options.socketPath ?? instanceSocketPath())
-  socket.on("error", () => {})
+export const attachToSupervisor = Effect.fn("InstanceSocket.attachToSupervisor")(function* (
+  server: AttachedServer,
+  options: { socketPath?: string } = {},
+) {
+  const socket = yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const socket = net.createConnection(options.socketPath ?? instanceSocketPath())
+      socket.on("error", () => {})
+      // Don't hold the process open for this.
+      socket.unref()
+      return socket
+    }),
+    (socket) => Effect.sync(() => socket.destroy()),
+  )
   let last = ""
   const push = () => {
     const state = server.state?.()
@@ -406,25 +422,25 @@ export function attachToSupervisor(server: AttachedServer, options: { socketPath
     last = line
     socket.write(`${line}\n`)
   }
-  const timer = setInterval(push, 1_000)
-  timer.unref()
+  const closed = Deferred.makeUnsafe<void>()
   socket.once("connect", () => {
     send(socket, { type: "attach", port: server.port, version: server.version })
     push()
   })
-  socket.once("close", () => clearInterval(timer))
-  // Don't hold the process open for this.
-  socket.unref()
-  return () => {
-    clearInterval(timer)
-    socket.destroy()
-  }
-}
+  socket.once("close", () => Deferred.doneUnsafe(closed, Exit.void))
+  yield* Effect.sync(push).pipe(
+    Effect.delay("1 second"),
+    Effect.forever,
+    Effect.raceFirst(Deferred.await(closed)),
+    Effect.forkScoped,
+  )
+})
 
 export type InstanceClaim =
   | {
     kind: "ours"
-    attach: (server: AttachedServer) => void
+    /** Reports the listening server for as long as the scope stays open. */
+    attach: (server: AttachedServer) => Effect.Effect<void, never, Scope.Scope>
     /** The app that started this server quit and chose to keep it running. */
     releasedFromParent: () => boolean
   }
@@ -451,7 +467,7 @@ export const claimInstance = Effect.fn("InstanceSocket.claim")(function* (
   if (lockEnv === "held") {
     const claim: InstanceClaim = {
       kind: "ours",
-      attach: (server) => void attachToSupervisor(server),
+      attach: (server) => attachToSupervisor(server),
       releasedFromParent: () => false,
     }
     return claim
@@ -467,7 +483,7 @@ export const claimInstance = Effect.fn("InstanceSocket.claim")(function* (
     onStop: () => process.kill(process.pid, "SIGTERM"),
   })
   const claim: InstanceClaim = lock
-    ? { kind: "ours", attach: (server) => lock.attach(server), releasedFromParent: () => lock.releasedFromParent }
+    ? { kind: "ours", attach: (server) => Effect.sync(() => lock.attach(server)), releasedFromParent: () => lock.releasedFromParent }
     : { kind: "running", status: yield* waitForInstancePort() }
   return claim
 })

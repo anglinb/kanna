@@ -16,6 +16,7 @@ export const MAC_APP_URL_SCHEME = "kanna-app"
 
 /** The app sets this so a server it started does not outlive a crashed app. */
 export const EXIT_WITH_PARENT_ENV_VAR = "KANNA_EXIT_WITH_PARENT"
+const PARENT_POLL_INTERVAL = "2 seconds"
 
 export function macAppOpenUrl(localUrl: string) {
   return `${MAC_APP_URL_SCHEME}://open?url=${encodeURIComponent(localUrl)}`
@@ -46,19 +47,22 @@ export const openInMacApp = Effect.fn("MacApp.open")(function* (
  * Poll the parent's pid, not `process.ppid`: Bun reads that once at start,
  * so it never turns into launchd's 1 when the parent dies.
  *
- * A plain unref'd interval rather than an Effect schedule: the watch must not
- * keep the process alive on its own, and an Effect sleep holds a ref'd timer.
+ * Completes once the parent is gone, checking every two seconds; never
+ * completes when the app did not ask for this. Its sleeps hold the process
+ * open, so run it alongside something that decides when the process ends:
+ * the CLI's main program (cli.ts, cli-supervisor.ts), which exits the
+ * process when it finishes.
  */
-export function exitWithParent(
-  onOrphaned: () => void,
+export const awaitParentExit = Effect.fn("MacApp.awaitParentExit")(function* (
   env: Record<string, string | undefined> = process.env,
   parent: number = process.ppid,
 ) {
-  if (env[EXIT_WITH_PARENT_ENV_VAR] !== "1" || parent <= 1) return
-  setInterval(() => {
-    if (!isAlive(parent)) onOrphaned()
-  }, 2_000).unref()
-}
+  if (env[EXIT_WITH_PARENT_ENV_VAR] !== "1" || parent <= 1) return yield* Effect.never
+  yield* Effect.annotateCurrentSpan("parent", parent)
+  do {
+    yield* Effect.sleep(PARENT_POLL_INTERVAL)
+  } while (isAlive(parent))
+})
 
 function isAlive(pid: number) {
   try {

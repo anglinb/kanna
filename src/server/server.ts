@@ -1,4 +1,4 @@
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime, Option } from "effect"
 import { homedir } from "node:os"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
@@ -49,13 +49,12 @@ import { handleChatWindow } from "./chat-window-route"
 import { handleVisualizationHeights } from "./visualization-heights"
 import { applyPiFaveModels } from "./provider-catalog"
 import { LatestVersionError, ProviderAuth } from "./provider-auth"
-import { fetchLatestPackageVersion } from "./cli-runtime"
+import { fetchLatestPackageVersion, type CliUpdateOptions } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
 import { PortTunnels } from "./port-tunnels"
 import { Terminals } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
-import type { UpdateInstallAttemptResult } from "./cli-runtime"
-import { fetchMainCommitSha, type NightlyInstallResult } from "./nightly"
+import { fetchMainCommitSha } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { instanceFingerprint } from "./instance"
 import {
@@ -151,12 +150,23 @@ export interface StartKannaServerOptions {
    */
   directCloud?: boolean
   onMigrationProgress?: (message: string) => void
-  update?: {
-    version: string
-    fetchLatestVersion: (packageName: string) => Promise<string>
-    installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
-    installNightly?: () => Promise<NightlyInstallResult>
-  }
+  update?: Pick<CliUpdateOptions, "version" | "fetchLatestVersion" | "installVersion" | "installNightly">
+}
+
+/** The self-updater for a server the CLI started, tracking through the server's Analytics. */
+function updateManagerLayer(update: NonNullable<StartKannaServerOptions["update"]>, devMode: boolean) {
+  return Layer.unwrap(Effect.gen(function* () {
+    const analytics = yield* Analytics
+    return UpdateManager.layer({
+      currentVersion: update.version,
+      fetchLatestVersion: update.fetchLatestVersion,
+      fetchLatestNightlySha: fetchMainCommitSha(),
+      installVersion: update.installVersion,
+      installNightly: update.installNightly,
+      devMode,
+      trackEvent: analytics.track,
+    })
+  }))
 }
 
 export async function startKannaServer(options: StartKannaServerOptions = {}) {
@@ -184,6 +194,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
     fetchGrokUsage: () => agent.fetchGrokUsage(),
   }
+  const analyticsLayer = Analytics.layer({
+    currentVersion: options.update?.version ?? "unknown",
+    environment: runtimeProfile === "dev" ? "dev" : "prod",
+  }).pipe(Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi })))
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(),
@@ -191,10 +205,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       EventStore.layer({ dataDir }).pipe(Layer.provideMerge(PerformanceLog.layer({ dataDir, version: options.update?.version }))),
       TicketStore.layer({ dataDir }),
       ProviderAuth.layer({
-        fetchLatestNpmVersion: (packageName) => Effect.tryPromise({
-          try: () => fetchLatestPackageVersion(packageName),
-          catch: (cause) => new LatestVersionError({ packageName, cause }),
-        }),
+        fetchLatestNpmVersion: (packageName) => fetchLatestPackageVersion(packageName).pipe(
+          Effect.catchTag("@kanna/server/cli-runtime/PackageRegistryError", (cause) =>
+            Effect.fail(new LatestVersionError({ packageName, cause }))),
+        ),
         // Runs only after a sign-in, long after startup has built `agent`
         // and read `usageLimits` out of this runtime.
         onSignedIn: (service) => Effect.sync(() => {
@@ -216,13 +230,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             clearGitHubRepoCache()
           }
         }),
-      }).pipe(
-        Layer.provideMerge(Analytics.layer({
-          currentVersion: options.update?.version ?? "unknown",
-          environment: runtimeProfile === "dev" ? "dev" : "prod",
-        })),
-        Layer.provideMerge(AppSettings.layer(path.join(dataDir, "settings.json"), { devbox: devboxUi })),
-      ),
+      }).pipe(Layer.provideMerge(analyticsLayer)),
+      // Self-update exists only when the CLI asked for it; it tracks through Analytics.
+      options.update
+        ? updateManagerLayer(options.update, runtimeProfile === "dev").pipe(Layer.provideMerge(analyticsLayer))
+        : analyticsLayer,
       UsageLimits.layer(path.join(dataDir, "usage-limits.json"), usageReads),
       EditorDetection.layer(),
       TerminalDetection.layer(),
@@ -305,8 +317,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   store.onTurnEnded = (chatId) => {
     void runKanna(turnFiles.endTurn(chatId).pipe(Effect.andThen(worktreeProbe.refreshForChat(chatId))))
   }
-  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth } = await runtime.runPromise(Effect.gen(function* () {
+  const { keybindings, appSettings, analytics, usageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager } = await runtime.runPromise(Effect.gen(function* () {
     return {
+      updateManager: Option.getOrNull(yield* Effect.serviceOption(UpdateManager)),
       keybindings: yield* Keybindings,
       appSettings: yield* AppSettings,
       analytics: yield* Analytics,
@@ -321,8 +334,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       providerAuth: yield* ProviderAuth,
     }
   }))
-  const trackEvent = (eventName: string, properties?: Record<string, unknown>) =>
-    runKannaSync(analytics.track(eventName, properties))
   const readLlmProvider = () => runKanna(readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform)))
   // Which editors and terminals this machine has, for the "Open in…" menus.
   // Deliberately not awaited: it shells out per app, and the menus render
@@ -337,17 +348,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     void router.broadcastSidebar()
   })
   await refreshDiscovery()
-  const updateManager = options.update
-    ? new UpdateManager({
-      currentVersion: options.update.version,
-      fetchLatestVersion: options.update.fetchLatestVersion,
-      fetchLatestNightlySha: fetchMainCommitSha,
-      installVersion: options.update.installVersion,
-      installNightly: options.update.installNightly,
-      devMode: runtimeProfile === "dev",
-      trackEvent,
-    })
-    : null
   const codexManager = new CodexAppServerManager()
   const agent = new AgentCoordinator({
     store,
