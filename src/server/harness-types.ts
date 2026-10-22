@@ -1,3 +1,4 @@
+import type { Effect, Stream } from "effect"
 import type { AccountInfo, AgentProvider, NormalizedToolCall, TranscriptEntry } from "../shared/types"
 
 export interface HarnessEvent {
@@ -21,4 +22,23 @@ export interface HarnessTurn {
   getAccountInfo?: () => Promise<AccountInfo | null>
   interrupt: () => Promise<void>
   close: () => void
+}
+
+/**
+ * A provider turn on Effect: what the adapters (codex, cursor, grok, pi)
+ * return from `startTurn` as they migrate.
+ *
+ * The turn lives in the `Scope` its `startTurn` ran in: closing that scope
+ * is `close()` — it stops the provider's process or session and ends
+ * `events`. `interrupt` asks the provider to stop the turn and lets
+ * `events` finish on its own, as `interrupt()` did.
+ *
+ * `events` fails with the provider's own tagged errors where the old
+ * AsyncIterable threw; the agent reads those as it read the throws.
+ */
+export interface HarnessTurnEffect<E = never> {
+  readonly provider: AgentProvider
+  readonly events: Stream.Stream<HarnessEvent, E>
+  readonly accountInfo?: Effect.Effect<AccountInfo | null>
+  readonly interrupt: Effect.Effect<void>
 }

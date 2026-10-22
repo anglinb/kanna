@@ -39,6 +39,17 @@ shutdown. Add your layer to that `Layer.mergeAll(...)`.
   `Effect.tryPromise` and say why in a comment.
 - Typed fakes live next to the module as `<module>.fake.ts`.
 
+## The provider contract (wave 3)
+
+Provider adapters return `HarnessTurnEffect` (`harness-types.ts`) from an
+Effect `startTurn` that runs in a `Scope`: the scope's close is the old
+`close()`, `events` is a `Stream`, `interrupt` an Effect. Until agent.ts
+migrates (wave 4) it reads them through `toHarnessTurn`
+(`harness-bridge.ts`), which turns one back into the Promise `HarnessTurn`.
+Callbacks the agent hands an adapter (tool requests, approvals) become
+Effect-returning in the adapter's args; agent.ts adapts its Promise
+callbacks at the call site with `Effect.tryPromise`.
+
 ## Rules
 
 ### Services
@@ -157,10 +168,13 @@ shutdown. Add your layer to that `Layer.mergeAll(...)`.
 | Terminals & serving | terminal-manager, local-http-servers, port-tunnels, share, auth, transcribe, png-thumbnail, project-icons | done |
 | Cloud | cloud/*, discovery, background-tasks | done |
 | Harness helpers & shared | harness-skills, skills, harness-instructions, visualization-*, handoff, agent-to-agent, session-artifacts, async-queue; Schema for `shared/protocol.ts` client envelopes and `shared/tools.ts` parsing | done |
-| Event store | event-store, read-models, transcript-payloads (sync readers) | wave 2 |
-| Git | diff-store, github, github-branch-pr, github-checks | wave 2 |
-| Derived state | worktree-probe, worktree-snapshot, ticket-board, ticket-messages, touched-file-backfill, visualization-heights | wave 2 |
-| Provider plumbing | provider-auth, claude-executable, quick-response, generate-commit-message, generate-title | wave 2 |
-| CLI | cli-runtime, cli, cli-supervisor, nightly, update-manager, share (CLI output), process-utils (`resolveCommandPath`) | wave 2 |
-| Providers & tools | codex-app-server, cursor-cli, grok-cli, pi-agent, kanna-*-tools, kanna-mcp, orchestrator, chat-commands | wave 3 |
+| Event store | event-store, read-models, transcript-payloads (sync readers) | done |
+| Git | diff-store, github, github-branch-pr, github-checks | done |
+| Derived state | worktree-probe, worktree-snapshot, ticket-board, ticket-messages, touched-file-backfill, visualization-heights | done |
+| Provider plumbing | provider-auth, claude-executable, quick-response, generate-commit-message, generate-title | done |
+| CLI | cli-runtime, cli, cli-supervisor, nightly, update-manager, share (CLI output), process-utils (`resolveCommandPath`) | done |
+| Codex | codex-app-server, codex-app-server-protocol | wave 3 |
+| CLI providers | grok-cli, cursor-cli, cursor-kanna-tools, async-queue | wave 3 |
+| Pi & Kanna tools | pi-agent, kanna-tools, kanna-display-tools, kanna-image-tools, kanna-visualization-tool, kanna-tool-adapters, kanna-mcp | wave 3 |
+| Orchestration | orchestrator, kanna-orchestration-tools, chat-commands, schedules wiring | wave 3 |
 | Composition | agent, ws-router, server, entry, chat-window-route, resume-turns; wire `protocol-schema.ts` into the router; delete `bridge.ts` | wave 4 |
