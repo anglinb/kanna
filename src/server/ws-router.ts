@@ -108,7 +108,7 @@ interface CreateWsRouterArgs {
   diagnostics?: PerformanceLog["Service"]
   store: EventStore
   diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
-  worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels" | "getProjectsWithoutRepo">
+  worktreeProbe: Pick<WorktreeProbe["Service"], "states" | "repoLabels" | "projectsWithoutRepo">
   projectIcons?: Pick<ProjectIcons["Service"], "urls">
   agent: AgentCoordinator
   terminals: Terminals["Service"]
@@ -472,9 +472,9 @@ export function createWsRouter({
       pendingUserInputPreviews,
       waitingOn,
       ticketAttention,
-      workingTrees: worktreeProbe.getStates(),
-      repoLabels: worktreeProbe.getRepoLabels(),
-      projectsWithoutRepo: worktreeProbe.getProjectsWithoutRepo(),
+      workingTrees: runKannaSync(worktreeProbe.states),
+      repoLabels: runKannaSync(worktreeProbe.repoLabels),
+      projectsWithoutRepo: runKannaSync(worktreeProbe.projectsWithoutRepo),
       projectIcons: projectIcons ? runKannaSync(projectIcons.urls) : undefined,
     })
 
@@ -1752,7 +1752,7 @@ export function createWsRouter({
             v: PROTOCOL_VERSION,
             type: "ack",
             id,
-            result: deriveChatTouchedFiles(chat, worktreeProbe.getStates().get(chat.projectId)),
+            result: deriveChatTouchedFiles(chat, runKannaSync(worktreeProbe.states).get(chat.projectId)),
           })
           return
         }
