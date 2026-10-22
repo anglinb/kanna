@@ -324,6 +324,11 @@ export type ClientCommand =
   | { type: "chat.discardDiffFile"; chatId: string; path: string }
   | { type: "chat.ignoreDiffFile"; chatId: string; path: string }
   | { type: "chat.cancel"; chatId: string }
+  /**
+   * A chat waiting for its usage limit to reset (`ChatRuntime.usageLimitResume`):
+   * `cancel` turns the resume off for it, `now` sends the "carry on" at once.
+   */
+  | { type: "chat.usageLimitResume"; chatId: string; action: "cancel" | "now" }
   | { type: "chat.stopDraining"; chatId: string }
   /** Stops one background task (a monitor, a workflow, a subagent) and leaves the turn running. */
   | { type: "chat.stopTask"; chatId: string; taskId: string }

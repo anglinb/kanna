@@ -10,6 +10,7 @@ import {
 import { ArrowDown, Flower, Upload } from "lucide-react"
 import { DrainingIndicator } from "../../components/messages/DrainingIndicator"
 import { QueuedUserMessage } from "../../components/messages/QueuedUserMessage"
+import { UsageLimitResumeRow } from "../../components/messages/UsageLimitResumeRow"
 import { messageNamingParent, ParentChatLink } from "../../components/messages/ParentChatLink"
 import { ReplyQuoteProjectContext } from "../../components/messages/ChatToolMessage"
 import { TRANSCRIPT_ROW_CLASS } from "../../components/messages/transcript-row"
@@ -55,7 +56,7 @@ import {
   EMPTY_STATE_TEXT,
 } from "./utils"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction, TerminalPreset } from "../../../shared/protocol"
-import type { TranscriptOutlineEntry, WaitingOn } from "../../../shared/types"
+import type { ChatRuntime, TranscriptOutlineEntry, WaitingOn } from "../../../shared/types"
 /**
  * How close to the bottom counts as "at the end", as a fraction of viewport
  * height.
@@ -265,6 +266,9 @@ interface ChatTranscriptViewportProps {
   onStopDraining: () => void
   onSteerQueuedMessage: (queuedMessageId: string) => Promise<void>
   onRemoveQueuedMessage: (queuedMessageId: string) => Promise<void>
+  /** Set while the chat waits for its usage limit to reset. */
+  usageLimitResume?: ChatRuntime["usageLimitResume"]
+  onUsageLimitResume?: (action: "cancel" | "now") => Promise<void>
   onOpenLocalLink: KannaState["handleOpenLocalLink"]
   onAskUserQuestionSubmit: KannaState["handleAskUserQuestion"]
   onExitPlanModeConfirm: KannaState["handleExitPlanMode"]
@@ -476,6 +480,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   onStopDraining,
   onSteerQueuedMessage,
   onRemoveQueuedMessage,
+  usageLimitResume,
+  onUsageLimitResume,
   onOpenLocalLink,
   onAskUserQuestionSubmit,
   onExitPlanModeConfirm,
@@ -1248,6 +1254,10 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
           what says so here. A draining stream says it with its own, below. */}
       {isProcessing || (runtimeStatus === "waiting_on_subagent" && !isDraining)
         ? <ProcessingMessage status={runtimeStatus ?? undefined} waitingOn={waitingOn} />
+        : null}
+      {/* Goes before the queue it holds: the "carry on" is sent first. */}
+      {usageLimitResume && onUsageLimitResume
+        ? <UsageLimitResumeRow resume={usageLimitResume} onAction={onUsageLimitResume} />
         : null}
       {queuedMessages.map((message) => (
         <QueuedUserMessage

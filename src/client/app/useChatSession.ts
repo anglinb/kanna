@@ -280,6 +280,7 @@ export function useChatSession({ socket, chatId, fallbackProviders }: {
   const {
     handleSteerQueuedMessage,
     handleRemoveQueuedMessage,
+    handleUsageLimitResume,
     handleCancel,
     handleStopDraining,
     handleAskUserQuestion,
@@ -314,6 +315,7 @@ export function useChatSession({ socket, chatId, fallbackProviders }: {
     handleSend,
     handleSteerQueuedMessage,
     handleRemoveQueuedMessage,
+    handleUsageLimitResume,
     handleCancel,
     handleStopDraining,
     handleAskUserQuestion,
