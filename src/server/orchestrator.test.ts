@@ -5,7 +5,8 @@ import path from "node:path"
 import { AgentCoordinator } from "./agent"
 import { fakeCodexAppServer } from "./codex-app-server.fake"
 import { NoopAnalytics } from "./analytics"
-import { Cause, Queue, Stream } from "effect"
+import { Cause, Effect, Queue, Stream } from "effect"
+import type { GetAccountRateLimitsResponse } from "./codex-app-server-protocol"
 import { ChatAgent } from "./chat-agent"
 import { createChatCommands } from "./chat-commands"
 import { runKanna, runKannaSync } from "./effect/bridge"
@@ -103,7 +104,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
 })
 
-async function setup(options?: { closeOutGraceMs?: number }) {
+async function setup(options?: { closeOutGraceMs?: number; codexRateLimits?: GetAccountRateLimitsResponse }) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-orchestrator-data-"))
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-orchestrator-project-"))
   const store = await openEventStore(dataDir)
@@ -112,7 +113,7 @@ async function setup(options?: { closeOutGraceMs?: number }) {
   const agent = new AgentCoordinator({
     store,
     onStateChange: () => {},
-    codexManager: fakeCodexAppServer(codex),
+    codexManager: { ...fakeCodexAppServer(codex), readAccountRateLimits: () => Effect.succeed(options?.codexRateLimits ?? null) },
     generateTitle: async () => ({ title: null, usedFallback: true, failureMessage: null }),
   })
   let clock: number | null = null
@@ -218,6 +219,39 @@ describe("sub-chats", () => {
     await until(() => codex.turnsFor(root).length === 2, "the parent to wake")
     expect(codex.turn(root).content).toContain("Sub-chat failed")
     expect(codex.turn(root).content).toContain("credentials expired")
+  })
+
+  test("a sub-chat that ran out of usage reports once it resumes and finishes, not when it stopped", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup({
+      codexRateLimits: { rateLimits: { primary: { usedPercent: 100, resetsAt: Math.floor(Date.now() / 1000) + 3_600 } } },
+    })
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "deploy" })
+    codex.finish(root, "Deploying.")
+    codex.fail(child.chatId, "You've hit your usage limit.: usageLimitExceeded")
+    await until(() => store.getChat(child.chatId)?.usageLimitResume !== undefined, "the resume to be set")
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(codex.turnsFor(root)).toHaveLength(1)
+
+    await runKanna(agent.resumeAfterUsageLimitEffect(child.chatId))
+    await until(() => codex.turnsFor(child.chatId).length === 2, "the carry on")
+    codex.finish(child.chatId, "Deployed.")
+    await until(() => codex.turnsFor(root).length === 2, "the parent to wake")
+    expect(codex.turn(root).content).toContain("Deployed.")
+  })
+
+  test("a sub-chat whose usage resume is cancelled reports its failure then", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup({
+      codexRateLimits: { rateLimits: { primary: { usedPercent: 100, resetsAt: Math.floor(Date.now() / 1000) + 3_600 } } },
+    })
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "deploy" })
+    codex.finish(root, "Deploying.")
+    codex.fail(child.chatId, "You've hit your usage limit.: usageLimitExceeded")
+    await until(() => store.getChat(child.chatId)?.usageLimitResume !== undefined, "the resume to be set")
+    await runKanna(agent.cancelUsageLimitResumeEffect(child.chatId))
+    await until(() => codex.turnsFor(root).length === 2, "the parent to wake")
+    expect(codex.turn(root).content).toContain("Sub-chat failed")
   })
 
   test("two results that land together reach the parent as one message", async () => {

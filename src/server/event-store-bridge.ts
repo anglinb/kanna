@@ -3,7 +3,7 @@ import type { AgentProvider, ChatSchedule, TranscriptEntry } from "../shared/typ
 import { runKanna } from "./effect/bridge"
 import { ServerPlatform } from "./effect/runtime"
 import { EventStore, type EventStoreHooks, type EventStoreOptions, type StaleChatSweepOptions } from "./event-store"
-import type { TouchedFile } from "./events"
+import type { TouchedFile, UsageLimitResume } from "./events"
 
 type Service = EventStore["Service"]
 
@@ -108,6 +108,7 @@ export class EventStoreBridge {
   recordTurnFailed(chatId: string, error: string) { return runKanna(this.service.recordTurnFailed(chatId, error)) }
   recordTurnCancelled(chatId: string) { return runKanna(this.service.recordTurnCancelled(chatId)) }
   setTurnResumePending(chatId: string, pending: boolean) { return runKanna(this.service.setTurnResumePending(chatId, pending)) }
+  setUsageLimitResume(chatId: string, resume: UsageLimitResume | null) { return runKanna(this.service.setUsageLimitResume(chatId, resume)) }
   setSessionToken(chatId: string, sessionToken: string | null) { return runKanna(this.service.setSessionToken(chatId, sessionToken)) }
   setPendingForkSessionToken(chatId: string, pendingForkSessionToken: string | null, pendingForkAt?: string | null) {
     return runKanna(this.service.setPendingForkSessionToken(chatId, pendingForkSessionToken, pendingForkAt))

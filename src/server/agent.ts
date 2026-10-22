@@ -89,6 +89,7 @@ import { buildHandoffContext, buildHandoffMessageContent } from "./handoff"
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
 import { Cause, Effect, Exit, Fiber, Queue, Schema, Stream } from "effect"
 import { runKanna } from "./effect/bridge"
+import { codexUsageLimitResetAt, isCodexUsageLimitFailure, USAGE_LIMIT_RESUME_MESSAGE, USAGE_LIMIT_RESUME_SLACK_MS } from "./usage-limit-resume"
 import { ServerPlatform } from "./effect/runtime"
 import { timestamped } from "./transcript"
 import {
@@ -1144,6 +1145,13 @@ export class AgentCoordinator {
   ) => Effect.Effect<SessionArtifactStatus, Error>
   private reportBackgroundError: ((message: string) => void) | null = null
   private onClaudeRateLimit: ((info: ClaudeRateLimitInfoRaw) => void) | null = null
+  /**
+   * When the limit that refused a chat's Claude turn resets (epoch ms), from
+   * the turn's `rejected` rate-limit event. Read if the turn then fails: a
+   * rejection that overage covered lets the turn go on. Cleared as the next
+   * turn starts.
+   */
+  private readonly claudeLimitResets = new Map<string, number>()
   private cursorModelCatalogApplied = false
   private grokModelCatalogApplied = false
   private codexModelCatalogRefresh: { fiber: Fiber.Fiber<void, never> | null } | null = null
@@ -1944,6 +1952,9 @@ export class AgentCoordinator {
     const self = this
     return Effect.gen(function* () {
       if (self.isBusy(chatId)) return false
+      // Waiting for its usage to come back: what is queued would hit the same
+      // limit. The resume sends it on after the "carry on".
+      if (self.store.getChat(chatId)?.usageLimitResume) return false
       const nextQueuedMessage = typeof self.store.getQueuedMessages === "function"
         ? self.store.getQueuedMessages(chatId)[0]
         : undefined
@@ -2168,6 +2179,7 @@ export class AgentCoordinator {
 
       const chat = self.store.requireChat(args.chatId)
       if (self.activeTurns.has(args.chatId)) return yield* Effect.fail(new Error("Chat is already running"))
+      self.claudeLimitResets.delete(args.chatId)
       const previousProvider = chat.provider
       if (previousProvider !== args.provider) yield* storeWriteEffect(self.store.setChatProvider(args.chatId, args.provider))
       yield* storeWriteEffect(self.store.setPlanMode(args.chatId, args.planMode))
@@ -2211,6 +2223,14 @@ export class AgentCoordinator {
         }, Date.now())))
       }
       yield* storeWriteEffect(self.store.recordTurnStarted(args.chatId, args.model))
+      // Any turn that starts supersedes a usage-limit resume: the user sent
+      // something, or this is the resume itself. Cleared only now, so the
+      // turn-start hooks still see it and the orchestrator does not report
+      // the refused turn as one the chat went on from. Should this turn hit
+      // the limit again, it is marked again.
+      if (self.store.getChat(args.chatId)?.usageLimitResume) {
+        yield* storeWriteEffect(self.store.setUsageLimitResume(args.chatId, null))
+      }
       return { chat, project, handoff, restore, shouldGenerateTitle, optimisticTitle }
     })
 
@@ -2527,7 +2547,12 @@ export class AgentCoordinator {
         ...(args.resumeSessionAt ? { resumeSessionAt: args.resumeSessionAt } : {}),
         onToolRequest: args.onToolRequest,
         customTools: args.customTools,
-        onRateLimitEvent: (info) => self.onClaudeRateLimit?.(info),
+        onRateLimitEvent: (info) => {
+          if (info.status === "rejected" && typeof info.resetsAt === "number") {
+            self.claudeLimitResets.set(args.chatId, info.resetsAt * 1000)
+          }
+          self.onClaudeRateLimit?.(info)
+        },
         onSubagentActivity: (update) => self.applySubagentActivity(args.chatId, update),
         signal,
         }).then((handle) => {
@@ -2923,7 +2948,7 @@ export class AgentCoordinator {
    *
    * Returns whether a turn was actually started.
    */
-  resumeInterruptedTurnEffect = Effect.fn("Agent.resumeInterruptedTurn")((chatId: string) => {
+  resumeInterruptedTurnEffect = Effect.fn("Agent.resumeInterruptedTurn")((chatId: string, message: string = RESUME_AFTER_RESTART_MESSAGE) => {
     const self = this
     return Effect.gen(function* () {
     const chat = self.store.getChat(chatId)
@@ -2948,7 +2973,7 @@ export class AgentCoordinator {
     yield* self.startTurnForChatEffect({
       chatId,
       provider,
-      content: RESUME_AFTER_RESTART_MESSAGE,
+      content: message,
       attachments: [],
       model: settings.model,
       effort: settings.effort,
@@ -2965,6 +2990,109 @@ export class AgentCoordinator {
   resumeInterruptedTurn(chatId: string): Promise<boolean> {
     return runKanna(this.resumeInterruptedTurnEffect(chatId))
   }
+
+  /**
+   * After a failed turn: when its provider's usage ran out and says when it
+   * comes back, mark the chat to continue then (`ChatRecord.usageLimitResume`).
+   * Never fails: a lookup that goes wrong leaves the turn failed, as it was.
+   */
+  private noteUsageLimitEffect = Effect.fn("Agent.noteUsageLimit")((chatId: string, provider: AgentProvider, resultText: string) => {
+    const self = this
+    return Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("chatId", chatId)
+      const claudeReset = self.claudeLimitResets.get(chatId)
+      self.claudeLimitResets.delete(chatId)
+      const resetsAt = provider === "claude"
+        ? claudeReset ?? null
+        : provider === "codex" && isCodexUsageLimitFailure(resultText)
+          ? codexUsageLimitResetAt(yield* self.codexManager.readAccountRateLimits(homedir()), Date.now())
+          : null
+      if (resetsAt === null) return
+      yield* storeWriteEffect(self.store.setUsageLimitResume(chatId, { at: resetsAt + USAGE_LIMIT_RESUME_SLACK_MS, provider }))
+      self.emitStateChange(chatId)
+    }).pipe(
+      Effect.tapError((error) => Effect.logWarning(`could not schedule a usage-limit resume for chat ${chatId}:`, error)),
+      Effect.ignore,
+    )
+  })
+
+  /**
+   * Continues a chat its usage limit stopped, now: clears the mark and sends
+   * the "carry on". Its queued messages follow once that turn ends. Without
+   * a session to continue (or with a turn already running) the queue goes on
+   * as it would have. False when no "carry on" was sent.
+   */
+  resumeAfterUsageLimitEffect = Effect.fn("Agent.resumeAfterUsageLimit")((chatId: string) => {
+    const self = this
+    return Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("chatId", chatId)
+      const chat = self.store.getChat(chatId)
+      if (!chat?.usageLimitResume) return false
+      // The turn's start clears the mark (see `startTurnEffect`). Anything
+      // short of starting one clears it here, so it is not retried forever.
+      const clear = storeWriteEffect(self.store.setUsageLimitResume(chatId, null)).pipe(
+        Effect.andThen(Effect.sync(() => self.emitStateChange(chatId))),
+      )
+      if (self.isBusy(chatId)) {
+        yield* clear
+        return false
+      }
+      // With a session, "carry on" continues it. Without one (the limit
+      // refused the chat's very first turn) there is nothing to continue,
+      // so the prompt it refused goes again.
+      const resumed = yield* (chat.sessionToken || chat.pendingForkSessionToken
+        ? self.resumeInterruptedTurnEffect(chatId, USAGE_LIMIT_RESUME_MESSAGE)
+        : self.retryLastPromptEffect(chatId)
+      ).pipe(Effect.onError(() => clear.pipe(Effect.ignore)))
+      if (!resumed) {
+        yield* clear
+        yield* self.maybeStartNextQueuedMessageEffect(chatId)
+      }
+      return resumed
+    })
+  })
+
+  /** Sends the chat's last prompt again, on the wire only: the transcript has it already. */
+  private retryLastPromptEffect = Effect.fn("Agent.retryLastPrompt")((chatId: string) => {
+    const self = this
+    return Effect.gen(function* () {
+      const chat = self.store.getChat(chatId)
+      if (!chat || chat.deletedAt || !chat.provider) return false
+      const last = [...self.store.getMessages(chatId)].reverse().find((entry) => entry.kind === "user_prompt")
+      if (!last || last.kind !== "user_prompt") return false
+      const settings = self.getProviderSettings(chat.provider, { model: chat.lastModel, planMode: chat.planMode, autoPlan: chat.autoPlan })
+      yield* self.startTurnForChatEffect({
+        chatId,
+        provider: chat.provider,
+        content: last.content,
+        attachments: last.attachments ?? [],
+        model: settings.model,
+        effort: settings.effort,
+        serviceTier: settings.serviceTier,
+        planMode: settings.planMode,
+        autoPlan: settings.autoPlan,
+        appendUserPrompt: false,
+      })
+      return true
+    })
+  })
+
+  /**
+   * The user turned the resume off for this chat: nothing is sent when the
+   * limit resets. Its queued messages stay queued, to send or remove by hand.
+   */
+  cancelUsageLimitResumeEffect = Effect.fn("Agent.cancelUsageLimitResume")((chatId: string) => {
+    const self = this
+    return Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("chatId", chatId)
+      if (!self.store.getChat(chatId)?.usageLimitResume) return
+      yield* storeWriteEffect(self.store.setUsageLimitResume(chatId, null))
+      self.emitStateChange(chatId)
+      // It was held as unsettled while it waited; now it is, so a parent
+      // waiting on it gets its report.
+      self.notifySettled(chatId)
+    })
+  })
 
   forkChatEffect = Effect.fn("Agent.forkChat")((
     chatId: string, lineage?: { parentChatId?: string; createdByChatId?: string },
@@ -3169,6 +3297,7 @@ export class AgentCoordinator {
               active.hasFinalResult = true
               if (event.entry.isError) {
                 yield* storeWriteEffect(self.store.recordTurnFailed(session.chatId, event.entry.result || "Turn failed"))
+                yield* self.noteUsageLimitEffect(session.chatId, "claude", event.entry.result ?? "")
               } else if (!active.cancelRequested) {
                 yield* storeWriteEffect(self.store.recordTurnFinished(session.chatId))
               }
@@ -3303,6 +3432,7 @@ export class AgentCoordinator {
               active.hasFinalResult = true
               if (event.entry.isError) {
                 yield* storeWriteEffect(self.store.recordTurnFailed(active.chatId, event.entry.result || "Turn failed"))
+                yield* self.noteUsageLimitEffect(active.chatId, active.provider, event.entry.result ?? "")
               } else if (!active.cancelRequested) {
                 yield* storeWriteEffect(self.store.recordTurnFinished(active.chatId))
               }

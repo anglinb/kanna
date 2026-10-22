@@ -273,6 +273,30 @@ describe("ws-router", () => {
     router.dispose()
   })
 
+  test("a usage-limit resume is cancelled or sent now by its command, and acked", async () => {
+    const calls: string[] = []
+    const router = createTestRouter({
+      agent: {
+        getActiveStatuses: () => new Map(),
+        getDrainingChatIds: () => new Set(),
+        cancelUsageLimitResumeEffect: (chatId: string) => Effect.sync(() => { calls.push(`cancel:${chatId}`) }),
+        resumeAfterUsageLimitEffect: (chatId: string) => Effect.sync(() => {
+          calls.push(`now:${chatId}`)
+          return true
+        }),
+      } as never,
+    })
+    const ws = new FakeWebSocket()
+    for (const action of ["cancel", "now"] as const) {
+      await router.handleMessage(ws as never, JSON.stringify({
+        v: 1, type: "command", id: action, command: { type: "chat.usageLimitResume", chatId: "chat-1", action },
+      }))
+    }
+    expect(calls).toEqual(["cancel:chat-1", "now:chat-1"])
+    expect(ws.sent.filter((message) => (message as { type: string }).type === "ack").map((message) => (message as { id: string }).id)).toEqual(["cancel", "now"])
+    router.dispose()
+  })
+
   test("skill listing uses the agent's native Effect operation", async () => {
     const calls: unknown[] = []
     const snapshot = { provider: "claude", skills: [], origin: "filesystem" }

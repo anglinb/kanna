@@ -34,6 +34,7 @@ import { TurnFileRecordError, TurnFileTracker } from "./worktree-snapshot"
 import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { resumeInterruptedTurns } from "./resume-turns"
 import { startServerMaintenance, startServerRecovery, stopServerMaintenance } from "./server-maintenance"
+import { startUsageLimitResumer } from "./usage-limit-resume"
 import { Orchestrator } from "./orchestrator"
 import { ChatAgent, type CoordinatorLike } from "./chat-agent"
 import { ChatCommands } from "./chat-commands"
@@ -484,6 +485,13 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     pruneMs: STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS,
     archiveMs: STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS,
     deleteMs: STALE_CHAT_DELETE_INTERVAL_MS,
+  }), maintenanceScope)
+  // Chats a usage limit stopped continue when the limit resets (see
+  // usage-limit-resume.ts). After recovery is under way, in the same scope,
+  // so shutdown stops it with the sweeps.
+  yield* Scope.provide(startUsageLimitResumer({
+    state: () => store.state,
+    resume: (chatId) => agent.resumeAfterUsageLimitEffect(chatId),
   }), maintenanceScope)
   yield* worktreeProbe.start
   yield* projectIcons.start

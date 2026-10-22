@@ -667,7 +667,9 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
    * what they may wake).
    */
   function isSelfSettled(chat: ChatRecord) {
-    return !hasTurnInFlight(chat) && !agent.hasDelegatedWork(chat.id)
+    // A chat waiting out a usage limit has more to do: it continues when the
+    // limit resets, and reports then (or once the user cancels the resume).
+    return !hasTurnInFlight(chat) && !agent.hasDelegatedWork(chat.id) && !chat.usageLimitResume
   }
 
   /** A chat this one started is still going, or has a report on its way here. */
@@ -1613,8 +1615,9 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       }
     }
     if (owed && chat?.parentChatId) owedTurns.add(chatId)
-    // The turn that ended is the one before this one.
-    if (endedTurnOwed) yield* background(reportEndedTurn(chatId))
+    // The turn that ended is the one before this one. One a usage limit
+    // refused is not: this turn carries its work on.
+    if (endedTurnOwed && !chat?.usageLimitResume) yield* background(reportEndedTurn(chatId))
     pushChatsAbove(chatId)
   })
 
@@ -1849,6 +1852,12 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       return
     }
     if (reporting.has(chatId)) return
+    // Stopped by a usage limit it will continue past: the report waits for
+    // the turn after the reset, or for the user to cancel that resume.
+    if (chat.usageLimitResume) {
+      cancelCloseOut(chatId)
+      return
+    }
     const status = statusOf(chat)
     if (status === "running" || status === "needs_input") {
       cancelCloseOut(chatId)

@@ -1359,6 +1359,8 @@ export function ChatPage() {
           onStopDraining={state.handleStopDraining}
           onSteerQueuedMessage={state.handleSteerQueuedMessage}
           onRemoveQueuedMessage={state.handleRemoveQueuedMessage}
+          usageLimitResume={state.runtime?.usageLimitResume}
+          onUsageLimitResume={state.handleUsageLimitResume}
           onOpenLocalLink={handleOpenLocalLink}
           editorPreset={editorPreset}
           editorCommandTemplate={editorCommandTemplate}

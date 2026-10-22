@@ -489,6 +489,7 @@ export function deriveChatSnapshot(
     ...(chat.delegator ? { delegator: true as const } : {}),
     ...(subagents?.length ? { subagents: [...subagents] } : {}),
     ...(schedules.length ? { schedules } : {}),
+    ...(chat.usageLimitResume ? { usageLimitResume: { ...chat.usageLimitResume } } : {}),
   }
 
   const transcript = getMessages(chat.id)
