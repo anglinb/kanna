@@ -75,7 +75,8 @@ export class ShareTunnelExitedError extends Schema.TaggedError<ShareTunnelExited
   }
 }
 
-export async function renderTerminalQr(url: string) {
+/** The QR code for `url`, drawn with ANSI blocks for a terminal. */
+export function renderTerminalQr(url: string) {
   return renderANSI(url, {
     ecc: "L",
     border: 2,
@@ -182,13 +183,17 @@ export const startShareTunnel = Effect.fn("Share.startShareTunnel")(function* (
   } satisfies StartedShareTunnel
 })
 
-export async function logShareDetails(
+/**
+ * Prints the share's QR code, public URL and local URL. This is the CLI's
+ * terminal output, not logging: `log` writes the lines as they are.
+ */
+export function logShareDetails(
   log: (message: string) => void,
   publicUrl: string,
   localUrl: string,
-  renderShareQrImpl: (url: string) => Promise<string> = renderTerminalQr,
+  renderShareQrImpl: (url: string) => string = renderTerminalQr,
 ) {
-  const qrCode = await renderShareQrImpl(publicUrl)
+  const qrCode = renderShareQrImpl(publicUrl)
 
   log("QR Code:")
   log(qrCode.trimEnd())

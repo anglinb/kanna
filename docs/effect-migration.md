@@ -19,6 +19,7 @@ compatible: this is a refactor, not a behaviour change.
 | `logger.ts` | Keeps the `[kanna] message` console shape for `Effect.log*`. Don't prefix messages with `LOG_PREFIX` yourself. |
 | `bridge.ts` | `runKanna` / `runKannaSync` / `subscribeKanna`: how not-yet-migrated Promise code calls a migrated service. Temporary; it is deleted at the end. |
 | `testing.ts` | `runTest(effect)`: runs an Effect test body scoped, with `ServerPlatform`. Stands in for `it.effect`/`it.scoped`. |
+| `main.ts` | `runKannaMain(program)`: runs a `kanna` process (cli.ts, cli-supervisor.ts). The program's result is the exit code and the process exits when it ends, so Effect timers inside it can't keep a finished process alive. Signals stay with the program. |
 
 `startKannaServer` (`server.ts`) builds one `ManagedRuntime` from the
 merged service layers, reads each service out of it, and disposes it at

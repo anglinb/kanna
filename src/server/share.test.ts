@@ -260,16 +260,16 @@ describe("startShareTunnel", () => {
 })
 
 describe("logShareDetails", () => {
-  test("prints qr, public url, and local url in the expected order", async () => {
+  test("prints qr, public url, and local url in the expected order", () => {
     const logLines: string[] = []
 
-    await logShareDetails(
+    logShareDetails(
       (message) => {
         logLines.push(message)
       },
       "https://kanna.trycloudflare.com",
       "http://localhost:3333",
-      async (url) => `[qr:${url}]\n`,
+      (url) => `[qr:${url}]\n`,
     )
 
     expect(logLines).toEqual([
@@ -286,8 +286,8 @@ describe("logShareDetails", () => {
 })
 
 describe("renderTerminalQr", () => {
-  test("renders an ANSI qr string", async () => {
-    const result = await renderTerminalQr("https://kanna.trycloudflare.com")
+  test("renders an ANSI qr string", () => {
+    const result = renderTerminalQr("https://kanna.trycloudflare.com")
 
     expect(result).toContain("\x1b[47m")
     expect(result).toContain("\n")

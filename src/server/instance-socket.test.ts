@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs"
+import net from "node:net"
 import os from "node:os"
 import path from "node:path"
-import { Effect } from "effect"
+import { Effect, Exit, Scope } from "effect"
 import { runTest } from "./effect/testing"
 import {
   acquireInstanceLock,
@@ -103,18 +104,46 @@ describe("the instance lock", () => {
     const socket = socketPath()
     await acquire(socket)
     let runningChats = 1
-    const detach = attachToSupervisor(
+    const scope = Effect.runSync(Scope.make())
+    await Effect.runPromise(attachToSupervisor(
       { port: 5000, version: "9.9.9", state: () => ({ runningChats, cloud: false }) },
       { socketPath: socket },
-    )
+    ).pipe(Scope.provide(scope)))
     await until(async () => (await runTest(instanceStatus({ socketPath: socket })))?.runningChats === 1)
     expect(await runTest(instanceStatus({ socketPath: socket }))).toMatchObject({ port: 5000, version: "9.9.9" })
 
     runningChats = 3
     await until(async () => (await runTest(instanceStatus({ socketPath: socket })))?.runningChats === 3)
 
-    detach()
+    // Closing the scope detaches: the supervisor forgets the port.
+    await Effect.runPromise(Scope.close(scope, Exit.void))
     await until(async () => (await runTest(instanceStatus({ socketPath: socket })))?.port === null)
+  })
+
+  test("an attached child stops pushing once the supervisor goes away", async () => {
+    const socket = socketPath()
+    // A stand-in supervisor that hangs up on the child as soon as it attaches.
+    let hungUp = false
+    const supervisor = net.createServer((connection) => {
+      connection.once("data", () => {
+        connection.destroy()
+        hungUp = true
+      })
+    })
+    await new Promise<void>((resolve) => supervisor.listen(socket, resolve))
+    const scope = Effect.runSync(Scope.make())
+    let reads = 0
+    await Effect.runPromise(attachToSupervisor(
+      { port: 5001, version: "9.9.9", state: () => { reads += 1; return { runningChats: reads, cloud: false } } },
+      { socketPath: socket },
+    ).pipe(Scope.provide(scope)))
+    await until(async () => hungUp)
+    await Bun.sleep(100)
+    const afterHangUp = reads
+    await Bun.sleep(1_300)
+    expect(reads).toBe(afterHangUp)
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+    supervisor.close()
   })
 
   test("close removes the socket", async () => {

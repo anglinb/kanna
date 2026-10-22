@@ -126,7 +126,7 @@ interface CreateWsRouterArgs {
   refreshInstalledApps?: () => void
   getDiscoveredProjects: () => DiscoveredProject[]
   machineDisplayName: string
-  updateManager: UpdateManager | null
+  updateManager: UpdateManager["Service"] | null
   usageLimits?: Pick<UsageLimits["Service"], "snapshot" | "refresh" | "changes"> | null
   providerAuth?: Pick<
     ProviderAuthManager,
@@ -632,7 +632,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "update",
-          data: updateManager?.getSnapshot() ?? {
+          data: updateManager ? runKannaSync(updateManager.snapshot) : {
             currentVersion: "unknown",
             latestVersion: null,
             status: "idle",
@@ -1188,7 +1188,7 @@ export function createWsRouter({
     }
   })
 
-  const disposeUpdateEvents = updateManager?.onChange(() => {
+  const disposeUpdateEvents = updateManager ? subscribeKanna(updateManager.changes, () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1201,7 +1201,7 @@ export function createWsRouter({
         send(ws, envelope)
       }
     }
-  }) ?? (() => {})
+  }) : () => {}
 
   const disposeUsageLimitsEvents = usageLimits ? subscribeKanna(usageLimits.changes, () => {
     for (const ws of sockets) {
@@ -1376,7 +1376,7 @@ export function createWsRouter({
         }
         case "update.check": {
           const snapshot = updateManager
-            ? await updateManager.checkForUpdates({ force: command.force })
+            ? await runKanna(updateManager.checkForUpdates({ force: command.force }))
             : {
                 currentVersion: "unknown",
                 latestVersion: null,
@@ -1394,7 +1394,7 @@ export function createWsRouter({
           if (!updateManager) {
             throw new Error("Update manager unavailable.")
           }
-          const result = await updateManager.installNightly()
+          const result = await runKanna(updateManager.installNightly)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1402,7 +1402,7 @@ export function createWsRouter({
           if (!updateManager) {
             throw new Error("Update manager unavailable.")
           }
-          const result = await updateManager.installStable()
+          const result = await runKanna(updateManager.installStable)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
@@ -1410,7 +1410,7 @@ export function createWsRouter({
           if (!updateManager) {
             throw new Error("Update manager unavailable.")
           }
-          const result = await updateManager.installUpdate()
+          const result = await runKanna(updateManager.installUpdate)
           send(ws, {
             v: PROTOCOL_VERSION,
             type: "ack",

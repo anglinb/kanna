@@ -109,9 +109,9 @@ const succeeds = Effect.fn("ProcessUtils.succeeds")(function* (argv: ReadonlyArr
 })
 
 /**
- * Whether `command` is on the login shell's PATH. Blocks while the shell
- * runs, on purpose: `installPackageVersion` is synchronous and asks through
- * `runKannaSync`. Probes run in bulk use `commandExists`.
+ * Whether `command` is on the login shell's PATH, asked of `sh` on every
+ * platform (the updaters' check). Blocks while the shell runs. Probes run in
+ * bulk use `commandExists`.
  */
 export const hasCommand = Effect.fn("ProcessUtils.hasCommand")(function* (command: string) {
   return yield* Effect.sync(() => spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" }).status === 0)
