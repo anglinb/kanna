@@ -32,7 +32,7 @@ describe("probeExistingInstance", () => {
     stops.push(server.stop)
 
     const match = await runTest(probeExistingInstance(server.port, dataDir))
-    expect(match).toEqual({ localUrl: `http://localhost:${server.port}`, port: server.port })
+    expect(match).toEqual({ localUrl: `http://localhost:${server.port}`, port: server.port, cloudEnabled: true })
 
     // Same server, different expected data dir (e.g. dev profile) → no match.
     const mismatch = await runTest(probeExistingInstance(server.port, "/somewhere/else"))

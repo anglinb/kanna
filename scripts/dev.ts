@@ -4,11 +4,13 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { LOG_PREFIX } from "../src/shared/branding"
 import { parseDevArgs } from "../src/shared/dev-ports"
 import { isShareEnabled, isTokenShareMode } from "../src/shared/share"
-import { logShareDetails, startShareTunnel } from "../src/server/share"
+import { readRuntimePolicy } from "../src/server/runtime-policy"
 import { Effect } from "effect"
 import { runKanna } from "../src/server/effect/bridge"
 import { ServerPlatform } from "../src/server/effect/runtime"
 import { awaitParentExit } from "../src/server/mac-app"
+
+process.env.KANNA_RUNTIME_PROFILE = "dev"
 
 const cwd = process.cwd()
 const forwardedArgs = process.argv.slice(2)
@@ -16,6 +18,12 @@ const bunBin = process.execPath
 const localHostname = getHostname()
 const devArgs = parseDevArgs(forwardedArgs, localHostname)
 const { clientPort, serverPort, serverArgs, share } = devArgs
+const cloudOverride = serverArgs.includes("--no-cloud") ? false : serverArgs.includes("--cloud") ? true : undefined
+const policy = await runKanna(readRuntimePolicy(cloudOverride).pipe(Effect.provide(ServerPlatform)))
+if (!policy.cloudEnabled && isShareEnabled(share)) {
+  console.error(`${LOG_PREFIX} cloud is disabled; public sharing is unavailable`)
+  process.exit(1)
+}
 
 const clientEnv = {
   ...process.env,
@@ -132,6 +140,7 @@ if (isShareEnabled(share)) {
   const localUrl = `http://localhost:${clientPort}`
 
   try {
+    const { logShareDetails, startShareTunnel } = await import("../src/server/share")
     await waitForLocalUrl(localUrl)
     const shareTunnel = await runKanna(startShareTunnel(localUrl, share).pipe(Effect.provide(ServerPlatform)))
     shareTunnelStop = shareTunnel.stop

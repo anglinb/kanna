@@ -8,10 +8,12 @@
  * log lines, so they stay plain callbacks.
  */
 
-import { Effect, type FileSystem, Match, Schedule, Schema } from "effect"
+import { Effect, type FileSystem, Match, Schedule } from "effect"
 import { renderANSI } from "uqr"
 import { getCloudFilePathDisplay, LOG_PREFIX } from "../../shared/branding"
 import { getMachineDisplayName } from "../machine-name"
+import { PairPromptError } from "./pair-error"
+export { PairPromptError } from "./pair-error"
 import type { HostProcess } from "../platform/host-process"
 import { Machine } from "../platform/machine"
 import type { ProcessSpawner } from "../platform/process-spawner"
@@ -31,15 +33,6 @@ export interface PairCommandArgs {
   action: PairAction
   pairingCode: string | null
 }
-
-/** The terminal's confirmation prompt could not be read. */
-export class PairPromptError extends Schema.TaggedError<PairPromptError>()(
-  "@kanna/server/cloud/pair-command/PairPromptError",
-  {
-    message: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {}
 
 type IdentityEffect<A> = Effect.Effect<A, CloudIdentityFileError, FileSystem.FileSystem | Machine | HostProcess>
 
