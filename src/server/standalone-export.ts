@@ -10,6 +10,7 @@ import type {
 } from "../shared/types"
 import { APP_VERSION } from "../shared/branding"
 import { getProjectExportDir } from "./paths"
+import { Machine } from "./platform/machine"
 
 const STANDALONE_TRANSCRIPT_BUNDLE_VERSION = 1 as const
 const STANDALONE_SHARE_UPLOAD_BASE_URL = "https://kanna.sh/api/share"
@@ -93,17 +94,13 @@ interface PreparedMessagesResult {
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 
-export function getStandaloneViewerDistDir() {
-  return path.join(import.meta.dir, "..", "..", "dist", "export-viewer")
-}
-
 export const writeStandaloneTranscriptExport = Effect.fn("StandaloneExport.write")(function* (
   args: WriteStandaloneTranscriptExportArgs,
   deps: StandaloneExportDeps = {},
-): Effect.fn.Return<StandaloneTranscriptExportCommandResult, StandaloneExportError, FileSystem.FileSystem> {
+): Effect.fn.Return<StandaloneTranscriptExportCommandResult, StandaloneExportError, FileSystem.FileSystem | Machine> {
   yield* Effect.annotateCurrentSpan("chatId", args.chatId)
   const fs = yield* FileSystem.FileSystem
-  const viewerDistDir = deps.viewerDistDir ?? getStandaloneViewerDistDir()
+  const viewerDistDir = deps.viewerDistDir
   const fetchImpl = deps.fetch ?? fetch
   const now = deps.now ?? new Date()
   const shareUploadBaseUrl = deps.shareUploadBaseUrl ?? STANDALONE_SHARE_UPLOAD_BASE_URL
@@ -111,16 +108,16 @@ export const writeStandaloneTranscriptExport = Effect.fn("StandaloneExport.write
   const writeError = (filePath: string) => (cause: unknown) =>
     Effect.fail(new StandaloneExportError({ operation: "write", chatId: args.chatId, filePath, cause }))
 
-  if (!(yield* pathExists(fs, viewerDistDir))) {
+  if (viewerDistDir === undefined || !(yield* pathExists(fs, viewerDistDir))) {
     return yield* new StandaloneExportError({
       operation: "viewer",
       chatId: args.chatId,
-      filePath: viewerDistDir,
+      filePath: viewerDistDir ?? "",
       cause: new Error("Standalone viewer bundle not found. Run `bun run build`."),
     })
   }
 
-  const exportRootDir = getProjectExportDir(args.localPath)
+  const exportRootDir = getProjectExportDir(args.localPath, (yield* Machine).homeDirectory)
   yield* fs.makeDirectory(exportRootDir, { recursive: true }).pipe(Effect.catchTag("PlatformError", writeError(exportRootDir)))
 
   const outputDir = yield* resolveUniqueExportDir(fs, exportRootDir, args.title || args.chatId, now)

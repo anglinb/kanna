@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { runTest } from "./effect/testing"
 import { instanceFingerprint, probeExistingInstance } from "./instance"
-import { startKannaServer } from "./server"
+import { startKannaServer } from "./server-bun"
 
 const stops: Array<() => Promise<void>> = []
 const tempDirs: string[] = []

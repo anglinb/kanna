@@ -1,9 +1,8 @@
-import type { Dirent } from "node:fs"
-import { readdir } from "node:fs/promises"
-import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import type { FsDirEntry, FsListResult } from "../shared/types"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
 import { runCommand } from "./process-utils"
 
 /**
@@ -20,9 +19,8 @@ export class ProjectDirectoryError extends Schema.TaggedError<ProjectDirectoryEr
   },
 ) {}
 
-/** Render an absolute path with the home directory abbreviated to `~`. */
-export function formatDisplayPath(filePath: string) {
-  const homePath = homedir()
+/** Render an absolute path with the home directory (the machine's) abbreviated to `~`. */
+export function formatDisplayPath(filePath: string, homePath: string) {
   if (filePath === homePath) return "~"
   if (filePath.startsWith(`${homePath}${path.sep}`)) {
     return `~${filePath.slice(homePath.length)}`
@@ -30,24 +28,26 @@ export function formatDisplayPath(filePath: string) {
   return filePath
 }
 
-export function resolveLocalPath(localPath: string) {
+/** `localPath` made absolute, with `~` expanded to `homeDir` (the machine's home). */
+export function resolveLocalPath(localPath: string, homeDir: string) {
   const trimmed = localPath.trim()
   if (!trimmed) {
     throw new Error("Project path is required")
   }
   if (trimmed === "~") {
-    return homedir()
+    return homeDir
   }
   if (trimmed.startsWith("~/")) {
-    return path.join(homedir(), trimmed.slice(2))
+    return path.join(homeDir, trimmed.slice(2))
   }
   return path.resolve(trimmed)
 }
 
-/** `resolveLocalPath` for Effect code: a blank path is a typed failure. */
+/** `resolveLocalPath` for Effect code, against the machine's home: a blank path is a typed failure. */
 export const resolveProjectPath = Effect.fn("Paths.resolveProjectPath")(function* (localPath: string) {
+  const { homeDirectory } = yield* Machine
   return yield* Effect.try({
-    try: () => resolveLocalPath(localPath),
+    try: () => resolveLocalPath(localPath, homeDirectory),
     catch: (cause) => new ProjectDirectoryError({
       operation: "resolve",
       path: localPath,
@@ -222,7 +222,8 @@ export const listDirectory = Effect.fn("Paths.listDirectory")(function* (
   requestedPath?: string,
   opts?: { nearest?: boolean },
 ) {
-  let resolved = requestedPath?.trim() ? yield* resolveProjectPath(requestedPath) : homedir()
+  const { homeDirectory } = yield* Machine
+  let resolved = requestedPath?.trim() ? yield* resolveProjectPath(requestedPath) : homeDirectory
   let missingSuffix: string | undefined
 
   if (opts?.nearest) {
@@ -232,25 +233,25 @@ export const listDirectory = Effect.fn("Paths.listDirectory")(function* (
   }
   yield* Effect.annotateCurrentSpan("path", resolved)
 
-  // node's readdir rather than FileSystem.readDirectory: only it hands back
-  // each entry's type from the same syscall, and a symlink to a folder lists
-  // as a file here, as it always has.
+  // Entries with their kinds rather than FileSystem.readDirectory: only that
+  // hands back each entry's type from the same syscall, and a symlink to a
+  // folder lists as a file here, as it always has.
   const listed = resolved
-  const dirents: Dirent[] = yield* Effect.tryPromise({
-    try: () => readdir(listed, { withFileTypes: true }),
-    catch: (cause) => new ProjectDirectoryError({
+  const extras = yield* FileSystemExtras
+  const dirents = yield* extras.readDirectoryEntries(listed).pipe(
+    Effect.catchTag("PlatformError", (error) => Effect.fail(new ProjectDirectoryError({
       operation: "list",
       path: listed,
-      message: listErrorMessage(listed, cause),
-      cause,
-    }),
-  })
+      message: listErrorMessage(listed, error.reason.cause),
+      cause: error.reason.cause,
+    }))),
+  )
 
   let isGitRepo = false
   const dirs: FsDirEntry[] = []
   const files: FsDirEntry[] = []
   for (const dirent of dirents) {
-    if (dirent.isDirectory()) {
+    if (dirent.kind === "Directory") {
       if (dirent.name === ".git") isGitRepo = true
       dirs.push({ name: dirent.name, kind: "dir" })
     } else {
@@ -267,7 +268,7 @@ export const listDirectory = Effect.fn("Paths.listDirectory")(function* (
   return {
     path: resolved,
     parentPath: parent === resolved ? null : parent,
-    homePath: homedir(),
+    homePath: homeDirectory,
     isGitRepo,
     entries: truncated ? entries.slice(0, FS_LIST_ENTRY_LIMIT) : entries,
     truncated,
@@ -282,10 +283,10 @@ export const createDirectory = Effect.fn("Paths.createDirectory")(function* (req
   return yield* listDirectory(resolved)
 })
 
-export function getProjectUploadDir(localPath: string) {
-  return path.join(resolveLocalPath(localPath), ".kanna", "uploads")
+export function getProjectUploadDir(localPath: string, homeDir: string) {
+  return path.join(resolveLocalPath(localPath, homeDir), ".kanna", "uploads")
 }
 
-export function getProjectExportDir(localPath: string) {
-  return path.join(resolveLocalPath(localPath), ".kanna", "exports")
+export function getProjectExportDir(localPath: string, homeDir: string) {
+  return path.join(resolveLocalPath(localPath, homeDir), ".kanna", "exports")
 }

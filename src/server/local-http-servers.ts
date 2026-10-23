@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
 import path from "node:path"
-import { promisify } from "node:util"
-import { Clock, Effect, Option, Schema } from "effect"
+import { Clock, Effect, Option, Schema, Stream } from "effect"
+import { Machine } from "./platform/machine"
+import { ProcessSpawner } from "./platform/process-spawner"
 
-const execFileAsync = promisify(execFile)
 // macOS ships lsof only in /usr/sbin. A launchd agent gets a trimmed PATH that
 // often stops at /bin, so a bare "lsof" fails with ENOENT and discovery goes
 // silent. Try PATH first, then the known absolute path.
@@ -78,11 +77,71 @@ class LocalHttpProbeError extends Schema.TaggedError<LocalHttpProbeError>()(
 const COMMAND_ERROR = "@kanna/server/local-http-servers/LocalCommandError"
 const PROBE_ERROR = "@kanna/server/local-http-servers/LocalHttpProbeError"
 
-const runCommand = (bin: string, args: string[], options: { timeout: number; maxBuffer: number }) =>
-  Effect.tryPromise({
-    try: (signal) => execFileAsync(bin, args, { ...options, signal }),
-    catch: (cause) => new LocalCommandError({ command: bin, cause }),
-  })
+/**
+ * How node's `execFile` failed, kept as the error's cause so `code` and
+ * `stdout` read the same: the exit status (a number) when the command ran
+ * and exited non-zero, a string code when it timed out or overflowed.
+ */
+function execFailure(message: string, fields: { code: unknown; stdout?: string; stderr?: string; killed?: boolean }) {
+  return Object.assign(new Error(message), fields)
+}
+
+/**
+ * `execFile` semantics on the machine's `ProcessSpawner`: collects stdout,
+ * kills the command past `timeout` ms or `maxBuffer` bytes of stdout, and
+ * fails on a non-zero exit with the output so far.
+ */
+const runCommand = Effect.fn("LocalHttpServers.runCommand")(function* (
+  bin: string,
+  args: string[],
+  options: { timeout: number; maxBuffer: number },
+) {
+  const spawner = yield* ProcessSpawner
+  const commandLine = [bin, ...args].join(" ")
+  const child = yield* spawner.spawn([bin, ...args], { stdout: "pipe", stderr: "pipe" }).pipe(
+    Effect.mapError((error) => new LocalCommandError({ command: bin, cause: error.cause })),
+  )
+  let stdout = ""
+  let overflowed = false
+  const collect = Effect.all([
+    child.stdout.pipe(
+      Stream.decodeText,
+      Stream.runForEach((chunk) => Effect.gen(function* () {
+        stdout += chunk
+        if (stdout.length > options.maxBuffer && !overflowed) {
+          overflowed = true
+          yield* child.kill()
+        }
+      })),
+    ),
+    Stream.mkString(Stream.decodeText(child.stderr)),
+    child.exited,
+  ], { concurrency: "unbounded" }).pipe(
+    Effect.mapError((cause) => new LocalCommandError({ command: bin, cause })),
+  )
+  const finished = yield* Effect.timeoutOption(collect, options.timeout)
+  if (Option.isNone(finished)) {
+    yield* child.kill()
+    return yield* new LocalCommandError({
+      command: bin,
+      cause: execFailure(`Command failed: ${commandLine}`, { code: null, killed: true, stdout }),
+    })
+  }
+  const [, stderr, exit] = finished.value
+  if (overflowed) {
+    return yield* new LocalCommandError({
+      command: bin,
+      cause: execFailure("stdout maxBuffer length exceeded", { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stdout, stderr }),
+    })
+  }
+  if (exit.exitCode !== 0) {
+    return yield* new LocalCommandError({
+      command: bin,
+      cause: execFailure(`Command failed: ${commandLine}\n${stderr}`, { code: exit.exitCode, stdout, stderr }),
+    })
+  }
+  return { stdout, stderr }
+}, Effect.scoped)
 
 const execLsof = Effect.fn("LocalHttpServers.execLsof")(function* (args: string[], options: { timeout: number; maxBuffer: number }) {
   let lastError: LocalCommandError | undefined
@@ -222,10 +281,11 @@ export const killLocalHttpServer = Effect.fn("LocalHttpServers.kill")(function* 
     return yield* new NoListeningProcessError({ port })
   }
 
-  yield* Effect.try({
-    try: () => process.kill(owner.pid, "SIGTERM"),
-    catch: (cause) => new KillProcessError({ port, pid: owner.pid, cause }),
-  })
+  const machine = yield* Machine
+  yield* machine.signalProcess(owner.pid, "SIGTERM").pipe(
+    Effect.catchTag("@kanna/server/platform/ProcessSignalError", (error) =>
+      Effect.fail(new KillProcessError({ port, pid: owner.pid, cause: error.cause }))),
+  )
 
   return {
     ok: true,

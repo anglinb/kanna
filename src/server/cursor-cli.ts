@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto"
-import { homedir } from "node:os"
 import { Cause, Context, Effect, FileSystem, Layer, Match, Option, Queue, Schema, Stream, type Scope } from "effect"
 import type { ContextWindowUsageSnapshot } from "../shared/types"
 import { asNumber, asRecord, asString } from "../shared/json"
@@ -8,6 +7,8 @@ import { collectCliOutput, lenient, pumpCliTurn, spawnCli, type SpawnCli } from 
 import type { HarnessEvent, HarnessTurnEffect } from "./harness-types"
 import type { KannaToolHost } from "./kanna-tools"
 import { createCursorKannaTools, type CursorKannaToolsError } from "./cursor-kanna-tools"
+import { HttpHost } from "./platform/http-host"
+import { Machine } from "./platform/machine"
 import type { CommandSpawnError } from "./process-utils"
 import { timestamped } from "./transcript"
 
@@ -348,12 +349,14 @@ export class CursorCli extends Context.Service<CursorCli, {
 }
 
 export const makeCursorCli = Effect.fn("CursorCli.make")(function* (options: CursorCliOptions = {}) {
-  const fs = yield* FileSystem.FileSystem
-  const spawnProcess = options.spawnProcess ?? spawnCli("cursor-agent")
+  // Only these two: the whole context would carry the layer's Scope over the turn's.
+  const kannaToolsContext = Context.pick(FileSystem.FileSystem, HttpHost)(yield* Effect.context<FileSystem.FileSystem | HttpHost>())
+  const spawnProcess = options.spawnProcess ?? (yield* spawnCli("cursor-agent"))
+  const machine = yield* Machine
 
   const listModels = Effect.fn("CursorCli.listModels")(function* (timeoutMs = 30_000) {
     // The model list is account-level, not workspace-level — spawn from HOME.
-    const output = yield* spawnProcess({ cwd: homedir(), argv: ["--list-models"] }).pipe(
+    const output = yield* spawnProcess({ cwd: machine.homeDirectory, argv: ["--list-models"] }).pipe(
       Effect.flatMap(collectCliOutput),
       Effect.scoped,
       Effect.timeoutOrElse({
@@ -391,7 +394,7 @@ export const makeCursorCli = Effect.fn("CursorCli.make")(function* (options: Cur
     yield* Effect.addFinalizer(() => Queue.end(queue))
 
     const customTools = args.customTools
-      ? yield* createCursorKannaTools(args.customTools).pipe(Effect.provideService(FileSystem.FileSystem, fs))
+      ? yield* createCursorKannaTools(args.customTools).pipe(Effect.provide(kannaToolsContext))
       : undefined
     if (customTools) argv.push("--plugin-dir", customTools.directory, "--approve-mcps")
     const closeTools = customTools?.close ?? Effect.void

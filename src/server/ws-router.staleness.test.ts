@@ -14,6 +14,7 @@ import { applyIncrementalChatSnapshot } from "../client/app/snapshotEquality"
 import { createEmptyState } from "./events"
 import { fakeRouterStore } from "./chat-commands.fake"
 import { createWsRouter } from "./ws-router"
+import { testPlatformContext } from "./platform/testing"
 
 /**
  * Broadcast-staleness invariant suite.
@@ -336,6 +337,7 @@ function createWorld(options?: { projectPath?: string }) {
   const keybindings = makeFakeKeybindings(keybindingsSnapshot as never)
 
   const router = createWsRouter({
+    platform: testPlatformContext,
     store: fakeRouterStore(store) as never,
     diffStore,
     worktreeProbe: makeFakeWorktreeProbe(),

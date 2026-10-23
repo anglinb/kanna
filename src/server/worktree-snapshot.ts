@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto"
-import { copyFile, lstat, rm, stat, utimes } from "node:fs/promises"
 import path from "node:path"
 import { Context, Effect, Fiber, FileSystem, Layer, Option, Schema, Semaphore } from "effect"
 import type { WorkingTreeLocation } from "./diff-store"
 import type { TouchedFile } from "./events"
-import { git, resolveLocation, treeBlobs, type WorktreeGitError } from "./worktree-git"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
+import type { ProcessSpawner } from "./platform/process-spawner"
+import { bindWorktreeGit, git, type WorktreeGitError } from "./worktree-git"
+import { capturePlatform } from "./platform"
 
 /**
  * Which files a chat actually changed, by snapshotting the working tree at each
@@ -119,6 +122,9 @@ export class TurnFileTracker extends Context.Service<TurnFileTracker, {
 
 const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options: TurnFileTrackerOptions) {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
+  const platform = yield* capturePlatform<FileSystem.FileSystem | FileSystemExtras | ProcessSpawner>()
+  const { git, resolveLocation, treeBlobs } = yield* bindWorktreeGit
   const pendingTurns = new Map<string, Fiber.Fiber<PendingTurn, WorktreeGitError>>()
   const locations = new Map<string, Effect.Effect<Option.Option<WorkingTreeLocation>, WorktreeGitError>>()
   const layerScope = yield* Effect.scope
@@ -153,10 +159,10 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
     const { repoRoot, gitDir } = location.value
 
     const indexPath = path.join(gitDir, `kanna-snapshot-index-${randomUUID()}`)
-    const env = { ...process.env, GIT_INDEX_FILE: indexPath }
+    const env = { ...machine.env.snapshot(), GIT_INDEX_FILE: indexPath }
     return yield* Effect.gen(function* () {
-      yield* seedIndex(location.value, indexPath, env)
-      const largeFiles = yield* findLargeDirtyFiles(repoRoot, env)
+      yield* seedIndex(location.value, indexPath, env).pipe(Effect.provide(platform))
+      const largeFiles = yield* findLargeDirtyFiles(repoRoot, env).pipe(Effect.provide(platform))
       if (Option.isNone(largeFiles)) return Option.none<Snapshot>()
       // Literal so a path with `*` or `[` in it excludes only itself. Over
       // stdin so no number of large files can hit the argument limit; that
@@ -336,29 +342,32 @@ const makeTurnFileTracker = Effect.fn("TurnFileTracker.make")(function* (options
  * cache with it. An index seeded by `read-tree HEAD` has none, so every
  * tracked file would be re-hashed on every snapshot. The copy keeps its mtime
  * because git's racy-clean check compares entries against it, which is why
- * this uses node's `fs`: `FileSystem.stat` rounds mtimes to whole
- * milliseconds. With no index to copy, seed from HEAD; that fails, as
- * expected, on an unborn HEAD.
+ * the stat is `FileSystemExtras`': `FileSystem.stat` rounds mtimes to whole
+ * milliseconds. The times go back as Dates, as node's stat handed them over.
+ * With no index to copy, seed from HEAD; that fails, as expected, on an
+ * unborn HEAD.
  */
-const seedIndex = (location: WorkingTreeLocation, indexPath: string, env: Record<string, string | undefined>) => {
+const seedIndex = Effect.fnUntraced(function* (location: WorkingTreeLocation, indexPath: string, env: Record<string, string | undefined>) {
+  const fs = yield* FileSystem.FileSystem
+  const files = yield* FileSystemExtras
   const userIndex = path.join(location.gitDir, "index")
-  return Effect.tryPromise(() => stat(userIndex)).pipe(
-    Effect.tap(() => Effect.tryPromise(() => copyFile(userIndex, indexPath))),
-    Effect.flatMap(({ atime, mtime }) => Effect.tryPromise(() => utimes(indexPath, atime, mtime))),
-    Effect.catch(() => Effect.tryPromise(() => rm(indexPath, { force: true })).pipe(
+  yield* files.stat(userIndex).pipe(
+    Effect.tap(() => fs.copyFile(userIndex, indexPath)),
+    Effect.flatMap(({ atimeMs, mtimeMs }) => fs.utimes(indexPath, new Date(atimeMs), new Date(mtimeMs))),
+    Effect.catch(() => fs.remove(indexPath, { force: true }).pipe(
       Effect.ignore,
       Effect.andThen(git(["read-tree", "HEAD"], location.repoRoot, { env })),
       Effect.asVoid,
     )),
   )
-}
+})
 
 /**
  * Dirty files at or above `LARGE_FILE_BYTES`, by path, each with a
  * `size:mtime:ctime:ino` fingerprint. ctime can't be set back and a replaced
  * file gets a new inode, so a same-size edit that keeps the old mtime
- * (`cp -p`, `rsync -a`) still shows. Node's `lstat`, for sub-millisecond
- * times, ctime and the inode.
+ * (`cp -p`, `rsync -a`) still shows. `FileSystemExtras.lstat`, for
+ * sub-millisecond times, ctime and the inode.
  *
  * Dirty means untracked, or different from `HEAD`, staged or not. Measured
  * against the index instead, staging a file would take it out of the set, and
@@ -371,6 +380,7 @@ const seedIndex = (location: WorkingTreeLocation, indexPath: string, env: Record
  * deletion without hashing anything. None when git could not list the files.
  */
 const findLargeDirtyFiles = Effect.fnUntraced(function* (repoRoot: string, env: Record<string, string | undefined>) {
+  const files = yield* FileSystemExtras
   const [untracked, againstHead] = yield* Effect.all([
     git(["ls-files", "-z", "--others", "--exclude-standard"], repoRoot, { env }),
     git(["diff-index", "--name-only", "-z", "--no-renames", "HEAD"], repoRoot, { env }),
@@ -381,9 +391,9 @@ const findLargeDirtyFiles = Effect.fnUntraced(function* (repoRoot: string, env: 
   if (untracked.exitCode !== 0 || changed.exitCode !== 0) return Option.none<Map<string, string>>()
   const paths = [...new Set(`${untracked.stdout}\0${changed.stdout}`.split("\0").filter(Boolean))]
   const largeFiles = new Map<string, string>()
-  yield* Effect.forEach(paths, (filePath) => Effect.tryPromise(() => lstat(path.join(repoRoot, filePath))).pipe(
+  yield* Effect.forEach(paths, (filePath) => files.lstat(path.join(repoRoot, filePath)).pipe(
     Effect.map((stats) => {
-      if (stats.isFile() && stats.size >= LARGE_FILE_BYTES) {
+      if (stats.kind === "File" && stats.size >= LARGE_FILE_BYTES) {
         largeFiles.set(filePath, `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.ino}`)
       }
     }),

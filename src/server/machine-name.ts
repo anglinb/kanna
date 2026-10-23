@@ -1,12 +1,11 @@
-import { homedir, hostname } from "node:os"
 import path from "node:path"
-import process from "node:process"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import { getCloudFilePath } from "../shared/branding"
+import { Machine } from "./platform/machine"
 import { runCommand } from "./process-utils"
 
-export function getMachineNameOverridePath() {
-  return path.join(homedir(), ".kanna", "machine-name")
+export function getMachineNameOverridePath(homeDir: string) {
+  return path.join(homeDir, ".kanna", "machine-name")
 }
 
 /** The fields of cloud.json this module reads; the rest belongs to cloud/identity. */
@@ -30,9 +29,9 @@ const readOptionalFile = Effect.fn("MachineName.readOptionalFile")(function* (fi
  * previews name themselves after the ref they serve; users can set it too.
  */
 export const readMachineNameOverride = Effect.fn("MachineName.readOverride")(function* (
-  overridePath: string = getMachineNameOverridePath(),
+  overridePath?: string,
 ) {
-  const text = yield* readOptionalFile(overridePath)
+  const text = yield* readOptionalFile(overridePath ?? getMachineNameOverridePath((yield* Machine).homeDirectory))
   const firstLine = Option.isSome(text) ? text.value.split("\n")[0]?.trim() ?? "" : ""
   return firstLine ? firstLine.slice(0, 80) : null
 })
@@ -42,9 +41,9 @@ export const readMachineNameOverride = Effect.fn("MachineName.readOverride")(fun
  * user picked at creation — the sandbox's own hostname is a random id.
  */
 export const readDevboxSubdomain = Effect.fn("MachineName.readDevboxSubdomain")(function* (
-  identityPath: string = getCloudFilePath(homedir()),
+  identityPath?: string,
 ) {
-  const text = yield* readOptionalFile(identityPath)
+  const text = yield* readOptionalFile(identityPath ?? getCloudFilePath((yield* Machine).homeDirectory))
   if (Option.isNone(text)) return null
   const identity = Schema.decodeUnknownOption(DevboxIdentity)(text.value)
   if (Option.isNone(identity) || identity.value.mode !== "direct") return null
@@ -74,13 +73,14 @@ export const getMachineDisplayName = Effect.fn("MachineName.getDisplayName")(fun
     return devboxSubdomain
   }
 
-  if (process.platform === "darwin") {
+  const machine = yield* Machine
+  if (machine.platform === "darwin") {
     const computerName = yield* readComputerName()
     if (computerName) {
       return computerName
     }
   }
 
-  const rawHostname = hostname().trim()
+  const rawHostname = machine.hostname().trim()
   return rawHostname.replace(/\.local$|\.lan$/i, "") || "This Machine"
 })

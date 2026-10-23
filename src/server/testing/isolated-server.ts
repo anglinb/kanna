@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { startKannaServer } from "../server"
+import { startKannaServer } from "../server-bun"
 
 /**
  * A real server on a random port with its data, settings and keybindings in a

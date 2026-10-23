@@ -22,6 +22,8 @@ import { deriveLocalProjectsSnapshot } from "./read-models"
 import { SERVER_PROVIDERS, applyCodexModels, resetServerProvidersForTests } from "./provider-catalog"
 import { createWsRouter } from "./ws-router"
 import { makeFakeUpdateManager } from "./update-manager.fake"
+import { testLocalMachine } from "./testing/local-machine"
+import { testPlatformContext } from "./platform/testing"
 
 function withSidebarGroupDefaults(group: {
   groupKey: string
@@ -216,6 +218,7 @@ function createFakeLlmProvider(): CreateWsRouterArgs["llmProvider"] {
 /** Builds a router with fake dependencies; pass overrides for the pieces a test cares about. */
 function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
   return createWsRouter({
+    platform: testPlatformContext,
     store: createFakeStore(),
     diffStore: makeFakeDiffStore(),
     worktreeProbe: makeFakeWorktreeProbe(),
@@ -358,7 +361,7 @@ describe("ws-router", () => {
         command: { type: "project.rename", localPath: projectPath, title: "Display Name" },
       }))
 
-      const projects = deriveLocalProjectsSnapshot(store.state, discovered, "Local Machine").projects
+      const projects = deriveLocalProjectsSnapshot(store.state, discovered, { ...testLocalMachine, displayName: "Local Machine" }).projects
       expect(projects).toHaveLength(1)
       expect(projects[0]).toMatchObject({ localPath: projectPath, sidebarTitle: "Display Name", chatCount: 0 })
       expect(store.state.chatsById.size).toBe(0)
@@ -415,7 +418,7 @@ describe("ws-router", () => {
       })
 
       const reloaded = await openEventStore(dataDir)
-      expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, "Machine").projects).toEqual([])
+      expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, { ...testLocalMachine, displayName: "Machine" }).projects).toEqual([])
       expect((await stat(projectPath)).isDirectory()).toBe(true)
     } finally {
       await rm(projectPath, { recursive: true, force: true })

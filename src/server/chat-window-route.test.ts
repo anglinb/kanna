@@ -9,6 +9,7 @@ import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
 import { ChatWindowPreparationError, handleChatWindow, type ChatWindowRouteDeps } from "./chat-window-route"
 import { createWsRouter } from "./ws-router"
+import { testPlatformContext } from "./platform/testing"
 
 /** prompt, text, text: three entries, two assistant messages. */
 function turn(n: number) {
@@ -50,6 +51,7 @@ async function firstSocketSnapshot(deps: ReturnType<typeof createDeps>) {
   const sent: unknown[] = []
   const ws = { sent, data: { subscriptions: new Map(), protectedDraftChatIds: new Set<string>() }, send: (m: string) => { sent.push(JSON.parse(m)) } }
   const router = createWsRouter({
+    platform: testPlatformContext,
     store: deps.store as never,
     diffStore: makeFakeDiffStore(),
     worktreeProbe: makeFakeWorktreeProbe(),
@@ -127,14 +129,14 @@ describe("chat window route", () => {
     const prepared: string[] = []
     const store = {
       ...deps.store,
-      prepareTranscript: (chatId: string) => Effect.sync(() => { prepared.push(chatId) }),
+      retainTranscript: (chatId: string) => Effect.sync(() => { prepared.push(chatId) }),
     }
     const routeDeps = { ...deps, store } as unknown as ChatWindowRouteDeps
     expect((await Effect.runPromise(handleChatWindow(new Request(url), url, routeDeps)))?.status).toBe(200)
     expect(prepared).toEqual(["chat-1"])
 
     const cause = new Error("transcript unavailable")
-    store.prepareTranscript = () => Effect.die(cause)
+    store.retainTranscript = () => Effect.die(cause)
     const result = await Effect.runPromise(Effect.result(handleChatWindow(new Request(url), url, routeDeps)))
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) {

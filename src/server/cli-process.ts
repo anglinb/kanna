@@ -1,6 +1,5 @@
-import process from "node:process"
 import { Effect, Fiber, Option, Result, Schema, Stream, type Scope } from "effect"
-import { CommandSpawnError } from "./process-utils"
+import { type CommandSpawnError, ProcessSpawner } from "./platform/process-spawner"
 
 /**
  * A provider CLI run for one turn or one query (Cursor's `cursor-agent`,
@@ -28,47 +27,34 @@ export interface CliSpawnArgs {
 export type SpawnCli = (args: CliSpawnArgs) => Effect.Effect<CliProcess, CommandSpawnError, Scope.Scope>
 
 /**
- * Spawns `command` with the server's environment. The error's message is the
- * spawn error's own (e.g. `Executable not found in $PATH: "grok"`), which the
- * adapters show the user as the turn's error, as they did before.
+ * A spawner for `command` with the machine's environment, bound to the
+ * machine's `ProcessSpawner`. The error's message is the spawn error's own
+ * (e.g. `Executable not found in $PATH: "grok"`), which the adapters show the
+ * user as the turn's error, as they did before.
  */
-export const spawnCli = (command: string): SpawnCli =>
-  Effect.fn("CliProcess.spawn")(function* (args: CliSpawnArgs) {
+export const spawnCli = Effect.fn("CliProcess.make")(function* (command: string) {
+  const spawner = yield* ProcessSpawner
+  const spawn: SpawnCli = Effect.fn("CliProcess.spawn")(function* (args: CliSpawnArgs) {
     yield* Effect.annotateCurrentSpan("command", command)
-    const proc = yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => Bun.spawn([command, ...args.argv], {
-          cwd: args.cwd,
-          env: process.env,
-          stdin: args.stdin === undefined ? "ignore" : Buffer.from(args.stdin),
-          stdout: "pipe",
-          stderr: "pipe",
-        }),
-        catch: (cause) => new CommandSpawnError({
-          command,
-          message: cause instanceof Error ? cause.message : `Failed to start ${command}`,
-          cause,
-        }),
-      }),
-      (proc) => Effect.sync(() => {
-        if (proc.exitCode === null && proc.signalCode === null) proc.kill()
-      }),
-    )
+    const proc = yield* spawner.spawn([command, ...args.argv], {
+      cwd: args.cwd,
+      stdin: args.stdin ?? "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
     return {
-      stdout: pipeText(command, proc.stdout),
-      stderr: pipeText(command, proc.stderr),
-      exitCode: Effect.promise(() => proc.exited).pipe(Effect.map(() => proc.exitCode)),
-      kill: (signal) => Effect.sync(() => {
-        if (proc.exitCode === null && proc.signalCode === null) proc.kill(signal)
-      }),
+      stdout: pipeText(proc.stdout),
+      stderr: pipeText(proc.stderr),
+      exitCode: proc.exited.pipe(Effect.map((exit) => exit.exitCode)),
+      kill: proc.kill,
     } satisfies CliProcess
   })
+  return spawn
+})
 
-const pipeText = (command: string, stream: ReadableStream<Uint8Array>) =>
-  Stream.fromReadableStream({
-    evaluate: () => stream,
-    onError: (cause) => new CommandSpawnError({ command, message: `Failed to read the output of ${command}`, cause }),
-  }).pipe(
+/** A pipe as text; a pipe that errors as the process dies just ends. */
+const pipeText = (stream: Stream.Stream<Uint8Array, CommandSpawnError>) =>
+  stream.pipe(
     Stream.decodeText,
     Stream.catchTag("@kanna/server/process-utils/CommandSpawnError", () => Stream.empty),
   )

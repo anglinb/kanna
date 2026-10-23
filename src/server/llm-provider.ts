@@ -1,9 +1,9 @@
-import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import OpenAI from "openai"
 import { getLlmProviderFilePath } from "../shared/branding"
 import { formatDisplayPath } from "./paths"
+import { Machine } from "./platform/machine"
 import {
   DEFAULT_OPENAI_SDK_MODEL,
   DEFAULT_OPENROUTER_SDK_MODEL,
@@ -66,9 +66,11 @@ export function resolveLlmProviderDefaultModel(provider: LlmProviderKind) {
   return ""
 }
 
+/** `filePath` is shown relative to `homeDirectory` (`~/...`). */
 export function normalizeLlmProviderSnapshot(
   value: unknown,
-  filePath = getLlmProviderFilePath(homedir())
+  filePath: string,
+  homeDirectory: string,
 ): LlmProviderSnapshot {
   const source = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -78,6 +80,7 @@ export function normalizeLlmProviderSnapshot(
   if (!source) {
     return createDefaultSnapshot(
       filePath,
+      homeDirectory,
       value === undefined || value === null ? null : "LLM provider file must contain a JSON object. Using defaults."
     )
   }
@@ -117,11 +120,11 @@ export function normalizeLlmProviderSnapshot(
     faveModels: normalizeFaveModels(source.faveModels),
     enabled,
     warning: warnings.length > 0 ? `Some Model Registry settings are invalid: ${warnings.join("; ")}` : null,
-    filePathDisplay: formatDisplayPath(filePath),
+    filePathDisplay: formatDisplayPath(filePath, homeDirectory),
   }
 }
 
-function createDefaultSnapshot(filePath: string, warning: string | null = null): LlmProviderSnapshot {
+function createDefaultSnapshot(filePath: string, homeDirectory: string, warning: string | null = null): LlmProviderSnapshot {
   return {
     provider: DEFAULT_PROVIDER,
     apiKey: "",
@@ -131,7 +134,7 @@ function createDefaultSnapshot(filePath: string, warning: string | null = null):
     faveModels: normalizeFaveModels([]),
     enabled: false,
     warning,
-    filePathDisplay: formatDisplayPath(filePath),
+    filePathDisplay: formatDisplayPath(filePath, homeDirectory),
   }
 }
 
@@ -146,9 +149,10 @@ export class LlmProviderFileError extends Schema.TaggedError<LlmProviderFileErro
 
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
 
-export const readLlmProviderSnapshot = Effect.fn("LlmProvider.read")(function* (
-  filePath: string = getLlmProviderFilePath(homedir()),
-) {
+
+export const readLlmProviderSnapshot = Effect.fn("LlmProvider.read")(function* (filePathOverride?: string) {
+  const homeDirectory = (yield* Machine).homeDirectory
+  const filePath = filePathOverride ?? getLlmProviderFilePath(homeDirectory)
   yield* Effect.annotateCurrentSpan("filePath", filePath)
   const fs = yield* FileSystem.FileSystem
   const text = yield* fs.readFileString(filePath).pipe(
@@ -158,25 +162,27 @@ export const readLlmProviderSnapshot = Effect.fn("LlmProvider.read")(function* (
       Effect.fail(new LlmProviderFileError({ operation: "read", filePath, cause }))),
   )
   if (Option.isNone(text)) {
-    return createDefaultSnapshot(filePath)
+    return createDefaultSnapshot(filePath, homeDirectory)
   }
   if (!text.value.trim()) {
-    return createDefaultSnapshot(filePath, "LLM provider file was empty. Using defaults.")
+    return createDefaultSnapshot(filePath, homeDirectory, "LLM provider file was empty. Using defaults.")
   }
   return yield* decodeJson(text.value).pipe(
-    Effect.map((parsed) => normalizeLlmProviderSnapshot(parsed, filePath)),
+    Effect.map((parsed) => normalizeLlmProviderSnapshot(parsed, filePath, homeDirectory)),
     Effect.catchTag("SchemaError", () =>
-      Effect.succeed(createDefaultSnapshot(filePath, "LLM provider file is invalid JSON. Using defaults."))),
+      Effect.succeed(createDefaultSnapshot(filePath, homeDirectory, "LLM provider file is invalid JSON. Using defaults."))),
   )
 })
 
 export const writeLlmProviderSnapshot = Effect.fn("LlmProvider.write")(function* (
   value: Pick<LlmProviderFile, "provider" | "apiKey" | "model" | "faveModels"> & { baseUrl: string },
-  filePath: string = getLlmProviderFilePath(homedir()),
+  filePathOverride?: string,
 ) {
+  const homeDirectory = (yield* Machine).homeDirectory
+  const filePath = filePathOverride ?? getLlmProviderFilePath(homeDirectory)
   yield* Effect.annotateCurrentSpan("filePath", filePath)
   const fs = yield* FileSystem.FileSystem
-  const snapshot = normalizeLlmProviderSnapshot(value, filePath)
+  const snapshot = normalizeLlmProviderSnapshot(value, filePath, homeDirectory)
   const payload: LlmProviderFile = {
     provider: snapshot.provider,
     apiKey: snapshot.apiKey,
@@ -231,7 +237,8 @@ export class LlmProviderRequestError extends Schema.TaggedError<LlmProviderReque
 export const validateLlmProviderCredentials = Effect.fn("LlmProvider.validate")(function* (
   value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">,
 ) {
-  const snapshot = normalizeLlmProviderSnapshot(value)
+  // The snapshot only carries the credentials here; its file path is never shown.
+  const snapshot = normalizeLlmProviderSnapshot(value, "llm-provider.json", "")
   if (!snapshot.enabled) {
     return {
       ok: false,

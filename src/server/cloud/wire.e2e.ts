@@ -27,8 +27,10 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { Subprocess } from "bun"
 import { PROXY_AUTH_HEADER, type CloudWsEndpointResponse } from "../../shared/cloud-api"
-import { startKannaServer } from "../server"
+import { startKannaServer } from "../server-bun"
+import { Effect } from "effect"
 import { runKanna, runKannaSync } from "../effect/bridge"
+import { ServerPlatform } from "../effect/runtime"
 import { createCloudApiClient } from "./api-client"
 import { normalizeCloudIdentity, type CloudIdentity } from "./identity"
 import { createCloudRuntime, type CloudRuntime } from "./index"
@@ -281,7 +283,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     })
     kannaStop = server.stop
     kannaLocalUrl = `http://127.0.0.1:${server.port}`
-    runKannaSync(cloudRuntime.start({ localUrl: kannaLocalUrl }))
+    runKannaSync(cloudRuntime.start({ localUrl: kannaLocalUrl }).pipe(Effect.provide(ServerPlatform)))
 
     // The supervisor heartbeats the moment the connector is up — no
     // propagation wait, no URL registration.
@@ -433,7 +435,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
     // to the harness.
     const parsed = normalizeCloudIdentity(injectedCloudJson, (message) => {
       throw new Error(`injected cloud.json rejected: ${message}`)
-    })
+    }, process.env)
     if (!parsed) throw new Error("injected cloud.json did not normalize")
     expect(parsed.mode).toBe("direct")
     expect(parsed.tunnelToken).toBe("")
@@ -458,7 +460,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
       trustProxy: true,
     })
     devboxStop = server.stop
-    runKannaSync(devboxRuntime.start({ localUrl: `http://127.0.0.1:${server.port}` }))
+    runKannaSync(devboxRuntime.start({ localUrl: `http://127.0.0.1:${server.port}` }).pipe(Effect.provide(ServerPlatform)))
 
     await waitFor(async () => {
       const response = await proxyFetch("/__cloud/machines", { host: `${DEVBOX_SUBDOMAIN}.kanna.sh` })

@@ -10,13 +10,13 @@
  */
 
 import { createHash } from "node:crypto"
-import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, Option, Schema } from "effect"
 import { getDataDir } from "../shared/branding"
+import { Machine } from "./platform/machine"
 
 /** Non-reversible identifier for a data dir (safe on the public /health). */
-export function instanceFingerprint(dataDir: string = getDataDir(homedir())) {
+export function instanceFingerprint(dataDir: string) {
   return createHash("sha256").update(path.resolve(dataDir)).digest("hex").slice(0, 16)
 }
 
@@ -53,6 +53,7 @@ export const probeExistingInstance = Effect.fn("Instance.probeExisting")(functio
   fetchImpl: typeof fetch = fetch,
 ) {
   yield* Effect.annotateCurrentSpan("port", port)
+  const expected = instanceFingerprint(dataDir ?? getDataDir((yield* Machine).homeDirectory))
   const response = yield* Effect.tryPromise({
     try: (signal) => fetchImpl(`http://127.0.0.1:${port}/health`, { signal }),
     catch: (cause) => new InstanceProbeError({ port, cause }),
@@ -63,7 +64,7 @@ export const probeExistingInstance = Effect.fn("Instance.probeExisting")(functio
     catch: (cause) => new InstanceProbeError({ port, cause }),
   })
   const health = Schema.decodeUnknownOption(InstanceHealth)(body)
-  if (Option.isNone(health) || health.value.instance !== instanceFingerprint(dataDir)) return null
+  if (Option.isNone(health) || health.value.instance !== expected) return null
   return { localUrl: `http://localhost:${port}`, port } satisfies ExistingInstance
 }, (effect) => effect.pipe(
   Effect.timeoutOption(PROBE_TIMEOUT),

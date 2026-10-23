@@ -62,5 +62,8 @@ export function fakeRouterStore<Store extends PromiseStore>(store: Store) {
     if (typeof method !== "function") continue
     service[name] = (...args: unknown[]) => Effect.promise(() => Promise.resolve(method.apply(store, args)))
   }
+  // The router holds transcripts with `retainTranscript`; a Promise store's
+  // `prepareTranscript` stands in (it has nothing to evict).
+  if (service.prepareTranscript && !service.retainTranscript) service.retainTranscript = service.prepareTranscript
   return service
 }

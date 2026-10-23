@@ -22,6 +22,7 @@ import { timestamped } from "./transcript"
 import { splitTranscriptEntry } from "./transcript-payloads"
 import type { TranscriptEntry } from "../shared/types"
 import { stripSystemMessages } from "../shared/message-preview"
+import { testPlatformContext } from "./platform/testing"
 
 /**
  * These run the real coordinator and the real store against a provider whose
@@ -90,9 +91,9 @@ class FakeCodex {
   }
 }
 
-async function until(condition: () => boolean, label = "condition") {
+async function until(condition: () => boolean | Promise<boolean>, label = "condition") {
   for (let attempt = 0; attempt < 400; attempt += 1) {
-    if (condition()) return
+    if (await condition()) return
     await Bun.sleep(5)
   }
   throw new Error(`Timed out waiting for ${label}`)
@@ -110,6 +111,7 @@ async function setup(options?: { closeOutGraceMs?: number }) {
   const project = await store.openProject(projectDir)
   const codex = new FakeCodex()
   const agent = new AgentCoordinator({
+    platform: testPlatformContext,
     store,
     onStateChange: () => {},
     codexManager: fakeCodexAppServer(codex),
@@ -152,7 +154,7 @@ async function setup(options?: { closeOutGraceMs?: number }) {
     pushes,
     userChat,
     setClock: (value: number) => { clock = value },
-    prompts: (chatId: string) => store.getMessages(chatId).filter((entry) => entry.kind === "user_prompt"),
+    prompts: async (chatId: string) => (await store.getMessages(chatId)).filter((entry) => entry.kind === "user_prompt"),
   }
 }
 
@@ -167,7 +169,7 @@ describe("sub-chats", () => {
     // The sub-chat is told who is talking to it; the transcript keeps the bare message.
     expect(codex.turn(child.chatId).content).toContain("audit the parser")
     expect(codex.turn(child.chatId).content).toContain("not typed by the user")
-    expect(prompts(child.chatId)[0]).toMatchObject({ content: "audit the parser", source: { kind: "agent", chatId: root } })
+    expect((await prompts(child.chatId))[0]).toMatchObject({ content: "audit the parser", source: { kind: "agent", chatId: root } })
     // And it shows in the parent's task log, where the user can stop it.
     expect(orchestrator.getChildActivities(root)).toMatchObject([{ type: "chat", status: "running", chatId: child.chatId, stoppable: true }])
   })
@@ -188,10 +190,10 @@ describe("sub-chats", () => {
     expect(codex.turn(root).content).toContain(`chat id ${child.chatId}`)
     // The agent gets the line saying which chat and how it ended. A reader
     // gets only what the sub-chat said.
-    const report = prompts(root)[1]!
+    const report = (await prompts(root))[1]!
     expect(report.kind === "user_prompt" && report.content).toContain("<system-message>\nSub-chat completed:")
     expect(report.kind === "user_prompt" && stripSystemMessages(report.content)).toBe("Found two bugs.")
-    expect(prompts(root)[1]).toMatchObject({ source: { kind: "report", chatIds: [child.chatId] } })
+    expect((await prompts(root))[1]).toMatchObject({ source: { kind: "report", chatIds: [child.chatId] } })
     expect(store.getChat(child.chatId)?.reportOwed).toBeUndefined()
     expect(orchestrator.getChildActivities(root)).toMatchObject([{ status: "completed" }])
   })
@@ -202,7 +204,7 @@ describe("sub-chats", () => {
     const child = await orchestrator.createChat(root, { message: "run the benchmarks" })
     codex.finish(root, "Benchmarks are running.")
     // Its own turn is over, but it is not finished while the sub-chat runs.
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "waiting_on_subchats", "the parent to go idle")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "waiting_on_subchats", "the parent to go idle")
 
     codex.finish(child.chatId, "p95 is 40ms.")
     await until(() => codex.turnsFor(root).length === 2, "the parent to wake")
@@ -254,7 +256,7 @@ describe("sub-chats", () => {
     await until(() => codex.turnsFor(root).length === 2)
     for (const chat of chats) expect(codex.turn(root).content.split(`${chat.chatId} done`)).toHaveLength(2)
     codex.finish(root, "noted")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed")
     expect(codex.turnsFor(root)).toHaveLength(2)
   })
 
@@ -265,7 +267,7 @@ describe("sub-chats", () => {
     expect(other.parentChatId).toBeUndefined()
     expect(other.createdByChatId).toBe(root)
     codex.finish(other.chatId, "done")
-    await until(() => orchestrator.readChat({ chatId: other.chatId }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other.chatId })).chat.status === "completed")
     expect(store.getQueuedMessages(root)).toHaveLength(0)
   })
 
@@ -282,7 +284,7 @@ describe("sub-chats", () => {
     expect(interim).toContain("Not its last word")
     expect(interim).toContain("\"Legwork\"")
     expect(stripSystemMessages(interim)).toBe("Handed off.")
-    expect(orchestrator.readChat({ chatId: child.chatId }).chat.status).toBe("waiting_on_subchats")
+    expect((await orchestrator.readChat({ chatId: child.chatId })).chat.status).toBe("waiting_on_subchats")
     // Still owed: the turn the bottom chat wakes is to be reported too.
     expect(store.getChat(child.chatId)).toMatchObject({ reportOwed: true, reportedThrough: store.getChat(child.chatId)!.lastTurnEndedAt })
 
@@ -429,16 +431,16 @@ describe("waiting on a subagent", () => {
     const { orchestrator, codex, agent, userChat } = await setup()
     const other = await userChat("run the tests")
     codex.finish(other, "The tests are running in the background.")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
 
     // A subagent that outlived the turn, as Claude's do.
     agent.applySubagentActivity(other, { kind: "started", id: "a1", type: "subagent", label: "test-runner" })
-    expect(orchestrator.readChat({ chatId: other }).chat.status).toBe("waiting_on_subagent")
+    expect((await orchestrator.readChat({ chatId: other })).chat.status).toBe("waiting_on_subagent")
     expect(orchestrator.listChats({ status: "waiting_on_subagent" }).chats.map((chat) => chat.chatId)).toEqual([other])
     expect(agent.getChatStatuses().get(other)).toBe("waiting_on_subagent")
 
     agent.applySubagentActivity(other, { kind: "stopped", id: "a1", failed: false })
-    expect(orchestrator.readChat({ chatId: other }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: other })).chat.status).toBe("completed")
     expect(agent.getChatStatuses().has(other)).toBe(false)
   })
 
@@ -459,8 +461,8 @@ describe("waiting on a subagent", () => {
     // No turn started to say so, and the parent's own page has to hear of it.
     expect(pushes).toContainEqual({ sidebar: true, chatIds: [root] })
     // To an agent the two are told apart: one it can act on, one it cannot.
-    expect(orchestrator.readChat({ chatId: child.chatId }).chat.status).toBe("waiting_on_subagent")
-    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("waiting_on_subchats")
+    expect((await orchestrator.readChat({ chatId: child.chatId })).chat.status).toBe("waiting_on_subagent")
+    expect((await orchestrator.readChat({ chatId: root })).chat.status).toBe("waiting_on_subchats")
 
     agent.applySubagentActivity(child.chatId, { kind: "stopped", id: "a1", failed: true })
     expect(agent.getChatStatuses().size).toBe(0)
@@ -482,7 +484,7 @@ describe("waiting on a subagent", () => {
     expect(agent.getSubagents(other)).toMatchObject([{ id: "sh1", type: "shell", status: "running", stoppable: true }])
 
     // An agent is told the same thing the sidebar shows, and is not kept waiting.
-    expect(orchestrator.readChat({ chatId: other }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: other })).chat.status).toBe("completed")
     expect(orchestrator.listChats({ status: "waiting_on_subagent" }).chats).toEqual([])
   })
 
@@ -493,11 +495,11 @@ describe("waiting on a subagent", () => {
     agent.applySubagentActivity(chat, { kind: "started", id: "a1", type: "subagent", label: "code-reviewer" })
     codex.finish(chat, "The review is running.")
     await until(() => agent.getChatStatuses().get(chat) === "waiting_on_subagent", "the chat to wait")
-    expect(orchestrator.readChat({ chatId: chat }).chat.status).toBe("waiting_on_subagent")
+    expect((await orchestrator.readChat({ chatId: chat })).chat.status).toBe("waiting_on_subagent")
 
     agent.applySubagentActivity(chat, { kind: "stopped", id: "a1", failed: false })
     expect(agent.getChatStatuses().has(chat)).toBe(false)
-    expect(orchestrator.readChat({ chatId: chat }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: chat })).chat.status).toBe("completed")
     expect(agent.getSubagents(chat).find((task) => task.id === "sh1")).toMatchObject({ status: "running" })
   })
 
@@ -512,7 +514,7 @@ describe("waiting on a subagent", () => {
     expect(agent.getChatStatuses().has(other)).toBe(false)
     const row = deriveSidebarData(store.state, agent.getChatStatuses()).projectGroups[0]!.chats.find((chat) => chat.chatId === other)
     expect(row).toMatchObject({ status: "idle", unread: true })
-    expect(orchestrator.readChat({ chatId: other }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: other })).chat.status).toBe("completed")
     expect(orchestrator.listChats({ status: "waiting_on_subagent" }).chats).toEqual([])
     // The monitor is still there to see, and to stop.
     expect(agent.getSubagents(other)).toMatchObject([{ id: "m1", type: "monitor", status: "running", stoppable: true }])
@@ -525,11 +527,11 @@ describe("waiting on a subagent", () => {
     agent.applySubagentActivity(chat, { kind: "started", id: "a1", type: "subagent", label: "code-reviewer" })
     codex.finish(chat, "The review is running.")
     await until(() => agent.getChatStatuses().get(chat) === "waiting_on_subagent", "the chat to wait")
-    expect(orchestrator.readChat({ chatId: chat }).chat.status).toBe("waiting_on_subagent")
+    expect((await orchestrator.readChat({ chatId: chat })).chat.status).toBe("waiting_on_subagent")
 
     agent.applySubagentActivity(chat, { kind: "stopped", id: "a1", failed: false })
     expect(agent.getChatStatuses().has(chat)).toBe(false)
-    expect(orchestrator.readChat({ chatId: chat }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: chat })).chat.status).toBe("completed")
     expect(agent.getSubagents(chat).find((task) => task.id === "m1")).toMatchObject({ status: "running" })
   })
 
@@ -649,7 +651,7 @@ describe("limits", () => {
     // A finished chat frees a place.
     const leaf = [...codex.turns].reverse().find((turn) => turn.open && turn.chatId !== root && turn.chatId !== first.chatId)!
     codex.finish(leaf.chatId, "done")
-    await until(() => orchestrator.readChat({ chatId: leaf.chatId }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: leaf.chatId })).chat.status === "completed")
     await orchestrator.createChat(root, { message: "fits now", subchat: false })
   })
 
@@ -677,10 +679,10 @@ describe("messages between chats", () => {
 
     codex.finish(other, "done")
     await until(() => codex.turnsFor(other).length === 2, "the queued message to start")
-    expect(prompts(other)[1]).toMatchObject({ content: "when you are done, rebase", source: { kind: "agent", chatId: root } })
+    expect((await prompts(other))[1]).toMatchObject({ content: "when you are done, rebase", source: { kind: "agent", chatId: root } })
 
     codex.finish(other, "rebased")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
     const started = await orchestrator.sendMessage(root, { chatId: other, message: "now push" })
     expect(started.started).toBe(true)
     // It is not this chat's sub-chat, so nothing is owed back.
@@ -693,7 +695,7 @@ describe("messages between chats", () => {
     const child = await orchestrator.createChat(root, { message: "audit the parser", title: "Parser audit" })
     expect(store.getChat(child.chatId)?.title).toBe("Parser audit")
     codex.finish(child.chatId, "Audited.")
-    await until(() => orchestrator.readChat({ chatId: child.chatId }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: child.chatId })).chat.status === "completed")
 
     pushes.length = 0
     const sent = await orchestrator.sendMessage(root, { chatId: child.chatId, message: "now fix the lexer", title: "Lexer fix" })
@@ -701,7 +703,7 @@ describe("messages between chats", () => {
     expect(store.getChat(child.chatId)?.title).toBe("Lexer fix")
     // Pushed on its own, ahead of the send's.
     expect(pushes[0]).toEqual({ sidebar: true, chatIds: [child.chatId] })
-    await until(() => prompts(child.chatId).length === 2, "the message")
+    await until(async () => (await prompts(child.chatId)).length === 2, "the message")
     // A follow-up passes the title it has: kept, and the result says so.
     pushes.length = 0
     const kept = await orchestrator.sendMessage(root, { chatId: child.chatId, message: "and the tests", title: "Lexer fix" })
@@ -715,7 +717,7 @@ describe("messages between chats", () => {
     const root = await userChat()
     const child = await orchestrator.createChat(root, { message: "audit the parser", title: "Parser audit" })
     codex.finish(child.chatId, "Audited.")
-    await until(() => orchestrator.readChat({ chatId: child.chatId }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: child.chatId })).chat.status === "completed")
     // The send fails: its turn is refused. The rename that went ahead of it is undone.
     const send = agent.send.bind(agent)
     agent.send = async () => { throw new Error("codex is not installed") }
@@ -730,7 +732,7 @@ describe("messages between chats", () => {
     const source = await orchestrator.createChat(root, { message: "audit the parser", title: "Parser audit" })
     Queue.offerUnsafe(codex.turn(source.chatId).events, { type: "session_token", sessionToken: "thread-1" })
     codex.finish(source.chatId, "Audited.")
-    await until(() => orchestrator.readChat({ chatId: source.chatId }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: source.chatId })).chat.status === "completed")
     const fork = await orchestrator.forkChat(root, { chatId: source.chatId, title: "Lexer fix" })
     expect(fork).toMatchObject({ title: "Lexer fix", forkedFromChatId: source.chatId })
     expect(store.getChat(source.chatId)?.title).toBe("Parser audit")
@@ -777,7 +779,7 @@ describe("reading and updating", () => {
     const root = await userChat("fix the login bug")
     const child = await orchestrator.createChat(root, { message: "check the session code", title: "Session check" })
     codex.finish(child.chatId, "The cookie is never refreshed.")
-    await until(() => orchestrator.readChat({ chatId: child.chatId }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: child.chatId })).chat.status === "completed")
 
     const listed = orchestrator.listChats({ projectId: project.id })
     expect(listed.total).toBe(2)
@@ -785,7 +787,7 @@ describe("reading and updating", () => {
     expect(orchestrator.listChats({ query: "session" }).chats.map((chat) => chat.title)).toEqual(["Session check"])
     expect(orchestrator.listChats({ status: "completed" }).chats).toHaveLength(1)
 
-    const read = orchestrator.readChat({ chatId: child.chatId })
+    const read = (await orchestrator.readChat({ chatId: child.chatId }))
     expect(read.entries.map((entry) => [entry.kind, entry.text])).toEqual([
       ["user_prompt", "check the session code"],
       ["assistant_text", "The cookie is never refreshed."],
@@ -793,10 +795,10 @@ describe("reading and updating", () => {
     expect(read.entries[0]!.from).toEqual({ kind: "agent", chatId: root })
     expect(read.entries[1]!.final).toBe(true)
     // Reading on from the last entry returns only what came after it.
-    expect(orchestrator.readChat({ chatId: child.chatId, after: read.entries[1]!.index }).entries).toEqual([])
-    expect(orchestrator.readChat({ chatId: child.chatId, after: -1, limit: 1 }))
+    expect((await orchestrator.readChat({ chatId: child.chatId, after: read.entries[1]!.index })).entries).toEqual([])
+    expect((await orchestrator.readChat({ chatId: child.chatId, after: -1, limit: 1 })))
       .toMatchObject({ next: { after: read.entries[0]!.index }, entries: [{ kind: "user_prompt" }] })
-    expect(orchestrator.readChat({ chatId: root }).subchats.map((chat) => chat.chatId)).toEqual([child.chatId])
+    expect((await orchestrator.readChat({ chatId: root })).subchats.map((chat) => chat.chatId)).toEqual([child.chatId])
   })
 
   test("renames, pins, marks done and archives", async () => {
@@ -855,7 +857,7 @@ describe("replies in full", () => {
     const resume = JSON.parse(/read_chat reads the rest: (\{.*\})\./.exec(report)![1]!)
     expect(resume).toMatchObject({ chatId: child.chatId, textOffset: 50_000 })
 
-    const rest = orchestrator.readChat(resume)
+    const rest = (await orchestrator.readChat(resume))
     expect(rest.entries).toHaveLength(1)
     expect(rest.entries[0]).toMatchObject({ kind: "assistant_text", text: "y".repeat(12_345), truncated: true, textOffset: 50_000, totalChars: 62_345 })
   })
@@ -889,7 +891,7 @@ describe("replies in full", () => {
     await until(() => codex.turnsFor(root).length === 2, "the report's turn")
     for (const reply of ["Parser: two bugs.", "Lexer: clean."]) expect(codex.turn(root).content.split(reply)).toHaveLength(2)
     codex.finish(root, "Noted.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the parent to come to rest")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed", "the parent to come to rest")
     expect(codex.turnsFor(root)).toHaveLength(2)
   })
 
@@ -899,7 +901,7 @@ describe("replies in full", () => {
     const child = await orchestrator.createChat(root, { message: "audit the parser" })
     await orchestrator.sendMessage(root, { chatId: child.chatId, message: "then check the lexer" })
     codex.finish(root, "Asked for both.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "waiting_on_subchats", "the parent to go idle")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "waiting_on_subchats", "the parent to go idle")
 
     codex.finish(child.chatId, "Parser: two bugs.")
     await until(() => codex.turnsFor(root).length === 2, "the first reply's turn")
@@ -936,12 +938,12 @@ describe("reading a chat", () => {
     codex.emit(child.chatId, timestamped({ kind: "tool_call", tool: { kind: "tool", toolKind: "write_file", toolName: "Write", toolId: "w1", input: { filePath: "parser.ts", content: body } } } as TranscriptEntry))
     codex.emit(child.chatId, timestamped({ kind: "tool_result", toolId: "w1", content: "Wrote 1000 lines to parser.ts" } as TranscriptEntry))
     codex.finish(child.chatId, "Done: parser.ts is written.")
-    await until(() => orchestrator.readChat({ chatId: child.chatId }).chat.status === "completed", "the first turn")
+    await until(async () => (await orchestrator.readChat({ chatId: child.chatId })).chat.status === "completed", "the first turn")
     await orchestrator.sendMessage(root, { chatId: child.chatId, message: "now test it" })
     await until(() => codex.turnsFor(child.chatId).length === 2, "the second turn")
     codex.emit(child.chatId, timestamped({ kind: "assistant_text", text: "Running the tests." }))
     codex.finish(child.chatId, "All tests pass.")
-    await until(() => orchestrator.readChat({ chatId: child.chatId }).chat.status === "completed", "the second turn to end")
+    await until(async () => (await orchestrator.readChat({ chatId: child.chatId })).chat.status === "completed", "the second turn to end")
     return { ...context, child: child.chatId, body }
   }
 
@@ -951,8 +953,8 @@ describe("reading a chat", () => {
     const child = await orchestrator.createChat(root, { message: "write it all out" })
     const long = "word ".repeat(6_000)
     codex.finish(child.chatId, long)
-    await until(() => orchestrator.readChat({ chatId: child.chatId }).chat.status === "completed")
-    const read = orchestrator.readChat({ chatId: child.chatId })
+    await until(async () => (await orchestrator.readChat({ chatId: child.chatId })).chat.status === "completed")
+    const read = (await orchestrator.readChat({ chatId: child.chatId }))
     const entry = read.entries.find((candidate) => candidate.kind === "assistant_text")!
     expect(entry.text).toBe(long)
     expect(entry).not.toHaveProperty("truncated")
@@ -962,51 +964,51 @@ describe("reading a chat", () => {
   test("kinds pick what comes back: what was said by default, each turn's reply, and tool traffic with its bodies", async () => {
     const { orchestrator, child, body } = await chatWithHistory()
 
-    expect(orchestrator.readChat({ chatId: child }).entries.map((entry) => entry.kind)).toEqual([
+    expect((await orchestrator.readChat({ chatId: child })).entries.map((entry) => entry.kind)).toEqual([
       "user_prompt", "assistant_text", "assistant_text", "user_prompt", "assistant_text", "assistant_text",
     ])
-    const replies = orchestrator.readChat({ chatId: child, kinds: ["reply"] }).entries
+    const replies = (await orchestrator.readChat({ chatId: child, kinds: ["reply"] })).entries
     expect(replies.map((entry) => [entry.kind, entry.text, entry.final])).toEqual([
       ["assistant_text", "Done: parser.ts is written.", true],
       ["assistant_text", "All tests pass.", true],
     ])
     // Tool bodies come from the payload sidecar, whole.
-    const tools = orchestrator.readChat({ chatId: child, kinds: ["tool_call", "tool_result"] }).entries
+    const tools = (await orchestrator.readChat({ chatId: child, kinds: ["tool_call", "tool_result"] })).entries
     expect(tools).toHaveLength(2)
     expect(tools[0]).toMatchObject({ kind: "tool_call", tool: "Write", toolId: "w1" })
     expect(tools[0]!.text).toContain(JSON.stringify(body))
     expect(tools[1]).toMatchObject({ kind: "tool_result", toolId: "w1", text: "Wrote 1000 lines to parser.ts" })
     // Prompts alone, the user's and agents' both.
-    expect(orchestrator.readChat({ chatId: child, kinds: ["user_prompt"] }).entries.map((entry) => entry.text)).toEqual(["write the file", "now test it"])
+    expect((await orchestrator.readChat({ chatId: child, kinds: ["user_prompt"] })).entries.map((entry) => entry.text)).toEqual(["write the file", "now test it"])
   })
 
   test("position: the latest page, after, before, the last turn, and pages that link to each other", async () => {
     const { orchestrator, child } = await chatWithHistory()
-    const all = orchestrator.readChat({ chatId: child }).entries
+    const all = (await orchestrator.readChat({ chatId: child })).entries
     expect(all).toHaveLength(6)
 
     // With no position, the latest entries, with the way back to the earlier ones.
-    const latest = orchestrator.readChat({ chatId: child, limit: 2 })
+    const latest = (await orchestrator.readChat({ chatId: child, limit: 2 }))
     expect(latest.entries.map((entry) => entry.text)).toEqual(["Running the tests.", "All tests pass."])
     expect(latest.earlier).toEqual({ before: latest.entries[0]!.index })
     expect(latest).not.toHaveProperty("next")
-    const back = orchestrator.readChat({ chatId: child, limit: 2, ...latest.earlier })
+    const back = (await orchestrator.readChat({ chatId: child, limit: 2, ...latest.earlier }))
     expect(back.entries.map((entry) => entry.text)).toEqual(["Done: parser.ts is written.", "now test it"])
 
     // Forward from the start, a page at a time.
-    const first = orchestrator.readChat({ chatId: child, after: -1, limit: 4 })
+    const first = (await orchestrator.readChat({ chatId: child, after: -1, limit: 4 }))
     expect(first.entries.map((entry) => entry.text)).toEqual(all.slice(0, 4).map((entry) => entry.text))
     expect(first.next).toEqual({ after: all[3]!.index })
-    const second = orchestrator.readChat({ chatId: child, limit: 4, ...first.next })
+    const second = (await orchestrator.readChat({ chatId: child, limit: 4, ...first.next }))
     expect(second.entries.map((entry) => entry.text)).toEqual(all.slice(4).map((entry) => entry.text))
     expect(second).not.toHaveProperty("next")
 
     // The last turn, and the filters carried on the links.
-    expect(orchestrator.readChat({ chatId: child, lastTurns: 1 }).entries.map((entry) => entry.text))
+    expect((await orchestrator.readChat({ chatId: child, lastTurns: 1 })).entries.map((entry) => entry.text))
       .toEqual(["now test it", "Running the tests.", "All tests pass."])
-    const lastReply = orchestrator.readChat({ chatId: child, lastTurns: 1, kinds: ["reply"] })
+    const lastReply = (await orchestrator.readChat({ chatId: child, lastTurns: 1, kinds: ["reply"] }))
     expect(lastReply.entries.map((entry) => entry.text)).toEqual(["All tests pass."])
-    expect(orchestrator.readChat({ chatId: child, kinds: ["reply"], limit: 1 }).earlier)
+    expect((await orchestrator.readChat({ chatId: child, kinds: ["reply"], limit: 1 })).earlier)
       .toEqual({ before: lastReply.entries[0]!.index, kinds: ["reply"] })
   })
 
@@ -1018,24 +1020,24 @@ describe("reading a chat", () => {
     const two = "b".repeat(70_000)
     codex.emit(child.chatId, timestamped({ kind: "assistant_text", text: one }))
     codex.finish(child.chatId, two)
-    await until(() => orchestrator.readChat({ chatId: child.chatId, kinds: ["reply"] }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: child.chatId, kinds: ["reply"] })).chat.status === "completed")
 
     // The first fits; the second does not, so it starts the next page whole.
-    const first = orchestrator.readChat({ chatId: child.chatId, after: -1, kinds: ["assistant_text"] })
+    const first = (await orchestrator.readChat({ chatId: child.chatId, after: -1, kinds: ["assistant_text"] }))
     expect(first.entries.map((entry) => entry.text)).toEqual([one])
     expect(first.next).toMatchObject({ after: first.entries[0]!.index })
     // Alone on its page and longer than a page, it is cut and marked.
-    const second = orchestrator.readChat({ chatId: child.chatId, kinds: ["assistant_text"], ...first.next })
+    const second = (await orchestrator.readChat({ chatId: child.chatId, kinds: ["assistant_text"], ...first.next }))
     expect(second.entries).toHaveLength(1)
     expect(second.entries[0]).toMatchObject({ text: "b".repeat(50_000), truncated: true, textOffset: 0, totalChars: 70_000, final: true })
     expect(second.next).toEqual({ after: first.entries[0]!.index, textOffset: 50_000, kinds: ["assistant_text"] })
-    const third = orchestrator.readChat({ chatId: child.chatId, ...second.next })
+    const third = (await orchestrator.readChat({ chatId: child.chatId, ...second.next }))
     expect(third.entries).toHaveLength(1)
     expect(third.entries[0]).toMatchObject({ text: "b".repeat(20_000), truncated: true, textOffset: 50_000, totalChars: 70_000 })
     expect(third).not.toHaveProperty("next")
 
     // Read back from the end, the long entry is cut from its start, with the way on.
-    const latest = orchestrator.readChat({ chatId: child.chatId, kinds: ["reply"] })
+    const latest = (await orchestrator.readChat({ chatId: child.chatId, kinds: ["reply"] }))
     expect(latest.entries[0]).toMatchObject({ text: "b".repeat(50_000), truncated: true, totalChars: 70_000 })
     expect(latest.next).toMatchObject({ textOffset: 50_000 })
   })
@@ -1062,7 +1064,7 @@ describe("schedules", () => {
     codex.finish(root, "done")
     await until(() => codex.turnsFor(root).length === 2, "the scheduled turn")
     expect(codex.turn(root).content).toContain("sent by the schedule")
-    expect(prompts(root)[1]).toMatchObject({ content: "check the deploy", source: { kind: "schedule" } })
+    expect((await prompts(root))[1]).toMatchObject({ content: "check the deploy", source: { kind: "schedule" } })
   })
 
   test("a repeating schedule skips a run while its last message is still waiting", async () => {
@@ -1274,7 +1276,7 @@ describe("reporting when a turn ends", () => {
     codex.finish(root, "ok")
     await until(() => codex.turnsFor(root).length === 2)
     codex.finish(root, "noted")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the parent to come to rest")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed", "the parent to come to rest")
   })
 
   test("a sub-chat that ends its turn with only a shell running reports as finished, and holds nobody", async () => {
@@ -1295,7 +1297,7 @@ describe("reporting when a turn ends", () => {
     expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
     codex.finish(root, "The server is up.")
     await until(() => agent.getChatStatuses().size === 0, "both to come to rest")
-    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: root })).chat.status).toBe("completed")
     expect(orchestrator.getChildActivities(root)).toMatchObject([{ status: "completed" }])
     // And it stays that way for as long as the shell does.
     await Bun.sleep(80)
@@ -1376,7 +1378,7 @@ describe("reporting when a turn ends", () => {
     codex.finish(root, "Noted.")
     await until(() => codex.turnsFor(root).length === 2, "the report's turn")
     codex.finish(root, "Waiting for the tests.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the parent to come to rest")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed", "the parent to come to rest")
 
     agent.applySubagentActivity(child.chatId, { kind: "stopped", id: "sh1", failed: false })
     await agent.send({ type: "chat.send", chatId: child.chatId, provider: "codex", content: "(the provider answering its finished shell)" })
@@ -1423,7 +1425,7 @@ describe("reporting when a turn ends", () => {
     expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
     codex.finish(root, "It is watching.")
     await until(() => agent.getChatStatuses().size === 0, "both to come to rest")
-    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: root })).chat.status).toBe("completed")
 
     // The monitor fires, twice, and stays up. Each turn it starts goes up.
     const replies = ["The deploy started.", "The deploy finished."]
@@ -1509,7 +1511,7 @@ describe("reporting when a turn ends", () => {
     codex.finish(root, "ok")
     await until(() => codex.turnsFor(root).length === 2)
     codex.finish(root, "Waiting for the check.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the parent to come to rest")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed", "the parent to come to rest")
 
     setClock(1_000_000 + 10 * 60_000)
     await orchestrator.runDueSchedules()
@@ -1595,7 +1597,7 @@ describe("reporting when a turn ends", () => {
     const root = await userChat()
     const other = await userChat("something else")
     codex.finish(other, "done")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
     await orchestrator.sendMessage(root, { chatId: other, message: "ship it", adopt: true })
     const helper = await orchestrator.createChat(other, { message: "run the release checks" })
     codex.finish(root, "Asked.")
@@ -1634,7 +1636,7 @@ describe("messages between agents", () => {
     // In one notice with who sent it, after where the reply goes.
     expect(codex.turn(child.chatId).content).toContain("your final reply is sent back to it when you finish. While you work on this message")
     // Wire-only: what is stored, and so shown anywhere, is the message.
-    expect(prompts(child.chatId)[0]).toMatchObject({ content: "audit the parser" })
+    expect((await prompts(child.chatId))[0]).toMatchObject({ content: "audit the parser" })
 
     // A message to a chat it did not start, queued behind the user's turn.
     await orchestrator.sendMessage(root, { chatId: other, message: "rebase onto main" })
@@ -1651,7 +1653,7 @@ describe("messages between agents", () => {
 
     // The user typing into the same chats is a person again.
     codex.finish(other, "ok")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
     await agent.send({ type: "chat.send", chatId: other, provider: "codex", content: "one more thing" })
     await until(() => codex.turnsFor(other).length === 4, "the user's turn")
     expect(codex.turn(other).content).not.toContain(NOBODY)
@@ -1688,7 +1690,7 @@ describe("messages between agents", () => {
     await until(() => codex.turnsFor(root).length === 1)
     const other = await userChat("something else")
     codex.finish(other, "done")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
     await orchestrator.sendMessage(root, { chatId: other, message: "rebase" })
     await until(() => codex.turnsFor(other).length === 2)
     expect(codex.turn(other).content).toContain("It adopted this chat, and your final reply is sent back to it when you finish. While you work on this message")
@@ -1706,7 +1708,7 @@ describe("messages between agents", () => {
     for (const chatId of [root, other, child.chatId]) codex.finish(chatId, "done")
     await until(() => codex.turnsFor(root).length === 2, "the sub-chat's report")
     codex.finish(root, "noted")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed")
 
     setClock(1_000_000 + 10 * 60_000)
     await orchestrator.runDueSchedules()
@@ -1837,7 +1839,7 @@ describe("delegators", () => {
     const source = await userChat("something else")
     Queue.offerUnsafe(codex.turn(source).events, { type: "session_token", sessionToken: "thread-1" })
     codex.finish(source, "done")
-    await until(() => orchestrator.readChat({ chatId: source }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: source })).chat.status === "completed")
     const fork = await orchestrator.forkChat(root, { chatId: source, subchat: false, title: "Parser audit, forked" })
     expect(fork).toMatchObject({ parentChatId: root, forkedFromChatId: source, title: "Parser audit, forked" })
     expect(store.getChat(fork.chatId)?.title).toBe("Parser audit, forked")
@@ -1858,7 +1860,7 @@ describe("delegators", () => {
     const root = await delegatorChat(context)
     Queue.offerUnsafe(codex.turn(root).events, { type: "session_token", sessionToken: "thread-root" })
     codex.finish(root, "Handed off.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed")
 
     const fork = await orchestrator.forkChat(root, { chatId: root, title: "Release notes", message: "draft the release notes" })
     expect(store.getChat(fork.chatId)?.delegator).toBe(true)
@@ -1945,7 +1947,7 @@ describe("delegators", () => {
     const root = await delegatorChat(context)
     const other = await userChat("something else")
     expect(orchestrator.getContext(root).chat).toMatchObject({ delegator: true })
-    expect(orchestrator.readChat({ chatId: root }).chat).toMatchObject({ delegator: true })
+    expect((await orchestrator.readChat({ chatId: root })).chat).toMatchObject({ delegator: true })
     const listed = orchestrator.listChats({}).chats
     expect(listed.find((chat) => chat.chatId === root)).toMatchObject({ delegator: true })
     expect(listed.find((chat) => chat.chatId === other)).not.toHaveProperty("delegator")
@@ -1972,7 +1974,7 @@ describe("adopting", () => {
     // Listed under the adopter everywhere a sub-chat is.
     expect(orchestrator.getChildActivities(root)).toMatchObject([{ type: "chat", chatId: other, status: "running" }])
     expect(orchestrator.listChats({ parentChatId: root }).chats.map((chat) => chat.chatId)).toEqual([other])
-    expect(orchestrator.readChat({ chatId: root }).subchats).toMatchObject([{ chatId: other, adopted: true }])
+    expect((await orchestrator.readChat({ chatId: root })).subchats).toMatchObject([{ chatId: other, adopted: true }])
 
     codex.finish(other, "done with the user's work")
     await until(() => codex.turnsFor(other).length === 2, "the adopter's message to start")
@@ -1986,7 +1988,7 @@ describe("adopting", () => {
     // It stays adopted, so the next message earns a report with no flag.
     await orchestrator.sendMessage(root, { chatId: other, message: "now push" })
     expect(store.getChat(other)).toMatchObject({ parentChatId: root, adopted: true, reportOwed: true })
-    expect(prompts(other)).toHaveLength(3)
+    expect(await prompts(other)).toHaveLength(3)
 
     // The snapshots carry the link and where it came from.
     const row = deriveSidebarData(store.state, agent.getChatStatuses()).projectGroups[0]!.chats.find((chat) => chat.chatId === other)
@@ -2029,7 +2031,7 @@ describe("adopting", () => {
       await until(() => codex.turnsFor(other).length === turns, `turn ${turns}`)
       codex.finish(other, `reply ${turns}`)
     }
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
     await Bun.sleep(30)
     expect(store.getQueuedMessages(root)).toHaveLength(0)
   })
@@ -2075,7 +2077,7 @@ describe("adopting", () => {
     await store.renameChat(other, "Release train")
     const child = await orchestrator.createChat(root, { message: "audit the parser", title: "Parser audit" })
     codex.finish(root, "Handed off.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "waiting_on_subchats", "the old parent to wait")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "waiting_on_subchats", "the old parent to wait")
 
     await orchestrator.sendMessage(other, { chatId: child.chatId, message: "report to me instead", adopt: true })
     expect(store.getChat(child.chatId)).toMatchObject({ parentChatId: other, adopted: true, reportOwed: true })
@@ -2086,7 +2088,7 @@ describe("adopting", () => {
     expect(codex.turn(root).content).toContain("Release train")
     expect(orchestrator.getChildActivities(root)).toEqual([])
     codex.finish(root, "Noted.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the old parent to come to rest")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed", "the old parent to come to rest")
 
     codex.finish(child.chatId, "audit one")
     await until(() => codex.turnsFor(child.chatId).length === 2)
@@ -2142,7 +2144,7 @@ describe("adopting", () => {
     const other = await userChat("something else")
     const child = await orchestrator.createChat(root, { message: "work" })
     codex.finish(other, "done")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
 
     // Refused before anything is written.
     await expect(orchestrator.sendMessage(root, { chatId: other, message: "hi", adopt: true, provider: "nope" as never })).rejects.toThrow("Unknown provider")
@@ -2184,13 +2186,13 @@ describe("adopting", () => {
     expect(codex.turnsFor(other)[0]!.open).toBe(true)
     expect(store.getChat(other)).toMatchObject({ parentChatId: root, adopted: true })
     // Stopped means stopped: it is not waiting on the chat it adopted.
-    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("cancelled")
+    expect((await orchestrator.readChat({ chatId: root })).chat.status).toBe("cancelled")
     expect(agent.getChatStatuses().get(root)).not.toBe("waiting_on_subagent")
 
     codex.finish(other, "done")
     await until(() => codex.turnsFor(other).length === 2)
     codex.finish(other, "rebased")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
     await Bun.sleep(30)
     expect(codex.turnsFor(root)).toHaveLength(1)
     expect(store.getQueuedMessages(root)).toHaveLength(0)
@@ -2203,22 +2205,22 @@ describe("adopting", () => {
     await orchestrator.sendMessage(root, { chatId: other, message: "rebase", adopt: true })
     codex.finish(root, "Asked for a rebase.")
     await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the adopter to wait")
-    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("waiting_on_subchats")
+    expect((await orchestrator.readChat({ chatId: root })).chat.status).toBe("waiting_on_subchats")
 
     codex.finish(other, "done")
     await until(() => codex.turnsFor(other).length === 2)
     codex.finish(other, "rebased")
     await until(() => codex.turnsFor(root).length === 2, "the report's turn")
     codex.finish(root, "Thanks.")
-    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: root })).chat.status === "completed")
 
     // The user goes back to work in the chat. That is not the adopter's wait.
     await agent.send({ type: "chat.send", chatId: other, provider: "codex", content: "one more thing" })
     await until(() => codex.turnsFor(other).length === 3, "the user's turn")
-    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("completed")
+    expect((await orchestrator.readChat({ chatId: root })).chat.status).toBe("completed")
     expect(agent.getChatStatuses().get(root)).not.toBe("waiting_on_subagent")
     codex.finish(other, "sure")
-    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await until(async () => (await orchestrator.readChat({ chatId: other })).chat.status === "completed")
     await Bun.sleep(30)
     expect(codex.turnsFor(root)).toHaveLength(2)
     expect(store.getQueuedMessages(root)).toHaveLength(0)
@@ -2229,6 +2231,7 @@ describe("adopting", () => {
     const root = await userChat()
     const other = await userChat("something else")
     const runtime = new KannaToolRuntime({
+      platform: testPlatformContext,
       chatId: root,
       cwd: "/tmp",
       emit: async () => {},
@@ -2252,6 +2255,7 @@ describe("the tools", () => {
     const root = await userChat()
     const emitted: TranscriptEntry[] = []
     const runtime = new KannaToolRuntime({
+      platform: testPlatformContext,
       chatId: root,
       cwd: "/tmp",
       emit: async (entry) => { emitted.push(entry) },

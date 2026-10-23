@@ -75,7 +75,7 @@ const kinds = (events: ReadonlyArray<HarnessEvent>) => events.map((event) => eve
 describe("PiAgentManager.startTurn", () => {
   test("a turn without a connection is its error result", async () => {
     const events = await runTest(Effect.gen(function* () {
-      const turn = yield* new PiAgentManager().startTurn({ ...turnArgs, connection: null })
+      const turn = yield* new PiAgentManager({ dataDir: "/tmp/kanna-pi-test" }).startTurn({ ...turnArgs, connection: null })
       return yield* Stream.runCollect(turn.events)
     }))
     expect(events.map((event) => event.entry)).toMatchObject([{ kind: "result", isError: true, result: MISSING_PI_CONNECTION_MESSAGE }])

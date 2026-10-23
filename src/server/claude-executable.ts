@@ -16,13 +16,13 @@
  * provider card offers `claude update`.
  */
 
-import { homedir } from "node:os"
 import { Effect, FileSystem, Option, Schema } from "effect"
 // Read at build time: the published server is a bundle with the SDK inlined
 // (scripts/build-server.ts), so there's no SDK folder on disk to look in. By
 // path, because the SDK's `exports` doesn't list package.json.
 import sdkPackage from "../../node_modules/@anthropic-ai/claude-agent-sdk/package.json" with { type: "json" }
 import { compareVersions } from "./cli-runtime"
+import { Machine } from "./platform/machine"
 import { type CommandSpawnError, resolveCommandPath, runCommand } from "./process-utils"
 
 /** Set to a wrapper script (Bedrock, Foundry…) to run it instead of `claude`. */
@@ -57,11 +57,17 @@ export function claudeCodeMinimumVersion(): string {
   return typeof version === "string" ? version : "0.0.0"
 }
 
-/** `CLAUDE_EXECUTABLE`, with a leading ~ expanded (the SDK spawns it verbatim). */
-export function claudeExecutableOverride(env: Record<string, string | undefined> = process.env): string | null {
+/** `CLAUDE_EXECUTABLE`, with a leading ~ expanded to `homeDirectory` (the SDK spawns it verbatim). */
+export function claudeExecutableOverride(env: Record<string, string | undefined>, homeDirectory: string): string | null {
   const value = env[CLAUDE_EXECUTABLE_ENV_VAR]?.trim()
-  return value ? value.replace(/^~(?=\/|$)/, homedir()) : null
+  return value ? value.replace(/^~(?=\/|$)/, homeDirectory) : null
 }
+
+/** `claudeExecutableOverride` for the machine's environment and home. */
+export const machineClaudeExecutableOverride = Effect.fn("ClaudeExecutable.machineOverride")(function* () {
+  const machine = yield* Machine
+  return claudeExecutableOverride(machine.env.snapshot(), machine.homeDirectory)
+})
 
 /** "2.1.280 (Claude Code)" → "2.1.280". */
 export function parseClaudeVersion(output: string): string | null {
@@ -77,16 +83,20 @@ export function outdatedClaudeMessage(version: string, minimum = claudeCodeMinim
 }
 
 export interface ResolveClaudeExecutableDeps {
+  /** Default: the machine's environment. */
   env?: Record<string, string | undefined>
   /** Where `command` is on PATH (default: process-utils' login-shell lookup). */
-  resolveCommandPath?: (command: string) => Effect.Effect<string | null>
+  resolveCommandPath?: (command: string) => Effect.Effect<string | null, never, ResolveCommandPathServices>
   /** `claude --version`, parsed (default: run it, cached per binary). */
   readVersion?: (binaryPath: string) => Effect.Effect<string | null, CommandSpawnError, FileSystem.FileSystem>
   minimumVersion?: string
 }
 
-/** process-utils' lookup, which blocks on a login shell when PATH misses. */
-export const resolveCommandPathEffect = (command: string) => Effect.sync(() => resolveCommandPath(command))
+/** What process-utils' lookup runs on. */
+export type ResolveCommandPathServices = Effect.Services<ReturnType<typeof resolveCommandPath>>
+
+/** process-utils' lookup, which asks a login shell when PATH misses. */
+export const resolveCommandPathEffect = (command: string) => resolveCommandPath(command)
 
 /** Types a result in place, so its `ok` stays a literal. */
 const executable = (value: ClaudeExecutable): ClaudeExecutable => value
@@ -125,7 +135,8 @@ export const resolveClaudeExecutable = Effect.fn("ClaudeExecutable.resolve")(fun
 ) {
   // An explicit override is trusted as-is: wrappers often don't answer
   // --version the way claude does.
-  const override = claudeExecutableOverride(deps.env)
+  const machine = yield* Machine
+  const override = claudeExecutableOverride(deps.env ?? machine.env.snapshot(), machine.homeDirectory)
   if (override) return executable({ ok: true, path: override, version: null })
 
   const binaryPath = yield* (deps.resolveCommandPath ?? resolveCommandPathEffect)("claude")

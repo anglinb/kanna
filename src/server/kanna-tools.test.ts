@@ -29,6 +29,7 @@ import { runTest } from "./effect/testing"
 import { parseTranscriptMediaUrl, getTranscriptMediaDir, retargetEntryMediaUrls } from "./transcript-media"
 import { openEventStore } from "./event-store-bridge"
 import { splitTranscriptEntry } from "./transcript-payloads"
+import { testPlatformContext } from "./platform/testing"
 
 const visualization = { title: "Sales", html: '<svg aria-label="Sales"><text>Jan: 10, Feb: 20</text></svg>' }
 let testDataDir: string
@@ -45,7 +46,7 @@ const inputTool = defineKannaTool({
 function setup(dataDir: string = testDataDir, definitions?: readonly (KannaTool | KannaToolDefinition)[]) {
   const entries: TranscriptEntry[] = []
   const replies: Array<(value: unknown) => void> = []
-  const runtime = new KannaToolRuntime({ chatId: "chat-1", cwd: dataDir ?? "/project", dataDir,
+  const runtime = new KannaToolRuntime({ platform: testPlatformContext, chatId: "chat-1", cwd: dataDir ?? "/project", dataDir,
     emit: async entry => { entries.push(entry) },
     requestInput: async (_request, signal) => new Promise(resolve => {
       replies.push(resolve)
@@ -126,12 +127,13 @@ describe("shared Kanna display tools", () => {
       const store = await openEventStore(dir)
       const project = await store.openProject(dir, "Display tools")
       const chat = await store.createChat(project.id)
-      const runtime = new KannaToolRuntime({ chatId: chat.id, cwd: dir, dataDir: dir,
+      const runtime = new KannaToolRuntime({ platform: testPlatformContext, chatId: chat.id, cwd: dir, dataDir: dir,
         emit: entry => store.appendMessage(chat.id, entry).then(() => {}), requestInput: async () => ({}),
       })
       await runtime.execute("show_visualization", visualization)
       await runtime.execute("send_attachments", attachments)
       const reopened = await openEventStore(dir)
+      await reopened.prepareTranscript(chat.id)
       const entries = reopened.getClientTranscript(chat.id).messages
       expect(entries[0]).toMatchObject({ tool: { toolKind: "display", input: { payload: { title: "Sales" } } } })
       expect(entries[3]).toMatchObject({ content: [{ type: "attachment", kind: "image" }, { type: "attachment", kind: "file" }] })

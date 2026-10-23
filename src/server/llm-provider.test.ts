@@ -1,3 +1,4 @@
+import { homedir } from "node:os"
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -44,7 +45,7 @@ describe("normalizeLlmProviderSnapshot", () => {
       apiKey: "  test-key  ",
       model: "  gpt-test  ",
       baseUrl: " https://example.com/v1 ",
-    }, TEST_FILE_PATH)).toEqual({
+    }, TEST_FILE_PATH, homedir())).toEqual({
       provider: "custom",
       apiKey: "test-key",
       model: "gpt-test",
@@ -63,7 +64,7 @@ describe("normalizeLlmProviderSnapshot", () => {
       apiKey: "test-key",
       model: "gpt-test",
       baseUrl: "",
-    }, TEST_FILE_PATH)
+    }, TEST_FILE_PATH, homedir())
 
     expect(snapshot.enabled).toBe(false)
     expect(snapshot.warning).toContain("custom provider requires a baseUrl")

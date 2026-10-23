@@ -1,10 +1,10 @@
 import path from "node:path"
-import process from "node:process"
 import { Effect, FileSystem, Match, Option, Schema } from "effect"
 import type { ClientCommand, EditorOpenSettings, EditorPreset } from "../shared/protocol"
 import { EDITOR_SPECS, isEditorPreset } from "../shared/editor-presets"
 import { TERMINAL_SPECS, type TerminalPreset } from "../shared/terminal-presets"
 import { resolveProjectPath } from "./paths"
+import { Machine } from "./platform/machine"
 import { canOpenMacApp, hasCommand, spawnDetached } from "./process-utils"
 
 type OpenExternalCommand = Extract<ClientCommand, { type: "system.openExternal" }>
@@ -42,7 +42,7 @@ export const openExternal = Effect.fn("ExternalOpen.open")(function* (command: O
   const resolvedPath = yield* resolveProjectPath(command.localPath)
   yield* Effect.annotateCurrentSpan("action", command.action)
   yield* Effect.annotateCurrentSpan("path", resolvedPath)
-  const platform = process.platform
+  const platform = (yield* Machine).platform
   const info = command.action === "open_editor" || command.action === "open_finder" || command.action === "open_preview" || command.action === "open_default"
     ? yield* fs.stat(resolvedPath).pipe(
       Effect.map(Option.some),

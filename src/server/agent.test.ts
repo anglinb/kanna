@@ -24,6 +24,7 @@ import type { SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
 import { makeFakeAnalytics } from "./analytics.fake"
 import { fakeCodexAppServer } from "./codex-app-server.fake"
+import { testPlatformContext } from "./platform/testing"
 
 async function waitFor(condition: () => boolean, timeoutMs = 2000) {
   const start = Date.now()
@@ -421,6 +422,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -492,6 +494,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -561,6 +564,7 @@ describe("AgentCoordinator codex integration", () => {
     const store = createFakeStore()
     const backgroundErrors: string[] = []
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -641,6 +645,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -726,6 +731,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -848,6 +854,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -940,6 +947,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -1014,6 +1022,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -1094,6 +1103,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -1163,6 +1173,7 @@ describe("AgentCoordinator codex integration", () => {
     const stateChanges: number[] = []
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {
         stateChanges.push(Date.now())
@@ -1233,6 +1244,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -1305,6 +1317,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -1399,6 +1412,7 @@ describe("AgentCoordinator codex integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -1434,6 +1448,7 @@ describe("AgentCoordinator claude integration", () => {
     store.chat.sessionToken = "session-1"
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       analytics,
       onStateChange: () => {},
@@ -1493,6 +1508,7 @@ describe("AgentCoordinator claude integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -1573,6 +1589,7 @@ describe("AgentCoordinator claude integration", () => {
     const startSessionCalls: Array<{ delegator?: boolean; sessionToken: string | null }> = []
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -1622,6 +1639,7 @@ describe("AgentCoordinator claude integration", () => {
   test("closing a Claude chat closes the agents its session left running", async () => {
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => {
@@ -1662,6 +1680,7 @@ describe("AgentCoordinator claude integration", () => {
     let turnStartedCount = 0
     store.recordTurnStarted = async () => { turnStartedCount += 1 }
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => {
@@ -1726,6 +1745,7 @@ describe("AgentCoordinator claude integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => ({
@@ -1769,6 +1789,7 @@ describe("AgentCoordinator claude integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -1850,6 +1871,7 @@ describe("AgentCoordinator claude integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -1913,6 +1935,7 @@ describe("AgentCoordinator claude integration", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => ({
@@ -1980,6 +2003,7 @@ describe("AgentCoordinator claude integration", () => {
     })
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => ({
@@ -2040,6 +2064,7 @@ describe("AgentCoordinator claude integration", () => {
     const prompts: string[] = []
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => ({
@@ -2096,6 +2121,7 @@ describe("AgentCoordinator claude integration", () => {
       return queued
     }
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => ({
@@ -2138,6 +2164,7 @@ describe("AgentCoordinator claude integration", () => {
     const store = createFakeStore()
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => ({
@@ -2208,6 +2235,7 @@ describe("AgentCoordinator claude integration", () => {
     })
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => ({
@@ -2278,6 +2306,7 @@ describe("AgentCoordinator claude integration", () => {
     store.chat.pendingForkAt = "uuid-at-fork"
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -2368,6 +2397,7 @@ describe("concurrent agents notice injection", () => {
     const queues: AsyncEventQueue<any>[] = []
     const prompts: string[] = []
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => {
@@ -2458,6 +2488,7 @@ describe("skill mentions", () => {
     const queues: AsyncEventQueue<any>[] = []
     const prompts: string[] = []
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => {
@@ -2533,6 +2564,7 @@ describe("mid-conversation provider switch", () => {
     }
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -2620,6 +2652,7 @@ describe("session restore on lost native session", () => {
     const prompts: string[] = []
     const startSessionCalls: Array<{ sessionToken: string | null; forkSession: boolean }> = []
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       checkSessionArtifact: () => artifactStatus,
@@ -2737,6 +2770,7 @@ describe("session restore on lost native session", () => {
     }
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -2794,6 +2828,7 @@ describe("AgentCoordinator restart resume", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -2863,6 +2898,7 @@ describe("AgentCoordinator restart resume", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -2902,6 +2938,7 @@ describe("AgentCoordinator restart resume", () => {
 
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: fakeCodexAppServer(fakeCodexManager),
@@ -2930,6 +2967,7 @@ describe("AgentCoordinator restart resume", () => {
     store.chat.lastModel = "opus"
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       checkSessionArtifact: () => "present" as SessionArtifactStatus,
@@ -2961,6 +2999,7 @@ describe("AgentCoordinator restart resume", () => {
     store.chat.resumePending = true
 
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => {
@@ -3019,8 +3058,8 @@ function createFakeStore(options?: {
     getTranscriptPath(chatId: string) {
       return `/tmp/transcripts/${chatId}.jsonl`
     },
-    getMessages() {
-      return this.messages
+    readMessages() {
+      return Effect.sync(() => this.messages)
     },
     async setChatProvider(chatId: string, provider: "claude" | "codex") {
       requireChat(chatId).provider = provider
@@ -3131,6 +3170,7 @@ describe("shared display tool lifecycle", () => {
       const dataDir = mkdtempSync(path.join(tmpdir(), "kanna-viz-host-"))
       const store = Object.assign(createFakeStore(), { dataDir })
       const coordinator = new AgentCoordinator({
+        platform: testPlatformContext,
         store: store as never,
         onStateChange: () => {},
         codexManager: fakeCodexAppServer(manager),
@@ -3173,7 +3213,7 @@ describe("shared display tool lifecycle", () => {
 describe("subagent activity", () => {
   function coordinator() {
     const store = createFakeStore()
-    return new AgentCoordinator({ store: store as never, onStateChange: () => {} })
+    return new AgentCoordinator({ platform: testPlatformContext, store: store as never, onStateChange: () => {} })
   }
 
   test("tracks an agent from start to stop", () => {
@@ -3358,6 +3398,7 @@ describe("subagent activity", () => {
     let report: ((update: SubagentActivityUpdate) => void) | undefined
     const store = createFakeStore()
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -3425,6 +3466,7 @@ describe("subagent activity", () => {
       }),
     }
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store: createFakeStore() as never,
       onStateChange: () => {},
       grokManager: fakeGrokManager as never,
@@ -3447,7 +3489,7 @@ describe("subagent activity", () => {
 
 describe("waiting on a subagent", () => {
   function coordinator() {
-    return new AgentCoordinator({ store: createFakeStore() as never, onStateChange: () => {} })
+    return new AgentCoordinator({ platform: testPlatformContext, store: createFakeStore() as never, onStateChange: () => {} })
   }
 
   test("a chat with no turn and a task still running is waiting on it", () => {
@@ -3565,6 +3607,7 @@ describe("waiting on a subagent", () => {
     const settled: string[] = []
     const store = createFakeStore()
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -3639,6 +3682,7 @@ describe("waiting on a subagent", () => {
       }),
     }
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store: createFakeStore() as never,
       onStateChange: () => {},
       grokManager: fakeGrokManager as never,
@@ -3670,7 +3714,7 @@ describe("waiting on a subagent", () => {
       async stopAgents() { stopped.push("all") },
     }
     const store = createFakeStore()
-    const agent = new AgentCoordinator({ store: store as never, onStateChange: () => {}, codexManager: fakeCodexAppServer(manager) })
+    const agent = new AgentCoordinator({ platform: testPlatformContext, store: store as never, onStateChange: () => {}, codexManager: fakeCodexAppServer(manager) })
     const agentStarted = (id: string) => report!("chat-1", { kind: "started", id, type: "subagent", label: "audit parser", stoppable: true })
     const finishTurn = () => {
       events.push({

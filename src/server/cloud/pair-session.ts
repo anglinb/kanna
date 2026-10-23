@@ -12,6 +12,7 @@
 import { Clock, Duration, Effect, Fiber, Option, Ref, Schedule } from "effect"
 import { createCloudApiClient, describeError, type CloudApiClient } from "./api-client"
 import type { CloudIdentity } from "./identity"
+import { Machine } from "../platform/machine"
 
 export type PairSessionStatus = "idle" | "waiting" | "paired" | "expired" | "error"
 
@@ -32,6 +33,7 @@ export interface PairSessionDeps<R = never> {
   machineName: string
   /** Persist credentials + bring the machine online. Failures surface as "error". */
   onPaired: (identity: CloudIdentity) => Effect.Effect<void, Error, R>
+  /** Default: the control plane, honouring the machine's control URL override. */
   createApiClient?: () => CloudApiClient
 }
 
@@ -55,10 +57,11 @@ type PollOutcome = "pending" | "done"
  */
 export const createPairSessionManager = <R = never>(
   deps: PairSessionDeps<R>,
-): Effect.Effect<PairSessionManager, never, R> =>
+): Effect.Effect<PairSessionManager, never, R | Machine> =>
   Effect.gen(function* () {
     const context = yield* Effect.context<R>()
-    const createApiClient = deps.createApiClient ?? (() => createCloudApiClient())
+    const machine = yield* Machine
+    const createApiClient = deps.createApiClient ?? (() => createCloudApiClient({ env: machine.env.snapshot() }))
     const snapshot = yield* Ref.make<PairSessionSnapshot>({ status: "idle" })
     /** Bumped per session so a stale `start` can tell it has been superseded. */
     let generation = 0

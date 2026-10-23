@@ -1,5 +1,8 @@
 import { Clock, Deferred, Effect, Option, Schema } from "effect"
 import type { GitHubRecentReposResult, GitHubRepoSummary } from "../shared/types"
+import type { FileSystemExtras } from "./platform/file-system-extras"
+import type { Machine } from "./platform/machine"
+import type { ProcessSpawner } from "./platform/process-spawner"
 import { type CommandOutput, type CommandSpawnError, resolveCommandPath, runCommand } from "./process-utils"
 import { parseGhAccount } from "./provider-auth"
 
@@ -36,17 +39,19 @@ const GhAuthStatus = Schema.Struct({
 const decodeAuthStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(GhAuthStatus))
 
 /** Runs one `gh` command. Injected in tests so they never spawn `gh`. */
-export type CommandRunner = (args: ReadonlyArray<string>) => Effect.Effect<CommandOutput, CommandSpawnError>
+export type CommandRunner = (
+  args: ReadonlyArray<string>,
+) => Effect.Effect<CommandOutput, CommandSpawnError, ProcessSpawner | Machine | FileSystemExtras>
 
 /**
  * Resolves gh through a login shell so servers launched without the user's
  * PATH (launchd/systemd) still find it — same treatment as provider-auth.
  */
-const runGh: CommandRunner = (args) => {
+const runGh: CommandRunner = Effect.fnUntraced(function* (args) {
   const [command, ...rest] = args
-  const argv = command === "gh" ? [resolveCommandPath("gh") ?? command, ...rest] : [...args]
-  return runCommand(argv, { stdout: true, stderr: true })
-}
+  const argv = command === "gh" ? [(yield* resolveCommandPath("gh")) ?? command, ...rest] : [...args]
+  return yield* runCommand(argv, { stdout: true, stderr: true })
+})
 
 /**
  * `gh` that could not be started reads as a command that failed: every probe

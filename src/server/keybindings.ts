@@ -1,8 +1,8 @@
-import { homedir } from "node:os"
 import path from "node:path"
 import { Context, Effect, FileSystem, Latch, Layer, Option, Schema, Stream, SubscriptionRef } from "effect"
 import { getKeybindingsFilePath } from "../shared/branding"
 import { DEFAULT_KEYBINDINGS, type KeybindingAction, type KeybindingsSnapshot } from "../shared/types"
+import { Machine } from "./platform/machine"
 
 const KEYBINDING_ACTIONS = Object.keys(DEFAULT_KEYBINDINGS) as KeybindingAction[]
 
@@ -35,14 +35,18 @@ export class Keybindings extends Context.Service<Keybindings, {
     bindings: Partial<Record<KeybindingAction, string[]>>,
   ) => Effect.Effect<KeybindingsSnapshot, KeybindingsFileError>
 }>()("@kanna/server/Keybindings") {
-  static readonly layer = (filePath = defaultKeybindingsFilePath()) =>
+  /** `filePath` defaults to the machine's keybindings file. */
+  static readonly layer = (filePath?: string) =>
     Layer.effect(this, makeKeybindings(filePath))
 }
 
-export const defaultKeybindingsFilePath = () => getKeybindingsFilePath(homedir())
+/** The runtime profile's keybindings file under `homeDir` (the machine's home, `Machine.homeDirectory`). */
+export const defaultKeybindingsFilePath = (homeDir: string) => getKeybindingsFilePath(homeDir)
 
-const makeKeybindings = Effect.fn("Keybindings.make")(function* (filePath: string) {
+const makeKeybindings = Effect.fn("Keybindings.make")(function* (filePathOption: string | undefined) {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
+  const filePath = filePathOption ?? defaultKeybindingsFilePath(machine.homeDirectory)
   yield* Effect.annotateCurrentSpan("filePath", filePath)
 
   const writeFile = (contents: unknown) =>
@@ -55,14 +59,14 @@ const makeKeybindings = Effect.fn("Keybindings.make")(function* (filePath: strin
   const exists = yield* fs.exists(filePath).pipe(Effect.orElseSucceed(() => false))
   if (!exists) yield* writeFile(DEFAULT_KEYBINDINGS)
 
-  const ref = yield* SubscriptionRef.make(yield* readSnapshot(fs, filePath))
+  const ref = yield* SubscriptionRef.make(yield* readSnapshot(fs, filePath, machine.homeDirectory))
 
   const reload = Effect.fn("Keybindings.reload")(function* () {
-    yield* SubscriptionRef.set(ref, yield* readSnapshot(fs, filePath))
+    yield* SubscriptionRef.set(ref, yield* readSnapshot(fs, filePath, machine.homeDirectory))
   })
 
   const write = Effect.fn("Keybindings.write")(function* (bindings: Partial<Record<KeybindingAction, string[]>>) {
-    const next = normalizeKeybindings(bindings, filePath)
+    const next = normalizeKeybindings(bindings, filePath, machine.homeDirectory)
     yield* writeFile(next.bindings)
     yield* SubscriptionRef.set(ref, next)
     return next
@@ -95,10 +99,14 @@ const makeKeybindings = Effect.fn("Keybindings.make")(function* (filePath: strin
 })
 
 export const readKeybindingsSnapshot = Effect.fn("Keybindings.readSnapshot")(function* (filePath: string) {
-  return yield* readSnapshot(yield* FileSystem.FileSystem, filePath)
+  return yield* readSnapshot(yield* FileSystem.FileSystem, filePath, (yield* Machine).homeDirectory)
 })
 
-const readSnapshot = Effect.fn("Keybindings.readSnapshotWith")(function* (fs: FileSystem.FileSystem, filePath: string) {
+const readSnapshot = Effect.fn("Keybindings.readSnapshotWith")(function* (
+  fs: FileSystem.FileSystem,
+  filePath: string,
+  homeDir: string,
+) {
   const text = yield* fs.readFileString(filePath).pipe(
     Effect.map(Option.some),
     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
@@ -106,26 +114,27 @@ const readSnapshot = Effect.fn("Keybindings.readSnapshotWith")(function* (fs: Fi
       Effect.fail(new KeybindingsFileError({ operation: "read", filePath, cause }))),
   )
   if (Option.isNone(text)) {
-    return createDefaultSnapshot(filePath)
+    return createDefaultSnapshot(filePath, homeDir)
   }
   if (!text.value.trim()) {
-    return createDefaultSnapshot(filePath, "Keybindings file was empty. Using defaults.")
+    return createDefaultSnapshot(filePath, homeDir, "Keybindings file was empty. Using defaults.")
   }
   return yield* decodeJson(text.value).pipe(
-    Effect.map((parsed) => normalizeKeybindings(parsed as KeybindingsFile, filePath)),
+    Effect.map((parsed) => normalizeKeybindings(parsed as KeybindingsFile, filePath, homeDir)),
     Effect.catchTag("SchemaError", () =>
-      Effect.succeed(createDefaultSnapshot(filePath, "Keybindings file is invalid JSON. Using defaults."))),
+      Effect.succeed(createDefaultSnapshot(filePath, homeDir, "Keybindings file is invalid JSON. Using defaults."))),
   )
 })
 
-export function normalizeKeybindings(value: KeybindingsFile | null | undefined, filePath = getKeybindingsFilePath(homedir())): KeybindingsSnapshot {
+/** `homeDir` is the machine's home, which `filePathDisplay` shortens to `~`. */
+export function normalizeKeybindings(value: KeybindingsFile | null | undefined, filePath: string, homeDir: string): KeybindingsSnapshot {
   const warnings: string[] = []
   const source = value && typeof value === "object" && !Array.isArray(value)
     ? value
     : null
 
   if (!source) {
-    return createDefaultSnapshot(filePath, "Keybindings file must contain a JSON object. Using defaults.")
+    return createDefaultSnapshot(filePath, homeDir, "Keybindings file must contain a JSON object. Using defaults.")
   }
 
   const bindings = {} as Record<KeybindingAction, string[]>
@@ -159,11 +168,11 @@ export function normalizeKeybindings(value: KeybindingsFile | null | undefined, 
   return {
     bindings,
     warning: warnings.length > 0 ? `Some keybindings were reset to defaults: ${warnings.join("; ")}` : null,
-    filePathDisplay: formatDisplayPath(filePath),
+    filePathDisplay: formatDisplayPath(filePath, homeDir),
   }
 }
 
-function createDefaultSnapshot(filePath: string, warning: string | null = null): KeybindingsSnapshot {
+function createDefaultSnapshot(filePath: string, homeDir: string, warning: string | null = null): KeybindingsSnapshot {
   return {
     bindings: {
       toggleEmbeddedTerminal: [...DEFAULT_KEYBINDINGS.toggleEmbeddedTerminal],
@@ -178,12 +187,11 @@ function createDefaultSnapshot(filePath: string, warning: string | null = null):
       toggleFocusMode: [...DEFAULT_KEYBINDINGS.toggleFocusMode],
     },
     warning,
-    filePathDisplay: formatDisplayPath(filePath),
+    filePathDisplay: formatDisplayPath(filePath, homeDir),
   }
 }
 
-function formatDisplayPath(filePath: string) {
-  const homePath = homedir()
+function formatDisplayPath(filePath: string, homePath: string) {
   if (filePath === homePath) return "~"
   if (filePath.startsWith(`${homePath}${path.sep}`)) {
     return `~${filePath.slice(homePath.length)}`

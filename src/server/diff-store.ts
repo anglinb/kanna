@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto"
-import { lstat, stat } from "node:fs/promises"
 import path from "node:path"
 import { Context, Deferred, Effect, FileSystem, Layer, Option, PubSub, Schema, Stream } from "effect"
 import type { PlatformError } from "effect/PlatformError"
@@ -48,9 +47,13 @@ import {
 import { getGhAuthInfo } from "./github"
 import { BranchPullRequests } from "./github-branch-pr"
 import { CommitChecks } from "./github-checks"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import type { Machine } from "./platform/machine"
+import type { ProcessSpawner } from "./platform/process-spawner"
 import { type CommandSpawnError, resolveCommandPath, runCommand } from "./process-utils"
 import { QuickResponse } from "./quick-response"
 import { inferProjectFileContentType } from "./uploads"
+import { capturePlatform } from "./platform"
 
 export type { WorkingTreeLocation, WorkingTreeProbe, WorkingTreeScan } from "./git"
 export { GitCommandError } from "./git"
@@ -239,7 +242,12 @@ function snapshotsEqual(left: StoredChatDiffState | undefined, right: StoredChat
  * provider-auth, so every gh consumer probes the same binary.
  */
 const runGh = (args: ReadonlyArray<string>) =>
-  runCommand([resolveCommandPath("gh") ?? "gh", ...args], { stdout: true, stderr: true })
+  resolveCommandPath("gh").pipe(
+    Effect.flatMap((gh) => runCommand([gh ?? "gh", ...args], { stdout: true, stderr: true })),
+  )
+
+/** The platform services diff-store's git, gh and file reads run on. */
+type DiffStorePlatform = FileSystem.FileSystem | FileSystemExtras | Machine | ProcessSpawner
 
 function formatGitFailure(result: GitOutput) {
   return [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n")
@@ -381,21 +389,20 @@ const hasUpstreamBranch = (repoRoot: string) =>
   getUpstreamRef(repoRoot).pipe(Effect.map((ref) => ref !== null))
 
 /**
- * When `FETCH_HEAD` last moved. node's `stat`, not `FileSystem.stat`: the
- * latter rounds mtimes to whole milliseconds, where `Date` truncates, so the
- * timestamp would drift by one from what earlier versions reported.
+ * When `FETCH_HEAD` last moved. `FileSystemExtras.stat`, not
+ * `FileSystem.stat`: the latter rounds mtimes to whole milliseconds, where
+ * `Date` truncates, so the timestamp would drift by one from what earlier
+ * versions reported.
  */
 const readLastFetchedAt = Effect.fn("DiffStore.readLastFetchedAt")(function* (gitDir: string | null) {
   if (!gitDir) {
     return undefined
   }
   const fetchHeadPath = path.join(gitDir, "FETCH_HEAD")
-  return yield* Effect.tryPromise({
-    try: () => stat(fetchHeadPath),
-    catch: fileError("stat", fetchHeadPath),
-  }).pipe(
-    Effect.map((info): string | undefined => info.mtime.toISOString()),
-    Effect.catchTag("@kanna/server/diff-store/WorktreeFileError", () => Effect.succeed(undefined)),
+  const files = yield* FileSystemExtras
+  return yield* files.stat(fetchHeadPath).pipe(
+    Effect.map((info): string | undefined => new Date(info.mtimeMs).toISOString()),
+    Effect.catchTag("PlatformError", () => Effect.succeed(undefined)),
   )
 })
 
@@ -712,7 +719,7 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
  * One `gh api` GET: the parsed JSON body, or `null` when gh answered with a
  * failure. Injected in tests so they never spawn gh.
  */
-export type GitHubCliApiLike = (path: string) => Effect.Effect<unknown, CommandSpawnError | Schema.SchemaError>
+export type GitHubCliApiLike = (path: string) => Effect.Effect<unknown, CommandSpawnError | Schema.SchemaError, DiffStorePlatform>
 
 const ghApiJson: GitHubCliApiLike = (apiPath) =>
   runGh(["api", "-H", "Accept: application/vnd.github+json", apiPath]).pipe(
@@ -987,20 +994,20 @@ const getGitHubOwners = Effect.fn("DiffStore.getGitHubOwners")(function* () {
 })
 
 /**
- * node's `lstat`, or null when the path is gone. Not `FileSystem.stat`: that
- * follows symlinks (a link must be measured as itself) and rounds mtimes to
- * whole milliseconds (mtimes feed the patch digest and the refresh stamp, so
- * sub-millisecond moves must still count).
+ * `lstat` with node's precision, or null when the path is gone. Not
+ * `FileSystem.stat`: that follows symlinks (a link must be measured as
+ * itself) and rounds mtimes to whole milliseconds (mtimes feed the patch
+ * digest and the refresh stamp, so sub-millisecond moves must still count).
  */
 const lstatOrNull = (filePath: string) =>
-  Effect.tryPromise({ try: () => lstat(filePath), catch: fileError("stat", filePath) }).pipe(
-    Effect.catchTag("@kanna/server/diff-store/WorktreeFileError", () => Effect.succeed(null)),
+  FileSystemExtras.use((files) => files.lstat(filePath)).pipe(
+    Effect.catchTag("PlatformError", () => Effect.succeed(null)),
   )
 
-/** node's `stat`, for the same reason as `lstatOrNull`. Follows links: git-dir entries are plain files. */
+/** `stat`, for the same reason as `lstatOrNull`. Follows links: git-dir entries are plain files. */
 const statOrNull = (filePath: string) =>
-  Effect.tryPromise({ try: () => stat(filePath), catch: fileError("stat", filePath) }).pipe(
-    Effect.catchTag("@kanna/server/diff-store/WorktreeFileError", () => Effect.succeed(null)),
+  FileSystemExtras.use((files) => files.stat(filePath)).pipe(
+    Effect.catchTag("PlatformError", () => Effect.succeed(null)),
   )
 
 /**
@@ -1027,13 +1034,13 @@ const readWorktreeFile = Effect.fn("DiffStore.readWorktreeFile")(function* (
 ) {
   const absolutePath = path.join(repoRoot, relativePath)
   const fileInfo = yield* lstatOrNull(absolutePath)
-  if (fileInfo?.isSymbolicLink()) {
+  if (fileInfo?.kind === "SymbolicLink") {
     return yield* fs.readLink(absolutePath).pipe(
       Effect.map((target): string | null => target),
       Effect.catchTag("PlatformError", () => Effect.succeed(null)),
     )
   }
-  if (!fileInfo?.isFile()) {
+  if (fileInfo?.kind !== "File") {
     return null
   }
 
@@ -1264,8 +1271,8 @@ const getWorktreeFileSize = Effect.fn("DiffStore.getWorktreeFileSize")(function*
   // size is its target path, and following it would weigh the patch against a
   // file whose bytes are never part of this diff.
   const fileInfo = yield* lstatOrNull(path.join(repoRoot, relativePath))
-  if (fileInfo?.isSymbolicLink()) return fileInfo.size
-  return fileInfo?.isFile() ? fileInfo.size : 0
+  if (fileInfo?.kind === "SymbolicLink") return fileInfo.size
+  return fileInfo?.kind === "File" ? fileInfo.size : 0
 })
 
 const getBaseBlobSize = Effect.fn("DiffStore.getBaseBlobSize")(function* (repoRoot: string, baseCommit: string | null, relativePath: string) {
@@ -1313,6 +1320,7 @@ const computeCurrentFiles = Effect.fn("DiffStore.computeCurrentFiles")(function*
   baseCommit: string | null,
   lineCounts?: { cache: LineCountCache; nextCache: LineCountCache },
 ) {
+  const extras = yield* FileSystemExtras
   const currentDirtyPaths = yield* listDirtyPaths(repoRoot)
   const trackedStatsByPath = yield* getTrackedDiffStats(repoRoot, baseCommit)
   const lineCountCache = lineCounts?.cache ?? new Map<string, LineCountCacheEntry>()
@@ -1330,8 +1338,8 @@ const computeCurrentFiles = Effect.fn("DiffStore.computeCurrentFiles")(function*
     // points at. Following it made every symlink-to-directory look like a
     // non-file, which the guard below then read as "gone".
     const fileInfo = yield* lstatOrNull(absolutePath)
-    const isFile = fileInfo?.isFile() ?? false
-    const isSymlink = fileInfo?.isSymbolicLink() ?? false
+    const isFile = fileInfo?.kind === "File"
+    const isSymlink = fileInfo?.kind === "SymbolicLink"
 
     if (!isFile && !isSymlink && entry.isUntracked) {
       // The untracked file vanished between `git status` and this scan.
@@ -1343,7 +1351,7 @@ const computeCurrentFiles = Effect.fn("DiffStore.computeCurrentFiles")(function*
     // rather than being sized, sniffed or line-counted through its target.
     const mimeType = isSymlink
       ? SYMLINK_MIME_TYPE
-      : isFile ? inferProjectFileContentType(relativePath, Bun.file(absolutePath).type) : undefined
+      : isFile ? inferProjectFileContentType(relativePath, extras.contentType(absolutePath)) : undefined
     const size = isFile || isSymlink ? fileInfo!.size : undefined
     const mtimeMs = isFile || isSymlink ? fileInfo!.mtimeMs : undefined
 
@@ -1701,6 +1709,7 @@ export class DiffStore extends Context.Service<DiffStore, {
 
 const makeDiffStore = Effect.fn("DiffStore.make")(function* () {
   const fs = yield* FileSystem.FileSystem
+  const platform = yield* capturePlatform<DiffStorePlatform>()
   const commitChecks = yield* CommitChecks
   const branchPullRequests = yield* BranchPullRequests
   const quickResponse = yield* QuickResponse
@@ -1986,7 +1995,7 @@ const makeDiffStore = Effect.fn("DiffStore.make")(function* () {
         readonly deferred: Deferred.Deferred<boolean, DiffRefreshError>
       }
 
-  const refreshSnapshot = (projectId: string, projectPath: string, options?: { force?: boolean }): Effect.Effect<boolean, DiffRefreshError> =>
+  const refreshSnapshot = (projectId: string, projectPath: string, options?: { force?: boolean }): Effect.Effect<boolean, DiffRefreshError, DiffStorePlatform> =>
     Effect.gen(function* () {
       const force = options?.force ?? false
       // One synchronous step, so two callers can't both see "nothing running".
@@ -3275,6 +3284,10 @@ const makeDiffStore = Effect.fn("DiffStore.make")(function* () {
     }
   })
 
+  // The service's methods need nothing: they run on the platform the layer
+  // was built with.
+  const bind = <Args extends ReadonlyArray<unknown>, A, E>(method: (...args: Args) => Effect.Effect<A, E, DiffStorePlatform>) =>
+    (...args: Args) => method(...args).pipe(Effect.provide(platform))
   const service: DiffStore["Service"] = {
     getProjectSnapshot,
     getSnapshotVersion,
@@ -3285,24 +3298,24 @@ const makeDiffStore = Effect.fn("DiffStore.make")(function* () {
     }),
     lastRefreshSkipped: () => lastRefreshSkipped,
     workingTreeScans: Stream.fromPubSub(workingTreeScans),
-    refreshSnapshot,
-    initializeGit,
-    getGitHubPublishInfo,
-    checkGitHubRepoAvailability,
-    publishToGitHub,
-    readPatch,
-    readCommit,
-    readBranch,
-    listBranches,
-    previewMergeBranch,
-    mergeBranch,
-    checkoutBranch,
-    createBranch,
-    syncBranch,
-    generateCommitMessage,
-    commitFiles,
-    discardFile,
-    ignoreFile,
+    refreshSnapshot: bind(refreshSnapshot),
+    initializeGit: bind(initializeGit),
+    getGitHubPublishInfo: bind(getGitHubPublishInfo),
+    checkGitHubRepoAvailability: bind(checkGitHubRepoAvailability),
+    publishToGitHub: bind(publishToGitHub),
+    readPatch: bind(readPatch),
+    readCommit: bind(readCommit),
+    readBranch: bind(readBranch),
+    listBranches: bind(listBranches),
+    previewMergeBranch: bind(previewMergeBranch),
+    mergeBranch: bind(mergeBranch),
+    checkoutBranch: bind(checkoutBranch),
+    createBranch: bind(createBranch),
+    syncBranch: bind(syncBranch),
+    generateCommitMessage: bind(generateCommitMessage),
+    commitFiles: bind(commitFiles),
+    discardFile: bind(discardFile),
+    ignoreFile: bind(ignoreFile),
   }
   return service
 })

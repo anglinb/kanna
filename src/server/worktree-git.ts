@@ -1,6 +1,8 @@
 import { Effect, Option, Schema } from "effect"
+import type { ProcessSpawner } from "./platform/process-spawner"
 import type { CommandSpawnError } from "./process-utils"
 import { probeWorkingTree, readTreeBlobs, resolveWorkingTreeLocation, runGit, type WorkingTreeScan } from "./git"
+import { capturePlatform } from "./platform"
 
 /**
  * The git helpers the worktree probe, the turn snapshots and the touched-file
@@ -38,7 +40,7 @@ export const treeBlobs = Effect.fn("WorktreeGit.treeBlobs")(function* (repoRoot:
 })
 
 /** One `git status` of the tree. A failed status reads as clean (see `probeWorkingTree`). */
-export const scanWorkingTree = (repoRoot: string): Effect.Effect<WorkingTreeScan, WorktreeGitError> =>
+export const scanWorkingTree = (repoRoot: string): Effect.Effect<WorkingTreeScan, WorktreeGitError, ProcessSpawner> =>
   probeWorkingTree(repoRoot).pipe(spawnFailed("probe working tree", repoRoot), Effect.withSpan("WorktreeGit.scanWorkingTree"))
 
 export const git = (args: string[], cwd: string, options?: { env?: Record<string, string | undefined>; stdin?: string }) =>
@@ -46,3 +48,20 @@ export const git = (args: string[], cwd: string, options?: { env?: Record<string
     spawnFailed("run git", cwd, args),
     Effect.withSpan("WorktreeGit.git", { attributes: { command: args[0] } }),
   )
+
+/**
+ * The helpers above, bound to the machine's `ProcessSpawner`, for a layer
+ * that captures its platform at construction so its service methods need
+ * nothing.
+ */
+export const bindWorktreeGit = Effect.gen(function* () {
+  const platform = yield* capturePlatform<ProcessSpawner>()
+  return {
+    resolveLocation: (projectPath: string) => resolveLocation(projectPath).pipe(Effect.provide(platform)),
+    treeBlobs: (repoRoot: string, treeish: string, paths: readonly string[]) =>
+      treeBlobs(repoRoot, treeish, paths).pipe(Effect.provide(platform)),
+    scanWorkingTree: (repoRoot: string) => scanWorkingTree(repoRoot).pipe(Effect.provide(platform)),
+    git: (args: string[], cwd: string, options?: { env?: Record<string, string | undefined>; stdin?: string }) =>
+      git(args, cwd, options).pipe(Effect.provide(platform)),
+  }
+})

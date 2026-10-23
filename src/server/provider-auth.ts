@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto"
-import { accessSync, constants as fsConstants, statSync } from "node:fs"
 import path from "node:path"
 import {
   type Cause,
@@ -42,7 +41,10 @@ import {
 import { compareVersions } from "./cli-runtime"
 import { parseGrokAuthStatus, parseGrokDeviceLogin, parseGrokVersion } from "./grok-cli"
 import { type LlmProviderFileError, readLlmProviderSnapshot, writeLlmProviderSnapshot } from "./llm-provider"
-import { CommandSpawnError } from "./process-utils"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
+import { CommandSpawnError, ProcessSpawner } from "./platform/process-spawner"
+import { PtySpawner } from "./platform/pty"
 
 export { parseGrokAuthStatus, parseGrokDeviceLogin, parseGrokVersion }
 
@@ -352,7 +354,7 @@ export interface ProviderAuthOptions {
     argv: ReadonlyArray<string>,
     options?: { readonly env?: Record<string, string> },
   ) => Effect.Effect<LoginChild, CommandSpawnError, Scope.Scope>
-  /** Start a login CLI on a PTY (default: a real process on `Bun.Terminal`). */
+  /** Start a login CLI on a PTY (default: a real process on the machine's `PtySpawner`). */
   readonly spawnPty?: (argv: ReadonlyArray<string>) => Effect.Effect<LoginChild, CommandSpawnError, Scope.Scope>
   /** Default: the user's llm-provider.json. */
   readonly readLlmProvider?: Effect.Effect<LlmProviderSnapshot, LlmProviderFileError>
@@ -466,24 +468,35 @@ type RefreshAction =
   | { readonly _tag: "skip" }
 
 const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: ProviderAuthOptions) {
-  const fs = yield* FileSystem.FileSystem
   const analytics = yield* Analytics
   const layerScope = yield* Effect.scope
+  const machine = yield* Machine
+  const files = yield* FileSystemExtras
+  // Only the platform: the whole context would carry the layer's Scope over the caller's.
+  const platformContext = Context.pick(FileSystem.FileSystem, ProcessSpawner, PtySpawner, Machine, FileSystemExtras)(
+    yield* Effect.context<FileSystem.FileSystem | ProcessSpawner | PtySpawner | Machine | FileSystemExtras>(),
+  )
 
-  const exec = options.exec ?? execCommand
-  const spawnStreaming = options.spawnStreaming ?? spawnStreamingCommand
-  const spawnPty = options.spawnPty ?? spawnPtyCommand
+  const exec = options.exec
+    ?? ((argv: ReadonlyArray<string>, execOptions?: ExecOptions) => execCommand(argv, execOptions).pipe(Effect.provide(platformContext)))
+  const spawnStreaming = options.spawnStreaming
+    ?? ((argv: ReadonlyArray<string>, spawnOptions?: { readonly env?: Record<string, string> }) =>
+      spawnStreamingCommand(argv, spawnOptions).pipe(Effect.provide(platformContext)))
+  const spawnPty = options.spawnPty
+    ?? ((argv: ReadonlyArray<string>) => spawnPtyCommand(argv).pipe(Effect.provide(platformContext)))
   const readLlmProvider = options.readLlmProvider
-    ?? readLlmProviderSnapshot().pipe(Effect.provideService(FileSystem.FileSystem, fs))
+    ?? readLlmProviderSnapshot().pipe(Effect.provide(platformContext))
   const writeLlmProvider = options.writeLlmProvider
     ?? ((value: LlmProviderWrite) =>
       writeLlmProviderSnapshot({ ...value, faveModels: value.faveModels ?? [] }).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provide(platformContext),
       ))
   const fetchFn = options.fetch ?? fetch
-  const resolveCommand = options.resolveCommandPath ?? resolveCommandPathEffect
-  const isExecutable = options.isExecutable ?? isExecutableFile
-  const platform = options.platform ?? process.platform
+  const resolveCommand = options.resolveCommandPath
+    ?? ((command: string) => resolveCommandPathEffect(command).pipe(Effect.provide(platformContext)))
+  const isExecutable = options.isExecutable ?? files.isExecutableFile
+  const platform = options.platform ?? machine.platform
+  const claudeOverride = () => claudeExecutableOverride(machine.env.snapshot(), machine.homeDirectory)
   const onSignedIn = options.onSignedIn ?? (() => Effect.void)
 
   const ref = yield* SubscriptionRef.make<ProviderAuthSnapshot>({
@@ -523,7 +536,7 @@ const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: Prov
 
   /** The binary the card probes and updates: the same `claude` turns run (claude-executable.ts). */
   const cliPath = (service: CliServiceId) => {
-    const override = service === "claude" ? claudeExecutableOverride() : null
+    const override = service === "claude" ? claudeOverride() : null
     return override !== null ? Effect.succeed(override) : resolvePath(CLI_BINARIES[service])
   }
 
@@ -544,7 +557,7 @@ const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: Prov
   // -------------------------------------------------------------------------
 
   const probeCliService = Effect.fn("ProviderAuth.probeCliService")(function* (service: CliServiceId) {
-    const override = service === "claude" ? claudeExecutableOverride() : null
+    const override = service === "claude" ? claudeOverride() : null
     const binaryPath = yield* cliPath(service)
     if (!binaryPath) {
       return {
@@ -1404,56 +1417,36 @@ function ghReleaseInstallScript(platform: NodeJS.Platform) {
 // Real processes (server runtime)
 // ---------------------------------------------------------------------------
 
-const spawnFailure = (command: string) => (cause: unknown) =>
-  new CommandSpawnError({ command, message: errorMessage(cause), cause })
-
-type Spawned = ReturnType<typeof Bun.spawn>
-
-const killIfRunning = (proc: Spawned) => Effect.sync(() => {
-  if (proc.exitCode === null && proc.signalCode === null) proc.kill()
-})
-
-/** A missing file, or one without the execute bit, is a no (`accessSync` says so by throwing). */
-const isExecutableFile = (filePath: string) =>
-  Effect.try(() => {
-    if (!statSync(filePath).isFile()) return false
-    accessSync(filePath, fsConstants.X_OK)
-    return true
-  }).pipe(Effect.orElseSucceed(() => false))
+/** The platform's spawn or read failure, re-messaged with the cause's own text as this module always showed it. */
+const remessage = (command: string) => (error: CommandSpawnError) =>
+  Effect.fail(new CommandSpawnError({ command, message: errorMessage(error.cause), cause: error.cause }))
 
 /** Run `argv` to completion, killed if it outlives `timeoutMs` or the caller is interrupted. */
 export const execCommand = Effect.fn("ProviderAuth.exec")(function* (argv: ReadonlyArray<string>, options: ExecOptions = {}) {
   const command = argv[0] ?? ""
   yield* Effect.annotateCurrentSpan("command", command)
-  const proc = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => Bun.spawn([...argv], {
-        stdin: options.stdin !== undefined ? new TextEncoder().encode(options.stdin) : "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, ...options.env },
-      }),
-      catch: spawnFailure(command),
-    }),
-    killIfRunning,
-  )
+  const machine = yield* Machine
+  const spawner = yield* ProcessSpawner
+  const proc = yield* spawner.spawn(argv, {
+    stdin: options.stdin ?? "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...machine.env.snapshot(), ...options.env },
+  }).pipe(Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", remessage(command)))
   if (options.timeoutMs) {
-    yield* killIfRunning(proc).pipe(Effect.delay(options.timeoutMs), Effect.forkScoped)
+    yield* proc.kill().pipe(Effect.delay(options.timeoutMs), Effect.forkScoped)
   }
-  const [stdout, stderr, code] = yield* Effect.tryPromise({
-    try: () => Promise.all([
-      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-      proc.exited,
-    ]),
-    catch: spawnFailure(command),
-  })
-  return { code, stdout, stderr } satisfies ExecResult
+  const [stdout, stderr, exit] = yield* Effect.all([
+    Stream.mkString(Stream.decodeText(proc.stdout)),
+    Stream.mkString(Stream.decodeText(proc.stderr)),
+    proc.exited,
+  ], { concurrency: "unbounded" }).pipe(Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", remessage(command)))
+  return { code: exit.code, stdout, stderr } satisfies ExecResult
 }, Effect.scoped)
 
 /** One pipe of a login CLI as text; a pipe that errors as the process dies just ends. */
-const pipeText = (command: string, stream: ReadableStream<Uint8Array>) =>
-  Stream.fromReadableStream({ evaluate: () => stream, onError: spawnFailure(command) }).pipe(
+const pipeText = (stream: Stream.Stream<Uint8Array, CommandSpawnError>) =>
+  stream.pipe(
     Stream.decodeText,
     Stream.catchTag("@kanna/server/process-utils/CommandSpawnError", () => Stream.empty),
   )
@@ -1465,24 +1458,16 @@ export const spawnStreamingCommand = Effect.fn("ProviderAuth.spawnStreaming")(fu
 ) {
   const command = argv[0] ?? ""
   yield* Effect.annotateCurrentSpan("command", command)
-  const proc = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => Bun.spawn([...argv], {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, ...options.env },
-      }),
-      catch: spawnFailure(command),
-    }),
-    killIfRunning,
-  )
+  const machine = yield* Machine
+  const spawner = yield* ProcessSpawner
+  const proc = yield* spawner.spawn(argv, {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...machine.env.snapshot(), ...options.env },
+  }).pipe(Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", remessage(command)))
   return {
-    output: Stream.merge(
-      pipeText(command, proc.stdout as ReadableStream<Uint8Array>),
-      pipeText(command, proc.stderr as ReadableStream<Uint8Array>),
-    ),
-    exited: Effect.promise(() => proc.exited),
+    output: Stream.merge(pipeText(proc.stdout), pipeText(proc.stderr)),
+    exited: proc.exited.pipe(Effect.map((exit) => exit.code)),
   } satisfies LoginChild
 })
 
@@ -1490,44 +1475,33 @@ export const spawnStreamingCommand = Effect.fn("ProviderAuth.spawnStreaming")(fu
 export const spawnPtyCommand = Effect.fn("ProviderAuth.spawnPty")(function* (argv: ReadonlyArray<string>) {
   const command = argv[0] ?? ""
   yield* Effect.annotateCurrentSpan("command", command)
-  if (typeof Bun.Terminal !== "function") {
+  const ptys = yield* PtySpawner
+  if (!ptys.available) {
     return yield* new CommandSpawnError({
       command,
       message: "This sign-in flow requires Bun 1.3.5+ (PTY support).",
       cause: null,
     })
   }
+  const machine = yield* Machine
   const output = yield* Queue.unbounded<string, Cause.Done>()
-  const closeTerminal = (terminal: Bun.Terminal) =>
-    Effect.try(() => terminal.close()).pipe(Effect.ignore)
-  const terminal = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => new Bun.Terminal({
-        cols: 200,
-        rows: 50,
-        name: "xterm-256color",
-        data: (_terminal, data) => {
-          Queue.offerUnsafe(output, Buffer.from(data).toString("utf8"))
-        },
-      }),
-      catch: spawnFailure(command),
-    }),
-    closeTerminal,
+  const decoder = new TextDecoder()
+  const proc = yield* ptys.spawn(argv, {
+    cols: 200,
+    rows: 50,
+    name: "xterm-256color",
+    env: { ...machine.env.snapshot(), TERM: "xterm-256color" },
+    onData: (data) => {
+      Queue.offerUnsafe(output, decoder.decode(data))
+    },
+  }).pipe(Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", remessage(command)))
+  const exited = proc.exited.pipe(
+    Effect.map((exit) => exit.code),
+    Effect.orDie,
   )
-  const proc = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => Bun.spawn([...argv], {
-        terminal,
-        env: { ...process.env, TERM: "xterm-256color" },
-      }),
-      catch: spawnFailure(command),
-    }),
-    killIfRunning,
-  )
-  const exited = Effect.promise(() => proc.exited)
   // The terminal closes with the process, and its output ends with it.
   yield* exited.pipe(
-    Effect.andThen(closeTerminal(terminal)),
+    Effect.andThen(proc.close),
     Effect.ensuring(Queue.end(output)),
     Effect.forkScoped,
   )
@@ -1535,10 +1509,9 @@ export const spawnPtyCommand = Effect.fn("ProviderAuth.spawnPty")(function* (arg
     output: Stream.fromQueue(output),
     exited,
     write: (data: string) =>
-      Effect.try(() => {
-        terminal.write(data)
-      }).pipe(
-        Effect.catchTag("UnknownError", () => Effect.logWarning("provider-auth: failed to write to login pty")),
+      proc.write(data).pipe(
+        Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", () =>
+          Effect.logWarning("provider-auth: failed to write to login pty")),
       ),
   } satisfies LoginChild
 })

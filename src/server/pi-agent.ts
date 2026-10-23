@@ -1,4 +1,3 @@
-import { homedir } from "node:os"
 import path from "node:path"
 import type {
   AuthStorage,
@@ -19,6 +18,7 @@ import { buildKannaAgentCorrection, buildKannaAgentId } from "./attribution"
 import { buildKannaSystemInstructions } from "./harness-instructions"
 import { appendSystemMessageBlock } from "./harness-skills"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
+import { Machine } from "./platform/machine"
 import { timestamped } from "./transcript"
 
 /**
@@ -263,7 +263,7 @@ export const resolvePiConnection = Effect.fn("PiAgent.resolveConnection")(functi
       apiKey: snapshot.value.apiKey,
     } satisfies PiConnection
   }
-  const envKey = process.env.OPENROUTER_API_KEY?.trim()
+  const envKey = (yield* Machine).env.get("OPENROUTER_API_KEY")?.trim()
   if (envKey) {
     return { provider: "openrouter", baseUrl: OPENROUTER_BASE_URL, apiKey: envKey } satisfies PiConnection
   }
@@ -368,8 +368,9 @@ export class PiAgentManager {
   private readonly agentDir: string
   private readonly sessionsDir: string
 
-  constructor(args: { dataDir?: string } = {}) {
-    const dataDir = args.dataDir ?? path.join(getDataRootDir(homedir()), "pi")
+  /** `dataDir` is pi's own directory under Kanna's data root (see `piDataDir`). */
+  constructor(args: { dataDir: string }) {
+    const dataDir = args.dataDir
     this.agentDir = path.join(dataDir, "agent")
     this.sessionsDir = path.join(dataDir, "sessions")
   }
@@ -719,9 +720,17 @@ export class PiAgentManager {
   })
 }
 
+/** Pi's directory under Kanna's data root on a machine whose home is `homeDirectory`. */
+export function piDataDir(homeDirectory: string) {
+  return path.join(getDataRootDir(homeDirectory), "pi")
+}
+
 export class PiAgent extends Context.Service<PiAgent, PiAgentManager>()("@kanna/server/PiAgent") {
   static readonly layer = (args: { dataDir?: string } = {}) => Layer.effect(this, Effect.acquireRelease(
-    Effect.sync(() => new PiAgentManager(args)),
+    Effect.gen(function* () {
+      const machine = yield* Machine
+      return new PiAgentManager({ dataDir: args.dataDir ?? piDataDir(machine.homeDirectory) })
+    }),
     (manager) => Effect.sync(() => manager.dispose()),
   ))
 }

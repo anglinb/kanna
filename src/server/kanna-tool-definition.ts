@@ -2,6 +2,8 @@ import { Effect, Schema, type FileSystem } from "effect"
 import { z } from "zod"
 import { decodeToolArguments, KannaToolArgumentsError, toolInputSchema } from "./kanna-tool-arguments"
 import type { Orchestrator } from "./orchestrator"
+import type { FileSystemExtras } from "./platform/file-system-extras"
+import type { Machine } from "./platform/machine"
 
 /**
  * What a Kanna tool is. Kept apart from `kanna-tools.ts`, which lists the
@@ -80,7 +82,7 @@ export interface KannaToolContext {
 }
 
 /** The services a tool may use. The runtime provides them. */
-export type KannaToolServices = FileSystem.FileSystem
+export type KannaToolServices = FileSystem.FileSystem | FileSystemExtras | Machine
 
 export interface KannaTool<A = any> {
   readonly name: string

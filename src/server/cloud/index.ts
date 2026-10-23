@@ -8,7 +8,7 @@
  * The loop runs in a scope `start` opens and `stop` closes.
  */
 
-import { Effect, Exit, Option, Scope } from "effect"
+import { FileSystem, Effect, Exit, Option, Scope } from "effect"
 import { createCloudApiClient, type CloudApiClient } from "./api-client"
 import { createConnectTokenManager, type ConnectTokenManager } from "./connect-token"
 import { runCloudHeartbeatLoop, type HeartbeatLoopDeps } from "./heartbeat-loop"
@@ -28,7 +28,8 @@ export interface CloudRuntime {
   readonly identity: CloudIdentity
   readonly connectTokens: ConnectTokenManager
   /** Brings the machine online. A second call while running does nothing. */
-  readonly start: (args: CloudRuntimeStartArgs) => Effect.Effect<void>
+  /** Needs `FileSystem.FileSystem` to find a local `cloudflared` for the connector. */
+  readonly start: (args: CloudRuntimeStartArgs) => Effect.Effect<void, never, FileSystem.FileSystem>
   /**
    * Stops the tunnel and best-effort tells the control plane we're offline
    * (so the dashboard/proxy flip immediately instead of waiting out the

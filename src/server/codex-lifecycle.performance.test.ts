@@ -9,6 +9,7 @@ import { AgentCoordinator } from "./agent"
 import { makeCodexAppServer } from "./codex-app-server"
 import { runTest } from "./effect/testing"
 import { openEventStore } from "./event-store-bridge"
+import { testPlatformContext } from "./platform/testing"
 
 class Child extends EventEmitter {
   stdin = new PassThrough()
@@ -36,7 +37,7 @@ class Child extends EventEmitter {
 
 test("closing a chat stops Codex and rejects pending requests", () => runTest(Effect.gen(function* () {
   const child = new Child()
-  const manager = yield* makeCodexAppServer({ spawnProcess: () => child })
+  const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => child) })
   const dataDir = yield* Effect.acquireRelease(
     Effect.promise(() => mkdtemp(path.join(tmpdir(), "kanna-codex-lifecycle-"))),
     (dir) => Effect.promise(() => rm(dir, { recursive: true, force: true })),
@@ -52,7 +53,7 @@ test("closing a chat stops Codex and rejects pending requests", () => runTest(Ef
     Effect.forkChild({ startImmediately: true }),
   )
   const store = yield* Effect.promise(() => openEventStore(dataDir))
-  const agent = new AgentCoordinator({ store, codexManager: manager, onStateChange: () => {} })
+  const agent = new AgentCoordinator({ platform: testPlatformContext, store, codexManager: manager, onStateChange: () => {} })
   yield* Effect.promise(() => agent.closeChat("chat"))
   expect(yield* Fiber.join(result)).toBe("Codex session closed")
   expect(child.killed).toBe(true)

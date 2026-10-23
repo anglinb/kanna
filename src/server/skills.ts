@@ -1,6 +1,5 @@
-import os from "node:os"
 import path from "node:path"
-import { Effect, FileSystem, Option, Schema } from "effect"
+import { Effect, FileSystem, Option, Schema, Stream } from "effect"
 import type {
   GlobalSkillsSnapshot,
   InstalledSkillsSnapshot,
@@ -9,6 +8,8 @@ import type {
   SkillUninstallResult,
 } from "../shared/types"
 import { listGlobalSkills } from "./harness-skills"
+import { Machine } from "./platform/machine"
+import { type CommandSpawnError, ProcessSpawner } from "./platform/process-spawner"
 
 const SKILL_AGENT_ALIASES = ["universal", "claude-code"] as const
 
@@ -59,12 +60,12 @@ export function assertSafeSkillId(skillId: string) {
   return normalized
 }
 
-export function getGlobalSkillLockPath() {
-  const xdgStateHome = process.env.XDG_STATE_HOME?.trim()
-  if (xdgStateHome) {
-    return path.join(xdgStateHome, "skills", ".skill-lock.json")
+export function getGlobalSkillLockPath(homeDir: string, xdgStateHome: string | undefined) {
+  const stateHome = xdgStateHome?.trim()
+  if (stateHome) {
+    return path.join(stateHome, "skills", ".skill-lock.json")
   }
-  return path.join(os.homedir(), ".agents", ".skill-lock.json")
+  return path.join(homeDir, ".agents", ".skill-lock.json")
 }
 
 // The lock file and the search API belong to other tools, so a field of the
@@ -124,8 +125,10 @@ export function parseInstalledSkillsLock(parsed: unknown, lockFilePath: string):
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
 
 /** The skills the skills CLI installed globally. A missing or unreadable lock file lists none. */
-export const listInstalledSkills = Effect.fn("Skills.listInstalled")(function* (lockFilePath: string = getGlobalSkillLockPath()) {
+export const listInstalledSkills = Effect.fn("Skills.listInstalled")(function* (lockFilePathOverride?: string) {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
+  const lockFilePath = lockFilePathOverride ?? getGlobalSkillLockPath(machine.homeDirectory, machine.env.get("XDG_STATE_HOME"))
   const empty = Effect.succeed<InstalledSkillsSnapshot>({ lockFilePath, skills: [] })
   return yield* fs.readFileString(lockFilePath).pipe(
     Effect.flatMap(decodeJson),
@@ -202,9 +205,9 @@ export const searchSkills = Effect.fn("Skills.search")(function* (query: string,
   } satisfies SkillSearchSnapshot
 })
 
-export function buildInstallSkillCommand(source: string, skillId: string) {
+export function buildInstallSkillCommand(source: string, skillId: string, platform: NodeJS.Platform) {
   return [
-    process.platform === "win32" ? "npx.cmd" : "npx",
+    platform === "win32" ? "npx.cmd" : "npx",
     "skills",
     "add",
     assertSafeSkillSource(source),
@@ -217,9 +220,9 @@ export function buildInstallSkillCommand(source: string, skillId: string) {
   ]
 }
 
-export function buildUninstallSkillCommand(skillId: string) {
+export function buildUninstallSkillCommand(skillId: string, platform: NodeJS.Platform) {
   return [
-    process.platform === "win32" ? "npx.cmd" : "npx",
+    platform === "win32" ? "npx.cmd" : "npx",
     "skills",
     "remove",
     assertSafeSkillId(skillId),
@@ -237,33 +240,29 @@ const buildCommand = (build: () => string[]) =>
 /** Runs the skills CLI to the end. Interrupting it kills the process. */
 const runSkillCommand = Effect.fn("Skills.runCommand")(function* (command: string[]) {
   yield* Effect.annotateCurrentSpan("command", command.slice(0, 3).join(" "))
-  const cwd = os.homedir()
-  const subprocess = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => Bun.spawn(command, {
-        cwd,
-        stdout: "pipe",
-        stderr: "pipe",
-        env: {
-          ...process.env,
-          DISABLE_TELEMETRY: process.env.DISABLE_TELEMETRY ?? "1",
-        },
-      }),
-      catch: (cause) => new SkillCommandError({ message: messageOf(cause), command, cause }),
-    }),
-    (subprocess) => Effect.sync(() => {
-      if (subprocess.exitCode === null) subprocess.kill()
-    }),
-  )
+  const machine = yield* Machine
+  const spawner = yield* ProcessSpawner
+  const cwd = machine.homeDirectory
+  const commandError = (error: CommandSpawnError) =>
+    new SkillCommandError({ message: messageOf(error.cause), command, cause: error.cause })
+  const subprocess = yield* spawner.spawn(command, {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      ...machine.env.snapshot(),
+      DISABLE_TELEMETRY: machine.env.get("DISABLE_TELEMETRY") ?? "1",
+    },
+  }).pipe(Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (error) => Effect.fail(commandError(error))))
 
-  const [stdout, stderr, exitCode] = yield* Effect.tryPromise({
-    try: () => Promise.all([
-      new Response(subprocess.stdout).text(),
-      new Response(subprocess.stderr).text(),
-      subprocess.exited,
-    ]),
-    catch: (cause) => new SkillCommandError({ message: messageOf(cause), command, cause }),
-  })
+  const [stdout, stderr, exit] = yield* Effect.all([
+    Stream.mkString(Stream.decodeText(subprocess.stdout)),
+    Stream.mkString(Stream.decodeText(subprocess.stderr)),
+    subprocess.exited,
+  ], { concurrency: "unbounded" }).pipe(
+    Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (error) => Effect.fail(commandError(error))),
+  )
+  const exitCode = exit.code
 
   if (exitCode !== 0) {
     return yield* new SkillCommandError({
@@ -277,7 +276,8 @@ const runSkillCommand = Effect.fn("Skills.runCommand")(function* (command: strin
 }, Effect.scoped)
 
 export const installSkill = Effect.fn("Skills.install")(function* (source: string, skillId: string) {
-  const command = yield* buildCommand(() => buildInstallSkillCommand(source, skillId))
+  const { platform } = yield* Machine
+  const command = yield* buildCommand(() => buildInstallSkillCommand(source, skillId, platform))
   const { cwd, stdout, stderr } = yield* runSkillCommand(command)
   return {
     source: command[3],
@@ -290,7 +290,8 @@ export const installSkill = Effect.fn("Skills.install")(function* (source: strin
 })
 
 export const uninstallSkill = Effect.fn("Skills.uninstall")(function* (skillId: string) {
-  const command = yield* buildCommand(() => buildUninstallSkillCommand(skillId))
+  const { platform } = yield* Machine
+  const command = yield* buildCommand(() => buildUninstallSkillCommand(skillId, platform))
   const { cwd, stdout, stderr } = yield* runSkillCommand(command)
   return {
     skillId: command[3],
@@ -313,7 +314,7 @@ export const listGlobalSkillsWithSources = Effect.fn("Skills.listGlobalWithSourc
   lockFilePath?: string
 } = {}) {
   const scanned = yield* listGlobalSkills({ home: args.home })
-  const lock = yield* listInstalledSkills(args.lockFilePath ?? getGlobalSkillLockPath())
+  const lock = yield* listInstalledSkills(args.lockFilePath)
   const sourceByName = new Map(
     lock.skills
       .filter((skill) => skill.source)

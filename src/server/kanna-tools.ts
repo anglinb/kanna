@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Schema, Semaphore } from "effect"
+import { Cause, Context, Effect, Exit, Schema, Semaphore } from "effect"
 import type { NormalizedToolCall, TranscriptEntry } from "../shared/types"
 import { normalizeToolCall } from "../shared/tools"
 import type { HarnessToolRequest } from "./harness-types"
@@ -20,7 +20,6 @@ import {
 } from "./kanna-tool-definition"
 import type { Orchestrator } from "./orchestrator"
 import { KannaLoggerLayer } from "./effect/logger"
-import { ServerPlatform } from "./effect/runtime"
 
 export {
   defineKannaTool,
@@ -240,6 +239,8 @@ export class KannaToolRuntime implements KannaToolHost {
     emit: (entry: TranscriptEntry) => Promise<void>
     requestInput: (request: HarnessToolRequest, signal: AbortSignal) => Promise<unknown>
     orchestration?: Orchestrator["Service"]
+    /** The platform the tools read files and the environment through. */
+    platform: Context.Context<KannaToolServices>
   }, definitions: readonly (KannaTool | KannaToolDefinition)[] = KANNA_TOOLS) {
     const session: KannaToolSession = {
       chatId: context.chatId,
@@ -255,7 +256,7 @@ export class KannaToolRuntime implements KannaToolHost {
         catch: (cause) => new KannaToolInputError({ chatId: context.chatId, message: failureText(cause), cause }),
       }),
     }
-    this.executor = Effect.runSync(makeKannaToolExecutor(session, definitions.map(toKannaTool)).pipe(Effect.provide(ServerPlatform)))
+    this.executor = Effect.runSync(makeKannaToolExecutor(session, definitions.map(toKannaTool)).pipe(Effect.provide(context.platform)))
   }
 
   abort() {

@@ -4,6 +4,7 @@ import { z } from "zod"
 import { ServerPlatform } from "./effect/runtime"
 import { ORCHESTRATION_TOOLS } from "./kanna-orchestration-tools"
 import { KannaToolRuntime } from "./kanna-tools"
+import { testPlatformContext } from "./platform/testing"
 
 /** Upstream's zod schemas for the tools that take a title, as the reference the Effect schemas must match. */
 const upstreamRunOptions = {
@@ -78,6 +79,7 @@ test("create_chat, fork_chat and send_message refuse a missing or blank title as
     sendMessage: (_actor: string, input: unknown) => Effect.sync(() => { seen.push(input); return {} }),
   }
   const runtime = new KannaToolRuntime({
+    platform: testPlatformContext,
     chatId: "chat-1", cwd: "/project", emit: async () => {}, requestInput: async () => ({}),
     orchestration: orchestration as never,
   }, ORCHESTRATION_TOOLS)
@@ -123,6 +125,7 @@ test("orchestration tools expose the original strict object schemas", () => {
 test("native orchestration tools preserve invalid argument text and transcript content", async () => {
   const events: Array<{ kind: string; content?: unknown }> = []
   const runtime = new KannaToolRuntime({
+    platform: testPlatformContext,
     chatId: "chat-1", cwd: "/project", emit: async (entry) => { events.push(entry) },
     requestInput: async () => ({}),
     orchestration: { getContext: () => Effect.succeed({ chatId: "chat-1" }) } as never,
@@ -134,6 +137,7 @@ test("native orchestration tools preserve invalid argument text and transcript c
   expect(result).toEqual({ content: [{ type: "text", text: '{"chatId":"chat-1"}' }] })
   expect(events.at(-1)?.content).toEqual({ chatId: "chat-1" })
   const unavailable = new KannaToolRuntime({
+    platform: testPlatformContext,
     chatId: "chat-1", cwd: "/project", emit: async () => {}, requestInput: async () => ({}),
   }, ORCHESTRATION_TOOLS)
   expect(await unavailable.execute("get_context", {})).toEqual({

@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import { Effect, Result } from "effect"
 import { runTest } from "./effect/testing"
 import { deleteProjectUpload, inferAttachmentContentType, persistProjectUpload } from "./uploads"
 import { getProjectUploadDir } from "./paths"
-import { persistUploadedFiles, startKannaServer, UploadBatchError } from "./server"
+import { persistUploadedFiles, UploadBatchError } from "./server"
+import { startKannaServer } from "./server-bun"
 
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yF9sAAAAASUVORK5CYII="
@@ -105,7 +106,7 @@ describe("uploads", () => {
 
     expect(attachment.kind).toBe("image")
     expect(attachment.mimeType).toBe("image/png")
-    expect(getProjectUploadDir(projectDir)).toBe(path.join(projectDir, ".kanna", "uploads"))
+    expect(getProjectUploadDir(projectDir, homedir())).toBe(path.join(projectDir, ".kanna", "uploads"))
     expect(attachment.absolutePath).toBe(path.join(projectDir, ".kanna/uploads/pixel.png"))
     expect(attachment.relativePath).toBe("./.kanna/uploads/pixel.png")
     expect(attachment.contentUrl).toBe("/api/projects/project-2/uploads/pixel.png/content")
@@ -291,7 +292,7 @@ describe("uploads", () => {
     expect(await Bun.file(path.join(projectDir, "keep.txt")).exists()).toBe(true)
 
     // A directory where the file would be cannot be removed without `recursive`.
-    await mkdir(path.join(getProjectUploadDir(projectDir), "folder"), { recursive: true })
+    await mkdir(path.join(getProjectUploadDir(projectDir, homedir()), "folder"), { recursive: true })
     expect(await runTest(deleteProjectUpload({ localPath: projectDir, storedName: "folder" }))).toBe(false)
     // Already gone is fine.
     expect(await runTest(deleteProjectUpload({ localPath: projectDir, storedName: "never.txt" }))).toBe(true)
@@ -314,7 +315,7 @@ describe("uploads", () => {
       expect(result.failure._tag).toBe("@kanna/server/uploads/UploadError")
       expect(result.failure.operation).toBe("write")
       expect(result.failure.projectId).toBe("project-5")
-      expect(result.failure.filePath).toBe(getProjectUploadDir(projectDir))
+      expect(result.failure.filePath).toBe(getProjectUploadDir(projectDir, homedir()))
     }
   })
 

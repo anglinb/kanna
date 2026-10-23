@@ -10,7 +10,6 @@ import {
   type SDKUserMessage,
   type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk"
-import { homedir } from "node:os"
 import type {
   AgentProvider,
   AccountInfo,
@@ -44,7 +43,8 @@ import { type CodexAppServer, createCodexAppServer } from "./codex-app-server"
 import { makeCursorCli, type CursorCli } from "./cursor-cli"
 import { makeGrokCli, type GrokCli } from "./grok-cli"
 import { openHarnessTurn } from "./harness-bridge"
-import { PiAgentManager, resolvePiConnection } from "./pi-agent"
+import { PiAgentManager, piDataDir, resolvePiConnection } from "./pi-agent"
+import { Machine, type MachineEnv } from "./platform/machine"
 import { type GenerateChatTitleResult, generateTitleForChatDetailed } from "./generate-title"
 import { QuickResponse, withSharedQuickResponse } from "./quick-response"
 import type { ClaudeRateLimitInfoRaw, ClaudeUsageRaw } from "./usage-limits"
@@ -87,9 +87,9 @@ import { asRecord } from "../shared/json"
 import { maxClaudeContextWindowFromModelUsage, normalizeClaudeContextUsage, normalizeClaudeUsageSnapshot } from "./claude-usage"
 import { buildHandoffContext, buildHandoffMessageContent } from "./handoff"
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
-import { Cause, Effect, Exit, Fiber, Queue, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Queue, Schema, Stream } from "effect"
 import { runKanna } from "./effect/bridge"
-import { ServerPlatform } from "./effect/runtime"
+import type { PlatformServices } from "./platform"
 import { timestamped } from "./transcript"
 import {
   findWorkflowOf,
@@ -365,9 +365,17 @@ interface AgentCoordinatorArgs {
   cursorManager?: CursorCli["Service"]
   grokManager?: GrokCli["Service"]
   piManager?: PiAgentManager
+  /**
+   * The platform the agents run on: processes, files, the machine's facts.
+   * The server passes the one its runtime was built with.
+   */
+  platform: Context.Context<PlatformServices>
+  /** The machine the agents run on (default: the platform's). */
+  machine?: Machine["Service"]
   resolvePiConnection?: () => Promise<import("./pi-agent").PiConnection | null>
   generateTitle?: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
   startClaudeSession?: (args: {
+    platform: Context.Context<PlatformServices>
     localPath: string
     model: string
     effort?: string
@@ -404,12 +412,12 @@ function tracksSubagentsFromTranscript(provider: AgentProvider) {
   return provider !== "claude" && provider !== "codex"
 }
 
-function isClaudeSteerLoggingEnabled() {
-  return process.env.KANNA_LOG_CLAUDE_STEER === "1"
+function isClaudeSteerLoggingEnabled(env: MachineEnv) {
+  return env.get("KANNA_LOG_CLAUDE_STEER") === "1"
 }
 
-function logClaudeSteer(stage: string, details?: Record<string, unknown>) {
-  if (!isClaudeSteerLoggingEnabled()) return
+function logClaudeSteer(env: MachineEnv, stage: string, details?: Record<string, unknown>) {
+  if (!isClaudeSteerLoggingEnabled(env)) return
   console.log("[kanna/claude-steer]", JSON.stringify({
     stage,
     ...details,
@@ -915,6 +923,8 @@ function subagentHooks(
 }
 
 async function startClaudeSession(args: {
+  /** The platform to resolve `claude` and read the environment through. */
+  platform: Context.Context<PlatformServices>
   localPath: string
   model: string
   effort?: string
@@ -998,7 +1008,8 @@ async function startClaudeSession(args: {
   }
 
   // The user's own `claude`, never the SDK's pinned copy (claude-executable.ts).
-  const claudeExecutable = await runKanna(resolveClaudeExecutable().pipe(Effect.provide(ServerPlatform)))
+  const claudeExecutable = await runKanna(resolveClaudeExecutable().pipe(Effect.provide(args.platform)))
+  const machine = Context.get(args.platform, Machine)
   if (args.signal?.aborted) throw new Error("Claude session startup was interrupted")
   if (!claudeExecutable.ok) throw new Error(claudeExecutable.message)
   const promptQueue = runKannaSync(Queue.unbounded<SDKUserMessage, Cause.Done>())
@@ -1039,7 +1050,10 @@ async function startClaudeSession(args: {
       // enabling it while the UI shows "Standard".
       settings: { enableWorkflows: true, fastMode: args.serviceTier === "fast" },
       pathToClaudeCodeExecutable: claudeExecutable.path,
-      env: (() => { const { CLAUDECODE: _, ...env } = process.env; return env })(),
+      env: (() => { const { CLAUDECODE: _, ...env } = machine.env.snapshot(); return env })(),
+      // The SDK spawns `claude` itself, on this computer. A binding whose
+      // machine is elsewhere would hand it `spawnClaudeCodeProcess`, backed by
+      // that machine's `ProcessSpawner`.
     },
   })
   if (args.signal?.aborted) {
@@ -1134,6 +1148,8 @@ export class AgentCoordinator {
   private readonly cursorManager: CursorCli["Service"]
   private readonly grokManager: GrokCli["Service"]
   private readonly piManager: PiAgentManager
+  private readonly platform: Context.Context<PlatformServices>
+  private readonly machine: Machine["Service"]
   private readonly ownsPiManager: boolean
   private readonly resolvePiConnectionEffect: () => Effect.Effect<import("./pi-agent").PiConnection | null, Error>
   private readonly generateTitleEffect: (messageContent: string, cwd: string) => Effect.Effect<GenerateChatTitleResult, Error>
@@ -1206,18 +1222,20 @@ export class AgentCoordinator {
     this.store = "service" in args.store ? args.store.service : args.store
     this.onStateChange = args.onStateChange
     this.analytics = args.analytics ?? NoopAnalytics
-    this.codexManager = args.codexManager ?? createCodexAppServer()
+    this.platform = args.platform
+    this.codexManager = args.codexManager ?? createCodexAppServer(args.platform)
     this.codexManager.setTaskActivityListener((chatId, update) => this.applySubagentActivity(chatId, update))
-    this.cursorManager = args.cursorManager ?? runKannaSync(makeCursorCli().pipe(Effect.provide(ServerPlatform)))
-    this.grokManager = args.grokManager ?? runKannaSync(makeGrokCli().pipe(Effect.provide(ServerPlatform)))
+    this.cursorManager = args.cursorManager ?? runKannaSync(makeCursorCli().pipe(Effect.provide(args.platform)))
+    this.grokManager = args.grokManager ?? runKannaSync(makeGrokCli().pipe(Effect.provide(args.platform)))
     this.ownsPiManager = args.piManager === undefined
-    this.piManager = args.piManager ?? new PiAgentManager()
+    this.machine = args.machine ?? Context.get(args.platform, Machine)
+    this.piManager = args.piManager ?? new PiAgentManager({ dataDir: piDataDir(this.machine.homeDirectory) })
     this.resolvePiConnectionEffect = args.resolvePiConnection
       ? () => Effect.tryPromise({
         try: () => args.resolvePiConnection!(),
         catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
       })
-      : () => resolvePiConnection().pipe(Effect.provide(ServerPlatform))
+      : () => resolvePiConnection().pipe(Effect.provide(args.platform))
     const quickResponse = args.quickResponse
     this.generateTitleEffect = args.generateTitle
       ? (messageContent, cwd) => Effect.tryPromise({
@@ -1228,14 +1246,14 @@ export class AgentCoordinator {
         ? (messageContent, cwd) => generateTitleForChatDetailed(messageContent, cwd).pipe(
           Effect.provideService(QuickResponse, quickResponse),
         )
-        : (messageContent, cwd) => withSharedQuickResponse(generateTitleForChatDetailed(messageContent, cwd)))
+        : (messageContent, cwd) => withSharedQuickResponse(args.platform, generateTitleForChatDetailed(messageContent, cwd)))
     this.startClaudeSessionFn = args.startClaudeSession ?? startClaudeSession
     this.checkSessionArtifactEffect = args.checkSessionArtifact
       ? (provider, query) => Effect.tryPromise({
         try: () => Promise.resolve(args.checkSessionArtifact!(provider, query)),
         catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
       })
-      : (provider, query) => checkSessionArtifact(provider, query).pipe(Effect.provide(ServerPlatform))
+      : (provider, query) => checkSessionArtifact(provider, query).pipe(Effect.provide(args.platform))
   }
 
   private forkBackground<A, E>(effect: Effect.Effect<A, E>): Fiber.Fiber<A, E> {
@@ -1274,7 +1292,8 @@ export class AgentCoordinator {
     let probe: ClaudeSessionHandle | null = null
     try {
       probe = await this.startClaudeSessionFn({
-        localPath: homedir(),
+        platform: this.platform,
+        localPath: this.machine.homeDirectory,
         // Model choice is irrelevant for the usage read; use the catalog default.
         model: "sonnet",
         planMode: false,
@@ -1293,7 +1312,7 @@ export class AgentCoordinator {
 
   /** Read Codex account rate limits on demand (reuses a live app-server or probes). */
   fetchCodexRateLimitsEffect = Effect.fn("Agent.fetchCodexRateLimits")(() =>
-    this.codexManager.readAccountRateLimits(homedir()))
+    this.codexManager.readAccountRateLimits(this.machine.homeDirectory))
 
   /** Compatibility for callers that have not moved to Effect yet. */
   fetchCodexRateLimits() {
@@ -1768,7 +1787,7 @@ export class AgentCoordinator {
         self.codexModelCatalogRefresh = refresh
         const current = refresh
         refresh.fiber = self.forkBackground(Effect.gen(function* () {
-          const result = yield* Effect.exit(self.codexManager.listModels(homedir()))
+          const result = yield* Effect.exit(self.codexManager.listModels(self.machine.homeDirectory))
           if (Exit.isSuccess(result) && result.value && applyCodexModels(result.value)) {
             self.emitStateChange(undefined, { immediate: true })
           }
@@ -2175,10 +2194,14 @@ export class AgentCoordinator {
 
       // Only handoff and restore need the full payload sidecar. The first-title
       // check reads it once for an empty chat; later turns skip it entirely.
-      let existingMessagesCache: ReturnType<typeof self.store.getMessages> | null = null
-      const existingMessages = () => (existingMessagesCache ??= self.store.getMessages(args.chatId))
+      let existingMessagesCache: TranscriptEntry[] | null = null
+      const existingMessages = Effect.suspend(() => existingMessagesCache
+        ? Effect.succeed(existingMessagesCache)
+        : storeWriteEffect(self.store.readMessages(args.chatId)).pipe(
+          Effect.tap((messages) => Effect.sync(() => { existingMessagesCache = messages })),
+        ))
       const shouldGenerateTitle = args.appendUserPrompt && chat.title === "New Chat"
-        && existingMessages().length === 0
+        && (yield* existingMessages).length === 0
       const optimisticTitle = shouldGenerateTitle ? fallbackTitleFromMessage(args.content) : null
       if (optimisticTitle) yield* storeWriteEffect(self.store.renameChat(args.chatId, optimisticTitle))
 
@@ -2186,7 +2209,7 @@ export class AgentCoordinator {
       if (!project) return yield* Effect.fail(new Error("Project not found"))
 
       const handoff = previousProvider !== null && previousProvider !== args.provider
-        ? yield* self.prepareProviderHandoffEffect(args.chatId, previousProvider, args.provider, existingMessages())
+        ? yield* self.prepareProviderHandoffEffect(args.chatId, previousProvider, args.provider, (yield* existingMessages))
         : null
       const restore = !handoff && previousProvider !== null
         && (yield* self.detectLostProviderSessionEffect({
@@ -2198,7 +2221,7 @@ export class AgentCoordinator {
           sessionToken: chat.sessionToken,
           pendingForkSessionToken: chat.pendingForkSessionToken,
         }))
-        ? yield* self.prepareSessionRestoreEffect(args.chatId, args.provider, existingMessages())
+        ? yield* self.prepareSessionRestoreEffect(args.chatId, args.provider, (yield* existingMessages))
         : null
 
       if (args.appendUserPrompt) {
@@ -2229,6 +2252,7 @@ export class AgentCoordinator {
           return { content: [{ type: "text", text: "Chat turn ended" }], isError: true }
         }
         active.customTools ??= new KannaToolRuntime({
+          platform: self.platform,
           chatId: args.chatId,
           cwd: project.localPath,
           dataDir: self.store.dataDir,
@@ -2364,7 +2388,7 @@ export class AgentCoordinator {
           forkSession: Boolean(chat.pendingForkSessionToken),
           connection,
           delegator,
-        }).pipe(Effect.provide(ServerPlatform)))
+        }).pipe(Effect.provide(self.platform)))
       }
       const started = yield* self.codexManager.startSession({
         chatId: args.chatId,
@@ -2447,7 +2471,7 @@ export class AgentCoordinator {
       session.pendingPrompts.push({ seq: promptSeq, id: promptId })
       active.claudePromptSeq = promptSeq
       active.claudeSessionId = session.id
-      logClaudeSteer("claude_prompt_sent", {
+      logClaudeSteer(self.machine.env, "claude_prompt_sent", {
         chatId: args.chatId,
         sessionId: session.id,
         promptSeq,
@@ -2515,6 +2539,7 @@ export class AgentCoordinator {
       let pendingHandle: ClaudeSessionHandle | null = null
       const started = yield* Effect.tryPromise({
         try: (signal) => self.startClaudeSessionFn({
+        platform: self.platform,
         localPath: args.localPath,
         model: args.model,
         effort: args.effort,
@@ -2707,7 +2732,7 @@ export class AgentCoordinator {
       const queuedMessage = self.store.getQueuedMessage(command.chatId, command.queuedMessageId)
       if (!queuedMessage) return yield* Effect.fail(new Error("Queued message not found"))
 
-      logClaudeSteer("steer_requested", {
+      logClaudeSteer(self.machine.env, "steer_requested", {
         chatId: command.chatId,
         queuedMessageId: command.queuedMessageId,
         activeTurn: self.activeTurns.has(command.chatId),
@@ -2721,7 +2746,7 @@ export class AgentCoordinator {
           yield* self.cancelEffect(command.chatId, { hideInterrupted: true })
         }
 
-        logClaudeSteer("steer_after_cancel", {
+        logClaudeSteer(self.machine.env, "steer_after_cancel", {
           chatId: command.chatId,
           stillActive: self.activeTurns.has(command.chatId),
         })
@@ -2791,7 +2816,7 @@ export class AgentCoordinator {
           }
           return {
             provider: "claude",
-            skills: yield* scanClaudeSkills({ cwd }).pipe(Effect.provide(ServerPlatform)),
+            skills: yield* scanClaudeSkills({ cwd }).pipe(Effect.provide(self.platform)),
             origin: "filesystem",
           } as const
         }
@@ -2810,7 +2835,7 @@ export class AgentCoordinator {
           }
           return {
             provider: "codex",
-            skills: yield* scanCodexSkills({ cwd }).pipe(Effect.provide(ServerPlatform)),
+            skills: yield* scanCodexSkills({ cwd }).pipe(Effect.provide(self.platform)),
             origin: "filesystem",
           } as const
         }
@@ -2819,7 +2844,7 @@ export class AgentCoordinator {
           // skill discovery roots, and invocation is failsafe-only by design.
           return {
             provider: "cursor",
-            skills: yield* scanCursorSkills({ cwd }).pipe(Effect.provide(ServerPlatform)),
+            skills: yield* scanCursorSkills({ cwd }).pipe(Effect.provide(self.platform)),
             origin: "filesystem",
           } as const
         case "grok": {
@@ -2827,7 +2852,7 @@ export class AgentCoordinator {
           if (live.length > 0) return { provider: "grok", skills: live, origin: "live" } as const
           return {
             provider: "grok",
-            skills: yield* scanGrokSkills({ cwd }).pipe(Effect.provide(ServerPlatform)),
+            skills: yield* scanGrokSkills({ cwd }).pipe(Effect.provide(self.platform)),
             origin: "filesystem",
           } as const
         }
@@ -3138,7 +3163,7 @@ export class AgentCoordinator {
               ) {
                 yield* storeWriteEffect(self.store.setPendingForkSessionToken(session.chatId, null))
               }
-              logClaudeSteer("claude_event_system_init", {
+              logClaudeSteer(self.machine.env, "claude_event_system_init", {
                 chatId: session.chatId,
                 sessionId: session.id,
                 activePromptSeq: active.claudePromptSeq ?? null,
@@ -3150,7 +3175,7 @@ export class AgentCoordinator {
               session.cancelledPromptSeqs.delete(seq)
             }
 
-            logClaudeSteer("claude_event", {
+            logClaudeSteer(self.machine.env, "claude_event", {
               chatId: session.chatId,
               sessionId: session.id,
               entryKind: event.entry.kind,
@@ -3438,7 +3463,7 @@ export class AgentCoordinator {
       const active = self.activeTurns.get(chatId)
       if (!active) return
 
-      logClaudeSteer("cancel_requested", {
+      logClaudeSteer(self.machine.env, "cancel_requested", {
         chatId,
         provider: active.provider,
         activePromptSeq: active.claudePromptSeq ?? null,
@@ -3503,7 +3528,7 @@ export class AgentCoordinator {
       }
       self.emitStateChange(chatId)
       if (stopped) self.notifySettled(chatId)
-      logClaudeSteer("cancel_active_turn_deleted", {
+      logClaudeSteer(self.machine.env, "cancel_active_turn_deleted", {
         chatId,
         provider: active.provider,
         activePromptSeq: active.claudePromptSeq ?? null,

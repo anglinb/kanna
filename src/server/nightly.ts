@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process"
-import { homedir } from "node:os"
 import path from "node:path"
-import { Effect, FileSystem, Option, Result, Schema } from "effect"
+import { Effect, Fiber, FileSystem, Option, Result, Schema, Stream } from "effect"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
+import { Machine } from "./platform/machine"
+import { ProcessSpawner } from "./platform/process-spawner"
 import { hasCommand } from "./process-utils"
 import { CLI_CHILD_MODE, CLI_CHILD_MODE_ENV_VAR } from "./restart"
 
@@ -15,6 +15,7 @@ const NIGHTLY_REPO = "jakemor/kanna"
 const STEP_TIMEOUT_MS = 10 * 60 * 1000
 const OUTPUT_TAIL_CHARS = 2_000
 const MAIN_COMMIT_TIMEOUT_MS = 10_000
+const PIPE_DRAIN_GRACE_MS = 1_000
 
 export interface NightlyInstallResult extends UpdateInstallAttemptResult {
   /** The stamped version of the installed build ("0.56.7-nightly.abc1234"), null on failure. */
@@ -29,7 +30,7 @@ export interface RunCommandResult {
 export interface NightlyBuildDeps {
   fetchImpl?: typeof fetch
   /** Command runner seam for tests; the default spawns with a hard timeout. */
-  runCommand?: (command: string, args: string[], cwd: string, env?: Record<string, string>) => Effect.Effect<RunCommandResult>
+  runCommand?: (command: string, args: string[], cwd: string, env?: Record<string, string>) => Effect.Effect<RunCommandResult, never, ProcessSpawner | Machine>
   /** Working directory override for tests (default ~/.kanna/nightly). */
   workDir?: string
   /** Bun global dir override for tests (default $BUN_INSTALL or ~/.bun). */
@@ -105,44 +106,57 @@ export const runCommandWithTimeout = Effect.fn("Nightly.runCommand")(function* (
   env?: Record<string, string>,
 ) {
   yield* Effect.annotateCurrentSpan("command", command)
+  const machine = yield* Machine
+  const spawner = yield* ProcessSpawner
   let output = ""
-  // The timeout is the child's own timer, not an Effect timeout: the global
-  // install runs uninterruptibly (see `replaceGlobalInstall`), where an
-  // Effect timeout could not stop it.
-  const finished = yield* Effect.callback<Option.Option<boolean>>((resume) => {
-    let settled = false
-    const settle = (result: Option.Option<boolean>) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resume(Effect.succeed(result))
-    }
-    const child = spawn(command, args, {
+  return yield* Effect.gen(function* () {
+    const spawned = yield* Effect.result(spawner.spawn([command, ...args], {
       cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      ...(env ? { env: { ...process.env, ...env } } : {}),
-    })
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL")
-      settle(Option.none())
-    }, STEP_TIMEOUT_MS)
-    child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString() })
-    child.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString() })
-    child.once("error", (error) => {
-      output += `\n${error.message}`
-      settle(Option.some(false))
-    })
-    child.once("exit", (code) => settle(Option.some(code === 0)))
-    return Effect.sync(() => {
-      clearTimeout(timer)
-      child.kill("SIGKILL")
-    })
-  })
-  if (Option.isNone(finished)) {
-    output += `\n[timed out after ${STEP_TIMEOUT_MS / 60_000} minutes]`
-    return { ok: false, output } satisfies RunCommandResult
-  }
-  return { ok: finished.value, output } satisfies RunCommandResult
+      stdout: "pipe",
+      stderr: "pipe",
+      ...(env ? { env: { ...machine.env.snapshot(), ...env } } : {}),
+    }))
+    if (Result.isFailure(spawned)) {
+      output += `\n${spawned.failure.message}`
+      return { ok: false, output } satisfies RunCommandResult
+    }
+    const child = spawned.success
+    // Killed outright on the way out, not just signalled.
+    yield* Effect.addFinalizer(() => child.kill("SIGKILL"))
+    // The timeout is the child's own timer, not an Effect timeout: the global
+    // install runs uninterruptibly (see `replaceGlobalInstall`), where an
+    // Effect timeout could not stop it. Killing the child ends the wait.
+    let timedOut = false
+    const timer = yield* Effect.sleep(STEP_TIMEOUT_MS).pipe(
+      Effect.andThen(Effect.sync(() => { timedOut = true })),
+      Effect.andThen(child.kill("SIGKILL")),
+      Effect.interruptible,
+      Effect.forkChild,
+    )
+    // stdout and stderr interleaved as they arrive, as a terminal shows them.
+    const append = (stream: typeof child.stdout) => stream.pipe(
+      Stream.decodeText,
+      Stream.runForEach((chunk) => Effect.sync(() => { output += chunk })),
+      Effect.ignore,
+      Effect.interruptible,
+      Effect.forkChild,
+    )
+    const readers = [yield* append(child.stdout), yield* append(child.stderr)]
+    const exit = yield* child.exited
+    yield* Fiber.interrupt(timer)
+    // The pipes close with the process; give them a moment to drain, but a
+    // grandchild holding them open can't stall the step.
+    yield* Effect.forEach(readers, Fiber.await, { discard: true }).pipe(
+      Effect.timeoutOption(PIPE_DRAIN_GRACE_MS),
+      Effect.interruptible,
+    )
+    yield* Effect.forEach(readers, Fiber.interrupt, { discard: true })
+    if (timedOut) {
+      output += `\n[timed out after ${STEP_TIMEOUT_MS / 60_000} minutes]`
+      return { ok: false, output } satisfies RunCommandResult
+    }
+    return { ok: exit.exitCode === 0, output } satisfies RunCommandResult
+  }).pipe(Effect.scoped)
 })
 
 function failure(userMessage: string): NightlyInstallResult {
@@ -160,8 +174,8 @@ function outputTail(output: string): string {
   return trimmed.length > OUTPUT_TAIL_CHARS ? `…${trimmed.slice(-OUTPUT_TAIL_CHARS)}` : trimmed
 }
 
-function bunGlobalDir(): string {
-  return process.env.BUN_INSTALL || path.join(homedir(), ".bun")
+function bunGlobalDir(machine: Machine["Service"]): string {
+  return machine.env.get("BUN_INSTALL") || path.join(machine.homeDirectory, ".bun")
 }
 
 const decodeJsonObject = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))
@@ -191,8 +205,9 @@ const writeJson = Effect.fn("Nightly.writeJson")(function* (filePath: string, va
  * nightly and stable installers repair the manifest first.
  * Succeeds with true when the manifest was repaired.
  */
-export const repairBunGlobalManifest = Effect.fn("Nightly.repairBunGlobalManifest")(function* (globalDir: string = bunGlobalDir()) {
-  return yield* repairManifest(path.join(globalDir, "install", "global", "package.json")).pipe(
+export const repairBunGlobalManifest = Effect.fn("Nightly.repairBunGlobalManifest")(function* (globalDir?: string) {
+  const machine = yield* Machine
+  return yield* repairManifest(path.join(globalDir ?? bunGlobalDir(machine), "install", "global", "package.json")).pipe(
     // Missing or unreadable manifest — nothing to repair.
     Effect.catchTags({
       PlatformError: () => Effect.succeed(false),
@@ -226,6 +241,7 @@ const repairManifest = Effect.fnUntraced(function* (manifestPath: string) {
  */
 export const installNightlyBuild = Effect.fn("Nightly.install")(function* (deps: NightlyBuildDeps = {}) {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
   const fetchImpl = deps.fetchImpl ?? fetch
   const runCommand = deps.runCommand ?? runCommandWithTimeout
 
@@ -244,7 +260,7 @@ export const installNightlyBuild = Effect.fn("Nightly.install")(function* (deps:
   yield* Effect.annotateCurrentSpan("sha", sha)
   yield* Effect.logInfo(`nightly: building ${NIGHTLY_REPO}@${sha.slice(0, 7)}`)
 
-  const workDir = deps.workDir ?? path.join(homedir(), ".kanna", "nightly")
+  const workDir = deps.workDir ?? path.join(machine.homeDirectory, ".kanna", "nightly")
   const srcDir = path.join(workDir, "src")
   const tarPath = path.join(workDir, "source.tar.gz")
   const archiveUrl = `https://codeload.github.com/${NIGHTLY_REPO}/tar.gz/${sha}`
@@ -357,7 +373,7 @@ export const installNightlyBuild = Effect.fn("Nightly.install")(function* (deps:
     // 0.57.0's dot-path install silently no-opped) — trust only the installed
     // manifest reporting the stamped version.
     const installedManifestPath = path.join(
-      deps.bunGlobalDir ?? bunGlobalDir(),
+      deps.bunGlobalDir ?? bunGlobalDir(machine),
       "install", "global", "node_modules", packageName, "package.json"
     )
     const installed = yield* Effect.result(readJsonObject(installedManifestPath).pipe(Effect.flatMap(decodePackageIdentity)))

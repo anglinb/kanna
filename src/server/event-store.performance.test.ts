@@ -24,6 +24,7 @@ test("a failed transcript write does not block another chat", async () => {
     await store.renameChat(second.id, "Recovered")
     await store.appendMessage(first.id, { _id: "good", kind: "assistant_text", createdAt: 2, text: "test" })
     expect(store.getChat(second.id)?.title).toBe("Recovered")
+    await store.prepareTranscript(first.id)
     expect(store.getClientTranscript(first.id).messages.map(entry => entry._id)).toEqual(["good"])
     expect(store.getResourceCounts().storeQueuedWrites).toBe(0)
   })

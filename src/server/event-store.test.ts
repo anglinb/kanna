@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import type { TranscriptEntry } from "../shared/types"
 import type { SnapshotFile } from "./events"
 import { Effect, Layer, Result } from "effect"
@@ -11,6 +11,7 @@ import { defaultEventStoreDataDir, EventStore, forkPointOf } from "./event-store
 import { PerformanceLog } from "./performance-log"
 import { openEventStore } from "./event-store-bridge"
 import { deriveLocalProjectsSnapshot } from "./read-models"
+import { testLocalMachine } from "./testing/local-machine"
 
 const originalRuntimeProfile = process.env.KANNA_RUNTIME_PROFILE
 const tempDirs: string[] = []
@@ -57,7 +58,7 @@ describe("EventStore", () => {
   test("uses the runtime profile for the default data dir", () => {
     process.env.KANNA_RUNTIME_PROFILE = "dev"
 
-    expect(defaultEventStoreDataDir()).toEndWith("/.kanna-dev/data")
+    expect(defaultEventStoreDataDir(homedir())).toEndWith("/.kanna-dev/data")
   })
 
   test("migrates legacy snapshot and messages log transcripts into per-chat files", async () => {
@@ -116,7 +117,7 @@ describe("EventStore", () => {
     expect(migrated).toBe(true)
     expect(progress.some((message) => message.includes("transcript migration detected"))).toBe(true)
     expect(progress.at(-1)).toContain("transcript migration complete")
-    expect(store.getMessages(chatId)).toEqual([
+    expect((await store.getMessages(chatId))).toEqual([
       entry("user_prompt", 100, { content: "hello" }),
       entry("assistant_text", 101, { text: "world" }),
     ])
@@ -137,7 +138,7 @@ describe("EventStore", () => {
     await store.appendMessage(chat.id, entry("assistant_text", 201, { content: "world" }))
     await store.compact()
 
-    expect(store.getMessages(chat.id)).toEqual([
+    expect((await store.getMessages(chat.id))).toEqual([
       entry("user_prompt", 200, { content: "hello" }),
       entry("assistant_text", 201, { text: "world" }),
     ])
@@ -233,6 +234,7 @@ describe("EventStore", () => {
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
 
+    await store.prepareTranscript(chat.id)
     expect(store.getChatReadAnchor(chat.id)).toBeNull()
 
     await store.appendMessage(chat.id, entry("user_prompt", 200, { content: "hello" }))
@@ -241,12 +243,14 @@ describe("EventStore", () => {
 
     await store.setChatReadAnchor(chat.id, "user_prompt-200", false)
 
+    await store.prepareTranscript(chat.id)
     expect(store.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: false,
     })
 
     const reloaded = await openEventStore(dataDir)
+    await reloaded.prepareTranscript(chat.id)
     expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: false,
@@ -267,6 +271,7 @@ describe("EventStore", () => {
     await store.compact()
 
     const reloaded = await openEventStore(dataDir)
+    await reloaded.prepareTranscript(chat.id)
     expect(reloaded.getChatReadAnchor(chat.id)).toEqual({
       messageId: "user_prompt-200",
       atEnd: true,
@@ -284,6 +289,7 @@ describe("EventStore", () => {
     await store.setChatReadAnchor(chat.id, "missing-entry", false)
 
     expect(store.getChat(chat.id)?.readAnchor?.messageId).toBe("missing-entry")
+    await store.prepareTranscript(chat.id)
     expect(store.getChatReadAnchor(chat.id)).toBeNull()
   })
 
@@ -834,7 +840,7 @@ describe("EventStore", () => {
     // recency-driven sidebar sections instead of reading as an empty draft.
     expect(forked.lastMessageAt).toBe(source.createdAt + 2)
     expect(forked.hasMessages).toBe(true)
-    expect(store.getMessages(forked.id)).toEqual(store.getMessages(source.id))
+    expect((await store.getMessages(forked.id))).toEqual((await store.getMessages(source.id)))
   })
 
   test("forking mid-turn branches from the last completed turn", async () => {
@@ -862,7 +868,7 @@ describe("EventStore", () => {
 
     // The copy stops at the completed turn's result — the in-flight prompt and
     // its half-written reply stay behind with the source.
-    expect(store.getMessages(forked.id)).toEqual(store.getMessages(source.id).slice(0, 3))
+    expect((await store.getMessages(forked.id))).toEqual((await store.getMessages(source.id)).slice(0, 3))
     expect(forked.lastMessageAt).toBe(3_000)
     // Previews describe the branch point, not the turn the fork left behind.
     expect(forked.lastUserMessagePreview).toBe("analyze this")
@@ -870,10 +876,10 @@ describe("EventStore", () => {
     expect(forked.lastAgentMessageAt).toBe(3_000)
     expect(forked.turnCount).toBe(1)
     // The source is untouched: its turn is still running.
-    expect(store.getMessages(source.id)).toHaveLength(5)
+    expect((await store.getMessages(source.id))).toHaveLength(5)
 
     const reloaded = await openEventStore(dataDir)
-    expect(reloaded.getMessages(forked.id)).toHaveLength(3)
+    expect((await reloaded.getMessages(forked.id))).toHaveLength(3)
   })
 
   test("a fork records where it branches off the source's session, and later turns of the source do not move it", async () => {
@@ -1132,20 +1138,20 @@ describe("EventStore", () => {
     const project = await store.openProject("/tmp/project")
     const chat = await store.createChat(project.id)
     const discovered = [{ localPath: project.localPath, title: project.title, modifiedAt: 1 }]
-    expect(deriveLocalProjectsSnapshot(store.state, discovered, "Machine").projects).toHaveLength(1)
+    expect(deriveLocalProjectsSnapshot(store.state, discovered, { ...testLocalMachine, displayName: "Machine" }).projects).toHaveLength(1)
 
     await store.removeProject(project.id)
     expect(store.getProject(project.id)).toBeNull()
-    expect(deriveLocalProjectsSnapshot(store.state, discovered, "Machine").projects).toEqual([])
+    expect(deriveLocalProjectsSnapshot(store.state, discovered, { ...testLocalMachine, displayName: "Machine" }).projects).toEqual([])
 
     const reloaded = await openEventStore(dataDir)
-    expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, "Machine").projects).toEqual([])
+    expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, { ...testLocalMachine, displayName: "Machine" }).projects).toEqual([])
 
     const reopened = await reloaded.openProject("/tmp/project")
 
     expect(reopened.id).toBe(project.id)
     expect(reloaded.listChatsByProject(reopened.id).map((entry) => entry.id)).toEqual([chat.id])
-    expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, "Machine").projects).toMatchObject([
+    expect(deriveLocalProjectsSnapshot(reloaded.state, discovered, { ...testLocalMachine, displayName: "Machine" }).projects).toMatchObject([
       { localPath: project.localPath, source: "saved", chatCount: 1 },
     ])
   })
@@ -1162,7 +1168,7 @@ describe("EventStore", () => {
 
     expect(store.getChat(chat.id)?.archivedAt).toBeNumber()
     expect(store.listChatsByProject(project.id)).toEqual([])
-    expect(store.getMessages(chat.id).map((message) => message.kind)).toEqual(["user_prompt"])
+    expect((await store.getMessages(chat.id)).map((message) => message.kind)).toEqual(["user_prompt"])
 
     await store.unarchiveChat(chat.id)
 
@@ -1448,7 +1454,7 @@ describe("on-demand tool payloads", () => {
       content: "written",
     } as unknown as TranscriptEntry)
 
-    const found = store.getEntriesById(chat.id, ["call-1", "result-1"])
+    const found = (await store.getEntriesById(chat.id, ["call-1", "result-1"]))
 
     expect(found).toHaveLength(2)
     // The payloads the wire dropped are exactly what this exists to return.
@@ -1464,8 +1470,8 @@ describe("on-demand tool payloads", () => {
     const chat = await store.createChat(project.id)
     await store.appendMessage(chat.id, entry("assistant_text", 1, { text: "hi" }))
 
-    expect(store.getEntriesById(chat.id, ["nope"])).toEqual([])
-    expect(store.getEntriesById(chat.id, [])).toEqual([])
+    expect((await store.getEntriesById(chat.id, ["nope"]))).toEqual([])
+    expect((await store.getEntriesById(chat.id, []))).toEqual([])
   })
 })
 
@@ -1482,14 +1488,19 @@ describe("transcript windows", () => {
       await store.appendMessage(chat.id, entry("assistant_text", turn * 10 + 2, { text: "two" }))
     }
 
+    await store.prepareTranscript(chat.id)
     expect(store.getInitialTranscriptWindowStart(chat.id, 2)).toBe(6)
+    await store.prepareTranscript(chat.id)
     expect(store.getInitialTranscriptWindowStart(chat.id, 4)).toBe(3)
+    await store.prepareTranscript(chat.id)
     expect(store.getInitialTranscriptWindowStart(chat.id, 50)).toBe(0)
 
     // A stored read position pulls the window back to it.
     await store.setChatReadAnchor(chat.id, "p1", false)
+    await store.prepareTranscript(chat.id)
     expect(store.getInitialTranscriptWindowStart(chat.id, 2)).toBe(0)
     await store.setChatReadAnchor(chat.id, "p3", true)
+    await store.prepareTranscript(chat.id)
     expect(store.getInitialTranscriptWindowStart(chat.id, 2)).toBe(6)
 
     expect(store.widenTranscriptWindowStart(chat.id, 6, { assistantMessages: 2 })).toBe(3)
@@ -1530,27 +1541,28 @@ describe("payload sidecar", () => {
     expect(sidecar).toContain(body)
 
     // The wire sees headers, expansion sees bodies, export sees everything.
+    await store.prepareTranscript(chat.id)
     const wire = store.getClientTranscript(chat.id).messages
     expect((wire[0] as unknown as { tool: { input: Record<string, unknown> } }).tool.input).toEqual({ filePath: "a.ts" })
     expect(wire[1]!.trimmed).toBe(true)
-    const [call, result] = store.getEntriesById(chat.id, ["call-1", "result-1"])
+    const [call, result] = (await store.getEntriesById(chat.id, ["call-1", "result-1"]))
     expect((call as unknown as { tool: { input: Record<string, unknown> } }).tool.input.content).toBe(body)
     expect(call!.trimmed).toBeUndefined()
     expect((result as unknown as { content: unknown }).content).toBe("written")
-    const full = store.getMessages(chat.id)
+    const full = (await store.getMessages(chat.id))
     expect((full[0] as unknown as { tool: { input: Record<string, unknown> } }).tool.input.content).toBe(body)
     expect((full[1] as unknown as { content: unknown }).content).toBe("written")
     expect((full[3] as unknown as { content: unknown }).content).toEqual({ ok: true })
 
     // A cold store rebuilds the index from the sidecar alone.
     const reopened = await openEventStore(dataDir)
-    expect((reopened.getEntriesById(chat.id, ["result-1"])[0] as unknown as { content: unknown }).content).toBe("written")
+    expect(((await reopened.getEntriesById(chat.id, ["result-1"]))[0] as unknown as { content: unknown }).content).toBe("written")
 
     // A fork carries the bodies with it.
     await reopened.setChatProvider(chat.id, "claude")
     await reopened.setSessionToken(chat.id, "session-1")
     const fork = await reopened.forkChat(chat.id)
-    expect((reopened.getMessages(fork.id)[1] as unknown as { content: unknown }).content).toBe("written")
+    expect(((await reopened.getMessages(fork.id))[1] as unknown as { content: unknown }).content).toBe("written")
   })
 
   test("the slim sweep splits a transcript written before the sidecar", async () => {
@@ -1569,8 +1581,9 @@ describe("payload sidecar", () => {
     const transcript = await readFile(store.getTranscriptPath(chat.id), "utf8")
     expect(transcript).not.toContain("a\\nb\\nc")
     expect(transcript).not.toContain("debugRaw")
+    await store.prepareTranscript(chat.id)
     expect((store.getClientTranscript(chat.id).messages[1] as { trimmed?: true }).trimmed).toBe(true)
-    expect((store.getEntriesById(chat.id, ["result-1"])[0] as unknown as { content: unknown }).content).toBe("a\nb\nc")
+    expect(((await store.getEntriesById(chat.id, ["result-1"]))[0] as unknown as { content: unknown }).content).toBe("a\nb\nc")
   })
 })
 
@@ -1598,7 +1611,7 @@ describe("tool result images", () => {
     const sidecar = await readFile(join(dataDir, "transcripts", `${chat.id}.payloads.jsonl`), "utf8")
     expect(sidecar).not.toContain(PNG_BASE64)
     expect(sidecar).toContain(url)
-    expect((store.getMessages(chat.id)[0] as unknown as { content: unknown[] }).content).toEqual([
+    expect(((await store.getMessages(chat.id))[0] as unknown as { content: unknown[] }).content).toEqual([
       { type: "image", url, mimeType: "image/png" },
     ])
     const mediaPath = store.resolveTranscriptMediaPath(url)
@@ -1642,13 +1655,13 @@ describe("slimTranscripts", () => {
       content: [{ type: "image", data: Buffer.from("89504e470d0a1a0a", "hex").toString("base64"), mimeType: "image/png" }],
     } as unknown as TranscriptEntry)
     // Warm the cache so the drop after the rewrite is what gets exercised.
-    expect(store.getMessages(chat.id)[1]?.debugRaw).toBeString()
+    expect((await store.getMessages(chat.id))[1]?.debugRaw).toBeString()
 
     const stats = await store.slimTranscripts()
     expect(stats.rewritten).toBe(1)
     expect(stats.bytesAfter).toBeLessThan(stats.bytesBefore)
 
-    const reread = store.getMessages(chat.id)
+    const reread = (await store.getMessages(chat.id))
     const cached = reread[1] as unknown as { debugRaw?: string; structuredResult?: unknown }
     expect(cached.debugRaw).toBeUndefined()
     expect(cached.structuredResult).toEqual({ approved: true })
@@ -1679,6 +1692,7 @@ describe("stale empty chat pruning", () => {
     await store.appendMessage(chat.id, entry("user_prompt", 1, { content: "hello" }))
 
     // Warm the LRU, then mimic the metadata having been lost.
+    await store.prepareTranscript(chat.id)
     store.getClientTranscript(chat.id)
     const record = store.getChat(chat.id)!
     record.hasMessages = false
@@ -1688,7 +1702,7 @@ describe("stale empty chat pruning", () => {
 
     expect(pruned).not.toContain(chat.id)
     expect(store.getChat(chat.id)).not.toBeNull()
-    expect(store.getMessages(chat.id)).toHaveLength(1)
+    expect((await store.getMessages(chat.id))).toHaveLength(1)
     // And the repair happened rather than merely being skipped.
     expect(store.getChat(chat.id)?.hasMessages).toBe(true)
   })
@@ -1706,6 +1720,7 @@ describe("getClientTranscript window and outline", () => {
     await store.appendMessage(chat.id, { _id: "p2", createdAt: at + 2, kind: "user_prompt", content: "second" } as TranscriptEntry)
     await store.appendMessage(chat.id, { _id: "a2", createdAt: at + 3, kind: "assistant_text", text: "y" } as TranscriptEntry)
 
+    await store.prepareTranscript(chat.id)
     const windowed = store.getClientTranscript(chat.id, 2)
     expect(windowed.startIndex).toBe(2)
     expect(windowed.messages.map((entry) => entry._id)).toEqual(["p2", "a2"])
@@ -1713,8 +1728,10 @@ describe("getClientTranscript window and outline", () => {
 
     const outlineBefore = windowed.outline
     await store.appendMessage(chat.id, { _id: "a3", createdAt: at + 4, kind: "assistant_text", text: "z" } as TranscriptEntry)
+    await store.prepareTranscript(chat.id)
     expect(store.getClientTranscript(chat.id).outline).toBe(outlineBefore)
     await store.appendMessage(chat.id, { _id: "p3", createdAt: at + 5, kind: "user_prompt", content: "third" } as TranscriptEntry)
+    await store.prepareTranscript(chat.id)
     expect(store.getClientTranscript(chat.id).outline.map((entry) => entry.id)).toEqual(["p1", "p2", "p3"])
     await rm(dataDir, { recursive: true, force: true })
   })
@@ -1918,7 +1935,7 @@ describe("EventStore service", () => {
     expect(seen).toEqual(["started:1", "caller", "ended:failed"])
   })
 
-  test("reads tool bodies asynchronously as the synchronous readers do", async () => {
+  test("reads tool bodies through the payload index, appends included", async () => {
     const dataDir = await createTempDataDir()
     const read = await withStore(dataDir, (store) => Effect.gen(function* () {
       const project = yield* store.openProject("/tmp/project")
@@ -1931,16 +1948,13 @@ describe("EventStore service", () => {
       return {
         first,
         second: yield* store.readEntriesById(chat.id, ["result-1", "result-2", "nope"]),
-        sync: store.getEntriesById(chat.id, ["result-1", "result-2"]),
         messages: yield* store.readMessages(chat.id),
-        syncMessages: store.getMessages(chat.id),
         missing: yield* Effect.result(store.readEntriesById("missing", ["x"])),
       }
     }))
     expect((read.first[0] as unknown as { content: unknown }).content).toBe("a\nb")
-    expect(read.second).toEqual(read.sync)
     expect(read.second.map((found) => (found as unknown as { content: unknown }).content)).toEqual(["a\nb", "later"])
-    expect(read.messages).toEqual(read.syncMessages)
+    expect(read.messages.map((message) => (message as unknown as { content?: unknown }).content)).toEqual([undefined, "a\nb", "later"])
     expect(Result.isFailure(read.missing) && read.missing.failure._tag).toBe("@kanna/server/event-store/EventStoreNotFoundError")
   })
 

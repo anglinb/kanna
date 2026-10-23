@@ -4,14 +4,14 @@
  * Contains secrets (machineToken, proxySecret) → written with mode 600.
  */
 
-import { homedir } from "node:os"
 import path from "node:path"
-import process from "node:process"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { getCloudFilePath } from "../../shared/branding"
 import { DEFAULT_CLOUD_CONTROL_URL } from "../../shared/cloud-api"
 import { PROD_SERVER_PORT } from "../../shared/ports"
+import { HostProcess } from "../platform/host-process"
+import { Machine } from "../platform/machine"
 
 /**
  * How this machine is reachable from the proxy:
@@ -56,8 +56,9 @@ function normalizeString(value: unknown) {
  */
 export function normalizeCloudIdentity(
   value: unknown,
-  warn: (message: string) => void = () => {},
-  env: Record<string, string | undefined> = process.env,
+  warn: (message: string) => void,
+  /** The machine's environment (`Machine.env`): a dev-box's host can come from it. */
+  env: Record<string, string | undefined>,
 ): CloudIdentity | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     warn("cloud.json is not an object — ignoring it")
@@ -107,8 +108,9 @@ export function normalizeCloudIdentity(
   }
 }
 
-export function getDefaultCloudIdentityPath() {
-  return getCloudFilePath(homedir())
+/** cloud.json under `homeDir`, the machine's home (`Machine.homeDirectory`). */
+export function getDefaultCloudIdentityPath(homeDir: string) {
+  return getCloudFilePath(homeDir)
 }
 
 /** cloud.json could not be read, written or deleted (never its contents: they are secrets). */
@@ -129,10 +131,12 @@ const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unkno
 
 /** null when there is no cloud.json, or when it is unusable (with a warning). */
 export const readCloudIdentity = Effect.fn("CloudIdentity.read")(function* (
-  filePath: string = getDefaultCloudIdentityPath(),
+  filePathOverride?: string,
   warn: (message: string) => void = () => {},
 ) {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
+  const filePath = filePathOverride ?? getDefaultCloudIdentityPath(machine.homeDirectory)
   const raw = yield* fs.readFileString(filePath).pipe(
     Effect.map(Option.some),
     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
@@ -141,7 +145,7 @@ export const readCloudIdentity = Effect.fn("CloudIdentity.read")(function* (
   if (Option.isNone(raw)) return null
 
   return yield* decodeJson(raw.value).pipe(
-    Effect.map((parsed) => normalizeCloudIdentity(parsed, warn)),
+    Effect.map((parsed) => normalizeCloudIdentity(parsed, warn, machine.env.snapshot())),
     Effect.catchTag("SchemaError", () => Effect.sync(() => {
       warn(`cloud.json at ${filePath} is not valid JSON — ignoring it`)
       return null
@@ -152,10 +156,11 @@ export const readCloudIdentity = Effect.fn("CloudIdentity.read")(function* (
 /** Atomic write (tmp + rename) with mode 600 — the file holds secrets. */
 export const writeCloudIdentity = Effect.fn("CloudIdentity.write")(function* (
   identity: CloudIdentity,
-  filePath: string = getDefaultCloudIdentityPath(),
+  filePathOverride?: string,
 ) {
   const fs = yield* FileSystem.FileSystem
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  const filePath = filePathOverride ?? getDefaultCloudIdentityPath((yield* Machine).homeDirectory)
+  const tempPath = `${filePath}.tmp-${(yield* HostProcess).pid}-${Date.now()}`
   yield* fs.makeDirectory(path.dirname(filePath), { recursive: true }).pipe(
     Effect.andThen(fs.writeFileString(tempPath, `${JSON.stringify(identity, null, 2)}\n`, { mode: 0o600 })),
     Effect.andThen(fs.chmod(tempPath, 0o600)),
@@ -166,9 +171,10 @@ export const writeCloudIdentity = Effect.fn("CloudIdentity.write")(function* (
 
 /** true when a cloud.json was there to delete. */
 export const deleteCloudIdentity = Effect.fn("CloudIdentity.delete")(function* (
-  filePath: string = getDefaultCloudIdentityPath(),
+  filePathOverride?: string,
 ) {
   const fs = yield* FileSystem.FileSystem
+  const filePath = filePathOverride ?? getDefaultCloudIdentityPath((yield* Machine).homeDirectory)
   return yield* fs.remove(filePath).pipe(
     Effect.as(true),
     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),

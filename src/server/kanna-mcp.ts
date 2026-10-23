@@ -4,6 +4,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { Effect, Schema, Stream } from "effect"
 import { kannaToolSpecs, type KannaToolHost } from "./kanna-tools"
 import { KannaLoggerLayer } from "./effect/logger"
+import { HttpHost } from "./platform/http-host"
 
 /**
  * The Kanna tools over MCP's streamable HTTP, for the providers that take an
@@ -17,7 +18,7 @@ export interface KannaMcpEndpoint {
   readonly headers: { readonly Authorization: string }
 }
 
-/** Answering one MCP request failed in the SDK. Bun answers it with a 500. */
+/** Answering one MCP request failed in the SDK. The listener answers it with a 500. */
 export class KannaMcpRequestError extends Schema.TaggedError<KannaMcpRequestError>()(
   "@kanna/server/kanna-mcp/KannaMcpRequestError",
   {
@@ -59,6 +60,7 @@ const closeConnection = (mcp: Server) => Effect.tryPromise(() => mcp.close()).pi
  * flight, stops the listener and closes every open connection.
  */
 export const serveKannaMcp = Effect.fn("KannaMcp.serve")(function* (host: KannaToolHost) {
+  const http = yield* HttpHost
   const token = crypto.randomUUID()
   const closing = new AbortController()
   const connections = new Set<Server>()
@@ -99,18 +101,20 @@ export const serveKannaMcp = Effect.fn("KannaMcp.serve")(function* (host: KannaT
   })
 
   const server = yield* Effect.acquireRelease(
-    Effect.sync(() => Bun.serve({
+    // A listener on port 0 that can't start is a defect, as it always was.
+    http.listen({
       hostname: "127.0.0.1",
       port: 0,
-      idleTimeout: 0,
+      idleTimeoutSeconds: 0,
       fetch: (request) => Effect.runPromise(handle(request).pipe(Effect.provide(KannaLoggerLayer))),
-    })),
+    }).pipe(Effect.orDie),
     (server) => Effect.suspend(() => {
       closing.abort()
-      server.stop(true)
-      const open = [...connections]
-      connections.clear()
-      return Effect.forEach(open, closeConnection, { concurrency: "unbounded", discard: true })
+      return server.stop(true).pipe(Effect.andThen(Effect.suspend(() => {
+        const open = [...connections]
+        connections.clear()
+        return Effect.forEach(open, closeConnection, { concurrency: "unbounded", discard: true })
+      })))
     }),
   )
   return {

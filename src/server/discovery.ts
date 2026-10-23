@@ -1,9 +1,9 @@
-import { homedir } from "node:os"
 import path from "node:path"
 import { Context, Deferred, Effect, FileSystem, Layer, Option, Predicate, Schema } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import type { AgentProvider } from "../shared/types"
 import { resolveLocalPath } from "./paths"
+import { Machine } from "./platform/machine"
 
 /**
  * Read only the first few KB of a file. Codex session logs run to many MB and
@@ -60,10 +60,10 @@ function mtimeMs(info: FileSystem.File.Info) {
 
 const resolveLocalPathOption = Option.liftThrowable(resolveLocalPath)
 
-/** The path as Kanna stores it, if it is a directory that exists. */
-const normalizeExistingDirectory = (fs: FileSystem.FileSystem, localPath: string) =>
+/** The path as Kanna stores it (`~` against the machine's home), if it is a directory that exists. */
+const normalizeExistingDirectory = (fs: FileSystem.FileSystem, machine: Machine["Service"], localPath: string) =>
   Effect.gen(function* () {
-    const normalized = resolveLocalPathOption(localPath)
+    const normalized = resolveLocalPathOption(localPath, machine.homeDirectory)
     if (Option.isNone(normalized)) return Option.none<string>()
     const info = yield* statOption(fs, normalized.value)
     return Option.isSome(info) && info.value.type === "Directory" ? normalized : Option.none<string>()
@@ -133,6 +133,7 @@ function isPresent<A>(value: A | null): value is A {
 /** Claude: one folder per project under ~/.claude/projects, named for its path. */
 export const makeClaudeDiscoveryAdapter = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
   const provider = "claude" as const
 
   const scan = Effect.fn("ProjectDiscovery.scanClaude")(function* (homeDir: string) {
@@ -148,7 +149,7 @@ export const makeClaudeDiscoveryAdapter = Effect.gen(function* () {
       if (stats.type !== "Directory") return null
 
       const resolvedPath = yield* resolveEncodedClaudePath(fs, name)
-      const normalizedPath = yield* normalizeExistingDirectory(fs, resolvedPath)
+      const normalizedPath = yield* normalizeExistingDirectory(fs, machine, resolvedPath)
       if (Option.isNone(normalizedPath)) {
         return null
       }
@@ -229,6 +230,7 @@ export const makeCodexDiscoveryAdapter = Effect.fn("ProjectDiscovery.makeCodex")
   options: CodexProjectDiscoveryOptions = {},
 ) {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
   const provider = "codex" as const
 
   const readHead = options.readFileHead ?? ((filePath: string) =>
@@ -352,7 +354,7 @@ export const makeCodexDiscoveryAdapter = Effect.fn("ProjectDiscovery.makeCodex")
   const projectAt = (localPath: string, modifiedAt: number) =>
     Effect.gen(function* () {
       if (!path.isAbsolute(localPath)) return null
-      const normalizedPath = yield* normalizeExistingDirectory(fs, localPath)
+      const normalizedPath = yield* normalizeExistingDirectory(fs, machine, localPath)
       if (Option.isNone(normalizedPath)) return null
       const project: ProviderDiscoveredProject = {
         provider,
@@ -396,6 +398,7 @@ const decodeUriComponentOption = Option.liftThrowable(decodeURIComponent)
 /** Grok: one folder per working directory under ~/.grok/sessions, named for it URI-encoded. */
 export const makeGrokDiscoveryAdapter = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
   const provider = "grok" as const
 
   const scan = Effect.fn("ProjectDiscovery.scanGrok")(function* (homeDir: string) {
@@ -414,7 +417,7 @@ export const makeGrokDiscoveryAdapter = Effect.gen(function* () {
       if (Option.isNone(folderStat) || folderStat.value.type !== "Directory") return null
       const cwd = decodeUriComponentOption(name)
       if (Option.isNone(cwd) || !path.isAbsolute(cwd.value)) return null
-      const normalizedPath = yield* normalizeExistingDirectory(fs, cwd.value)
+      const normalizedPath = yield* normalizeExistingDirectory(fs, machine, cwd.value)
       if (Option.isNone(normalizedPath)) return null
       const project: ProviderDiscoveredProject = {
         provider,
@@ -462,6 +465,7 @@ const makeProjectDiscovery = Effect.fn("ProjectDiscovery.make")(function* (optio
     yield* makeGrokDiscoveryAdapter,
   ]
   const scope = yield* Effect.scope
+  const machine = yield* Machine
   const inFlight = new Map<string, Deferred.Deferred<DiscoveredProject[], ProjectDiscoveryError>>()
 
   const runDiscovery = (homeDir: string) =>
@@ -471,7 +475,7 @@ const makeProjectDiscovery = Effect.fn("ProjectDiscovery.make")(function* (optio
       )),
     )
 
-  const discover = Effect.fn("ProjectDiscovery.discover")(function* (homeDir: string = homedir()) {
+  const discover = Effect.fn("ProjectDiscovery.discover")(function* (homeDir: string = machine.homeDirectory) {
     const existing = inFlight.get(homeDir)
     if (existing) return yield* Deferred.await(existing)
 

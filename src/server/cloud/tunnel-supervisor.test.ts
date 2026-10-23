@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { type Duration, Effect, Fiber } from "effect"
+import { FileSystem, type Duration, Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 import { DEFAULT_CLOUD_CONTROL_URL, type CloudHeartbeatRequest } from "../../shared/cloud-api"
 import { runTest } from "../effect/testing"
@@ -109,7 +109,7 @@ const restartDelays = (warnings: string[]) =>
   })
 
 /** Runs the body on a TestClock (starting at 0) with the supervisor's logs captured. */
-function runSupervised<A>(body: (logs: ReturnType<typeof captureLogs>) => Effect.Effect<A>) {
+function runSupervised<A>(body: (logs: ReturnType<typeof captureLogs>) => Effect.Effect<A, never, FileSystem.FileSystem>) {
   const logs = captureLogs()
   return runTest(body(logs).pipe(Effect.provide(logs.layer), Effect.provide(TestClock.layer())))
 }

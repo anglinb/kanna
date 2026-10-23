@@ -1,6 +1,6 @@
-import type { ServerWebSocket } from "bun"
 import type { ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
 import { PROTOCOL_VERSION } from "../shared/types"
+import type { ClientSocket } from "./platform/http-host"
 
 export interface SnapshotBroadcastFilter {
   includeSidebar?: boolean
@@ -32,16 +32,16 @@ export function shouldIncludeTopic(topic: SubscriptionTopic, filter?: SnapshotBr
 
 const COMPRESS_FRAME_MIN_BYTES = 1024
 
-function sendFrame<Data>(socket: ServerWebSocket<Data>, payload: string) {
+function sendFrame<Data>(socket: ClientSocket<Data>, payload: string) {
   socket.send(payload, payload.length >= COMPRESS_FRAME_MIN_BYTES)
 }
 
-export function sendEnvelope<Data>(socket: ServerWebSocket<Data>, message: ServerEnvelope) {
+export function sendEnvelope<Data>(socket: ClientSocket<Data>, message: ServerEnvelope) {
   const payload = JSON.stringify(message)
   sendFrame(socket, payload)
   return payload.length
 }
 
-export function sendSerializedSnapshot<Data>(socket: ServerWebSocket<Data>, id: string, snapshotJson: string) {
+export function sendSerializedSnapshot<Data>(socket: ClientSocket<Data>, id: string, snapshotJson: string) {
   sendFrame(socket, `{"v":${PROTOCOL_VERSION},"type":"snapshot","id":${JSON.stringify(id)},"snapshot":${snapshotJson}}`)
 }

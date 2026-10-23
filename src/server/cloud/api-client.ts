@@ -4,7 +4,6 @@
  * KANNA_CLOUD_CONTROL_URL for self-hosters and the wire e2e.
  */
 
-import process from "node:process"
 import { Effect, Predicate, Schema } from "effect"
 import {
   CLOUD_CONTROL_URL_ENV_VAR,
@@ -52,6 +51,11 @@ export const describeError = (error: unknown) =>
 export interface CloudApiClientDeps {
   fetchImpl?: typeof fetch
   controlUrl?: string
+  /**
+   * The environment the control URL override is read from: the machine's
+   * (`Machine.env`). Without one there is no override.
+   */
+  env?: Record<string, string | undefined>
 }
 
 export interface CloudApiClient {
@@ -75,8 +79,8 @@ export interface CloudApiClient {
 }
 
 export function resolveControlUrl(
-  explicit?: string,
-  env: Record<string, string | undefined> = process.env,
+  explicit: string | undefined,
+  env: Record<string, string | undefined>,
 ) {
   const fromEnv = env[CLOUD_CONTROL_URL_ENV_VAR]?.trim()
   return (explicit?.trim() || fromEnv || DEFAULT_CLOUD_CONTROL_URL).replace(/\/$/, "")
@@ -90,7 +94,7 @@ const decodePoll = Schema.decodeUnknownEffect(Schema.fromJsonString(CloudSchemas
 
 export function createCloudApiClient(deps: CloudApiClientDeps = {}): CloudApiClient {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const controlUrl = resolveControlUrl(deps.controlUrl)
+  const controlUrl = resolveControlUrl(deps.controlUrl, deps.env ?? {})
 
   const networkError = (path: string) => (cause: unknown) =>
     new CloudNetworkError({ message: describeError(cause), path, cause })

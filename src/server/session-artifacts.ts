@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto"
-import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, FileSystem, Match } from "effect"
 
 import type { AgentProvider } from "../shared/types"
 import { grokSessionDir } from "./grok-cli"
+import { Machine } from "./platform/machine"
 
 /**
  * Whether a provider's native session artifact for a chat still exists on disk.
@@ -21,7 +21,7 @@ export type SessionArtifactStatus = "present" | "missing" | "unknown"
 export interface SessionArtifactQuery {
   cwd: string
   sessionToken: string | null | undefined
-  /** Injectable home directory; defaults to the real one. Tests pass a temp dir. */
+  /** Injectable home directory; defaults to the machine's. Tests pass a temp dir. */
   home?: string
 }
 
@@ -71,7 +71,7 @@ export const checkSessionArtifact = Effect.fn("SessionArtifacts.check")(function
   yield* Effect.annotateCurrentSpan("provider", provider)
   const sessionToken = query.sessionToken
   if (!isSafeToken(sessionToken)) return "unknown" satisfies SessionArtifactStatus
-  const home = query.home ?? homedir()
+  const home = query.home ?? (yield* Machine).homeDirectory
 
   return yield* Match.value(provider).pipe(
     Match.when("claude", () => {

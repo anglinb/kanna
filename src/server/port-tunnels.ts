@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer, Schema } from "effect"
+import { FileSystem, Context, Deferred, Effect, Layer, Schema } from "effect"
 import {
   startShareTunnel,
   type CloudflaredInstallError,
@@ -73,7 +73,9 @@ function validatePort(port: number) {
 }
 
 const makePortTunnels = Effect.fn("PortTunnels.make")(function* (options: PortTunnelsOptions) {
-  const startTunnel = options.startTunnel ?? ((localUrl: string) => startShareTunnel(localUrl, "quick"))
+  const fs = yield* FileSystem.FileSystem
+  const startTunnel = options.startTunnel
+    ?? ((localUrl: string) => startShareTunnel(localUrl, "quick").pipe(Effect.provideService(FileSystem.FileSystem, fs)))
   // Plain maps: every read and write is a synchronous step inside one effect.
   const tunnels = new Map<number, { publicUrl: string; stop: () => void }>()
   const pending = new Map<number, Deferred.Deferred<ExposedPort, ExposeError>>()

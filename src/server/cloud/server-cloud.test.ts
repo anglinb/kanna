@@ -10,7 +10,7 @@ import {
   PROXY_AUTH_HEADER,
   type CloudWsEndpointResponse,
 } from "../../shared/cloud-api"
-import { startKannaServer } from "../server"
+import { startKannaServer } from "../server-bun"
 import { createConnectTokenManager } from "./connect-token"
 import type { PairSessionSnapshot } from "./pair-session"
 import type { CloudIdentity } from "./identity"

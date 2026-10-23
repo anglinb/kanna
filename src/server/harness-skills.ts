@@ -1,8 +1,8 @@
-import { readdir } from "node:fs/promises"
-import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, FileSystem, Option } from "effect"
 import type { AgentProvider, GlobalSkillSummary, HarnessSkill, HarnessSkillSource } from "../shared/types"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
 
 /**
  * Harness-agnostic skill plumbing for the composer's "/" menu.
@@ -248,13 +248,16 @@ const WALK_MAX_DEPTH = 8
  * A directory's subdirectories, symlinks not followed. `FileSystem` lists
  * names only, and telling a directory from a file or a symlink through it
  * costs a stat per entry across the whole repo, so this one read keeps
- * `readdir`'s file types.
+ * the entries' kinds.
  */
 const readSubdirectories = (dir: string) =>
-  Effect.tryPromise(() => readdir(dir, { withFileTypes: true })).pipe(
-    Effect.map((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)),
-    Effect.catchTag("UnknownError", () => Effect.succeed<string[]>([])),
-  )
+  Effect.gen(function* () {
+    const files = yield* FileSystemExtras
+    return yield* files.readDirectoryEntries(dir).pipe(
+      Effect.map((entries) => entries.filter((entry) => entry.kind === "Directory").map((entry) => entry.name)),
+      Effect.catchTag("PlatformError", () => Effect.succeed<string[]>([])),
+    )
+  })
 
 /**
  * Find every `<dir>/<marker>/skills` root nested anywhere under `base` (cursor
@@ -264,7 +267,7 @@ const readSubdirectories = (dir: string) =>
 export const findNestedSkillRoots = Effect.fn("HarnessSkills.findNestedSkillRoots")(function* (base: string, markers: string[]) {
   const fs = yield* FileSystem.FileSystem
   const roots: string[] = []
-  const walk = (dir: string, depth: number): Effect.Effect<void> => Effect.gen(function* () {
+  const walk = (dir: string, depth: number): Effect.Effect<void, never, FileSystemExtras> => Effect.gen(function* () {
     for (const marker of markers) {
       const candidate = path.join(dir, marker, "skills")
       if (yield* exists(fs, candidate)) roots.push(candidate)
@@ -297,7 +300,7 @@ const scanSkillsRoots = (roots: string[]) =>
  * skills only appear once the live session's supportedCommands() is available.
  */
 export const scanClaudeSkills = Effect.fn("HarnessSkills.scanClaudeSkills")(function* (args: ScanArgs) {
-  const home = args.home ?? homedir()
+  const home = args.home ?? (yield* Machine).homeDirectory
   return dedupeSkillsByName([
     ...yield* scanSkillsRoot(path.join(args.cwd, ".claude", "skills")),
     ...yield* scanCommandsRoot(path.join(args.cwd, ".claude", "commands")),
@@ -314,7 +317,7 @@ export const scanClaudeSkills = Effect.fn("HarnessSkills.scanClaudeSkills")(func
  * input items still resolve on capable codex versions.
  */
 export const scanCodexSkills = Effect.fn("HarnessSkills.scanCodexSkills")(function* (args: ScanArgs) {
-  const home = args.home ?? homedir()
+  const home = args.home ?? (yield* Machine).homeDirectory
   const repoRoots = (yield* collectAncestorDirsToRepoRoot(args.cwd))
     .map((dir) => path.join(dir, ".agents", "skills"))
   return dedupeSkillsByName(yield* scanSkillsRoots([
@@ -331,7 +334,7 @@ export const scanCodexSkills = Effect.fn("HarnessSkills.scanCodexSkills")(functi
  * anywhere in the repo, plus the user-level equivalents.
  */
 export const scanCursorSkills = Effect.fn("HarnessSkills.scanCursorSkills")(function* (args: ScanArgs) {
-  const home = args.home ?? homedir()
+  const home = args.home ?? (yield* Machine).homeDirectory
   return dedupeSkillsByName(yield* scanSkillsRoots([
     ...yield* findNestedSkillRoots(args.cwd, [".cursor", ".agents"]),
     path.join(home, ".cursor", "skills"),
@@ -344,7 +347,7 @@ export const scanCursorSkills = Effect.fn("HarnessSkills.scanCursorSkills")(func
  * (repo → git root and $HOME), matching grok inspect's resource loader.
  */
 export const scanGrokSkills = Effect.fn("HarnessSkills.scanGrokSkills")(function* (args: ScanArgs) {
-  const home = args.home ?? homedir()
+  const home = args.home ?? (yield* Machine).homeDirectory
   const repoRoots = (yield* collectAncestorDirsToRepoRoot(args.cwd))
     .flatMap((dir) => [
       path.join(dir, ".grok", "skills"),
@@ -387,7 +390,7 @@ export function globalSkillRoots(home: string): { dir: string; providers: AgentP
  * once with the union of supporting harnesses.
  */
 export const listGlobalSkills = Effect.fn("HarnessSkills.listGlobalSkills")(function* (args: { home?: string } = {}) {
-  const home = args.home ?? homedir()
+  const home = args.home ?? (yield* Machine).homeDirectory
   const byName = new Map<string, { name: string; description: string; providers: Set<AgentProvider>; paths: string[] }>()
   for (const root of globalSkillRoots(home)) {
     for (const skill of yield* scanSkillsRoot(root.dir)) {

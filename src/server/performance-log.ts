@@ -1,10 +1,11 @@
 import { CLIENT_PERFORMANCE_METRICS } from "../shared/performance"
-import { execFile } from "node:child_process"
 import path from "node:path"
-import { promisify } from "node:util"
 import { Context, Deferred, Effect, FileSystem, Layer, Option, Schema } from "effect"
-
-const execFileAsync = promisify(execFile)
+import { HostProcess } from "./platform/host-process"
+import { Machine } from "./platform/machine"
+import type { ProcessSpawner } from "./platform/process-spawner"
+import { runCommand } from "./process-utils"
+import { capturePlatform } from "./platform"
 const DAY_MS = 86_400_000
 const MAX_DAILY_BYTES = 8 * 1024 * 1024
 const RETENTION_DAYS = 14
@@ -54,6 +55,9 @@ export class PerformanceLog extends Context.Service<PerformanceLog, {
 
 const makePerformanceLog = Effect.fn("PerformanceLog.make")(function* (options: PerformanceLogOptions) {
   const fs = yield* FileSystem.FileSystem
+  const host = yield* HostProcess
+  const machine = yield* Machine
+  const spawner = yield* capturePlatform<ProcessSpawner>()
   const scope = yield* Effect.scope
   const directory = path.join(options.dataDir, "diagnostics")
   const dailyLimit = options.dailyLimit ?? MAX_DAILY_BYTES
@@ -62,7 +66,7 @@ const makePerformanceLog = Effect.fn("PerformanceLog.make")(function* (options: 
   const clients = new Map<string, { lastSeen: string; metrics: Record<string, Metric> }>()
   let droppedSamples = 0
   let sampleResources: () => Record<string, number> = () => ({})
-  let previousCpu = process.cpuUsage()
+  let previousCpu = host.cpuUsage()
   let previousTime = performance.now()
   let lastPruneDay = ""
   let warned = false
@@ -116,7 +120,7 @@ const makePerformanceLog = Effect.fn("PerformanceLog.make")(function* (options: 
       }
       lastPruneDay = day
     }
-    const cpu = process.cpuUsage()
+    const cpu = host.cpuUsage()
     const time = performance.now()
     const elapsed = Math.max(1, time - previousTime)
     const sampled = Object.fromEntries(metrics)
@@ -127,18 +131,18 @@ const makePerformanceLog = Effect.fn("PerformanceLog.make")(function* (options: 
     const sample = {
       v: 1,
       version,
-      bunVersion: process.versions.bun,
+      bunVersion: host.runtimeVersion,
       time: new Date(now).toISOString(),
-      pid: process.pid,
-      uptimeSeconds: process.uptime(),
+      pid: host.pid,
+      uptimeSeconds: host.uptimeSeconds(),
       intervalMs: elapsed,
-      memory: process.memoryUsage(),
+      memory: host.memoryUsage(),
       cpuPercent: ((cpu.user - previousCpu.user + cpu.system - previousCpu.system) / 1000 / elapsed) * 100,
       resources: sampleResources(),
       clients: Object.fromEntries(clients),
       droppedSamples,
       metrics: sampled,
-      children: yield* readChildProcessMemory(),
+      children: yield* readChildProcessMemory(machine.platform, host.pid).pipe(Effect.provide(spawner)),
     }
     previousCpu = cpu
     previousTime = time
@@ -204,31 +208,34 @@ const makePerformanceLog = Effect.fn("PerformanceLog.make")(function* (options: 
 })
 
 /** Executable names and numeric process data only. Never collect command arguments. */
-const readChildProcessMemory = Effect.fn("PerformanceLog.readChildProcessMemory")(function* () {
-  if (process.platform === "win32") return null
-  return yield* Effect.tryPromise((signal) => execFileAsync("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,comm="], {
-    timeout: 3000,
-    maxBuffer: 1024 * 1024,
-    signal,
-  })).pipe(
-    Effect.map(({ stdout }) => summarizeChildProcesses(stdout)),
-    // No `ps`, or it timed out: the line goes out without children.
-    Effect.orElseSucceed(() => null),
+const PS_MAX_OUTPUT_BYTES = 1024 * 1024
+
+const readChildProcessMemory = Effect.fn("PerformanceLog.readChildProcessMemory")(function* (
+  platform: NodeJS.Platform,
+  serverPid: number,
+) {
+  if (platform === "win32") return null
+  const output = yield* runCommand(["ps", "-axo", "pid=,ppid=,rss=,pcpu=,comm="], { stdout: true }).pipe(
+    Effect.timeoutOption(3000),
+    Effect.orElseSucceed(() => Option.none()),
   )
+  // No `ps`, it failed, it timed out or overflowed: the line goes out without children.
+  if (Option.isNone(output) || output.value.exitCode !== 0 || output.value.stdout.length > PS_MAX_OUTPUT_BYTES) return null
+  return summarizeChildProcesses(output.value.stdout, serverPid)
 })
 
-function summarizeChildProcesses(stdout: string) {
+function summarizeChildProcesses(stdout: string, serverPid: number) {
   const processes = stdout.trim().split("\n").flatMap(line => {
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.+)$/.exec(line)
     return match ? [{ pid: Number(match[1]), parent: Number(match[2]), rssBytes: Number(match[3]) * 1024, cpuPercent: Number(match[4]), executable: path.basename(match[5]!) }] : []
   })
-  const ids = new Set([process.pid])
+  const ids = new Set([serverPid])
   for (let pass = 0; pass < 32; pass++) {
     const before = ids.size
     for (const child of processes) if (ids.has(child.parent)) ids.add(child.pid)
     if (ids.size === before) break
   }
-  const children = processes.filter(child => child.pid !== process.pid && ids.has(child.pid) && child.executable !== "ps")
+  const children = processes.filter(child => child.pid !== serverPid && ids.has(child.pid) && child.executable !== "ps")
   return {
     count: children.length,
     rssBytes: children.reduce((sum, child) => sum + child.rssBytes, 0),

@@ -13,7 +13,7 @@ export function makeFakeAppSettings(
   options: { analyticsUserId?: string } = {},
 ): AppSettings["Service"] {
   const ref = Effect.runSync(SubscriptionRef.make<AppSettingsSnapshot>({
-    ...defaultAppSettingsSnapshot("/tmp/kanna-fake-settings.json"),
+    ...defaultAppSettingsSnapshot("/tmp/kanna-fake-settings.json", "/tmp"),
     ...initial,
   }))
   const writePatch = (patch: AppSettingsPatch) =>

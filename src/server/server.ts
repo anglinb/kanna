@@ -1,5 +1,4 @@
-import { Effect, Fiber, Layer, ManagedRuntime, Option, Schema, Scope } from "effect"
-import { homedir } from "node:os"
+import { Effect, Fiber, Layer, ManagedRuntime, Option, Result, Schema, Scope } from "effect"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
 import { getDataDir, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
@@ -39,7 +38,7 @@ import { ChatAgent, type CoordinatorLike } from "./chat-agent"
 import { ChatCommands } from "./chat-commands"
 import { ProjectDiscovery, type DiscoveredProject } from "./discovery"
 import { Keybindings } from "./keybindings"
-import { ServerPlatform } from "./effect/runtime"
+import { KannaLoggerLayer } from "./effect/logger"
 import { runKanna, runKannaSync, subscribeKanna } from "./effect/bridge"
 import { startupSlot } from "./effect/startup-slot"
 import { ProjectIcons } from "./project-icons"
@@ -68,6 +67,9 @@ import { Terminals } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
 import { fetchMainCommitSha } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
+import { Machine } from "./platform/machine"
+import { capturePlatform, type PlatformServices } from "./platform"
+import { HttpHost, type HttpListener } from "./platform/http-host"
 import { instanceFingerprint } from "./instance"
 import { inheritShellPath } from "./process-utils"
 
@@ -94,6 +96,13 @@ export class ServerShutdownError extends Schema.TaggedError<ServerShutdownError>
   "@kanna/server/ServerShutdownError",
   { operation: Schema.String, cause: Schema.Defect() },
 ) {}
+
+export interface ServerAssetDirs {
+  /** The Vite build of the web client (dist/client). */
+  readonly client: string
+  /** The standalone transcript viewer (dist/export-viewer). */
+  readonly exportViewer: string
+}
 
 export interface StartKannaServerOptions {
   port?: number
@@ -129,6 +138,12 @@ export interface StartKannaServerOptions {
    * through the app-settings snapshot to unlock dev-box-only UI.
    */
   directCloud?: boolean
+  /**
+   * Where the built web client and the standalone transcript viewer are.
+   * The Bun entry (server-bun.ts) points them at the package's dist/; a host
+   * without them serves no app shell and can't write standalone exports.
+   */
+  assetDirs?: ServerAssetDirs
   onMigrationProgress?: (message: string) => void
   /** Where keybindings live. Defaults to the user's home; tests point it at a temp dir. */
   keybindingsPath?: string
@@ -160,7 +175,15 @@ function updateManagerLayer(update: NonNullable<StartKannaServerOptions["update"
   }))
 }
 
-const startKannaServerEffect = Effect.fn("Server.start")(function* (options: StartKannaServerOptions) {
+/**
+ * Starts the server on whatever platform the caller provides: every file,
+ * process, PTY, machine fact and the HTTP listener come from those services.
+ * `startKannaServer` runs it on Bun.
+ */
+export const startKannaServerEffect = Effect.fn("Server.start")(function* (options: StartKannaServerOptions) {
+  const platform = yield* capturePlatform<PlatformServices>()
+  const machine = yield* Machine
+  const http = yield* HttpHost
   const port = options.port ?? 3210
   const hostname = options.host ?? "127.0.0.1"
   const strictPort = options.strictPort ?? false
@@ -169,7 +192,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
   // awaited before anything can start an agent.
   const shellPathReady = yield* Effect.forkChild(inheritShellPath())
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
-  const dataDir = options.dataDir ?? getDataDir(homedir())
+  const dataDir = options.dataDir ?? getDataDir(machine.homeDirectory)
   // Services already on Effect, built once and released at shutdown. The
   // rest of startup still holds them as plain values until it migrates too.
   // The store loads (snapshot, log replay) as the runtime is built, with
@@ -177,7 +200,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
-  const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
+  const devboxUi = Boolean(options.directCloud) || machine.env.get("KANNA_DEVBOX_UI") === "1"
   const agentSlot = startupSlot<AgentStartupPort>("agent")
   const routerSlot = startupSlot<RouterStartupPort>("router")
   const storeSlot = startupSlot<StoreStartupPort>("event store")
@@ -191,7 +214,10 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     fetchGrokUsage: () => fetchGrokAccountUsage(),
   }
   // Tests and CI boot real servers with fresh ids; they stay out of analytics.
-  const analyticsLayer = (isAnalyticsDisabledByEnv()
+  const machineEnv = yield* Effect.gen(function* () {
+    return (yield* Machine).env.snapshot()
+  }).pipe(Effect.provide(platform))
+  const analyticsLayer = (isAnalyticsDisabledByEnv(machineEnv)
     ? Layer.succeed(Analytics, NoopAnalytics)
     : Analytics.layer({
       currentVersion: options.update?.version ?? "unknown",
@@ -285,14 +311,14 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
             Effect.fail(new TurnFileRecordError({ chatId, cause }))),
         ),
       }),
-    ).pipe(Layer.provide(ServerPlatform)),
+    ).pipe(Layer.provide(Layer.merge(Layer.succeedContext(platform), KannaLoggerLayer))),
   )
   const runtimeContext = yield* runtime.contextEffect
   const diagnostics = yield* PerformanceLog.pipe(Effect.provideContext(runtimeContext))
   const store = yield* EventStore.pipe(Effect.provideContext(runtimeContext))
   storeSlot.bind(store)
   const diffStore = yield* DiffStore.pipe(Effect.provideContext(runtimeContext))
-  const machineDisplayName = yield* getMachineDisplayName().pipe(Effect.provide(ServerPlatform))
+  const machineDisplayName = yield* getMachineDisplayName().pipe(Effect.provide(platform))
   // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
   // every request path below reads the current value.
   let cloud: CloudRuntime | null = options.cloud ?? null
@@ -312,7 +338,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     return discoveredProjects
   })
 
-  let server: ReturnType<typeof Bun.serve<ClientState>>
+  let server!: HttpListener
   const { worktreeProbe, turnFiles } = yield* Effect.all({
     worktreeProbe: WorktreeProbe,
     turnFiles: TurnFileTracker,
@@ -374,6 +400,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
   })
   yield* refreshDiscoveryEffect()
   const agent = new AgentCoordinator({
+    platform,
     store,
     analytics,
     codexManager,
@@ -407,6 +434,8 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
   })
 
   const router = createWsRouter({
+    platform,
+    exportViewerDistDir: options.assetDirs?.exportViewer,
     diagnostics,
     store,
     diffStore,
@@ -421,8 +450,8 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     analytics,
     usageLimits,
     llmProvider: {
-      read: () => readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform)),
-      write: (value) => writeLlmProviderSnapshot(value).pipe(Effect.provide(ServerPlatform)),
+      read: () => readLlmProviderSnapshot().pipe(Effect.provide(platform)),
+      write: (value) => writeLlmProviderSnapshot(value).pipe(Effect.provide(platform)),
       validate: (value) => validateLlmProviderCredentials(value),
     },
     refreshDiscovery: refreshDiscoveryEffect,
@@ -451,7 +480,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
         catch: (cause) => new ServerStartupError({ operation: "broadcast model catalog", cause }),
       })
     }
-  }).pipe(Effect.provide(ServerPlatform))).catch(() => undefined)
+  }).pipe(Effect.provide(platform))).catch(() => undefined)
 
   // Chat garbage collection, three tiers measured against the user's latest
   // chat activity: empty drafts are hard-deleted after 5 idle minutes, chats
@@ -499,11 +528,11 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
         catch: (cause) => new ServerStartupError({ operation: "broadcast sidebar", cause }),
       })
     }
-  })).catch((error) => {
+  }).pipe(Effect.provide(platform))).catch((error) => {
       console.warn(`${LOG_PREFIX} touched-file backfill failed:`, error)
   })
 
-  const distDir = path.join(import.meta.dir, "..", "..", "dist", "client")
+  const distDir = options.assetDirs?.client
 
   const MAX_PORT_ATTEMPTS = 20
   let actualPort = port
@@ -516,7 +545,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
       ? yield* createPairSessionManager({
           machineName: machineDisplayName,
           onPaired: (identity) => Effect.gen(function* () {
-            yield* writeCloudIdentity(identity).pipe(Effect.provide(ServerPlatform))
+            yield* writeCloudIdentity(identity).pipe(Effect.provide(platform))
             const runtime = createCloudRuntime(identity)
             cloud = runtime
             selfPairedCloud = runtime
@@ -534,15 +563,14 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
       : null
 
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
-    try {
-      server = Bun.serve<ClientState>({
+    const listened = yield* Effect.result(http.listen<ClientState>({
         port: actualPort,
         hostname,
         // Bun's default is 10s, which reaps tunneled requests riding out a
         // Cloudflare edge blip (and coincides exactly with the tunnel
         // supervisor's self-ping timeout). 60s stays under Cloudflare's
         // ~100s origin read timeout so the edge gives up first.
-        idleTimeout: 60,
+        idleTimeoutSeconds: 60,
         // Backstop: a request Bun idle-timed-out can leave its async fetch
         // handler rejecting later on a dead socket. Without this handler
         // that rejection escapes and can take the process down.
@@ -566,10 +594,8 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
 
           const upgradeWebSocket = () => {
             const upgraded = serverInstance.upgrade(req, {
-              data: {
-                subscriptions: new Map(),
-                snapshotSignatures: new Map(),
-              },
+              subscriptions: new Map(),
+              snapshotSignatures: new Map(),
             })
             return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 })
           }
@@ -738,42 +764,42 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
             return withOriginAgentCluster(Response.json(payload, { headers: { "Cache-Control": "no-store" } }))
           }
 
-          const uploadResponse = await runKanna(handleProjectUploadEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
+          const uploadResponse = await runKanna(handleProjectUploadEffect(req, url, store).pipe(Effect.provide(platform)))
           if (uploadResponse) {
             return withOriginAgentCluster(uploadResponse)
           }
 
-          const transcribeResponse = await runKanna(handleTranscribe(req, url, readLlmProviderSnapshot().pipe(Effect.provide(ServerPlatform))))
+          const transcribeResponse = await runKanna(handleTranscribe(req, url, readLlmProviderSnapshot().pipe(Effect.provide(platform))))
           if (transcribeResponse) {
             return withOriginAgentCluster(transcribeResponse)
           }
 
-          const deleteUploadResponse = await runKanna(handleProjectUploadDeleteEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
+          const deleteUploadResponse = await runKanna(handleProjectUploadDeleteEffect(req, url, store).pipe(Effect.provide(platform)))
           if (deleteUploadResponse) {
             return withOriginAgentCluster(deleteUploadResponse)
           }
 
-          const attachmentContentResponse = await runKanna(handleAttachmentContentEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
+          const attachmentContentResponse = await runKanna(handleAttachmentContentEffect(req, url, store).pipe(Effect.provide(platform)))
           if (attachmentContentResponse) {
             return withOriginAgentCluster(attachmentContentResponse)
           }
 
-          const visualizationHeightsResponse = await runKanna(handleVisualizationHeights(req, url, store).pipe(Effect.provide(ServerPlatform)))
+          const visualizationHeightsResponse = await runKanna(handleVisualizationHeights(req, url, store).pipe(Effect.provide(platform)))
           if (visualizationHeightsResponse) {
             return withOriginAgentCluster(visualizationHeightsResponse)
           }
 
-          const transcriptMediaResponse = await runKanna(handleTranscriptMediaContentEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
+          const transcriptMediaResponse = await runKanna(handleTranscriptMediaContentEffect(req, url, store).pipe(Effect.provide(platform)))
           if (transcriptMediaResponse) {
             return withOriginAgentCluster(transcriptMediaResponse)
           }
 
-          const projectIconResponse = await runKanna(handleProjectIconEffect(req, url, store.dataDir).pipe(Effect.provide(ServerPlatform)))
+          const projectIconResponse = await runKanna(handleProjectIconEffect(req, url, store.dataDir).pipe(Effect.provide(platform)))
           if (projectIconResponse) {
             return withOriginAgentCluster(projectIconResponse)
           }
 
-          const projectFileContentResponse = await runKanna(handleProjectFileContentEffect(req, url, store).pipe(Effect.provide(ServerPlatform)))
+          const projectFileContentResponse = await runKanna(handleProjectFileContentEffect(req, url, store).pipe(Effect.provide(platform)))
           if (projectFileContentResponse) {
             return withOriginAgentCluster(projectFileContentResponse)
           }
@@ -783,7 +809,8 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
             return withOriginAgentCluster(chatWindowResponse)
           }
 
-          return withOriginAgentCluster(runKanna(serveStaticEffect(distDir, url.pathname).pipe(Effect.provide(ServerPlatform))))
+          if (distDir === undefined) return withOriginAgentCluster(new Response("Not found", { status: 404 }))
+          return withOriginAgentCluster(runKanna(serveStaticEffect(distDir, url.pathname).pipe(Effect.provide(platform))))
         },
         websocket: {
           // Negotiated per connection: browsers opt in and get 8-12x smaller
@@ -799,7 +826,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
           // bytes, so nothing is lost by taking them raw. "dedicated" rather
           // than the shared compressor: one deflate context per socket, a few
           // hundred KB each, and a reply Safari accepts.
-          perMessageDeflate: { compress: "dedicated", decompress: "disable" },
+          compressOutgoing: true,
           open(ws) {
             router.handleOpen(ws)
           },
@@ -813,17 +840,18 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
             router.handleClose(ws)
           },
         },
-      })
+      }))
+    if (Result.isSuccess(listened)) {
+      server = listened.success
       break
-    } catch (err: unknown) {
-      const isAddrInUse =
-        err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EADDRINUSE"
-      if (!isAddrInUse || strictPort || attempt === MAX_PORT_ATTEMPTS - 1) {
-        throw err
-      }
-      console.log(`Port ${actualPort} is in use, trying ${actualPort + 1}...`)
-      actualPort++
     }
+    // Anything but a taken port, or a taken port we may not move off, fails
+    // startup with the listener's own error, as the throw did.
+    if (!listened.failure.addressInUse || strictPort || attempt === MAX_PORT_ATTEMPTS - 1) {
+      return yield* Effect.die(listened.failure.cause)
+    }
+    console.log(`Port ${actualPort} is in use, trying ${actualPort + 1}...`)
+    actualPort++
   }
 
   yield* analytics.trackLaunch({
@@ -871,7 +899,7 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
       try: () => runtime.dispose(),
       catch: (cause) => new ServerShutdownError({ operation: "dispose runtime", cause }),
     })
-    yield* Effect.sync(() => server.stop(true))
+    yield* server.stop(true)
   })
 
   return {
@@ -886,7 +914,3 @@ const startKannaServerEffect = Effect.fn("Server.start")(function* (options: Sta
     state: () => ({ runningChats: agent.activeTurns.size, cloud: Boolean(options.cloud ?? selfPairedCloud) }),
   }
 })
-
-export function startKannaServer(options: StartKannaServerOptions = {}) {
-  return runKanna(startKannaServerEffect(options))
-}

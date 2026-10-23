@@ -4,6 +4,7 @@ import { Effect, FileSystem, Schema } from "effect"
 import { fileTypeFromBuffer } from "file-type"
 import type { ChatAttachment } from "../shared/types"
 import { getProjectUploadDir } from "./paths"
+import { Machine } from "./platform/machine"
 
 const DEFAULT_BINARY_MIME_TYPE = "application/octet-stream"
 const IMAGE_MIME_PREFIX = "image/"
@@ -73,7 +74,7 @@ export interface PersistProjectUploadArgs {
 export const persistProjectUpload = Effect.fn("Uploads.persist")(function* (args: PersistProjectUploadArgs) {
   yield* Effect.annotateCurrentSpan("projectId", args.projectId)
   const fs = yield* FileSystem.FileSystem
-  const uploadDir = getProjectUploadDir(args.localPath)
+  const uploadDir = getProjectUploadDir(args.localPath, (yield* Machine).homeDirectory)
   const writeError = (filePath: string) => (cause: unknown) =>
     Effect.fail(new UploadError({ operation: "write", projectId: args.projectId, filePath, cause }))
   yield* fs.makeDirectory(uploadDir, { recursive: true }).pipe(Effect.catchTag("PlatformError", writeError(uploadDir)))
@@ -137,7 +138,7 @@ export const deleteProjectUpload = Effect.fn("Uploads.delete")(function* (args: 
   }
 
   const fs = yield* FileSystem.FileSystem
-  const absolutePath = path.join(getProjectUploadDir(args.localPath), storedName)
+  const absolutePath = path.join(getProjectUploadDir(args.localPath, (yield* Machine).homeDirectory), storedName)
   return yield* fs.remove(absolutePath, { force: true }).pipe(
     Effect.as(true),
     Effect.catchTag("PlatformError", () => Effect.succeed(false)),

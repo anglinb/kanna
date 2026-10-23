@@ -9,6 +9,7 @@ import type {
   UsageLimitWindow,
   UsageLimitsSnapshot,
 } from "../shared/types"
+import { Machine } from "./platform/machine"
 import { grokProductUsageWindows, moneyVal, type GrokBillingRaw, type GrokUsageError, type GrokUserRaw } from "./grok-cli"
 
 // ---------------------------------------------------------------------------
@@ -601,7 +602,7 @@ export interface UsageLimitsDeps {
   /** Fetch a fresh Codex rate-limit read, or null when unavailable. */
   fetchCodexRateLimits?: () => Promise<CodexRateLimitsRaw | null>
   /** Fetch Grok Build billing + subscription from cli-chat-proxy (`fetchGrokAccountUsage`). */
-  fetchGrokUsage?: () => Effect.Effect<GrokUsageRaw | null, GrokUsageError, FileSystem.FileSystem>
+  fetchGrokUsage?: () => Effect.Effect<GrokUsageRaw | null, GrokUsageError, FileSystem.FileSystem | Machine>
   now?: () => Date
 }
 
@@ -680,6 +681,7 @@ type RefreshAction =
 
 const makeUsageLimits = Effect.fn("UsageLimits.make")(function* (filePath: string, deps: UsageLimitsDeps) {
   const fs = yield* FileSystem.FileSystem
+  const grokContext = Context.pick(FileSystem.FileSystem, Machine)(yield* Effect.context<FileSystem.FileSystem | Machine>())
   const scope = yield* Effect.scope
   yield* Effect.annotateCurrentSpan("filePath", filePath)
   const now = () => deps.now?.() ?? new Date()
@@ -747,7 +749,7 @@ const makeUsageLimits = Effect.fn("UsageLimits.make")(function* (filePath: strin
     const fetchGrokUsage = deps.fetchGrokUsage
     if (!fetchGrokUsage) return
     const fresh = yield* fetchGrokUsage().pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provide(grokContext),
       Effect.map((raw) => normalizeGrokAccountUsage(raw, nowIso())),
       Effect.catchTag("@kanna/server/grok-cli/GrokUsageError", (error) => {
         const message = error.message

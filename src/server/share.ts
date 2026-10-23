@@ -1,7 +1,6 @@
-import { existsSync } from "node:fs"
 import { renderANSI } from "uqr"
 import { ConfigHandler, Tunnel, bin as cloudflaredBin, install as installCloudflared } from "cloudflared"
-import { Deferred, Effect, Exit, Schema } from "effect"
+import { Deferred, Effect, Exit, FileSystem, Schema } from "effect"
 import type { ShareMode } from "../shared/share"
 import { isTokenShareMode } from "../shared/share"
 
@@ -88,10 +87,12 @@ export const ensureCloudflaredInstalled = Effect.fn("Share.ensureCloudflaredInst
   deps: ShareTunnelDeps = {},
 ) {
   const resolvedBin = deps.cloudflaredBin ?? cloudflaredBin
-  const fileExists = deps.existsSync ?? existsSync
+  const exists = deps.existsSync
+    ? Effect.sync(() => deps.existsSync!(resolvedBin))
+    : (yield* FileSystem.FileSystem).exists(resolvedBin).pipe(Effect.orElseSucceed(() => false))
   const installBinary = deps.installCloudflared ?? installCloudflared
 
-  if (fileExists(resolvedBin)) {
+  if (yield* exists) {
     return resolvedBin
   }
 

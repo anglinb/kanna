@@ -201,13 +201,12 @@ describeIfSupported("Terminals", () => {
     await runTest(writeToSession({
       status: "running",
       focusReportingEnabled: true,
-      terminal: {
-        write(data: string) {
+      pty: {
+        write: (data: string) => Effect.sync(() => {
           writes.push(data)
-          return data.length
-        },
+        }),
+        signalGroup: () => Effect.succeed(false),
       },
-      process: null,
     }, FOCUS_IN_SEQUENCE))
 
     expect(writes).toEqual([FOCUS_IN_SEQUENCE])
@@ -215,17 +214,7 @@ describeIfSupported("Terminals", () => {
 
   test("resize signals the shell process group with SIGWINCH", async () => {
     const resizeCalls: Array<{ cols: number; rows: number }> = []
-    const killCalls: Array<{ pid: number; signal: NodeJS.Signals }> = []
-    const originalKill = process.kill
-
-    ;(process as typeof process & {
-      kill: (pid: number, signal?: NodeJS.Signals | number) => boolean
-    }).kill = ((pid: number, signal?: NodeJS.Signals | number) => {
-      if (typeof signal === "string") {
-        killCalls.push({ pid, signal })
-      }
-      return true
-    }) as typeof process.kill
+    const groupSignals: NodeJS.Signals[] = []
 
     const session = {
       cols: 80,
@@ -235,25 +224,24 @@ describeIfSupported("Terminals", () => {
           resizeCalls.push({ cols, rows })
         },
       },
-      terminal: {
-        resize(cols: number, rows: number) {
+      pty: {
+        resize: (cols: number, rows: number) => Effect.sync(() => {
           resizeCalls.push({ cols, rows })
-        },
+        }),
+        signalGroup: (signal: NodeJS.Signals) => Effect.sync(() => {
+          groupSignals.push(signal)
+          return true
+        }),
       },
-      process: { pid: 4321, kill: () => {} },
     }
 
-    try {
-      await runTest(resizeSession(session, 120, 40))
-    } finally {
-      process.kill = originalKill
-    }
+    await runTest(resizeSession(session, 120, 40))
 
     expect(resizeCalls).toEqual([
       { cols: 120, rows: 40 },
       { cols: 120, rows: 40 },
     ])
-    expect(killCalls).toContainEqual({ pid: -4321, signal: "SIGWINCH" })
+    expect(groupSignals).toEqual(["SIGWINCH"])
   })
 
   test("new sessions reset focus mode back to filtered", async () => {
@@ -410,12 +398,12 @@ describeIfSupported("Terminals", () => {
 
 describe("applyUtf8Locale", () => {
   test("sets a UTF-8 LANG when the environment specifies none", () => {
-    const env = applyUtf8Locale({ PATH: "/usr/bin" })
+    const env = applyUtf8Locale({ PATH: "/usr/bin" }, "linux")
     expect(env.LANG).toMatch(/\.UTF-8$/i)
   })
 
   test("leaves an existing UTF-8 locale untouched", () => {
-    const env = applyUtf8Locale({ LANG: "en_GB.UTF-8" })
+    const env = applyUtf8Locale({ LANG: "en_GB.UTF-8" }, "linux")
     expect(env.LANG).toBe("en_GB.UTF-8")
     expect(env.LC_ALL).toBeUndefined()
   })
@@ -423,20 +411,20 @@ describe("applyUtf8Locale", () => {
   test("overrides LC_ALL and LC_CTYPE when they force ASCII", () => {
     // Both outrank LANG in POSIX precedence, so setting LANG alone would not
     // actually give the shell a UTF-8 locale.
-    const env = applyUtf8Locale({ LC_ALL: "C", LC_CTYPE: "POSIX", LANG: "en_US.UTF-8" })
+    const env = applyUtf8Locale({ LC_ALL: "C", LC_CTYPE: "POSIX", LANG: "en_US.UTF-8" }, "linux")
     expect(env.LC_ALL).toMatch(/\.UTF-8$/i)
     expect(env.LC_CTYPE).toMatch(/\.UTF-8$/i)
   })
 
   test("treats a non-UTF-8 LC_CTYPE as authoritative over a UTF-8 LANG", () => {
-    const env = applyUtf8Locale({ LC_CTYPE: "POSIX", LANG: "en_US.UTF-8" })
+    const env = applyUtf8Locale({ LC_CTYPE: "POSIX", LANG: "en_US.UTF-8" }, "linux")
     expect(env.LC_CTYPE).toMatch(/\.UTF-8$/i)
     // The already-valid LANG is a deliberate regional choice — keep it.
     expect(env.LANG).toBe("en_US.UTF-8")
   })
 
   test("keeps a deliberate UTF-8 LC_ALL", () => {
-    const env = applyUtf8Locale({ LC_ALL: "ja_JP.UTF-8", LANG: "C" })
+    const env = applyUtf8Locale({ LC_ALL: "ja_JP.UTF-8", LANG: "C" }, "linux")
     expect(env.LC_ALL).toBe("ja_JP.UTF-8")
     expect(env.LANG).toBe("C")
   })

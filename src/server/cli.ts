@@ -13,7 +13,7 @@ import {
 } from "./cli-runtime"
 import { CLI_STARTUP_UPDATE_RESTART_EXIT_CODE, CLI_UI_UPDATE_RESTART_EXIT_CODE } from "./restart"
 import { installNightlyBuild } from "./nightly"
-import { startKannaServer } from "./server"
+import { startKannaServer } from "./server-bun"
 import { awaitParentExit, openInMacApp } from "./mac-app"
 import { runKannaMain } from "./effect/main"
 
@@ -88,8 +88,8 @@ const program = Effect.gen(function* () {
     fetchLatestVersion: fetchLatestPackageVersion,
     installVersion: (packageName, version) => installPackageVersion(packageName, version).pipe(Effect.provideContext(platform)),
     installNightly: installNightlyBuild().pipe(Effect.provideContext(platform)),
-    openUrl,
-    openInMacApp: (localUrl) => openInMacApp(localUrl),
+    openUrl: (url) => openUrl(url).pipe(Effect.provideContext(platform)),
+    openInMacApp: (localUrl) => openInMacApp(localUrl).pipe(Effect.provideContext(platform)),
     // The CLI's terminal output, written as it is: not logging.
     log: console.log,
     warn: console.warn,

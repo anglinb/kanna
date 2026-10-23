@@ -4,6 +4,8 @@ import type { ChatAttachment } from "../shared/types"
 import { APP_NAME } from "../shared/branding"
 import type { EventStore } from "./event-store"
 import { getProjectUploadDir } from "./paths"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
 import { PROJECT_ICON_URL_PREFIX, resolveProjectIconPath } from "./project-icons"
 import {
   deleteProjectUpload,
@@ -166,10 +168,12 @@ export const handleAttachmentContent = Effect.fn("HttpFileRoutes.handleAttachmen
   if (!project) return Response.json({ error: "Project not found" }, { status: 404 })
   const storedName = decodeURIComponent(match[2])
   if (invalidStoredName(storedName)) return Response.json({ error: "Invalid attachment path" }, { status: 400 })
-  const filePath = path.join(getProjectUploadDir(project.localPath), storedName)
+  const filePath = path.join(getProjectUploadDir(project.localPath, (yield* Machine).homeDirectory), storedName)
   if (!(yield* isRegularFile(filePath))) return Response.json({ error: "Attachment not found" }, { status: 404 })
-  const file = Bun.file(filePath)
-  return new Response(file, { headers: { "Content-Type": inferAttachmentContentType(storedName, file.type) } })
+  const files = yield* FileSystemExtras
+  return new Response(yield* files.fileBody(filePath), {
+    headers: { "Content-Type": inferAttachmentContentType(storedName, files.contentType(filePath)) },
+  })
 })
 
 export const handleTranscriptMediaContent = Effect.fn("HttpFileRoutes.handleTranscriptMediaContent")(function* (
@@ -179,11 +183,12 @@ export const handleTranscriptMediaContent = Effect.fn("HttpFileRoutes.handleTran
   if (req.method !== "GET") return methodNotAllowed()
   const filePath = store.resolveTranscriptMediaPath(url.pathname)
   if (!filePath || !(yield* isRegularFile(filePath))) return Response.json({ error: "Media not found" }, { status: 404 })
-  const file = Bun.file(filePath)
-  return new Response(file, { headers: {
-    "Content-Type": file.type || "application/octet-stream",
+  const files = yield* FileSystemExtras
+  const type = files.contentType(filePath)
+  return new Response(yield* files.fileBody(filePath), { headers: {
+    "Content-Type": type || "application/octet-stream",
     "X-Content-Type-Options": "nosniff",
-    ...(!/^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm|quicktime|ogg))$/.test(file.type)
+    ...(!/^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm|quicktime|ogg))$/.test(type)
       ? { "Content-Disposition": "attachment", "Content-Security-Policy": "sandbox; default-src 'none'" } : {}),
     "Cache-Control": "private, max-age=31536000, immutable",
   } })
@@ -195,9 +200,9 @@ export const handleProjectIcon = Effect.fn("HttpFileRoutes.handleProjectIcon")(f
   const filePath = resolveProjectIconPath(dataDir, url.pathname)
   if (!filePath) return Response.json({ error: "Icon not found" }, { status: 404 })
   if (!(yield* isRegularFile(filePath))) return Response.json({ error: "Icon not found" }, { status: 404 })
-  const file = Bun.file(filePath)
-  return new Response(file, { headers: {
-    "Content-Type": file.type || "application/octet-stream",
+  const files = yield* FileSystemExtras
+  return new Response(yield* files.fileBody(filePath), { headers: {
+    "Content-Type": files.contentType(filePath) || "application/octet-stream",
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
     "Cache-Control": "private, max-age=31536000, immutable",
@@ -222,8 +227,10 @@ export const handleProjectFileContent = Effect.fn("HttpFileRoutes.handleProjectF
     return Response.json({ error: "Invalid project file path" }, { status: 400 })
   }
   if (!(yield* isRegularFile(filePath))) return Response.json({ error: "File not found" }, { status: 404 })
-  const file = Bun.file(filePath)
-  return new Response(file, { headers: { "Content-Type": inferProjectFileContentType(relativePath, file.type) } })
+  const files = yield* FileSystemExtras
+  return new Response(yield* files.fileBody(filePath), {
+    headers: { "Content-Type": inferProjectFileContentType(relativePath, files.contentType(filePath)) },
+  })
 })
 
 export const handleProjectUploadDelete = Effect.fn("HttpFileRoutes.handleProjectUploadDelete")(function* (
@@ -250,10 +257,12 @@ export const serveStatic = Effect.fn("HttpFileRoutes.serveStatic")(function* (di
   const requestedPath = pathname === "/" ? "/index.html" : pathname
   const filePath = path.join(distDir, requestedPath)
   const indexPath = path.join(distDir, "index.html")
+  const files = yield* FileSystemExtras
   // A directory (`/assets`) is not a file to serve: it falls through to the
-  // app shell, as `Bun.file(...).exists()` did.
-  if (yield* isRegularFile(filePath)) return new Response(Bun.file(filePath), { headers: getStaticHeaders(requestedPath) })
-  if (yield* isRegularFile(indexPath)) return new Response(Bun.file(indexPath), { headers: {
+  // app shell, as `Bun.file(...).exists()` did. The body carries the file's
+  // own content type where no header sets one.
+  if (yield* isRegularFile(filePath)) return new Response(yield* files.fileBody(filePath), { headers: getStaticHeaders(requestedPath) })
+  if (yield* isRegularFile(indexPath)) return new Response(yield* files.fileBody(indexPath), { headers: {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
   } })

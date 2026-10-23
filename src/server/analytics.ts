@@ -4,6 +4,7 @@ import { PROD_SERVER_PORT } from "../shared/ports"
 import type { ShareMode } from "../shared/share"
 import { isTokenShareMode } from "../shared/share"
 import { AppSettings } from "./app-settings"
+import { Machine } from "./platform/machine"
 
 interface AnalyticsRequestBody {
   userId: string
@@ -34,9 +35,6 @@ export interface AnalyticsOptions {
   fetchImpl?: FetchLike
 }
 
-function isAnalyticsLoggingEnabled() {
-  return process.env.KANNA_LOG_ANALYTICS === "1"
-}
 
 /** An analytics event did not reach the endpoint. */
 export class AnalyticsRequestError extends Schema.TaggedError<AnalyticsRequestError>()(
@@ -66,6 +64,8 @@ export class Analytics extends Context.Service<Analytics, {
 
 const makeAnalytics = Effect.fn("Analytics.make")(function* (options: AnalyticsOptions) {
   const settings = yield* AppSettings
+  const machine = yield* Machine
+  const isAnalyticsLoggingEnabled = () => machine.env.get("KANNA_LOG_ANALYTICS") === "1"
   const scope = yield* Effect.scope
   const endpoint = options.endpoint ?? ANALYTICS_ENDPOINT
   const fetchImpl = options.fetchImpl ?? fetch
@@ -169,7 +169,7 @@ export const NoopAnalytics: Analytics["Service"] = {
  * set CI. KANNA_DISABLE_ANALYTICS=1 or DO_NOT_TRACK=1 covers anything else
  * that boots Kanna unattended.
  */
-export function isAnalyticsDisabledByEnv(env: Record<string, string | undefined> = process.env) {
+export function isAnalyticsDisabledByEnv(env: Record<string, string | undefined>) {
   const isSet = (value: string | undefined) => Boolean(value) && value !== "0" && value !== "false"
   return env.NODE_ENV === "test"
     || isSet(env.CI)

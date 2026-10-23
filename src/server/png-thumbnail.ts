@@ -1,8 +1,7 @@
-import { createReadStream } from "node:fs"
-import { Transform, Writable } from "node:stream"
+import { Readable, Transform, Writable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { crc32, createInflate, deflateSync } from "node:zlib"
-import { Effect, FileSystem, Option, Schema } from "effect"
+import { Effect, FileSystem, Option, Schema, Stream } from "effect"
 
 /**
  * Shrinks a PNG without ever holding it decoded.
@@ -493,10 +492,15 @@ export const writePngThumbnail = Effect.fn("PngThumbnail.writePngThumbnail")(fun
   const parts: PngParts = { header: null, palette: null, paletteAlpha: null }
   const averager = new RowAverager(parts, maxSize, background ?? null)
   yield* Effect.tryPromise({
-    // Node's file stream feeds zlib with bounded chunks; the Effect signal
-    // closes the whole pipeline on interruption.
+    // The file system's stream feeds zlib with bounded chunks; the Effect
+    // signal closes the whole pipeline (and with it the file) on interruption.
     try: (signal) => pipeline(
-      createReadStream(sourcePath, { highWaterMark: READ_CHUNK_BYTES }),
+      Readable.from(
+        Stream.toAsyncIterable(fs.stream(sourcePath, { chunkSize: READ_CHUNK_BYTES }).pipe(
+          Stream.map((chunk) => Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)),
+        )),
+        { objectMode: false },
+      ),
       new ImageDataReader(parts),
       createInflate(),
       averager,

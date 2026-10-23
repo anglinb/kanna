@@ -1,7 +1,9 @@
-import process from "node:process"
 import { Context, Effect, Layer } from "effect"
+import { Machine } from "./platform/machine"
+import type { ProcessSpawner } from "./platform/process-spawner"
 import { TERMINAL_PRESETS, TERMINAL_SPECS, type TerminalPreset } from "../shared/terminal-presets"
 import { commandExists, macAppExists } from "./process-utils"
+import { capturePlatform } from "./platform"
 
 /** Same reasoning as the editor probe in editor-detection.ts. */
 const DETECTION_TTL_MS = 60_000
@@ -14,11 +16,13 @@ export class TerminalDetection extends Context.Service<TerminalDetection, {
   readonly refresh: (target: { setInstalledTerminals: (terminals: TerminalPreset[]) => void }) => Effect.Effect<void>
 }>()("@kanna/server/TerminalDetection") {
   static readonly layer = (options: { readonly platform?: NodeJS.Platform } = {}) =>
-    Layer.effect(this, makeTerminalDetection(options.platform ?? process.platform))
+    Layer.effect(this, makeTerminalDetection(options.platform))
 }
 
-const makeTerminalDetection = Effect.fn("TerminalDetection.make")(function* (platform: NodeJS.Platform) {
-  const [cached, invalidate] = yield* Effect.cachedInvalidateWithTTL(probe(platform), DETECTION_TTL_MS)
+const makeTerminalDetection = Effect.fn("TerminalDetection.make")(function* (platformOverride?: NodeJS.Platform) {
+  const platform = platformOverride ?? (yield* Machine).platform
+  const processes = yield* capturePlatform<Machine | ProcessSpawner>()
+  const [cached, invalidate] = yield* Effect.cachedInvalidateWithTTL(probe(platform).pipe(Effect.provide(processes)), DETECTION_TTL_MS)
 
   const detect = Effect.fn("TerminalDetection.detect")(function* (options: { readonly force?: boolean } = {}) {
     if (options.force) yield* invalidate

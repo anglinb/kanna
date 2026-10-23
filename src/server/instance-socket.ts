@@ -191,7 +191,7 @@ export class InstanceLock {
   private server: AttachedServer | null = null
   private link: net.Socket | null = null
   private readonly startedAt = Date.now()
-  private readonly instance = instanceFingerprint()
+  private readonly instance = instanceFingerprint(getDataDir(os.homedir()))
 
   constructor(
     private readonly listener: net.Server,

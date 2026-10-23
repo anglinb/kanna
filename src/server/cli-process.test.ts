@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Exit, Option, Result, Schema, Scope } from "effect"
-import { collectCliOutput, lenient, pumpCliTurn, spawnCli } from "./cli-process"
+import { type CliSpawnArgs, collectCliOutput, lenient, pumpCliTurn, spawnCli } from "./cli-process"
 import { makeFakeCli } from "./cli-process.fake"
 import { runTest } from "./effect/testing"
 
-const sh = spawnCli("sh")
+const sh = (args: CliSpawnArgs) => spawnCli("sh").pipe(Effect.flatMap((spawn) => spawn(args)))
 
 describe("spawnCli", () => {
   test("collects both pipes and the exit code, with stdin written then closed", () => runTest(Effect.gen(function* () {
@@ -36,7 +36,7 @@ describe("spawnCli", () => {
   })))
 
   test("a missing binary fails with the spawn error's own message", () => runTest(Effect.gen(function* () {
-    const result = yield* Effect.result(spawnCli("kanna-no-such-cli")({ cwd: "/tmp", argv: [] }))
+    const result = yield* Effect.result(spawnCli("kanna-no-such-cli").pipe(Effect.flatMap((spawn) => spawn({ cwd: "/tmp", argv: [] }))))
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("@kanna/server/process-utils/CommandSpawnError")
@@ -49,8 +49,9 @@ describe("pumpCliTurn", () => {
   test("hands over lines as they arrive and exits after the pipes drain", () => runTest(Effect.gen(function* () {
     const seen: string[] = []
     const exited = yield* Deferred.make<{ readonly code: number | null; readonly stderr: string }>()
+    const spawnSh = yield* spawnCli("sh")
     const proc = yield* pumpCliTurn({
-      spawn: sh({ cwd: "/tmp", argv: ["-c", "printf 'a\\nb\\r\\nc'; printf 'warn' >&2; exit 2"] }),
+      spawn: spawnSh({ cwd: "/tmp", argv: ["-c", "printf 'a\\nb\\r\\nc'; printf 'warn' >&2; exit 2"] }),
       onLine: (line) => Effect.sync(() => { seen.push(line) }),
       onExit: (value) => Deferred.succeed(exited, value).pipe(Effect.asVoid),
     })

@@ -1,4 +1,3 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import type { TranscriptEntry } from "../shared/types"
 import { INLINE_TOOL_KINDS, UNBOUNDED_TOOL_INPUT_FIELDS, trimToolCallEntry } from "./events"
@@ -21,14 +20,9 @@ import { INLINE_TOOL_KINDS, UNBOUNDED_TOOL_INPUT_FIELDS, trimToolCallEntry } fro
  * once per chat by scanning the sidecar for newlines, without parsing, and
  * then kept current as lines are appended.
  *
- * Each reader comes twice. The Effect ones (`loadTranscriptPayloadIndex`,
- * `readTranscriptPayloadsById`, `readTranscriptPayloads`) go through
- * `FileSystem` and back the EventStore's Effect reads. The synchronous ones
- * (`new TranscriptPayloadIndex(path)`, `index.read`, `readAllTranscriptPayloads`)
- * stay `node:fs`, because their callers (`EventStore.getEntriesById`,
- * `getMessages`) are still synchronous: the router's snapshots, the agent and
- * the orchestrator read them within one tick, and `FileSystem` only reads
- * asynchronously. The sync readers go when those callers move to Effect.
+ * Every read (`loadTranscriptPayloadIndex`, `readTranscriptPayloadsById`,
+ * `readTranscriptPayloads`) goes through `FileSystem` and backs the
+ * EventStore's Effect reads (`readEntriesById`, `readMessages`).
  */
 
 /** A header's dropped fields, keyed by entry id. */
@@ -122,13 +116,9 @@ export class TranscriptPayloadIndex {
   /** Bytes of the sidecar covered by the index; the next append starts here. */
   private scannedBytes = 0
 
-  /**
-   * Scans `bytes` when given (what `loadTranscriptPayloadIndex` read), and
-   * otherwise reads the sidecar synchronously, for the synchronous readers.
-   */
-  constructor(readonly sidecarPath: string, bytes?: Uint8Array) {
-    if (bytes) this.scan(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength))
-    else if (existsSync(sidecarPath)) this.scan(readFileSync(sidecarPath))
+  /** Scans `bytes`, the sidecar as `loadTranscriptPayloadIndex` read it. */
+  constructor(readonly sidecarPath: string, bytes: Uint8Array) {
+    this.scan(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength))
   }
 
   /** Account for a line this process just appended, without touching disk. */
@@ -144,23 +134,6 @@ export class TranscriptPayloadIndex {
   /** Where a payload's line sits, for `readTranscriptPayloadsById`. */
   span(payloadId: string): PayloadSpan | undefined {
     return this.spans.get(payloadId)
-  }
-
-  /** One positional read; null when the id is not in the sidecar. */
-  read(payloadId: string): TranscriptPayload | null {
-    const span = this.spans.get(payloadId)
-    if (!span) return null
-    const fd = openSync(this.sidecarPath, "r")
-    try {
-      const buffer = Buffer.alloc(span.length)
-      readSync(fd, buffer, 0, span.length, span.offset)
-      return Option.getOrNull(decodePayloadLine(buffer.toString("utf8")))
-    } catch {
-      // A truncated or garbled line loses one payload, not the transcript.
-      return null
-    } finally {
-      closeSync(fd)
-    }
   }
 
   private scan(bytes: Buffer) {
@@ -192,12 +165,6 @@ function readIdPrefix(bytes: Buffer, start: number, end: number): string | null 
 export function serializeTranscriptPayload(payload: TranscriptPayload) {
   const { _id, ...rest } = payload
   return `${JSON.stringify({ _id, ...rest })}\n`
-}
-
-/** Every payload in a sidecar, for the full-fidelity readers. */
-export function readAllTranscriptPayloads(sidecarPath: string): Map<string, TranscriptPayload> {
-  if (!existsSync(sidecarPath)) return new Map()
-  return parsePayloadLines(readFileSync(sidecarPath, "utf8"))
 }
 
 function parsePayloadLines(text: string) {
@@ -235,8 +202,8 @@ export const loadTranscriptPayloadIndex = Effect.fn("TranscriptPayloads.loadInde
 
 /**
  * The payloads of `payloadIds`, one positional read each through one open
- * file. Ids the index does not have are absent. As with `index.read`, a line
- * that cannot be read or decoded loses that payload, not the batch.
+ * file. Ids the index does not have are absent. A line that cannot be read
+ * or decoded loses that payload, not the batch.
  */
 export const readTranscriptPayloadsById = Effect.fn("TranscriptPayloads.readById")(function* (
   index: TranscriptPayloadIndex,
@@ -264,7 +231,7 @@ export const readTranscriptPayloadsById = Effect.fn("TranscriptPayloads.readById
   return payloads
 })
 
-/** Every payload in a sidecar, through `FileSystem`: `readAllTranscriptPayloads` as an Effect. */
+/** Every payload in a sidecar, through `FileSystem`. */
 export const readTranscriptPayloads = Effect.fn("TranscriptPayloads.readAll")(function* (sidecarPath: string) {
   const fs = yield* FileSystem.FileSystem
   const text = yield* fs.readFileString(sidecarPath).pipe(

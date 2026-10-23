@@ -6,7 +6,7 @@ import { Effect, Result } from "effect"
 import { createAuthManager } from "./auth"
 import { runTest } from "./effect/testing"
 import { persistProjectUpload } from "./uploads"
-import { startKannaServer } from "./server"
+import { startKannaServer } from "./server-bun"
 
 describe("createAuthManager.handleLogin", () => {
   const origin = "http://localhost:3210"

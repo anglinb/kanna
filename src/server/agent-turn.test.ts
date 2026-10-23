@@ -14,6 +14,7 @@ import type { Orchestrator } from "./orchestrator"
 import type { PiAgentManager } from "./pi-agent"
 import type { QuickResponse } from "./quick-response"
 import { timestamped } from "./transcript"
+import { testPlatformContext } from "./platform/testing"
 
 class TurnStartError extends Schema.TaggedError<TurnStartError>()(
   "@kanna/server/agent-turn.test/TurnStartError",
@@ -87,6 +88,7 @@ test("AgentCoordinator writes a Claude turn through the native EventStore servic
     const store = await runTest(EventStore.make({ dataDir }))
     const project = await runTest(store.openProject(dataDir))
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store,
       onStateChange: () => {},
       quickResponse: {
@@ -132,7 +134,7 @@ test("AgentCoordinator writes a Claude turn through the native EventStore servic
     expect(store.getChat(chatId)?.lastTurnEndedAt).toBeNumber()
     expect(store.getChat(chatId)?.title).toBe("Native title")
     expect(titleRequestCount).toBe(1)
-    expect(store.getMessages(chatId).map((entry) => entry.kind)).toContain("result")
+    expect((await runTest(store.readMessages(chatId))).map((entry) => entry.kind)).toContain("result")
     expect(noticedChatId).toBe(chatId)
     expect(wirePrompt).toContain("Native orchestration notice")
     expect(agent.getWaitingOn(chatId).chats).toBe(2)
@@ -171,6 +173,7 @@ test("interrupting a stalled Claude resume releases startup and closes a late SD
     await runTest(store.setChatProvider(chat.id, "claude"))
     await runTest(store.setSessionToken(chat.id, "session-before-restart"))
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store,
       onStateChange: () => {},
       checkSessionArtifact: () => "present",
@@ -207,6 +210,7 @@ test("interrupting a resumed provider during scoped acquisition releases its tur
     await runTest(store.setChatProvider(chat.id, "cursor"))
     await runTest(store.setSessionToken(chat.id, "session-before-restart"))
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store,
       onStateChange: () => {},
       checkSessionArtifact: () => "present",
@@ -241,6 +245,7 @@ test("interrupting Codex recovery also closes its warm session", async () => {
     await runTest(store.setChatProvider(chat.id, "codex"))
     await runTest(store.setSessionToken(chat.id, "session-before-restart"))
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store,
       onStateChange: () => {},
       codexManager: {
@@ -277,6 +282,7 @@ test("interrupting a resume stalled while sending its prompt closes the live Cla
     await runTest(store.setChatProvider(chat.id, "claude"))
     await runTest(store.setSessionToken(chat.id, "session-before-restart"))
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store,
       onStateChange: () => {},
       checkSessionArtifact: () => "present",
@@ -315,6 +321,7 @@ test("disposing the coordinator interrupts a blocked account-info task", async (
     const store = await runTest(EventStore.make({ dataDir }))
     const project = await runTest(store.openProject(dataDir))
     const agent = new AgentCoordinator({
+      platform: testPlatformContext,
       store,
       onStateChange: () => {},
       startClaudeSession: async () => ({

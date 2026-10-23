@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 import { Deferred, Effect, Exit, Fiber, Option, Result, Scope, Stream } from "effect"
 import { makeCodexAppServer } from "./codex-app-server"
+import { CommandSpawnError } from "./platform/process-spawner"
 import { runTest } from "./effect/testing"
 import type { HarnessEvent } from "./harness-types"
 
@@ -66,7 +67,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -100,7 +101,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     const started = yield* manager.startSession({
@@ -148,7 +149,7 @@ describe("CodexAppServer", () => {
 
     const processes = [firstProcess]
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => processes.shift() ?? firstProcess,
+      spawnProcess: () => Effect.sync(() => processes.shift() ?? firstProcess),
     })
 
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
@@ -200,7 +201,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     const started = yield* manager.startSession({
@@ -247,7 +248,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -305,7 +306,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -353,7 +354,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const turn = yield* manager.startTurn({
@@ -419,7 +420,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const skills = yield* manager.listSkills({ chatId: "chat-1", cwd: "/tmp/project" })
@@ -443,7 +444,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     expect(yield* manager.listSkills({ chatId: "chat-1", cwd: "/tmp/project" })).toBeNull()
@@ -471,7 +472,7 @@ describe("CodexAppServer", () => {
           : { id: message.id, result: { data: [row("gpt-6-astra"), row("gpt-reserve", { hidden: true })], nextCursor: "page-2" } })
       }
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
 
     const models = yield* manager.listModels("/tmp/home")
     expect(models?.map((model) => model.model)).toEqual(["gpt-6-astra", "gpt-5.6-sol"])
@@ -500,7 +501,7 @@ describe("CodexAppServer", () => {
         child.writeServerMessage({ id: message.id, error: { code: -32601, message: "method not found" } })
       }
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const listed = yield* Effect.result(manager.listModels("/tmp/home"))
@@ -548,7 +549,7 @@ describe("CodexAppServer", () => {
           })
         }
       })
-      const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+      const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
       const chatId = `chat-matrix-${index}`
 
       yield* manager.startSession({
@@ -630,7 +631,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -707,7 +708,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     const result = yield* manager.generateStructured({
@@ -787,7 +788,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -846,7 +847,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -942,7 +943,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1043,7 +1044,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1121,7 +1122,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1198,7 +1199,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1284,7 +1285,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1398,7 +1399,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1458,7 +1459,7 @@ describe("CodexAppServer", () => {
         })
       }
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     let asked = 0
@@ -1527,7 +1528,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1608,7 +1609,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1672,7 +1673,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1753,7 +1754,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1843,7 +1844,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -1931,7 +1932,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -2018,7 +2019,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -2068,7 +2069,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -2153,7 +2154,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -2207,7 +2208,7 @@ describe("CodexAppServer", () => {
     })
 
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => process,
+      spawnProcess: () => Effect.sync(() => process),
     })
 
     yield* manager.startSession({
@@ -2269,7 +2270,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const turn = yield* manager.startTurn({
@@ -2319,7 +2320,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const turn = yield* manager.startTurn({
@@ -2370,7 +2371,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const turn = yield* manager.startTurn({
@@ -2430,7 +2431,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const turn = yield* manager.startTurn({
@@ -2485,7 +2486,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const turn = yield* manager.startTurn({
@@ -2529,7 +2530,7 @@ describe("CodexAppServer", () => {
       }
     })
 
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
 
     const turn = yield* manager.startTurn({
@@ -2582,7 +2583,7 @@ describe("CodexAppServer service", () => {
       })
       child.writeServerMessage({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, startedAt: 1 } } })
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession(startChat)
     const turn = yield* manager.startTurn(turnArgs)
     const entries = (yield* collectStream(turn.events)).flatMap((event) => event.type === "transcript" ? [event.entry] : [])
@@ -2601,7 +2602,7 @@ describe("CodexAppServer service", () => {
       child.writeServerMessage({ method: "turn/plan/updated", params: { threadId: "thread-1", turnId: "turn-1", plan: "not a list" } })
       child.writeServerMessage({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } })
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     yield* manager.startSession(startChat)
     const turn = yield* manager.startTurn(turnArgs)
     const entries = (yield* collectStream(turn.events)).flatMap((event) => event.type === "transcript" ? [event.entry] : [])
@@ -2609,7 +2610,7 @@ describe("CodexAppServer service", () => {
   })))
 
   test("fails a turn on a chat with no session, and a second turn while one runs", () => runTest(Effect.gen(function* () {
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => threadProcess() })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => threadProcess()) })
     const noSession = yield* Effect.result(manager.startTurn(turnArgs))
     if (!Result.isFailure(noSession)) throw new Error("expected no session")
     expect(noSession.failure._tag).toBe("@kanna/server/codex-app-server/CodexSessionNotStartedError")
@@ -2628,7 +2629,7 @@ describe("CodexAppServer service", () => {
       if (message.method === "initialize") child.writeServerMessage({ id: message.id, result: {} })
       if (message.method === "thread/resume") child.writeServerMessage({ id: message.id, error: { message: "permission denied" } })
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     const started = yield* Effect.result(manager.startSession({ ...startChat, sessionToken: "thread-old" }))
     if (!Result.isFailure(started)) throw new Error("expected the resume to fail")
     expect(started.failure.message).toBe("thread/resume failed: permission denied")
@@ -2639,9 +2640,7 @@ describe("CodexAppServer service", () => {
 
   test("a codex that cannot be spawned fails the session, and makes account reads null", () => runTest(Effect.gen(function* () {
     const manager = yield* makeCodexAppServer({
-      spawnProcess: () => {
-        throw new Error("spawn codex ENOENT")
-      },
+      spawnProcess: () => Effect.fail(new CommandSpawnError({ command: "codex", message: "spawn codex ENOENT", cause: null })),
     })
     const started = yield* Effect.result(manager.startSession(startChat))
     if (!Result.isFailure(started)) throw new Error("expected the spawn to fail")
@@ -2656,7 +2655,7 @@ describe("CodexAppServer service", () => {
     Object.defineProperty(process.stdout, Symbol.asyncIterator, {
       value: () => { throw new Error("stdout cannot be read") },
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     const started = yield* Effect.exit(manager.startSession(startChat))
     expect(Exit.isFailure(started)).toBe(true)
     expect(process.killed).toBe(true)
@@ -2666,7 +2665,7 @@ describe("CodexAppServer service", () => {
   test("closing the layer kills every session and ends its turn", () => runTest(Effect.gen(function* () {
     const process = threadProcess()
     const scope = yield* Scope.make()
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process }).pipe(Scope.provide(scope))
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) }).pipe(Scope.provide(scope))
     yield* manager.startSession(startChat)
     const turn = yield* manager.startTurn(turnArgs)
     const events = yield* collectStream(turn.events).pipe(Effect.forkChild({ startImmediately: true }))
@@ -2677,7 +2676,7 @@ describe("CodexAppServer service", () => {
 
   test("streams pushed rate limits to subscribers", () => runTest(Effect.gen(function* () {
     const process = threadProcess()
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     const pushed = yield* Stream.runHead(manager.rateLimitPushes).pipe(Effect.forkChild({ startImmediately: true }))
     yield* manager.startSession(startChat)
     process.writeServerMessage({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 42 } } } })
@@ -2696,7 +2695,7 @@ describe("Codex shared tools", () => {
           child.writeServerMessage({ id: message.id, result: { thread: { id: "thread-tools" } } })
         }
       })
-      const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+      const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
       yield* manager.startSession({
         chatId: "tools", cwd: "/repo", model: "gpt-5.4",
         sessionToken: method === "thread/resume" ? "existing" : null,
@@ -2736,7 +2735,7 @@ describe("Codex spawned agents", () => {
         child.writeServerMessage({ id: message.id, result: {} })
       }
     })
-    const manager = yield* makeCodexAppServer({ spawnProcess: () => process })
+    const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
     const updates: any[] = []
     manager.setTaskActivityListener((chatId, update) => updates.push({ chatId, ...update }))
     yield* manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })

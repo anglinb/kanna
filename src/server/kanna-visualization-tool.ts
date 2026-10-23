@@ -1,9 +1,8 @@
-import { constants } from "node:fs"
-import { open } from "node:fs/promises"
 import path from "node:path"
 import { Effect, FileSystem, type PlatformError, Schema } from "effect"
 import { VISUALIZATION_MAX_BYTES, VISUALIZATION_MAX_HEIGHT, VISUALIZATION_TOOL_NAME, type VisualizationArtifact } from "../shared/visualization"
 import { buildTranscriptMediaUrl, getTranscriptMediaDir } from "./transcript-media"
+import { FileSystemExtras } from "./platform/file-system-extras"
 import { buildVisualizationDocument } from "./visualization-document"
 import { SHOW_VISUALIZATION_DESCRIPTION } from "./visualization-instructions"
 import { defineKannaTool, failureText, KannaToolCallError, KannaToolRefusal, platformFailureText } from "./kanna-tool-definition"
@@ -37,21 +36,20 @@ const platformError = (operation: string) => (cause: PlatformError.PlatformError
   Effect.fail(new KannaToolCallError({ tool: VISUALIZATION_TOOL_NAME, operation, message: platformFailureText(cause), cause }))
 
 /**
- * The HTML in a file the agent named. Node's `open` with `O_NONBLOCK`, as
- * `storeLocalAttachment` does: a FIFO is refused instead of blocking the
- * call, and the size checked is the opened file's.
+ * The HTML in a file the agent named, opened `O_NONBLOCK` (`readFileHead`),
+ * as `storeLocalAttachment` does: a FIFO is refused instead of blocking the
+ * call, and the size checked is the opened file's. At most the size limit is
+ * read, so an oversized file is refused without reading it whole.
  */
 const readHtmlFile = Effect.fn("KannaVisualizationTool.readHtmlFile")(function* (filePath: string) {
-  return yield* Effect.acquireUseRelease(
-    Effect.tryPromise({ try: () => open(filePath, constants.O_RDONLY | constants.O_NONBLOCK), catch: callError("open") }),
-    (file) => Effect.gen(function* () {
-      const info = yield* Effect.tryPromise({ try: () => file.stat(), catch: callError("stat") })
-      if (!info.isFile()) return yield* refuse("The visualization path must be a file.")
-      if (info.size > VISUALIZATION_MAX_BYTES) return yield* refuse("Visualizations must be 2 MB or smaller.")
-      return yield* Effect.tryPromise({ try: () => file.readFile("utf8"), catch: callError("read") })
-    }),
-    (file) => Effect.tryPromise(() => file.close()).pipe(Effect.ignore),
+  const files = yield* FileSystemExtras
+  const { info, head } = yield* files.readFileHead(filePath, VISUALIZATION_MAX_BYTES).pipe(
+    // The operation that failed (open, stat or read) and node's own error, as before.
+    Effect.catchTag("PlatformError", (error) => Effect.fail(callError(error.reason.method)(error.reason.cause ?? error))),
   )
+  if (info.kind !== "File") return yield* refuse("The visualization path must be a file.")
+  if (info.size > VISUALIZATION_MAX_BYTES) return yield* refuse("Visualizations must be 2 MB or smaller.")
+  return Buffer.from(head.buffer, head.byteOffset, head.byteLength).toString("utf8")
 })
 
 export const SHOW_VISUALIZATION_TOOL = defineKannaTool({

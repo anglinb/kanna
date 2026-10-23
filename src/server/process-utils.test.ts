@@ -22,7 +22,7 @@ afterEach(() => {
 })
 
 describe("resolveCommandPath", () => {
-  test("finds binaries the login-shell PATH misses in well-known user bin dirs", () => {
+  test("finds binaries the login-shell PATH misses in well-known user bin dirs", async () => {
     // e.g. the native Claude Code installer's ~/.local/bin, whose PATH line
     // goes to the interactive shell rc that `sh -lc` never reads on macOS.
     fakeHome = mkdtempSync(path.join(tmpdir(), "kanna-home-"))
@@ -32,13 +32,13 @@ describe("resolveCommandPath", () => {
     writeFileSync(binary, "#!/bin/sh\nexit 0\n")
     chmodSync(binary, 0o755)
 
-    expect(resolveCommandPath("kanna-fake-cli", fakeHome)).toBe(binary)
-    expect(resolveCommandPath("kanna-missing-cli", fakeHome)).toBeNull()
+    expect(await runTest(resolveCommandPath("kanna-fake-cli", fakeHome))).toBe(binary)
+    expect(await runTest(resolveCommandPath("kanna-missing-cli", fakeHome))).toBeNull()
   })
 
-  test("login-shell resolution still wins when it succeeds", () => {
+  test("login-shell resolution still wins when it succeeds", async () => {
     fakeHome = mkdtempSync(path.join(tmpdir(), "kanna-home-"))
-    expect(resolveCommandPath("sh", fakeHome)).toMatch(/\/sh$/)
+    expect(await runTest(resolveCommandPath("sh", fakeHome))).toMatch(/\/sh$/)
   })
 })
 

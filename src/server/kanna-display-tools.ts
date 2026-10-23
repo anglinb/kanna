@@ -1,12 +1,11 @@
 import { z } from "zod"
-import { open } from "node:fs/promises"
-import { constants } from "node:fs"
 import path from "node:path"
 import { Effect, FileSystem, type PlatformError, Schema } from "effect"
 import { fileTypeFromBuffer } from "file-type"
 import { type DisplayAttachment } from "../shared/display-tools"
 import { SHOW_VISUALIZATION_TOOL } from "./kanna-visualization-tool"
 import { buildTranscriptMediaUrl, getTranscriptMediaDir } from "./transcript-media"
+import { FileSystemExtras } from "./platform/file-system-extras"
 import { UrlString } from "./kanna-tool-arguments"
 import {
   defineKannaTool,
@@ -78,25 +77,21 @@ export const sniffMimeType = (bytes: Uint8Array) =>
 /**
  * Size and type of a local file, checked on one open handle.
  *
- * Node's `open` stays here rather than `FileSystem.open`: the file is opened
+ * `readFileHead` rather than `FileSystem.open`: the file is opened
  * `O_NONBLOCK`, so a FIFO or device path is refused at the `isFile` check
  * instead of blocking the open forever, and the stat is of the file that was
  * opened, not of whatever the path names a moment later.
  */
 const inspectLocalFile = Effect.fn("KannaDisplayTools.inspectLocalFile")(function* (source: string) {
-  return yield* Effect.acquireUseRelease(
-    Effect.tryPromise({ try: () => open(source, constants.O_RDONLY | constants.O_NONBLOCK), catch: fileError("open", source) }),
-    (handle) => Effect.gen(function* () {
-      const info = yield* Effect.tryPromise({ try: () => handle.stat(), catch: fileError("stat", source) })
-      if (!info.isFile()) return yield* new AttachmentRefusal({ message: "Attachments must be files." })
-      if (info.size > MAX_ATTACHMENT_BYTES) return yield* new AttachmentRefusal({ message: "Attachments must be 100 MB or smaller." })
-      const header = Buffer.alloc(Math.min(info.size, 8192))
-      yield* Effect.tryPromise({ try: () => handle.read(header, 0, header.length, 0), catch: fileError("read", source) })
-      const detected = yield* sniffMimeType(header)
-      return { size: info.size, mimeType: detected ?? Bun.file(source).type ?? "application/octet-stream" }
-    }),
-    (handle) => Effect.tryPromise(() => handle.close()).pipe(Effect.ignore),
+  const files = yield* FileSystemExtras
+  const { info, head } = yield* files.readFileHead(source, 8192).pipe(
+    // The operation that failed (open, stat or read) and node's own error, as before.
+    Effect.catchTag("PlatformError", (error) => Effect.fail(fileError(error.reason.method, source)(error.reason.cause ?? error))),
   )
+  if (info.kind !== "File") return yield* new AttachmentRefusal({ message: "Attachments must be files." })
+  if (info.size > MAX_ATTACHMENT_BYTES) return yield* new AttachmentRefusal({ message: "Attachments must be 100 MB or smaller." })
+  const detected = yield* sniffMimeType(head)
+  return { size: info.size, mimeType: detected ?? files.contentType(source) ?? "application/octet-stream" }
 })
 
 /**
@@ -131,14 +126,14 @@ export const removeStoredFiles = Effect.fn("KannaDisplayTools.removeStoredFiles"
   ), { concurrency: "unbounded", discard: true })
 })
 
-const describeUrl = (item: AttachmentItem & { url: string }) => Effect.try({
+const describeUrl = (item: AttachmentItem & { url: string }, files: FileSystemExtras["Service"]) => Effect.try({
   try: (): DisplayAttachment => {
     const url = new URL(item.url)
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) {
       throw new Error("Attachment URLs must use HTTP or HTTPS without embedded credentials.")
     }
     const name = decodeURIComponent(url.pathname.split("/").pop() || "attachment")
-    const mimeType = Bun.file(name).type || "application/octet-stream"
+    const mimeType = files.contentType(name) || "application/octet-stream"
     const kind = mimeType === "image/svg+xml" ? "file" : item.kind ?? attachmentKind(mimeType)
     return { type: "attachment", url: url.href, name, kind, mimeType, size: null }
   },
@@ -161,7 +156,7 @@ export const resolveDisplayAttachments = Effect.fn("KannaDisplayTools.resolveAtt
   const cleanup = removeStoredFiles(copied).pipe(Effect.provideContext(services))
   const attachments = yield* Effect.forEach(items, Effect.fnUntraced(function* (item) {
     if (Boolean(item.path) === Boolean(item.url)) return yield* new AttachmentRefusal({ message: "Each attachment needs exactly one path or url." })
-    if (item.url) return yield* describeUrl({ ...item, url: item.url })
+    if (item.url) return yield* describeUrl({ ...item, url: item.url }, yield* FileSystemExtras)
     const stored = yield* storeLocalAttachment(path.resolve(context.cwd, item.path!), context)
     copied.push(stored.destination)
     return stored.attachment

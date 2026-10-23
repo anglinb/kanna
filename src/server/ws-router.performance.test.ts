@@ -11,6 +11,7 @@ import path from "node:path"
 import { openEventStore } from "./event-store-bridge"
 import { createWsRouter, type ClientState } from "./ws-router"
 import type { ChatSnapshot } from "../shared/types"
+import { testPlatformContext } from "./platform/testing"
 
 
 test("stream updates read only the new tail and release subscription maps", async () => {
@@ -19,6 +20,7 @@ test("stream updates read only the new tail and release subscription maps", asyn
   const project = await store.openProject(directory)
   const chat = await store.createChat(project.id)
   const router = createWsRouter({
+    platform: testPlatformContext,
     store: store.service,
     agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() },
     diffStore: makeFakeDiffStore(), worktreeProbe: makeFakeWorktreeProbe(), terminals: makeFakeTerminals(),

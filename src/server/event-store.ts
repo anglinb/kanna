@@ -1,7 +1,5 @@
-import { existsSync, readFileSync as readFileSyncImmediate } from "node:fs"
-import { homedir } from "node:os"
 import path from "node:path"
-import { Context, Deferred, Effect, FileSystem, Layer, Option, Result, Schema } from "effect"
+import { Context, Deferred, Effect, FileSystem, Layer, Option, Result, Schema, type Scope } from "effect"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
 import { toMessagePreview } from "../shared/message-preview"
 import { buildTranscriptOutline, findTranscriptWindowStart } from "../shared/transcript-window"
@@ -30,10 +28,11 @@ import { resolveLocalPath } from "./paths"
 // cannot drift: if the wire resolution changes, this bump condition follows.
 import { SIDEBAR_ACTIVITY_RESOLUTION_MS } from "./read-models"
 import { slimTranscriptFile } from "./transcript-slim"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
 import {
   loadTranscriptPayloadIndex,
   mergeTranscriptPayload,
-  readAllTranscriptPayloads,
   readTranscriptPayloads,
   readTranscriptPayloadsById,
   serializeTranscriptPayload,
@@ -355,6 +354,20 @@ export class EventStoreNotFoundError extends Schema.TaggedError<EventStoreNotFou
   }
 }
 
+/**
+ * A synchronous transcript read for a chat whose transcript isn't in the
+ * cache. A bug, not an expected failure: the caller should have held
+ * `retainTranscript` around its reads. Thrown, so it surfaces as a defect.
+ */
+export class TranscriptNotLoadedError extends Schema.TaggedError<TranscriptNotLoadedError>()(
+  "@kanna/server/event-store/TranscriptNotLoadedError",
+  { chatId: Schema.String },
+) {
+  override get message() {
+    return `Transcript of chat ${this.chatId} was read before it was loaded (hold retainTranscript around the read)`
+  }
+}
+
 const REJECTED_MESSAGES = {
   invalid_chat_id: "Invalid chat id",
   chat_exists: "Chat already exists",
@@ -455,7 +468,8 @@ export interface EventStoreOptions {
   dataDir?: string
 }
 
-export const defaultEventStoreDataDir = () => getDataDir(homedir())
+/** The runtime profile's data dir under `homeDir` (the machine's home, `Machine.homeDirectory`). */
+export const defaultEventStoreDataDir = (homeDir: string) => getDataDir(homeDir)
 
 type QueuedMessageInput = Omit<QueuedChatMessage, "id" | "createdAt"> & Partial<Pick<QueuedChatMessage, "id" | "createdAt">>
 
@@ -464,11 +478,12 @@ type QueuedMessageInput = Omit<QueuedChatMessage, "id" | "createdAt"> & Partial<
  * JSONL event logs folded into memory, compacted into `snapshot.json`, plus
  * one transcript (and payload sidecar) per chat. See CLAUDE.md.
  *
- * Reads are synchronous and answer from memory: the router builds snapshots
- * from them within one tick, and the agent and orchestrator read them
- * mid-turn. A transcript that is not cached yet is read from disk
- * synchronously on those paths; `prepareTranscript` loads it asynchronously
- * first where the caller can wait.
+ * Reads are synchronous and answer from memory: the router builds a snapshot
+ * from many of them within one tick, so no write can land halfway through
+ * one. A transcript is read only once it is loaded: `retainTranscript` loads
+ * it (asynchronously, on the write chain) and keeps it in the cache until the
+ * caller's scope closes. Reading one that isn't loaded is a bug and throws
+ * `TranscriptNotLoadedError`; nothing reads the disk synchronously.
  *
  * Writes are Effects. Every write (event appends, transcript appends,
  * transcript loads and rewrites) runs on one FIFO chain, in the order the
@@ -500,18 +515,11 @@ export class EventStore extends Context.Service<EventStore, {
   readonly listSchedules: () => ChatSchedule[]
   readonly getQueuedMessages: (chatId: string) => QueuedChatMessage[]
   readonly getQueuedMessage: (chatId: string, queuedMessageId: string) => QueuedChatMessage | null
-  /**
-   * The whole transcript with every tool body merged back in. This reads
-   * the payload sidecar end to end, so it is for export, handoff and fork,
-   * not for anything that runs per push. `readMessages` is the same, read
-   * asynchronously.
+  /*
+   * The transcript reads below answer from the cache and throw
+   * `TranscriptNotLoadedError` for a chat whose transcript isn't loaded:
+   * hold `retainTranscript` around them.
    */
-  readonly getMessages: (chatId: string) => TranscriptEntry[]
-  /**
-   * Entries by id, with their payloads intact. Backs the tool-payload fetch.
-   * `readEntriesById` is the same, read asynchronously.
-   */
-  readonly getEntriesById: (chatId: string, entryIds: string[]) => TranscriptEntry[]
   readonly getEntryDebugRaw: (chatId: string, entryId: string) => string | null
   readonly getClientTranscript: (chatId: string, fromIndex?: number) => ClientTranscript
   readonly getChatReadAnchor: (chatId: string) => ResolvedChatReadAnchor | null
@@ -529,9 +537,20 @@ export class EventStore extends Context.Service<EventStore, {
   readonly resolveTranscriptMediaPath: (url: string) => string | null
   readonly getResourceCounts: () => EventStoreResourceCounts
 
-  /** Loads a transcript into the cache off the event loop's critical path. Shares the write chain. */
-  readonly prepareTranscript: (chatId: string) => Effect.Effect<void, EventStoreFileError>
+  /**
+   * Loads a chat's transcript into the cache (on the write chain, so a partial
+   * append can't enter it) and keeps it there until the scope closes, so the
+   * synchronous reads above can answer. Pinned before the load starts: nothing
+   * can evict it between the load and the read.
+   */
+  readonly retainTranscript: (chatId: string) => Effect.Effect<void, EventStoreFileError, Scope.Scope>
+  /**
+   * The whole transcript with every tool body merged back in. This reads the
+   * payload sidecar end to end, so it is for export, handoff and fork, not for
+   * anything that runs per push.
+   */
   readonly readMessages: (chatId: string) => Effect.Effect<TranscriptEntry[], EventStoreFileError | TranscriptPayloadReadError>
+  /** Entries by id, with their payloads intact. Backs the tool-payload fetch. */
   readonly readEntriesById: (
     chatId: string,
     entryIds: string[],
@@ -698,6 +717,8 @@ class StoreMemory {
   static readonly TRANSCRIPT_CACHE_BYTES = 128 * 1024 * 1024
   readonly transcriptBytes = new Map<string, number>()
   readonly transcriptLoads = new Map<string, Deferred.Deferred<void, EventStoreFileError>>()
+  /** Readers holding each transcript (`retainTranscript`); a pinned one is never evicted. */
+  readonly transcriptPins = new Map<string, number>()
   queuedWrites = 0
   /**
    * Offsets into each chat's payload sidecar (`transcript-payloads.ts`).
@@ -712,7 +733,12 @@ class StoreMemory {
    */
   private readonly outlineCache = new WeakMap<TranscriptEntry[], { length: number; outline: TranscriptOutlineEntry[] }>()
 
-  constructor(readonly dataDir: string, readonly record: (name: string, value?: number) => void) {
+  constructor(
+    readonly dataDir: string,
+    readonly record: (name: string, value?: number) => void,
+    /** Where `~` in a project path points. */
+    readonly machine: Pick<Machine["Service"], "homeDirectory">,
+  ) {
     this.paths = {
       snapshot: path.join(dataDir, "snapshot.json"),
       projectsLog: path.join(dataDir, "projects.jsonl"),
@@ -795,6 +821,21 @@ class StoreMemory {
     this.payloadIndexes.clear()
   }
 
+  pinTranscript(chatId: string) {
+    this.transcriptPins.set(chatId, (this.transcriptPins.get(chatId) ?? 0) + 1)
+  }
+
+  /**
+   * Lets go of a pin. Doesn't trim: eviction happens only on the write chain
+   * (a load or an append), where it can't land between another load and the
+   * read it was for. The next insertion brings the cache back under budget.
+   */
+  unpinTranscript(chatId: string) {
+    const count = (this.transcriptPins.get(chatId) ?? 0) - 1
+    if (count > 0) this.transcriptPins.set(chatId, count)
+    else this.transcriptPins.delete(chatId)
+  }
+
   clearLegacyTranscriptState() {
     this.legacyMessagesByChatId.clear()
     this.snapshotHasLegacyMessages = false
@@ -804,7 +845,7 @@ class StoreMemory {
     this.stateVersion += 1
     switch (event.type) {
       case "project_opened": {
-        const localPath = resolveLocalPath(event.localPath)
+        const localPath = resolveLocalPath(event.localPath, this.machine.homeDirectory)
         const project = {
           id: event.projectId,
           localPath,
@@ -1215,12 +1256,6 @@ class StoreMemory {
     return path.join(this.paths.transcriptsDir, `${chatId}.payloads.jsonl`)
   }
 
-  getPayloadIndex(chatId: string) {
-    const cached = this.payloadIndexes.get(chatId)
-    if (cached) return cached
-    return this.setPayloadIndex(chatId, new TranscriptPayloadIndex(this.payloadSidecarPath(chatId)))
-  }
-
   setPayloadIndex(chatId: string, index: TranscriptPayloadIndex) {
     while (this.payloadIndexes.size >= 16) {
       const oldest = this.payloadIndexes.keys().next().value
@@ -1270,8 +1305,9 @@ class StoreMemory {
   /**
    * Every entry for a chat as the transcript file holds it, which is header
    * form: tool bodies live in the payload sidecar and are merged back only by
-   * `getEntriesById` and `getMessages`. Loads from disk on miss. Callers must
-   * not mutate.
+   * `readEntriesById` and `readMessages`. Answers from the cache; a transcript
+   * that isn't loaded throws `TranscriptNotLoadedError` (see
+   * `retainTranscript`). Callers must not mutate.
    */
   getTranscriptEntries(chatId: string): TranscriptEntry[] {
     const cached = this.transcriptCache.get(chatId)
@@ -1281,9 +1317,13 @@ class StoreMemory {
       this.transcriptCache.set(chatId, cached)
       return cached
     }
-
+    // A pre-sidecar snapshot keeps its transcripts in memory already.
     const legacyEntries = this.legacyMessagesByChatId.get(chatId)
-    const entries = legacyEntries ? cloneTranscriptEntries(legacyEntries) : this.loadTranscriptFromDisk(chatId)
+    if (!legacyEntries) {
+      this.record("transcript_unloaded_reads")
+      throw new TranscriptNotLoadedError({ chatId })
+    }
+    const entries = cloneTranscriptEntries(legacyEntries)
     this.setCachedTranscript(chatId, entries)
     return entries
   }
@@ -1299,33 +1339,12 @@ class StoreMemory {
     let bytes = [...this.transcriptBytes.values()].reduce((sum, size) => sum + size, 0)
     for (const oldest of this.transcriptCache.keys()) {
       if (this.transcriptCache.size <= StoreMemory.TRANSCRIPT_CACHE_LIMIT && bytes <= StoreMemory.TRANSCRIPT_CACHE_BYTES) break
-      // One large transcript must remain usable until its reader finishes.
-      if (oldest === keepChatId) continue
+      // The one just inserted, and any a reader holds, stay.
+      if (oldest === keepChatId || this.transcriptPins.has(oldest)) continue
       bytes -= this.transcriptBytes.get(oldest) ?? 0
       this.dropTranscriptCaches(oldest)
       this.record("transcript_cache_evictions")
     }
-  }
-
-  /**
-   * The synchronous cache-miss read behind `getTranscriptEntries`. `node:fs`
-   * on purpose: its callers answer within one tick (see the class comment on
-   * `EventStore`); `prepareTranscript` is the asynchronous load.
-   */
-  private loadTranscriptFromDisk(chatId: string) {
-    const transcriptPath = this.transcriptPath(chatId)
-    if (!existsSync(transcriptPath)) {
-      return []
-    }
-
-    const started = performance.now()
-    const text = readFileSyncImmediate(transcriptPath, "utf8")
-    if (!text.trim()) return []
-
-    const entries: TranscriptEntry[] = []
-    parseTranscriptLines(text, 0, entries)
-    this.record("transcript_sync_load_ms", performance.now() - started)
-    return entries
   }
 
   getProject(projectId: string) {
@@ -1446,24 +1465,6 @@ class StoreMemory {
   }
 
   /**
-   * Entries by id, with their payloads intact.
-   *
-   * Backs the tool-payload fetch: snapshots ship tool calls and results without
-   * their unbounded fields, and a row that gets opened asks for the real thing.
-   * Batched because expanding a tool group asks for every member at once.
-   * `debugRaw` is stripped as everywhere else on the wire — the raw JSON view
-   * has its own request for that.
-   *
-   * Ids that no longer exist are simply absent from the result.
-   */
-  getEntriesById(chatId: string, entryIds: string[]): TranscriptEntry[] {
-    this.requireChat(chatId)
-    if (entryIds.length === 0) return []
-    let index: TranscriptPayloadIndex | null = null
-    return this.collectEntriesById(chatId, entryIds, (entryId) => (index ??= this.getPayloadIndex(chatId)).read(entryId))
-  }
-
-  /**
    * The entries `entryIds` names, in transcript order, each merged with what
    * `readPayload` returns for it. Only headers marked `trimmed` have a sidecar
    * line; anything else (an inline kind, or a transcript written before the
@@ -1482,12 +1483,6 @@ class StoreMemory {
     return found
   }
 
-  /** Header entries ids that have a sidecar line to read. */
-  trimmedEntryIds(chatId: string, entryIds: string[]) {
-    const wanted = new Set(entryIds)
-    return this.getTranscriptEntries(chatId).filter((entry) => entry.trimmed && wanted.has(entry._id)).map((entry) => entry._id)
-  }
-
   /**
    * The raw provider payload for one entry, or null if the entry is gone or
    * never carried one. Snapshots strip `debugRaw`; this backs the raw JSON
@@ -1498,12 +1493,6 @@ class StoreMemory {
     this.requireChat(chatId)
     const entries = this.getTranscriptEntries(chatId)
     return entries.find((entry) => entry._id === entryId)?.debugRaw ?? null
-  }
-
-  getMessages(chatId: string) {
-    const entries = this.getTranscriptEntries(chatId)
-    if (!entries.some((entry) => entry.trimmed)) return cloneTranscriptEntries(entries)
-    return mergeMessages(entries, readAllTranscriptPayloads(this.payloadSidecarPath(chatId)))
   }
 
   getQueuedMessages(chatId: string) {
@@ -1643,8 +1632,10 @@ interface ParsedReplayEvent {
 
 const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventStoreOptions) {
   const fs = yield* FileSystem.FileSystem
+  const extras = yield* FileSystemExtras
   const diagnostics = yield* Effect.serviceOption(PerformanceLog)
-  const dataDir = options.dataDir ?? defaultEventStoreDataDir()
+  const machine = yield* Machine
+  const dataDir = options.dataDir ?? defaultEventStoreDataDir(machine.homeDirectory)
   yield* Effect.annotateCurrentSpan("dataDir", dataDir)
 
   // Synchronous code (the cache trim on a read) records too, so this runs
@@ -1652,9 +1643,10 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
   const record = (name: string, value?: number) => {
     if (Option.isSome(diagnostics)) Effect.runSync(diagnostics.value.record(name, value))
   }
-  const memory = new StoreMemory(dataDir, record)
+  const memory = new StoreMemory(dataDir, record, machine)
   const { paths } = memory
-  const withFs = Effect.provideService(FileSystem.FileSystem, fs)
+  const withFs = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.provideService(FileSystemExtras, extras))
 
   const fileError = (operation: EventStoreFileError["operation"], filePath: string, chatId?: string) => (cause: unknown) =>
     Effect.fail(new EventStoreFileError({ operation, filePath, cause, ...(chatId === undefined ? {} : { chatId }) }))
@@ -2009,8 +2001,8 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
   // ---- Transcripts -----------------------------------------------------
 
   /** Runs on the write chain, so a partial append cannot enter the cache. */
-  const loadTranscriptAsync = Effect.fn("EventStore.loadTranscript")(function* (chatId: string) {
-    if (memory.transcriptCache.has(chatId)) return
+  const loadTranscriptAsync = Effect.fn("EventStore.loadTranscript")(function* (chatId: string, refresh = false) {
+    if (!refresh && memory.transcriptCache.has(chatId)) return
     const started = performance.now()
     const legacy = memory.legacyMessagesByChatId.get(chatId)
     if (legacy) {
@@ -2054,6 +2046,14 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     }))
   })
 
+  const retainTranscript = Effect.fn("EventStore.retainTranscript")(function* (chatId: string) {
+    yield* Effect.acquireRelease(
+      Effect.sync(() => memory.pinTranscript(chatId)),
+      () => Effect.sync(() => memory.unpinTranscript(chatId)),
+    )
+    yield* prepareTranscript(chatId)
+  })
+
   /** A transcript's entries straight from disk, without touching the cache. */
   const readTranscriptFile = Effect.fn("EventStore.readTranscriptFile")(function* (chatId: string) {
     const transcriptPath = memory.transcriptPath(chatId)
@@ -2065,26 +2065,28 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
       try: () => parseTranscriptLines(text.value, 0, entries),
       catch: (cause) => new EventStoreFileError({ operation: "parse", filePath: transcriptPath, chatId, cause }),
     })
-    record("transcript_sync_load_ms", performance.now() - started)
+    record("transcript_file_parse_ms", performance.now() - started)
     return entries
   })
 
   const readMessages = Effect.fn("EventStore.readMessages")(function* (chatId: string) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
-    yield* prepareTranscript(chatId)
-    const entries = memory.getTranscriptEntries(chatId)
+    yield* retainTranscript(chatId)
+    // Copy the entry list before payload IO: later appends belong to the next read.
+    const entries = [...memory.getTranscriptEntries(chatId)]
     if (!entries.some((entry) => entry.trimmed)) return cloneTranscriptEntries(entries)
     const payloads = yield* readTranscriptPayloads(memory.payloadSidecarPath(chatId)).pipe(withFs)
-    return mergeMessages(memory.getTranscriptEntries(chatId), payloads)
-  })
+    return mergeMessages(entries, payloads)
+  }, Effect.scoped)
 
   const readEntriesById = Effect.fn("EventStore.readEntriesById")(function* (chatId: string, entryIds: string[]) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
     yield* requireChat(chatId)
     if (entryIds.length === 0) return []
-    yield* prepareTranscript(chatId)
-    const trimmed = memory.trimmedEntryIds(chatId, entryIds)
-    if (trimmed.length === 0) return memory.collectEntriesById(chatId, entryIds, () => null)
+    yield* retainTranscript(chatId)
+    const entries = memory.collectEntriesById(chatId, entryIds, () => null)
+    const trimmed = entries.filter((entry) => entry.trimmed).map((entry) => entry._id)
+    if (trimmed.length === 0) return entries
     // Built on the write chain: an append between reading the sidecar and
     // storing the index would otherwise go unnoted and shift every later offset.
     const index = memory.payloadIndexes.get(chatId) ?? (yield* enqueueWrite(Effect.suspend(() => {
@@ -2096,8 +2098,8 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
       )
     })))
     const payloads = yield* readTranscriptPayloadsById(index, trimmed).pipe(withFs)
-    return memory.collectEntriesById(chatId, entryIds, (entryId) => payloads.get(entryId))
-  })
+    return entries.map((entry) => entry.trimmed ? mergeTranscriptPayload(entry, payloads.get(entry._id)) : entry)
+  }, Effect.scoped)
 
   /** Transcript, payload sidecar and media of a chat that is gone for good. */
   const removeTranscriptFiles = Effect.fn("EventStore.removeTranscriptFiles")(function* (chatId: string) {
@@ -2110,7 +2112,7 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
   // ---- Projects --------------------------------------------------------
 
   const openProject = Effect.fn("EventStore.openProject")(function* (localPath: string, title?: string) {
-    const normalized = resolveLocalPath(localPath)
+    const normalized = resolveLocalPath(localPath, machine.homeDirectory)
     const existingId = memory.state.projectIdsByPath.get(normalized)
     if (existingId) {
       const existing = memory.state.projectsById.get(existingId)
@@ -3068,12 +3070,16 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
         )
       }).pipe(
         withFs,
-        Effect.flatMap((result) => Effect.sync(() => {
+        Effect.flatMap((result) => Effect.gen(function* () {
           stats.bytesBefore += result.bytesBefore
           stats.bytesAfter += result.bytesAfter
           if (!result.changed) return
           stats.rewritten += 1
-          memory.dropTranscriptCaches(chatId)
+          memory.payloadIndexes.delete(chatId)
+          // An active lease must stay readable while the rewritten file loads.
+          // Replace its entries in one step rather than dropping the cache.
+          if (memory.transcriptPins.has(chatId)) yield* loadTranscriptAsync(chatId, true)
+          else memory.dropTranscriptCaches(chatId)
           options?.onProgress?.(
             `${LOG_PREFIX} transcript slim: ${name} ${formatMegabytes(result.bytesBefore)} → ${formatMegabytes(result.bytesAfter)}`
           )
@@ -3128,8 +3134,6 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     listSchedules: () => memory.listSchedules(),
     getQueuedMessages: (chatId) => memory.getQueuedMessages(chatId),
     getQueuedMessage: (chatId, queuedMessageId) => memory.getQueuedMessage(chatId, queuedMessageId),
-    getMessages: (chatId) => memory.getMessages(chatId),
-    getEntriesById: (chatId, entryIds) => memory.getEntriesById(chatId, entryIds),
     getEntryDebugRaw: (chatId, entryId) => memory.getEntryDebugRaw(chatId, entryId),
     getClientTranscript: (chatId, fromIndex) => memory.getClientTranscript(chatId, fromIndex),
     getChatReadAnchor: (chatId) => memory.getChatReadAnchor(chatId),
@@ -3144,7 +3148,7 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     resolveTranscriptMediaPath: (url) => memory.resolveTranscriptMediaPath(url),
     getResourceCounts: () => memory.getResourceCounts(),
 
-    prepareTranscript,
+    retainTranscript,
     readMessages,
     readEntriesById,
     openProject,

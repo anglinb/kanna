@@ -3,7 +3,7 @@ import { Context, Effect, FileSystem, Layer, Option, PubSub, Ref, Schedule, Sema
 import { buildRepoBrowseUrl } from "../shared/git-url"
 import type { WorkingTreeLocation, WorkingTreeProbe as WorkingTreeReading, WorkingTreeScan } from "./diff-store"
 import type { StoreState } from "./events"
-import { resolveLocation, scanWorkingTree, treeBlobs, type WorktreeGitError } from "./worktree-git"
+import { bindWorktreeGit, type WorktreeGitError } from "./worktree-git"
 
 /**
  * Tracks, per project, whether the working tree is dirty, which paths are dirty
@@ -211,6 +211,7 @@ export class WorktreeProbe extends Context.Service<WorktreeProbe, {
 
 const makeWorktreeProbe = Effect.fn("WorktreeProbe.make")(function* (options: WorktreeProbeOptions) {
   const fs = yield* FileSystem.FileSystem
+  const { resolveLocation, scanWorkingTree, treeBlobs } = yield* bindWorktreeGit
   const entries = new Map<string, ProjectProbeEntry>()
   const probes = new Map<string, WorkingTreeReading>()
   /** Absent for projects that aren't in a repo (or haven't been resolved yet). */

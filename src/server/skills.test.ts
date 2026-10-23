@@ -171,7 +171,7 @@ describe("skills helpers", () => {
   })
 
   test("builds global install and uninstall commands for universal and Claude Code aliases", () => {
-    expect(buildInstallSkillCommand("owner/repo", "my-skill").slice(1)).toEqual([
+    expect(buildInstallSkillCommand("owner/repo", "my-skill", "darwin").slice(1)).toEqual([
       "skills",
       "add",
       "owner/repo",
@@ -183,7 +183,7 @@ describe("skills helpers", () => {
       "claude-code",
       "--yes",
     ])
-    expect(buildUninstallSkillCommand("my-skill").slice(1)).toEqual([
+    expect(buildUninstallSkillCommand("my-skill", "darwin").slice(1)).toEqual([
       "skills",
       "remove",
       "my-skill",

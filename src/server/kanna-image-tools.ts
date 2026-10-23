@@ -3,6 +3,7 @@ import { Cause, Effect, Exit, FileSystem, Option, Schema } from "effect"
 import type { DisplayAttachment } from "../shared/display-tools"
 import { removeStoredFiles, sniffMimeType, storeLocalAttachment } from "./kanna-display-tools"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
+import { Machine } from "./platform/machine"
 import { defineKannaTool, failureText, platformFailureText, type KannaTool, type KannaToolServices } from "./kanna-tool-definition"
 
 /** Nano Banana 2 Lite on OpenRouter. It serves 1K images and takes up to 14 reference images. */
@@ -61,7 +62,7 @@ export const readImageCredentials = Effect.fn("KannaImageTools.readCredentials")
   if (registry.provider === "openrouter" && registry.apiKey.trim()) {
     return { apiKey: registry.apiKey.trim(), baseUrl: registry.resolvedBaseUrl } satisfies ImageCredentials
   }
-  const envKey = process.env.OPENROUTER_API_KEY?.trim()
+  const envKey = (yield* Machine).env.get("OPENROUTER_API_KEY")?.trim()
   if (envKey) return { apiKey: envKey, baseUrl: OPENROUTER_BASE_URL } satisfies ImageCredentials
   return yield* imageError("Image generation needs an OpenRouter API key. Set one under Settings › Providers › Model Registry.")
 })

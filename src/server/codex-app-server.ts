@@ -1,7 +1,5 @@
-import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import type { Readable, Writable } from "node:stream"
-import { Cause, Context, Deferred, Effect, Exit, Layer, Match, PubSub, Queue, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Layer, Match, PubSub, Queue, Result, Schema, Scope, Stream } from "effect"
 import type {
   AskUserQuestionItem,
   CodexReasoningEffort,
@@ -17,7 +15,10 @@ import { buildKannaSystemInstructions } from "./harness-instructions"
 import type { SubagentActivityUpdate } from "./background-tasks"
 import type { KannaToolHost } from "./kanna-tools"
 import { type KannaMcpEndpoint, serveKannaMcp } from "./kanna-mcp"
+import { HttpHost } from "./platform/http-host"
 import { runKannaSync } from "./effect/bridge"
+import type { PlatformServices } from "./platform"
+import { type CommandSpawnError, ProcessSpawner, type ProcessSignal, type SpawnedProcess } from "./platform/process-spawner"
 import { asNumber, asRecord } from "../shared/json"
 import { timestamped } from "./transcript"
 import {
@@ -69,11 +70,16 @@ import {
   notificationThreadId,
 } from "./codex-app-server-protocol"
 
-/** The slice of a child process the manager drives; tests hand in fakes. */
+/**
+ * The slice of a child process the manager drives, shaped like node's
+ * `ChildProcess` (tests hand in node streams and an EventEmitter). `close`
+ * comes once the process has exited and both output pipes have been read
+ * to the end.
+ */
 export interface CodexAppServerProcess {
-  stdin: Writable
-  stdout: Readable
-  stderr: Readable
+  stdin: { write(chunk: string): unknown }
+  stdout: AsyncIterable<Uint8Array>
+  stderr: AsyncIterable<Uint8Array>
   killed?: boolean
   kill(signal?: NodeJS.Signals | number): void
   on(event: "close", listener: (code: number | null) => void): this
@@ -82,7 +88,10 @@ export interface CodexAppServerProcess {
   once(event: "error", listener: (error: Error) => void): this
 }
 
-export type SpawnCodexAppServer = (cwd: string) => CodexAppServerProcess
+/** Starts `codex app-server` in `cwd`; the process belongs to the scope. */
+export type SpawnCodexAppServer = (
+  cwd: string,
+) => Effect.Effect<CodexAppServerProcess, CommandSpawnError, Scope.Scope | ProcessSpawner>
 
 export interface CodexAppServerOptions {
   spawnProcess?: SpawnCodexAppServer
@@ -305,10 +314,6 @@ function codexSystemInitEntry(model: string): TranscriptEntry {
   })
 }
 
-function errorMessage(value: unknown): string {
-  if (value instanceof Error) return value.message
-  return String(value)
-}
 
 const AGENT_LABEL_LIMIT = 80
 
@@ -893,12 +898,134 @@ const INITIALIZE_PARAMS = {
   },
 } satisfies InitializeParams
 
-const spawnCodexAppServer: SpawnCodexAppServer = (cwd) =>
-  spawn("codex", ["app-server"], {
+/** The node-style events of a `CodexAppServerProcess`, without node's EventEmitter. */
+class ProcessEvents {
+  private readonly listeners = {
+    close: [] as Array<{ fn: (code: number | null) => void; once: boolean }>,
+    error: [] as Array<{ fn: (error: Error) => void; once: boolean }>,
+  }
+
+  add(event: "close" | "error", fn: ((code: number | null) => void) | ((error: Error) => void), once: boolean) {
+    if (event === "close") this.listeners.close.push({ fn: fn as (code: number | null) => void, once })
+    else this.listeners.error.push({ fn: fn as (error: Error) => void, once })
+  }
+
+  emitClose(code: number | null) {
+    const current = this.listeners.close
+    this.listeners.close = current.filter((listener) => !listener.once)
+    for (const listener of current) listener.fn(code)
+  }
+
+  emitError(error: Error) {
+    const current = this.listeners.error
+    this.listeners.error = current.filter((listener) => !listener.once)
+    for (const listener of current) listener.fn(error)
+  }
+}
+
+function eventSurface(events: ProcessEvents) {
+  return {
+    on(event: "close" | "error", listener: ((code: number | null) => void) | ((error: Error) => void)) {
+      events.add(event, listener, false)
+      return this
+    },
+    once(event: "close" | "error", listener: ((code: number | null) => void) | ((error: Error) => void)) {
+      events.add(event, listener, true)
+      return this
+    },
+  }
+}
+
+/**
+ * `codex app-server` on the machine's `ProcessSpawner`, presented as the
+ * node-shaped process the manager drives. stdin writes go out in order
+ * through one fiber; `close` comes after the exit and both pipes drained, as
+ * node's did. A binary that can't start doesn't fail the spawn: it reports
+ * an `error`, which fails the session's first request, as node's spawn did.
+ */
+const spawnCodexAppServer: SpawnCodexAppServer = Effect.fn("CodexAppServer.spawnProcess")(function* (cwd: string) {
+  const spawner = yield* ProcessSpawner
+  const events = new ProcessEvents()
+  const spawned = yield* Effect.result(spawner.spawn(["codex", "app-server"], {
     cwd,
-    stdio: ["pipe", "pipe", "pipe"],
-    env: process.env,
-  }) as unknown as CodexAppServerProcess
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  }))
+  if (Result.isFailure(spawned)) return failedProcess(events, spawned.failure)
+  const proc: SpawnedProcess = spawned.success
+
+  let drained = 0
+  let exitCode: number | null | undefined
+  const maybeClose = () => {
+    if (drained === 2 && exitCode !== undefined) events.emitClose(exitCode)
+  }
+  const pipe = (stream: Stream.Stream<Uint8Array, CommandSpawnError>) =>
+    Stream.toAsyncIterable(stream.pipe(
+      // A pipe that errors as the process dies just ends, as node's did.
+      Stream.catchTag("@kanna/server/process-utils/CommandSpawnError", () => Stream.empty),
+      Stream.ensuring(Effect.sync(() => {
+        drained++
+        maybeClose()
+      })),
+    ))
+  yield* proc.exited.pipe(
+    Effect.flatMap((exit) => Effect.sync(() => {
+      exitCode = exit.exitCode
+      maybeClose()
+    })),
+    Effect.forkScoped,
+  )
+
+  const writes = yield* Queue.unbounded<string>()
+  yield* Queue.take(writes).pipe(
+    Effect.flatMap((chunk) => proc.writeStdin(chunk)),
+    Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (error) =>
+      Effect.logWarning("Failed to write to Codex app-server:", error.message)),
+    Effect.forever,
+    Effect.forkScoped,
+  )
+
+  const child = {
+    stdin: { write: (chunk: string) => Queue.offerUnsafe(writes, chunk) },
+    stdout: pipe(proc.stdout),
+    stderr: pipe(proc.stderr),
+    killed: false,
+    kill(signal?: NodeJS.Signals | number) {
+      child.killed = true
+      Effect.runFork(proc.kill(typeof signal === "string" ? signal as ProcessSignal : undefined))
+    },
+    ...eventSurface(events),
+  }
+  return child as CodexAppServerProcess
+})
+
+function failedProcess(events: ProcessEvents, failure: CommandSpawnError): CodexAppServerProcess {
+  const error = new Error(failure.message)
+  const empty: AsyncIterable<Uint8Array> = { async *[Symbol.asyncIterator]() {} }
+  const surface = eventSurface(events)
+  const child = {
+    stdin: { write: () => false },
+    stdout: empty,
+    stderr: empty,
+    killed: false,
+    kill() {
+      child.killed = true
+    },
+    on(event: "close" | "error", listener: ((code: number | null) => void) | ((error: Error) => void)) {
+      surface.on(event, listener)
+      // Reported after the listener is on, a tick later, like node's `error`.
+      if (event === "error") queueMicrotask(() => events.emitError(error))
+      return child
+    },
+    once(event: "close" | "error", listener: ((code: number | null) => void) | ((error: Error) => void)) {
+      surface.once(event, listener)
+      if (event === "error") queueMicrotask(() => events.emitError(error))
+      return child
+    },
+  }
+  return child as unknown as CodexAppServerProcess
+}
 
 /**
  * The lines of a child's output, split as readline split them (on \n, \r\n
@@ -906,7 +1033,7 @@ const spawnCodexAppServer: SpawnCodexAppServer = (cwd) =>
  * thousands of lines a turn. The stream is taken now, so nothing written
  * before the reader runs is lost.
  */
-function readLines(readable: Readable): Stream.Stream<string, unknown> {
+function readLines(readable: AsyncIterable<Uint8Array>): Stream.Stream<string, unknown> {
   const chunks: AsyncIterator<Uint8Array> = readable[Symbol.asyncIterator]()
   return Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => chunks }, (cause) => cause).pipe(
     Stream.decodeText(),
@@ -1029,12 +1156,17 @@ export class CodexAppServer extends Context.Service<CodexAppServer, {
  * replaces was never disposed. Its sessions still end with `stopSession` /
  * `stopAll`. Goes when those callers get it from the server's runtime.
  */
-export function createCodexAppServer(options: CodexAppServerOptions = {}): CodexAppServer["Service"] {
-  return runKannaSync(makeCodexAppServer(options).pipe(Scope.provide(Scope.makeUnsafe())))
+export function createCodexAppServer(
+  platform: Context.Context<PlatformServices>,
+  options: CodexAppServerOptions = {},
+): CodexAppServer["Service"] {
+  return runKannaSync(makeCodexAppServer(options).pipe(Scope.provide(Scope.makeUnsafe()), Effect.provide(platform)))
 }
 
 export const makeCodexAppServer = Effect.fn("CodexAppServer.make")(function* (options: CodexAppServerOptions = {}) {
   const spawnProcess = options.spawnProcess ?? spawnCodexAppServer
+  const spawner = yield* ProcessSpawner
+  const http = yield* HttpHost
   const layerScope = yield* Effect.scope
   const sessions = new Map<string, SessionContext>()
   const rateLimits = yield* PubSub.unbounded<CodexRateLimitSnapshot>()
@@ -1108,15 +1240,15 @@ export const makeCodexAppServer = Effect.fn("CodexAppServer.make")(function* (op
     yield* Effect.annotateCurrentSpan("chatId", args.chatId)
     const scope = yield* Scope.fork(layerScope)
     return yield* Effect.gen(function* () {
-      const child = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () => spawnProcess(args.cwd),
-          catch: (cause) => new CodexSpawnError({ chatId: args.chatId, cwd: args.cwd, message: errorMessage(cause), cause }),
-        }),
-        (child) => Effect.sync(() => killQuietly(child)),
-      ).pipe(Scope.provide(scope))
+      const child = yield* spawnProcess(args.cwd).pipe(
+        Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (error) =>
+          Effect.fail(new CodexSpawnError({ chatId: args.chatId, cwd: args.cwd, message: error.message, cause: error.cause }))),
+        Effect.tap((child) => Effect.addFinalizer(() => Effect.sync(() => killQuietly(child)))),
+        Effect.provideService(ProcessSpawner, spawner),
+        Scope.provide(scope),
+      )
       const customTools = args.customTools
-        ? yield* serveKannaMcp(args.customTools).pipe(Scope.provide(scope))
+        ? yield* serveKannaMcp(args.customTools).pipe(Scope.provide(scope), Effect.provideService(HttpHost, http))
         : undefined
       const context: SessionContext = {
         ...(customTools ? { customTools } : {}),

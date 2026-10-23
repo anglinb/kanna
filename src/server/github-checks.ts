@@ -1,6 +1,10 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect"
 import type { ChatCheckRun, ChatCheckRunState, ChatCommitChecks, ChatCommitChecksState } from "../shared/types"
+import type { FileSystemExtras } from "./platform/file-system-extras"
+import type { Machine } from "./platform/machine"
+import type { ProcessSpawner } from "./platform/process-spawner"
 import { type CommandSpawnError, resolveCommandPath, runCommand } from "./process-utils"
+import { capturePlatform } from "./platform"
 
 /** Runs one `gh api graphql` query. Injected in tests so they never spawn `gh`. */
 export type GraphqlRunner = (query: string) => Effect.Effect<{ stdout: string; exitCode: number | null }, CommandSpawnError>
@@ -75,8 +79,10 @@ const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
  * Resolves gh through a login shell so servers started without the user's
  * PATH still find it — the same treatment every other gh caller uses.
  */
-const runGhGraphql: GraphqlRunner = (query) =>
-  runCommand([resolveCommandPath("gh") ?? "gh", "api", "graphql", "-f", `query=${query}`], { stdout: true })
+const runGhGraphql = (query: string) =>
+  resolveCommandPath("gh").pipe(
+    Effect.flatMap((gh) => runCommand([gh ?? "gh", "api", "graphql", "-f", `query=${query}`], { stdout: true })),
+  )
 
 function buildQuery(owner: string, name: string, shas: string[]) {
   const objects = shas
@@ -244,7 +250,8 @@ export class CommitChecks extends Context.Service<CommitChecks, {
 }
 
 const makeCommitChecks = Effect.fn("CommitChecks.make")(function* (options: CommitChecksOptions) {
-  const runGraphql = options.runGraphql ?? runGhGraphql
+  const platform = yield* capturePlatform<ProcessSpawner | Machine | FileSystemExtras>()
+  const runGraphql: GraphqlRunner = options.runGraphql ?? ((query) => runGhGraphql(query).pipe(Effect.provide(platform)))
   const scope = yield* Effect.scope
   const entries = new Map<string, CacheEntry>()
   const inFlight = new Set<string>()

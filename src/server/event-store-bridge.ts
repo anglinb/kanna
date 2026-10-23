@@ -42,8 +42,8 @@ export class EventStoreBridge {
   listSchedules() { return this.service.listSchedules() }
   getQueuedMessages(chatId: string) { return this.service.getQueuedMessages(chatId) }
   getQueuedMessage(chatId: string, queuedMessageId: string) { return this.service.getQueuedMessage(chatId, queuedMessageId) }
-  getMessages(chatId: string) { return this.service.getMessages(chatId) }
-  getEntriesById(chatId: string, entryIds: string[]) { return this.service.getEntriesById(chatId, entryIds) }
+  getMessages(chatId: string) { return runKanna(this.service.readMessages(chatId)) }
+  getEntriesById(chatId: string, entryIds: string[]) { return runKanna(this.service.readEntriesById(chatId, entryIds)) }
   getEntryDebugRaw(chatId: string, entryId: string) { return this.service.getEntryDebugRaw(chatId, entryId) }
   getClientTranscript(chatId: string, fromIndex?: number) { return this.service.getClientTranscript(chatId, fromIndex) }
   getChatReadAnchor(chatId: string) { return this.service.getChatReadAnchor(chatId) }
@@ -62,7 +62,8 @@ export class EventStoreBridge {
   resolveTranscriptMediaPath(url: string) { return this.service.resolveTranscriptMediaPath(url) }
   getResourceCounts() { return this.service.getResourceCounts() }
 
-  prepareTranscript(chatId: string) { return runKanna(this.service.prepareTranscript(chatId)) }
+  /** Warms the cache for legacy tests; production readers use scoped `retainTranscript`. */
+  prepareTranscript(chatId: string) { return runKanna(this.service.retainTranscript(chatId).pipe(Effect.scoped)) }
   readMessages(chatId: string) { return runKanna(this.service.readMessages(chatId)) }
   readEntriesById(chatId: string, entryIds: string[]) { return runKanna(this.service.readEntriesById(chatId, entryIds)) }
 

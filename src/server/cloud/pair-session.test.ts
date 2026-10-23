@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Effect, type Duration, type FileSystem } from "effect"
+import { Effect, type Duration } from "effect"
 import { TestClock } from "effect/testing"
 import type { CloudDeviceCodePollResponse } from "../../shared/cloud-api"
 import { runTest } from "../effect/testing"
 import type { CloudRequestError } from "./api-client"
 import { readCloudIdentity, writeCloudIdentity, type CloudIdentity } from "./identity"
+import type { PlatformServices } from "../platform"
 import { createPairSessionManager, type PairSessionManager } from "./pair-session"
 import { apiError, captureLogs, makeFakeCloudApiClient, networkError } from "./testing"
 
@@ -88,7 +89,7 @@ function createManager(
 }
 
 /** Runs the body on a TestClock set to NOW, with the session's log lines captured. */
-function run<A, E>(body: Effect.Effect<A, E, FileSystem.FileSystem>) {
+function run<A, E>(body: Effect.Effect<A, E, PlatformServices>) {
   const logs = captureLogs()
   return runTest(TestClock.setTime(NOW).pipe(
     Effect.andThen(body),

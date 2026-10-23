@@ -1,4 +1,5 @@
 import process from "node:process"
+import { createInterface } from "node:readline/promises"
 import { Clock, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } from "effect"
 import { hasCommand, runCommand, spawnDetached } from "./process-utils"
 import { APP_NAME, CLI_COMMAND, getDataDirDisplay, getDataRootDirDisplay, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
@@ -21,8 +22,9 @@ import {
 import type { Analytics } from "./analytics"
 import type { UpdateManager } from "./update-manager"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
+import { describeError } from "./cloud/api-client"
 import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
-import { runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
+import { PairPromptError, runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
 import type { ServerPlatform } from "./effect/runtime"
 
 /** The platform services the CLI runs on (effect/runtime.ts). */
@@ -494,7 +496,7 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
   }
 
   if (parsedArgs.kind === "pair") {
-    const pairDeps = { log: deps.log, warn: deps.warn }
+    const pairDeps = { log: deps.log, warn: deps.warn, confirm: promptConfirm }
     const code = yield* (deps.runPairCommandImpl ?? runPairCommand)(parsedArgs.args, pairDeps)
     if (code !== 0 || parsedArgs.args.action !== "pair") {
       return { kind: "exited", code } satisfies CliRunResult
@@ -862,4 +864,20 @@ export const installPackageVersion = Effect.fn("Cli.installPackageVersion")(func
   }
 
   return classifyInstallVersionFailure(`${stdout}\n${stderr}`)
+})
+
+/** A yes/no question on the terminal, for `kanna pair`. Without a TTY nobody can answer, so it's a yes. */
+const promptConfirm = Effect.fn("Cli.confirm")(function* (question: string) {
+  if (!process.stdin.isTTY) {
+    return true
+  }
+  const answer = yield* Effect.acquireUseRelease(
+    Effect.sync(() => createInterface({ input: process.stdin, output: process.stdout })),
+    (rl) => Effect.tryPromise({
+      try: (signal) => rl.question(`${question} [y/N] `, { signal }),
+      catch: (cause) => new PairPromptError({ message: describeError(cause), cause }),
+    }),
+    (rl) => Effect.sync(() => rl.close()),
+  )
+  return /^y(es)?$/i.test(answer.trim())
 })

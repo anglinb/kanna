@@ -6,8 +6,9 @@
  * the CLI's half of that arrangement.
  */
 
-import process from "node:process"
 import { Effect } from "effect"
+import { HostProcess } from "./platform/host-process"
+import { Machine } from "./platform/machine"
 import { runCommand } from "./process-utils"
 
 export const MAC_APP_BUNDLE_ID = "sh.kanna.mac"
@@ -29,9 +30,9 @@ export function macAppOpenUrl(localUrl: string) {
  */
 export const openInMacApp = Effect.fn("MacApp.open")(function* (
   localUrl: string,
-  platform: NodeJS.Platform = process.platform,
+  platform?: NodeJS.Platform,
 ) {
-  if (platform !== "darwin") return false
+  if ((platform ?? (yield* Machine).platform) !== "darwin") return false
   return yield* runCommand(["open", "-b", MAC_APP_BUNDLE_ID, macAppOpenUrl(localUrl)]).pipe(
     Effect.map((output) => output.exitCode === 0),
     Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", () => Effect.succeed(false)),
@@ -44,8 +45,8 @@ export const openInMacApp = Effect.fn("MacApp.open")(function* (
  * supervisor and its child both watch: the supervisor for the app, the child
  * for a supervisor that was killed outright.
  *
- * Poll the parent's pid, not `process.ppid`: Bun reads that once at start,
- * so it never turns into launchd's 1 when the parent dies.
+ * Poll the parent's pid, not the parent pid's current value: Bun reads that
+ * once at start, so it never turns into launchd's 1 when the parent dies.
  *
  * Completes once the parent is gone, checking every two seconds; never
  * completes when the app did not ask for this. Its sleeps hold the process
@@ -54,22 +55,22 @@ export const openInMacApp = Effect.fn("MacApp.open")(function* (
  * process when it finishes.
  */
 export const awaitParentExit = Effect.fn("MacApp.awaitParentExit")(function* (
-  env: Record<string, string | undefined> = process.env,
-  parent: number = process.ppid,
+  env?: Record<string, string | undefined>,
+  parent?: number,
 ) {
-  if (env[EXIT_WITH_PARENT_ENV_VAR] !== "1" || parent <= 1) return yield* Effect.never
-  yield* Effect.annotateCurrentSpan("parent", parent)
+  const machine = yield* Machine
+  const exitWithParent = env ? env[EXIT_WITH_PARENT_ENV_VAR] : machine.env.get(EXIT_WITH_PARENT_ENV_VAR)
+  const parentPid = parent ?? (yield* HostProcess).parentPid
+  if (exitWithParent !== "1" || parentPid <= 1) return yield* Effect.never
+  yield* Effect.annotateCurrentSpan("parent", parentPid)
   do {
     yield* Effect.sleep(PARENT_POLL_INTERVAL)
-  } while (isAlive(parent))
+  } while (yield* isAlive(machine, parentPid))
 })
 
-function isAlive(pid: number) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
+const isAlive = (machine: Machine["Service"], pid: number) =>
+  machine.signalProcess(pid, 0).pipe(
+    Effect.as(true),
     // EPERM: it's there, just not ours to signal.
-    return (error as NodeJS.ErrnoException).code === "EPERM"
-  }
-}
+    Effect.catchTag("@kanna/server/platform/ProcessSignalError", (error) => Effect.succeed(error.code === "EPERM")),
+  )

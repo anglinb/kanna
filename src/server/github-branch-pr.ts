@@ -1,6 +1,10 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect"
 import type { ChatBranchPullRequest } from "../shared/types"
+import type { FileSystemExtras } from "./platform/file-system-extras"
+import type { Machine } from "./platform/machine"
+import type { ProcessSpawner } from "./platform/process-spawner"
 import { type CommandSpawnError, resolveCommandPath, runCommand } from "./process-utils"
+import { capturePlatform } from "./platform"
 
 /** Runs one `gh api` GET. Injected in tests so they never spawn `gh`. */
 export type GhApiRunner = (path: string) => Effect.Effect<{ stdout: string; exitCode: number | null }, CommandSpawnError>
@@ -40,8 +44,10 @@ const REPO_SLUG_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u
 const BRANCH_PATTERN = /^[A-Za-z0-9._/-]+$/u
 
 /** Through a login shell's PATH, as every other gh caller resolves it. */
-const runGhApi: GhApiRunner = (path) =>
-  runCommand([resolveCommandPath("gh") ?? "gh", "api", "-H", "Accept: application/vnd.github+json", path], { stdout: true })
+const runGhApi = (path: string) =>
+  resolveCommandPath("gh").pipe(
+    Effect.flatMap((gh) => runCommand([gh ?? "gh", "api", "-H", "Accept: application/vnd.github+json", path], { stdout: true })),
+  )
 
 export interface BranchPullRequestsOptions {
   readonly runGhApi?: GhApiRunner
@@ -69,7 +75,8 @@ export class BranchPullRequests extends Context.Service<BranchPullRequests, {
 }
 
 const makeBranchPullRequests = Effect.fn("BranchPullRequests.make")(function* (options: BranchPullRequestsOptions) {
-  const run = options.runGhApi ?? runGhApi
+  const platform = yield* capturePlatform<ProcessSpawner | Machine | FileSystemExtras>()
+  const run: GhApiRunner = options.runGhApi ?? ((path) => runGhApi(path).pipe(Effect.provide(platform)))
   const scope = yield* Effect.scope
   const entries = new Map<string, CacheEntry>()
   const inFlight = new Set<string>()

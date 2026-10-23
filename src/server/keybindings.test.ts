@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import { DEFAULT_KEYBINDINGS } from "../shared/types"
 import { Effect, Fiber, Option, Stream } from "effect"
@@ -26,7 +26,7 @@ describe("normalizeKeybindings", () => {
     const snapshot = normalizeKeybindings({
       toggleEmbeddedTerminal: [],
       toggleRightSidebar: "Ctrl+B",
-    }, TEST_FILE_PATH)
+    }, TEST_FILE_PATH, homedir())
 
     expect(snapshot.bindings).toEqual(DEFAULT_KEYBINDINGS)
     expect(snapshot.warning).toContain("toggleEmbeddedTerminal")
@@ -44,7 +44,7 @@ describe("normalizeKeybindings", () => {
       createChatInCurrentProject: ["Cmd+Alt+N"],
       openAddProject: ["Cmd+Alt+O"],
       openCommandPalette: ["Cmd+P"],
-    }, TEST_FILE_PATH)
+    }, TEST_FILE_PATH, homedir())
 
     expect(snapshot).toEqual({
       bindings: {
@@ -150,7 +150,7 @@ describe("Keybindings", () => {
     process.env.KANNA_RUNTIME_PROFILE = "dev"
 
     try {
-      expect(defaultKeybindingsFilePath()).toEndWith("/.kanna-dev/keybindings.json")
+      expect(defaultKeybindingsFilePath(homedir())).toEndWith("/.kanna-dev/keybindings.json")
     } finally {
       if (previous === undefined) {
         delete process.env.KANNA_RUNTIME_PROFILE

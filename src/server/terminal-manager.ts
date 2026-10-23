@@ -1,12 +1,12 @@
 import path from "node:path"
-import process from "node:process"
 import { StringDecoder } from "node:string_decoder"
-import defaultShell, { detectDefaultShell } from "default-shell"
 import { Terminal } from "@xterm/headless"
 import { SerializeAddon } from "@xterm/addon-serialize"
 import { Unicode11Addon } from "@xterm/addon-unicode11"
-import { Context, Effect, Layer, PubSub, Schema, Stream } from "effect"
+import { Context, Effect, Exit, Layer, PubSub, Schema, Scope, Stream } from "effect"
 import type { TerminalEvent, TerminalSnapshot, TerminalTailResult } from "../shared/protocol"
+import { Machine } from "./platform/machine"
+import { PtySpawner, type PtyProcess } from "./platform/pty"
 
 const DEFAULT_COLS = 80
 /**
@@ -44,8 +44,10 @@ interface TerminalSession {
   scrollback: number
   status: "running" | "exited"
   exitCode: number | null
-  process: Bun.Subprocess | null
-  terminal: Bun.Terminal
+  /** The shell on its PTY. */
+  pty: PtyProcess
+  /** Owns the PTY: closing it kills the shell if still running and closes the terminal. */
+  scope: Scope.Closeable
   headless: Terminal
   serializeAddon: SerializeAddon
   /**
@@ -132,18 +134,17 @@ function normalizeTerminalDimension(value: number, fallback: number) {
 
 
 /** The login shell, from the user's account, else the platform's default. */
-const resolveShell = Effect.try(() => detectDefaultShell()).pipe(
-  Effect.catchTag("UnknownError", () => Effect.sync(() => {
-    if (defaultShell) return defaultShell
-    if (process.platform === "win32") {
-      return process.env.ComSpec || "cmd.exe"
-    }
-    return process.env.SHELL || "/bin/sh"
-  })),
-)
+const resolveShell = Effect.fn("Terminals.resolveShell")(function* (machine: Machine["Service"]) {
+  const shell = yield* machine.userShell
+  if (shell) return shell
+  if (machine.platform === "win32") {
+    return machine.env.get("ComSpec") || "cmd.exe"
+  }
+  return machine.env.get("SHELL") || "/bin/sh"
+})
 
-function resolveShellArgs(shellPath: string) {
-  if (process.platform === "win32") {
+function resolveShellArgs(shellPath: string, platform: NodeJS.Platform) {
+  if (platform === "win32") {
     return []
   }
 
@@ -168,13 +169,13 @@ const UTF8_LOCALE_PATTERN = /(\.utf-?8|\.euc.+)$/i
  * POSIX precedence is LC_ALL > LC_CTYPE > LANG, so setting LANG alone (what
  * VS Code does) is not enough — an inherited `LC_ALL=C` would still win.
  */
-export function applyUtf8Locale(env: Record<string, string | undefined>) {
+export function applyUtf8Locale(env: Record<string, string | undefined>, platform: NodeJS.Platform) {
   const effective = env.LC_ALL || env.LC_CTYPE || env.LANG
   if (effective && UTF8_LOCALE_PATTERN.test(effective)) return env
 
   // C.UTF-8 always exists on glibc/musl without locale generation; macOS ships
   // en_US.UTF-8 but has no C.UTF-8.
-  const fallback = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8"
+  const fallback = platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8"
   // Replace only the variables actually forcing ASCII, so a user's deliberate
   // regional choice (`LANG=de_DE.UTF-8` under an inherited `LC_ALL=C`) survives.
   if (!env.LANG || !UTF8_LOCALE_PATTERN.test(env.LANG)) env.LANG = fallback
@@ -183,9 +184,9 @@ export function applyUtf8Locale(env: Record<string, string | undefined>) {
   return env
 }
 
-function createTerminalEnv() {
+function createTerminalEnv(machine: Machine["Service"]) {
   return applyUtf8Locale({
-    ...process.env,
+    ...machine.env.snapshot(),
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     // Lets a shell rc tell "running inside Kanna" from a normal terminal, the
@@ -194,7 +195,7 @@ function createTerminalEnv() {
     // say — is to condition on it.
     TERM_PROGRAM: "kanna",
     KANNA_TERMINAL: "1",
-  })
+  }, machine.platform)
 }
 
 function updateFocusReportingState(session: Pick<TerminalSession, "focusReportingEnabled" | "modeSequenceTail">, chunk: string) {
@@ -216,7 +217,7 @@ function filterFocusReportInput(data: string, allowFocusReporting: boolean) {
   return data.replaceAll(FOCUS_IN_SEQUENCE, "").replaceAll(FOCUS_OUT_SEQUENCE, "")
 }
 
-/** Embedded terminals can't run here (Windows, or a Bun without `Bun.Terminal`). */
+/** Embedded terminals can't run here (Windows, or a platform without PTYs). */
 export class TerminalUnsupportedError extends Schema.TaggedError<TerminalUnsupportedError>()(
   "@kanna/server/terminal-manager/TerminalUnsupportedError",
   { reason: Schema.String },
@@ -241,32 +242,6 @@ export class TerminalSpawnError extends Schema.TaggedError<TerminalSpawnError>()
   }
 }
 
-/** The shell's process, as far as signalling it goes. */
-type ShellProcess = Pick<Bun.Subprocess, "pid" | "kill">
-
-/**
- * Signals the shell's whole process group, falling back to the shell alone
- * when the group can't be signalled (or on Windows). Succeeds with whether
- * either took.
- */
-function signalTerminalProcessGroup(subprocess: ShellProcess | null, signal: NodeJS.Signals): Effect.Effect<boolean> {
-  if (!subprocess) return Effect.succeed(false)
-  const pid = subprocess.pid
-  if (typeof pid !== "number") return Effect.succeed(false)
-
-  const shellOnly = Effect.try(() => subprocess.kill(signal))
-  const attempt = process.platform === "win32"
-    ? shellOnly
-    : Effect.try(() => process.kill(-pid, signal)).pipe(Effect.catchTag("UnknownError", () => shellOnly))
-  return attempt.pipe(
-    Effect.as(true),
-    Effect.catchTag("UnknownError", () => Effect.succeed(false)),
-  )
-}
-
-const killTerminalProcessTree = (subprocess: ShellProcess | null) =>
-  signalTerminalProcessGroup(subprocess, "SIGKILL").pipe(Effect.asVoid)
-
 /**
  * Keystrokes for a session. Ctrl+C is sent to the process group as SIGINT
  * rather than written, so a foreground job dies even when it has the PTY in
@@ -274,8 +249,7 @@ const killTerminalProcessTree = (subprocess: ShellProcess | null) =>
  */
 export const writeToSession = Effect.fn("Terminals.writeToSession")(function* (
   session: Pick<TerminalSession, "status" | "focusReportingEnabled"> & {
-    terminal: Pick<Bun.Terminal, "write">
-    process: ShellProcess | null
+    pty: Pick<PtyProcess, "write" | "signalGroup">
   },
   data: string,
 ) {
@@ -289,16 +263,17 @@ export const writeToSession = Effect.fn("Terminals.writeToSession")(function* (
   while (cursor < filteredData.length) {
     const ctrlCIndex = filteredData.indexOf("\x03", cursor)
 
+    // A failed write is a defect, as the PTY's throw was.
     if (ctrlCIndex === -1) {
-      session.terminal.write(filteredData.slice(cursor))
+      yield* session.pty.write(filteredData.slice(cursor)).pipe(Effect.orDie)
       return
     }
 
     if (ctrlCIndex > cursor) {
-      session.terminal.write(filteredData.slice(cursor, ctrlCIndex))
+      yield* session.pty.write(filteredData.slice(cursor, ctrlCIndex)).pipe(Effect.orDie)
     }
 
-    yield* signalTerminalProcessGroup(session.process, "SIGINT")
+    yield* session.pty.signalGroup("SIGINT")
     cursor = ctrlCIndex + 1
   }
 })
@@ -307,8 +282,7 @@ export const writeToSession = Effect.fn("Terminals.writeToSession")(function* (
 export const resizeSession = Effect.fn("Terminals.resizeSession")(function* (
   session: Pick<TerminalSession, "cols" | "rows"> & {
     headless: Pick<Terminal, "resize">
-    terminal: Pick<Bun.Terminal, "resize">
-    process: ShellProcess | null
+    pty: Pick<PtyProcess, "resize" | "signalGroup">
   },
   cols: number,
   rows: number,
@@ -316,15 +290,15 @@ export const resizeSession = Effect.fn("Terminals.resizeSession")(function* (
   session.cols = normalizeTerminalDimension(cols, session.cols)
   session.rows = normalizeTerminalDimension(rows, session.rows)
   session.headless.resize(session.cols, session.rows)
-  session.terminal.resize(session.cols, session.rows)
-  yield* signalTerminalProcessGroup(session.process, "SIGWINCH")
+  yield* session.pty.resize(session.cols, session.rows)
+  yield* session.pty.signalGroup("SIGWINCH")
 })
 
 /**
- * Single entry point for PTY bytes. Kept apart from the `Bun.Terminal`
- * config so tests can drive it with deliberately split chunks — the real PTY
- * gives no control over where reads land. Plain code: `Bun.Terminal` calls it
- * synchronously, outside any fiber.
+ * Single entry point for PTY bytes. Kept apart from the PTY's `onData` so
+ * tests can drive it with deliberately split chunks — the real PTY gives no
+ * control over where reads land. Plain code: the PTY calls it synchronously,
+ * outside any fiber.
  *
  * The decode is stateful: bytes of a partially received character are held
  * back and prepended to the next chunk. The shadow terminal, the tail log and
@@ -383,11 +357,14 @@ function snapshotOf(session: TerminalSession): TerminalSnapshot {
   }
 }
 
-function disposeSession(session: TerminalSession) {
-  session.terminal.close()
+function disposeShadow(session: Pick<TerminalSession, "serializeAddon" | "headless">) {
   session.serializeAddon.dispose()
   session.headless.dispose()
 }
+
+/** Closes the PTY (and its terminal), then the shadow terminal. */
+const disposeSession = (session: TerminalSession) =>
+  Scope.close(session.scope, Exit.void).pipe(Effect.andThen(Effect.sync(() => disposeShadow(session))))
 
 export interface TerminalResourceCounts {
   terminalSessions: number
@@ -425,6 +402,8 @@ export class Terminals extends Context.Service<Terminals, {
 }
 
 const makeTerminals = Effect.fn("Terminals.make")(function* () {
+  const machine = yield* Machine
+  const ptys = yield* PtySpawner
   // Sessions are touched from PTY callbacks, which run outside any fiber, so
   // they live in a plain map rather than a Ref.
   const sessions = new Map<string, TerminalSession>()
@@ -438,8 +417,8 @@ const makeTerminals = Effect.fn("Terminals.make")(function* () {
     const session = sessions.get(terminalId)
     if (!session) return
     sessions.delete(terminalId)
-    yield* killTerminalProcessTree(session.process)
-    disposeSession(session)
+    yield* session.pty.signalGroup("SIGKILL")
+    yield* disposeSession(session)
   })
 
   // Shutdown kills every shell; then subscribers see the stream end.
@@ -449,16 +428,16 @@ const makeTerminals = Effect.fn("Terminals.make")(function* () {
     ))
 
   /** Marks the session exited when its shell ends, unless it was closed first. */
-  const watchExit = (terminalId: string, subprocess: Bun.Subprocess) =>
-    Effect.tryPromise(() => subprocess.exited).pipe(
-      Effect.flatMap((exitCode) => Effect.sync(() => {
+  const watchExit = (terminalId: string, pty: PtyProcess) =>
+    pty.exited.pipe(
+      Effect.flatMap(({ code: exitCode }) => Effect.sync(() => {
         const active = sessions.get(terminalId)
         if (!active) return
         active.status = "exited"
         active.exitCode = exitCode
         emit({ type: "terminal.exit", terminalId, exitCode })
       })),
-      Effect.catchTag("UnknownError", (error) => Effect.sync(() => {
+      Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (error) => Effect.sync(() => {
         const active = sessions.get(terminalId)
         if (!active) return
         active.status = "exited"
@@ -475,11 +454,11 @@ const makeTerminals = Effect.fn("Terminals.make")(function* () {
 
   const create = Effect.fn("Terminals.create")(function* (args: CreateTerminalArgs) {
     yield* Effect.annotateCurrentSpan("terminalId", args.terminalId)
-    if (process.platform === "win32") {
+    if (machine.platform === "win32") {
       return yield* new TerminalUnsupportedError({ reason: "Embedded terminal is currently supported on macOS/Linux only." })
     }
-    if (typeof Bun.Terminal !== "function") {
-      return yield* new TerminalUnsupportedError({ reason: "Embedded terminal requires Bun 1.3.5+ with Bun.Terminal support." })
+    if (!ptys.available) {
+      return yield* new TerminalUnsupportedError({ reason: "Embedded terminal requires Bun 1.3.5+ with PTY support." })
     }
 
     const existing = sessions.get(args.terminalId)
@@ -489,19 +468,20 @@ const makeTerminals = Effect.fn("Terminals.make")(function* () {
       existing.rows = normalizeTerminalDimension(args.rows, existing.rows)
       existing.headless.options.scrollback = existing.scrollback
       existing.headless.resize(existing.cols, existing.rows)
-      existing.terminal.resize(existing.cols, existing.rows)
-      yield* signalTerminalProcessGroup(existing.process, "SIGWINCH")
+      yield* existing.pty.resize(existing.cols, existing.rows)
+      yield* existing.pty.signalGroup("SIGWINCH")
       return snapshotOf(existing)
     }
 
-    const shell = yield* resolveShell
+    const shell = yield* resolveShell(machine)
     const cols = normalizeTerminalDimension(args.cols, DEFAULT_COLS)
     const rows = normalizeTerminalDimension(args.rows, DEFAULT_ROWS)
     const scrollback = clampScrollback(args.scrollback)
     const title = path.basename(shell) || "shell"
     const { headless, serializeAddon } = createHeadlessTerminal(cols, rows, scrollback)
 
-    const session: TerminalSession = {
+    // Everything but the PTY, which needs this object for its output.
+    const shadow = {
       terminalId: args.terminalId,
       title,
       cwd: args.projectPath,
@@ -509,17 +489,8 @@ const makeTerminals = Effect.fn("Terminals.make")(function* () {
       cols,
       rows,
       scrollback,
-      status: "running",
-      exitCode: null,
-      process: null,
-      terminal: new Bun.Terminal({
-        cols,
-        rows,
-        name: "xterm-256color",
-        data: (_terminal, data) => {
-          handlePtyOutput(session, data, emit)
-        },
-      }),
+      status: "running" as TerminalSession["status"],
+      exitCode: null as number | null,
       headless,
       serializeAddon,
       decoder: new StringDecoder("utf8"),
@@ -528,18 +499,31 @@ const makeTerminals = Effect.fn("Terminals.make")(function* () {
       modeSequenceTail: "",
     }
 
-    const subprocess = yield* Effect.try({
-      try: () => Bun.spawn([shell, ...resolveShellArgs(shell)], {
-        cwd: args.projectPath,
-        env: createTerminalEnv(),
-        terminal: session.terminal,
-      }),
-      catch: (cause) => new TerminalSpawnError({ terminalId: args.terminalId, shell, cwd: args.projectPath, cause }),
-    }).pipe(Effect.tapError(() => Effect.sync(() => disposeSession(session))))
-    session.process = subprocess
-    // The watch belongs to the layer, not to the request that created the
-    // terminal, so it outlives the request.
-    yield* watchExit(args.terminalId, subprocess).pipe(Effect.forkIn(layerScope))
+    // The PTY outlives the request that created it. Its scope stands alone
+    // rather than under the layer's, so only close() ends it, and shutdown
+    // keeps the order close() has: SIGKILL the group, then close the PTY.
+    // Closing the PTY first hangs up the shell, which then exits on its own
+    // and the SIGKILL lands mid-exit (in the tests, the next shell then
+    // stalls at startup).
+    const scope = yield* Scope.make()
+    const pty = yield* ptys.spawn([shell, ...resolveShellArgs(shell, machine.platform)], {
+      cwd: args.projectPath,
+      env: createTerminalEnv(machine),
+      cols,
+      rows,
+      name: "xterm-256color",
+      onData: (data) => {
+        handlePtyOutput(shadow, data, emit)
+      },
+    }).pipe(
+      Scope.provide(scope),
+      Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (error) =>
+        Effect.fail(new TerminalSpawnError({ terminalId: args.terminalId, shell, cwd: args.projectPath, cause: error.cause }))),
+      Effect.tapError(() => Scope.close(scope, Exit.void).pipe(Effect.andThen(Effect.sync(() => disposeShadow(shadow))))),
+    )
+    const session: TerminalSession = Object.assign(shadow, { pty, scope })
+    // The watch, like the PTY, belongs to the layer.
+    yield* watchExit(args.terminalId, pty).pipe(Effect.forkIn(layerScope))
 
     sessions.set(args.terminalId, session)
     return snapshotOf(session)
@@ -580,7 +564,7 @@ const makeTerminals = Effect.fn("Terminals.make")(function* () {
       const pids: number[] = []
       for (const session of sessions.values()) {
         if (session.cwd !== cwd || session.status !== "running") continue
-        const pid = session.process?.pid
+        const pid = session.pty.pid
         if (typeof pid === "number") {
           pids.push(pid)
         }

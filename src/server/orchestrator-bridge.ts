@@ -44,7 +44,7 @@ export class ChatOrchestrator {
   }
   getContext(actorChatId: string) { return runKannaSync(this.service.getContext(actorChatId)) }
   listChats(input: Parameters<Service["listChats"]>[0]) { return runKannaSync(this.service.listChats(input)) }
-  readChat(input: Parameters<Service["readChat"]>[0]) { return runKannaSync(this.service.readChat(input)) }
+  readChat(input: Parameters<Service["readChat"]>[0]) { return runKanna(this.service.readChat(input)) }
   listSchedules(input: Parameters<Service["listSchedules"]>[0]) { return runKannaSync(this.service.listSchedules(input)) }
 
   // Writes, for an agent

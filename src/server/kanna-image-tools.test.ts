@@ -8,6 +8,7 @@ import { displayAttachments } from "../shared/display-tools"
 import { normalizeToolCall } from "../shared/tools"
 import { KannaToolRuntime } from "./kanna-tools"
 import { IMAGE_MODEL, createGenerateImagesTool, pathForMimeType } from "./kanna-image-tools"
+import { testPlatformContext } from "./platform/testing"
 
 // 1x1 images. The tool trusts the bytes, not the extension the model chose.
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64")
@@ -25,7 +26,7 @@ async function project() {
 function runtime(dir: string, fetchImpl: (url: string, init?: RequestInit) => Promise<Response>) {
   const entries: TranscriptEntry[] = []
   const tool = createGenerateImagesTool({ readCredentials: Effect.succeed({ apiKey: "key", baseUrl: "https://openrouter.test/api/v1/" }), fetchImpl })
-  const host = new KannaToolRuntime({ chatId: "chat-1", cwd: dir, dataDir: dir,
+  const host = new KannaToolRuntime({ platform: testPlatformContext, chatId: "chat-1", cwd: dir, dataDir: dir,
     emit: async entry => { entries.push(entry) },
     requestInput: async () => ({}),
   }, [tool])

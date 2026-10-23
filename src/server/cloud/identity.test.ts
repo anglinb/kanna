@@ -91,7 +91,7 @@ describe("normalizeCloudIdentity", () => {
       appOrigin: "https://s-x.kanna.sh/",
       tunnelToken: "tt",
       tunnelHost: "https://tun-m1.kanna.sh/",
-    })
+    }, () => {}, {})
     expect(normalized).toEqual({
       controlUrl: DEFAULT_CLOUD_CONTROL_URL,
       machineToken: "t",
@@ -116,6 +116,7 @@ describe("normalizeCloudIdentity", () => {
           // v1 file: no tunnel credentials
         },
         (message) => warnings.push(message),
+        {},
       ),
     ).toBeNull()
     expect(warnings[0]).toContain("tunnelToken")
@@ -123,7 +124,7 @@ describe("normalizeCloudIdentity", () => {
   })
 
   test("enabled: false is preserved", () => {
-    const normalized = normalizeCloudIdentity({ ...IDENTITY, enabled: false })
+    const normalized = normalizeCloudIdentity({ ...IDENTITY, enabled: false }, () => {}, {})
     expect(normalized?.enabled).toBe(false)
   })
 })

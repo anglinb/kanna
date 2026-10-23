@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib"
 import { Cause, Effect, Schema } from "effect"
 import type { KannaStatus, SubagentActivity, WaitingOn } from "../shared/types"
 import type { AppSettings } from "./app-settings"
@@ -25,7 +26,7 @@ export class ChatWindowPreparationError extends Schema.TaggedError<ChatWindowPre
  * cut down to what begins there. Keep the two in step.
  */
 export interface ChatWindowRouteDeps {
-  store: Pick<EventStore["Service"], "state" | "getChat" | "getClientTranscript" | "getInitialTranscriptWindowStart"> & Partial<Pick<EventStore["Service"], "prepareTranscript">>
+  store: Pick<EventStore["Service"], "state" | "getChat" | "getClientTranscript" | "getInitialTranscriptWindowStart"> & Partial<Pick<EventStore["Service"], "retainTranscript">>
   agent: {
     getActiveStatuses: () => Map<string, KannaStatus>
     /** Optional for the same reason as `getSubagents`. Preferred: it also has the chats waiting on a subagent. */
@@ -75,9 +76,10 @@ export const handleChatWindow = Effect.fn("ChatWindowRoute.handleChatWindow")(fu
     return new Response(null, { status: 405, headers: { Allow: "GET" } })
   }
   const chatId = decodeURIComponent(match[1])
-  const prepareTranscript = deps.store.prepareTranscript
-  if (deps.store.getChat(chatId) && prepareTranscript) {
-    yield* prepareTranscript(chatId).pipe(Effect.catchCause((cause) =>
+  const retainTranscript = deps.store.retainTranscript
+  if (deps.store.getChat(chatId) && retainTranscript) {
+    // Held until the window is read (the handler is scoped).
+    yield* retainTranscript(chatId).pipe(Effect.catchCause((cause) =>
       Effect.fail(new ChatWindowPreparationError({ chatId, cause: Cause.squash(cause) }))))
   }
   const data = yield* readChatWindow(chatId, deps)
@@ -94,5 +96,5 @@ export const handleChatWindow = Effect.fn("ChatWindowRoute.handleChatWindow")(fu
     return new Response(json, { headers })
   }
   headers.set("Content-Encoding", "gzip")
-  return new Response(Bun.gzipSync(Buffer.from(json)), { headers })
-})
+  return new Response(gzipSync(Buffer.from(json)), { headers })
+}, Effect.scoped)

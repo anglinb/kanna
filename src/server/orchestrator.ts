@@ -751,6 +751,17 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
 
   const refuse = (chatId: string, message: string) => Effect.fail(new ChatActionRefusedError({ chatId, message }))
 
+  /**
+   * Keeps a chat's transcript loaded for the reads that follow, until the
+   * caller's scope closes. A transcript that can't be read dies, as the
+   * synchronous read it replaces threw.
+   */
+  const holdTranscript = (chatId: string) => store.retainTranscript(chatId).pipe(Effect.orDie)
+
+  /** `f`, run with the chat's transcript loaded. */
+  const withTranscript = <A>(chatId: string, f: () => A) =>
+    Effect.scoped(holdTranscript(chatId).pipe(Effect.andThen(Effect.sync(f))))
+
   function tailEntries(chatId: string, count = TAIL_ENTRIES): { entries: TranscriptEntry[]; startIndex: number } {
     const start = Math.max(0, store.getTranscriptLength(chatId) - count)
     const transcript = store.getClientTranscript(chatId, start)
@@ -961,6 +972,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   const readChat = Effect.fn("Orchestrator.readChat")(function* (input: ReadChatInput) {
     yield* Effect.annotateCurrentSpan("chatId", input.chatId)
     const chat = yield* requireChat(input.chatId)
+    yield* holdTranscript(chat.id)
     const limit = input.limit ?? 40
     const kinds = new Set<ReadChatKind>(input.kinds?.length ? input.kinds : DEFAULT_READ_KINDS)
     const total = store.getTranscriptLength(chat.id)
@@ -1002,7 +1014,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
 
     // Tool bodies live in the sidecar. One read for the whole page.
     const toolIds = page.filter((row) => row.kind === "tool_call" || row.kind === "tool_result").map((row) => row.entry._id)
-    const whole = new Map(store.getEntriesById(chat.id, toolIds).map((entry) => [entry._id, entry]))
+    const whole = new Map((yield* store.readEntriesById(chat.id, toolIds).pipe(Effect.orDie)).map((entry) => [entry._id, entry]))
     const textOf = (row: ReadableRow) => readableText(whole.get(row.entry._id) ?? row.entry)
 
     let budget = READ_TOTAL_TEXT_LIMIT
@@ -1059,7 +1071,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
       ...(next ? { next } : {}),
       ...(earlier ? { earlier } : {}),
     }
-  })
+  }, Effect.scoped)
 
   /**
    * The transcript from `fromIndex` to its end, as rows `read_chat` can
@@ -1271,7 +1283,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
   const tellFormerParent = Effect.fn("Orchestrator.tellFormerParent")(function* (parentChatId: string, chatId: string, owed: boolean) {
     const chat = store.getChat(chatId)
     if (owed && chat) {
-      yield* deliverInTurn(parentChatId, chatId, buildSection(parentChatId, chat)).pipe(
+      yield* deliverInTurn(parentChatId, chatId, yield* withTranscript(chatId, () => buildSection(parentChatId, chat))).pipe(
         warnOnFailure(`could not tell chat ${parentChatId} that sub-chat ${chatId} was adopted`),
       )
     }
@@ -1873,7 +1885,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     }
     const parentChatId = chat.parentChatId
     // Written now, from the turn that earned it, before anything can change.
-    const section = buildSection(parentChatId, chat, { replyReported: chat.reportedThrough === through })
+    const section = yield* withTranscript(chatId, () => buildSection(parentChatId, chat, { replyReported: chat.reportedThrough === through }))
     // This report covers the turn that ended last. See `owedTurns`.
     owedTurns.delete(chatId)
     reporting.add(chatId)
@@ -1918,7 +1930,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     const through = chat.lastTurnEndedAt ?? 0
     if (chat.reportedThrough === through) return
     const parentChatId = chat.parentChatId
-    const section = buildSection(parentChatId, chat)
+    const section = yield* withTranscript(chatId, () => buildSection(parentChatId, chat))
     reporting.add(chatId)
     yield* Effect.gen(function* () {
       yield* store.setReportedThrough(chatId, through)

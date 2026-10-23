@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto"
-import { homedir } from "node:os"
 import path from "node:path"
-import process from "node:process"
 import { Cause, Context, Effect, Exit, FileSystem, Layer, Match, Option, Queue, Schema, Stream, type Scope } from "effect"
 import type { ContextWindowUsageSnapshot, HarnessSkill, NormalizedToolCall, TodoItem } from "../shared/types"
 import { asNumber, asRecord, asString } from "../shared/json"
 import { normalizeToolCall } from "../shared/tools"
 import { collectCliOutput, lenient, pumpCliTurn, spawnCli, type SpawnCli } from "./cli-process"
 import type { HarnessEvent, HarnessToolRequest, HarnessTurnEffect } from "./harness-types"
+import { Machine } from "./platform/machine"
 import type { CommandSpawnError } from "./process-utils"
 import { timestamped } from "./transcript"
 
@@ -722,8 +721,8 @@ export function readGrokAuthTokenFromFile(payload: unknown): string | null {
   return null
 }
 
-export function grokProxyBaseUrl(): string {
-  const override = process.env.GROK_CLI_CHAT_PROXY_BASE_URL?.trim()
+export function grokProxyBaseUrl(env: Record<string, string | undefined>): string {
+  const override = env.GROK_CLI_CHAT_PROXY_BASE_URL?.trim()
   if (override) return override.replace(/\/$/, "")
   return GROK_CLI_CHAT_PROXY_BASE_URL
 }
@@ -803,10 +802,11 @@ export class GrokCli extends Context.Service<GrokCli, {
 
 export const makeGrokCli = Effect.fn("GrokCli.make")(function* (options: GrokCliOptions = {}) {
   const fs = yield* FileSystem.FileSystem
-  const spawnProcess = options.spawnProcess ?? spawnCli("grok")
+  const spawnProcess = options.spawnProcess ?? (yield* spawnCli("grok"))
+  const machine = yield* Machine
 
   const listModels = Effect.fn("GrokCli.listModels")(function* (timeoutMs = 30_000) {
-    const output = yield* spawnProcess({ cwd: homedir(), argv: ["models"] }).pipe(
+    const output = yield* spawnProcess({ cwd: machine.homeDirectory, argv: ["models"] }).pipe(
       Effect.flatMap(collectCliOutput),
       Effect.scoped,
       Effect.timeoutOrElse({
@@ -823,7 +823,7 @@ export const makeGrokCli = Effect.fn("GrokCli.make")(function* (options: GrokCli
   })
 
   const listSkills = Effect.fn("GrokCli.listSkills")(function* (
-    args: { readonly cwd: string; readonly timeoutMs?: number } = { cwd: process.cwd() },
+    args: { readonly cwd: string; readonly timeoutMs?: number } = { cwd: machine.workingDirectory },
   ) {
     return yield* spawnProcess({ cwd: args.cwd, argv: ["inspect", "--json"] }).pipe(
       Effect.flatMap(collectCliOutput),
@@ -967,11 +967,10 @@ export class GrokUsageError extends Schema.TaggedError<GrokUsageError>()(
 const decodeAuthFile = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
 
 /** The grok CLI's sign-in token, or null when it is signed out or the file can't be read. */
-export const readGrokAuthToken = Effect.fn("GrokCli.readAuthToken")(function* (
-  filePath = path.join(homedir(), ".grok", "auth.json"),
-) {
+export const readGrokAuthToken = Effect.fn("GrokCli.readAuthToken")(function* (filePath?: string) {
   const fs = yield* FileSystem.FileSystem
-  return yield* fs.readFileString(filePath).pipe(
+  const authPath = filePath ?? path.join((yield* Machine).homeDirectory, ".grok", "auth.json")
+  return yield* fs.readFileString(authPath).pipe(
     Effect.flatMap(decodeAuthFile),
     Effect.map(readGrokAuthTokenFromFile),
     Effect.catchTag("PlatformError", () => Effect.succeed(null)),
@@ -996,7 +995,7 @@ export const fetchGrokAccountUsage = Effect.fn("GrokCli.fetchAccountUsage")(func
   const token = args.token ?? (yield* readGrokAuthToken())
   if (!token) return null
   const fetchFn = args.fetchFn ?? fetch
-  const base = (args.baseUrl ?? grokProxyBaseUrl()).replace(/\/$/, "")
+  const base = (args.baseUrl ?? grokProxyBaseUrl((yield* Machine).env.snapshot())).replace(/\/$/, "")
   const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" }
 
   const get = (url: string) => Effect.tryPromise({

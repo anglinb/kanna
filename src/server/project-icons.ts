@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto"
-import { readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { Clock, Context, Effect, FileSystem, Layer, Match, Option, PubSub, Ref, Schedule, Schema, Semaphore, Stream } from "effect"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
+import { ProcessSpawner, type ProcessSpawnOptions } from "./platform/process-spawner"
 import { readPngHeader, writePngThumbnail, type Background } from "./png-thumbnail"
+import { capturePlatform } from "./platform"
 
 /**
  * A project's icon, found in its own files.
@@ -252,46 +255,45 @@ const fileError = (operation: string, filePath: string) => (cause: unknown) =>
   new ProjectIconFileError({ operation, filePath, cause })
 
 /**
- * `stat` through node rather than `FileSystem`: the platform's stat rounds
- * mtime to whole milliseconds, and `mtimeMs` is stored in `index.json` and
- * hashed into file names, so a rounded value would redo every icon.
+ * `FileSystemExtras.stat` rather than `FileSystem`'s: the platform's stat
+ * rounds mtime to whole milliseconds, and `mtimeMs` is stored in
+ * `index.json` and hashed into file names, so a rounded value would redo
+ * every icon.
  */
 const statFile = (filePath: string) =>
-  Effect.tryPromise({ try: () => stat(filePath), catch: fileError("stat", filePath) })
+  FileSystemExtras.use((files) => files.stat(filePath)).pipe(
+    Effect.catchTag("PlatformError", (cause) => Effect.fail(fileError("stat", filePath)(cause))),
+  )
 
-/** Runs a short-lived child to its end; killed if the caller is interrupted first. */
-const runChild = <C extends { readonly exitCode: number | null; kill(): void }, A>(
-  operation: string,
-  cwd: string,
-  spawn: () => C,
-  read: (child: C) => Promise<A>,
-) =>
-  Effect.acquireRelease(
-    Effect.try({ try: spawn, catch: fileError(operation, cwd) }),
-    (child) => Effect.sync(() => {
-      if (child.exitCode === null) child.kill()
-    }),
-  ).pipe(
-    Effect.flatMap((child) => Effect.tryPromise({ try: () => read(child), catch: fileError(operation, cwd) })),
+/**
+ * Runs a short-lived child to its end, with its stdout as text when piped.
+ * Killed (SIGTERM) after `GIT_TIMEOUT_MS`, and if the caller is interrupted
+ * first. Succeeds with the exit code (null when a signal ended it).
+ */
+const runChild = (operation: string, cwd: string, argv: ReadonlyArray<string>, options: ProcessSpawnOptions) =>
+  Effect.gen(function* () {
+    const spawner = yield* ProcessSpawner
+    const child = yield* spawner.spawn(argv, options)
+    yield* child.kill().pipe(Effect.delay(GIT_TIMEOUT_MS), Effect.forkScoped)
+    const [output, exit] = yield* Effect.all([
+      Stream.mkString(Stream.decodeText(child.stdout)),
+      child.exited,
+    ], { concurrency: "unbounded" })
+    return { output, exitCode: exit.exitCode }
+  }).pipe(
+    Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (cause) => Effect.fail(fileError(operation, cwd)(cause))),
     Effect.scoped,
   )
 
 /** Candidate paths git tracks under `root`, or null when `root` is not in a repo. */
 const listTrackedPaths = Effect.fn("ProjectIcons.listTrackedPaths")(function* (root: string) {
-  return yield* runChild(
-    "git ls-files",
-    root,
-    () => Bun.spawn(["git", "ls-files", "-z", "--", ...GIT_PATHSPECS], {
-      cwd: root,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "ignore",
-      timeout: GIT_TIMEOUT_MS,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
-    }),
-    (child) => Promise.all([new Response(child.stdout).text(), child.exited]),
-  ).pipe(
-    Effect.map(([output, exitCode]) => (exitCode === 0 ? output.split("\0").filter(Boolean) : null)),
+  const machine = yield* Machine
+  return yield* runChild("git ls-files", root, ["git", "ls-files", "-z", "--", ...GIT_PATHSPECS], {
+    cwd: root,
+    stdout: "pipe",
+    env: { ...machine.env.snapshot(), GIT_OPTIONAL_LOCKS: "0" },
+  }).pipe(
+    Effect.map(({ output, exitCode }) => (exitCode === 0 ? output.split("\0").filter(Boolean) : null)),
     Effect.catchTag(FILE_ERROR, () => Effect.succeed(null)),
   )
 })
@@ -300,10 +302,11 @@ const listTrackedPaths = Effect.fn("ProjectIcons.listTrackedPaths")(function* (r
  * Candidate paths by reading folders, breadth first and bounded. For a
  * project outside git, and for one whose icon git doesn't track yet.
  *
- * `readdir` through node: the walk needs each entry's type, which
- * `FileSystem.readDirectory` doesn't give without a stat per entry.
+ * `FileSystemExtras.readDirectoryEntries`: the walk needs each entry's type,
+ * which `FileSystem.readDirectory` doesn't give without a stat per entry.
  */
 const walkForPaths = Effect.fn("ProjectIcons.walkForPaths")(function* (root: string) {
+  const files = yield* FileSystemExtras
   const found: string[] = []
   let queue: Array<{ dir: string; depth: number }> = [{ dir: "", depth: 0 }]
   let visited = 0
@@ -313,18 +316,15 @@ const walkForPaths = Effect.fn("ProjectIcons.walkForPaths")(function* (root: str
       if (visited >= WALK_MAX_DIRS) break
       visited += 1
       const directory = path.join(root, dir)
-      const entries = yield* Effect.tryPromise({
-        try: () => readdir(directory, { withFileTypes: true }),
-        catch: fileError("readdir", directory),
-      }).pipe(Effect.catchTag(FILE_ERROR, () => Effect.succeed(null)))
+      const entries = yield* files.readDirectoryEntries(directory).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(null)))
       if (!entries) continue
       for (const entry of entries) {
         const relativePath = dir ? `${dir}/${entry.name}` : entry.name
-        if (entry.isFile()) {
+        if (entry.kind === "File") {
           if (classifyIconPath(relativePath)) found.push(relativePath)
           continue
         }
-        if (!entry.isDirectory() || depth >= WALK_MAX_DEPTH || WALK_SKIP_DIRS.has(entry.name)) continue
+        if (entry.kind !== "Directory" || depth >= WALK_MAX_DEPTH || WALK_SKIP_DIRS.has(entry.name)) continue
         if (entry.name.startsWith(".") && entry.name !== ".idea" && entry.name !== ".github") continue
         // `build` is where electron-builder keeps its icon, and also where
         // every other tool writes its output: look at it, go no deeper than
@@ -426,7 +426,7 @@ const resolveIconComposer = Effect.fn("ProjectIcons.resolveIconComposer")(functi
       if (imageName.includes("/") || imageName.includes("\\")) continue
       const layerPath = path.join(bundleDir, "Assets", imageName)
       const info = yield* statFile(layerPath).pipe(Effect.catchTag(FILE_ERROR, () => Effect.succeed(null)))
-      if (info?.isFile() && (!best || info.size > best.size)) best = { path: layerPath, size: info.size }
+      if (info?.kind === "File" && (!best || info.size > best.size)) best = { path: layerPath, size: info.size }
     }
   }
   if (!best) return null
@@ -536,17 +536,15 @@ const extractIcnsPng = Effect.fn("ProjectIcons.extractIcnsPng")(function* (sourc
 
 /** macOS's own image tool, for what the PNG reader can't take. Decodes in its process, not this one. */
 const resizeWithSips = Effect.fn("ProjectIcons.resizeWithSips")(function* (sourcePath: string, targetPath: string) {
-  if (process.platform !== "darwin") return false
+  const machine = yield* Machine
+  if (machine.platform !== "darwin") return false
   return yield* runChild(
     "sips",
     sourcePath,
-    () => Bun.spawn(
-      ["/usr/bin/sips", "-s", "format", "png", "-Z", String(THUMBNAIL_SIZE), sourcePath, "--out", targetPath],
-      { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: GIT_TIMEOUT_MS },
-    ),
-    (child) => child.exited,
+    ["/usr/bin/sips", "-s", "format", "png", "-Z", String(THUMBNAIL_SIZE), sourcePath, "--out", targetPath],
+    {},
   ).pipe(
-    Effect.map((exitCode) => exitCode === 0),
+    Effect.map(({ exitCode }) => exitCode === 0),
     Effect.catchTag(FILE_ERROR, () => Effect.succeed(false)),
   )
 })
@@ -673,7 +671,7 @@ export const findProjectIcon = Effect.fn("ProjectIcons.findProjectIcon")(functio
     if (!resolved) continue
     const source = resolved.path
     const info = yield* statFile(source).pipe(Effect.catchTag(FILE_ERROR, () => Effect.succeed(null)))
-    if (!info || !info.isFile() || info.size === 0) continue
+    if (!info || info.kind !== "File" || info.size === 0) continue
     const found = {
       source,
       mtimeMs: info.mtimeMs,
@@ -732,6 +730,7 @@ export class ProjectIcons extends Context.Service<ProjectIcons, {
 
 const makeProjectIcons = Effect.fn("ProjectIcons.make")(function* (options: ProjectIconsOptions) {
   const fs = yield* FileSystem.FileSystem
+  const platform = yield* capturePlatform<FileSystem.FileSystem | FileSystemExtras | Machine | ProcessSpawner>()
   const iconsDir = path.join(options.dataDir, "project-icons")
   const indexPath = path.join(iconsDir, "index.json")
   // Touched only inside `tick`, which the semaphore keeps to one at a time.
@@ -858,9 +857,9 @@ const makeProjectIcons = Effect.fn("ProjectIcons.make")(function* (options: Proj
       ticking.withPermitsIfAvailable(1),
       Effect.asVoid,
       Effect.catchTag(FILE_ERROR, (error) => Effect.logWarning("Project icon pass failed:", error.cause)),
-      // The finder's functions take the file system from context; the layer
+      // The finder's functions take the platform from context; the layer
       // already resolved it.
-      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provide(platform),
     )
 
   // `start` is called from outside the layer; the passes belong to the layer,

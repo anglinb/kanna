@@ -1,7 +1,5 @@
 import type { PerformanceLog } from "./performance-log"
-import type { ServerWebSocket } from "bun"
-import { homedir } from "node:os"
-import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Stream } from "effect"
 import { PROTOCOL_VERSION } from "../shared/types"
 import type { ClientCommand, ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
 import { ClientFrameJsonSchema, CompatibleClientEnvelopeSchema } from "../shared/protocol-schema"
@@ -18,9 +16,12 @@ import type { EventStore } from "./event-store"
 import { openExternal } from "./external-open"
 import type { Keybindings } from "./keybindings"
 import { runKanna, runKannaSync } from "./effect/bridge"
-import { ServerPlatform } from "./effect/runtime"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
 import type { PortTunnels } from "./port-tunnels"
+import type { PlatformServices } from "./platform"
+import type { ClientSocket } from "./platform/http-host"
+import { Machine } from "./platform/machine"
+import { FileSystemExtras } from "./platform/file-system-extras"
 import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath, resolveLocalPath } from "./paths"
 import { listRecentGitHubRepos } from "./github"
 import { SERVER_PROVIDERS, applyPiFaveModels } from "./provider-catalog"
@@ -33,7 +34,7 @@ import type { ProjectIcons } from "./project-icons"
 import type { ProviderAuth } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimits } from "./usage-limits"
-import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
+import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData, folderModifiedAtReader } from "./read-models"
 import { sendEnvelope as send, sendSerializedSnapshot, shouldIncludeTopic, type SnapshotBroadcastFilter } from "./ws-transport"
 import type {
   AppSettingsSnapshot,
@@ -125,6 +126,13 @@ export interface ClientState {
 }
 
 interface CreateWsRouterArgs {
+  /**
+   * The platform the router's file, git and process commands run on (the
+   * home directory for a dev-box terminal, project folders, clones).
+   */
+  platform: Context.Context<PlatformServices>
+  /** The standalone transcript viewer's build (dist/export-viewer); exports fail without it. */
+  exportViewerDistDir?: string
   diagnostics?: PerformanceLog["Service"]
   store: EventStore["Service"]
   diffStore: Pick<DiffStore["Service"], "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
@@ -182,7 +190,7 @@ interface SnapshotComputationCache {
   chat?: Map<string, ChatSnapshot | null>
 }
 
-function ensureChatEntrySpans(ws: ServerWebSocket<ClientState>) {
+function ensureChatEntrySpans(ws: ClientSocket<ClientState>) {
   if (!ws.data.chatEntrySpans) {
     ws.data.chatEntrySpans = new Map()
   }
@@ -190,7 +198,7 @@ function ensureChatEntrySpans(ws: ServerWebSocket<ClientState>) {
   return ws.data.chatEntrySpans
 }
 
-function ensureChatProvidersSent(ws: ServerWebSocket<ClientState>) {
+function ensureChatProvidersSent(ws: ClientSocket<ClientState>) {
   if (!ws.data.chatProvidersSent) {
     ws.data.chatProvidersSent = new Map()
   }
@@ -198,7 +206,7 @@ function ensureChatProvidersSent(ws: ServerWebSocket<ClientState>) {
   return ws.data.chatProvidersSent
 }
 
-function ensureSnapshotSignatures(ws: ServerWebSocket<ClientState>) {
+function ensureSnapshotSignatures(ws: ClientSocket<ClientState>) {
   if (!ws.data.snapshotSignatures) {
     ws.data.snapshotSignatures = new Map()
   }
@@ -207,6 +215,8 @@ function ensureSnapshotSignatures(ws: ServerWebSocket<ClientState>) {
 }
 
 export function createWsRouter({
+  platform,
+  exportViewerDistDir,
   diagnostics,
   store,
   diffStore,
@@ -229,7 +239,7 @@ export function createWsRouter({
   backgroundChatPushIntervalMs = BACKGROUND_CHAT_PUSH_INTERVAL_MS,
   chatCommands: providedChatCommands,
 }: CreateWsRouterArgs) {
-  const sockets = new Set<ServerWebSocket<ClientState>>()
+  const sockets = new Set<ClientSocket<ClientState>>()
   let pendingBroadcastTimer: Fiber.Fiber<void, never> | null = null
   let pendingBroadcastAll = false
   const pendingBroadcastChatIds = new Set<string>()
@@ -281,7 +291,7 @@ export function createWsRouter({
     ])
   }
 
-  function getProtectedDraftChatIds(extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
+  function getProtectedDraftChatIds(extraSockets?: Iterable<ClientSocket<ClientState>>) {
     const protectedChatIds = new Set<string>()
 
     for (const socket of sockets) {
@@ -299,7 +309,7 @@ export function createWsRouter({
     return protectedChatIds
   }
 
-  const pruneStaleEmptyChatsEffect = Effect.fn("WsRouter.pruneStaleEmptyChats")(function* (extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
+  const pruneStaleEmptyChatsEffect = Effect.fn("WsRouter.pruneStaleEmptyChats")(function* (extraSockets?: Iterable<ClientSocket<ClientState>>) {
     const activeChatIds = getProtectedChatIds()
     const protectedDraftChatIds = getProtectedDraftChatIds(extraSockets)
     return yield* store.pruneStaleEmptyChats({
@@ -307,10 +317,10 @@ export function createWsRouter({
       protectedChatIds: protectedDraftChatIds,
     })
   })
-  const maybePruneStaleEmptyChats = (extraSockets?: Iterable<ServerWebSocket<ClientState>>) =>
+  const maybePruneStaleEmptyChats = (extraSockets?: Iterable<ClientSocket<ClientState>>) =>
     runKanna(pruneStaleEmptyChatsEffect(extraSockets))
 
-  const autoArchiveStaleChatsEffect = Effect.fn("WsRouter.autoArchiveStaleChats")(function* (extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
+  const autoArchiveStaleChatsEffect = Effect.fn("WsRouter.autoArchiveStaleChats")(function* (extraSockets?: Iterable<ClientSocket<ClientState>>) {
     const activeChatIds = getProtectedChatIds()
     const protectedDraftChatIds = getProtectedDraftChatIds(extraSockets)
     return yield* store.autoArchiveStaleChats({
@@ -318,10 +328,10 @@ export function createWsRouter({
       protectedChatIds: protectedDraftChatIds,
     })
   })
-  const maybeAutoArchiveStaleChats = (extraSockets?: Iterable<ServerWebSocket<ClientState>>) =>
+  const maybeAutoArchiveStaleChats = (extraSockets?: Iterable<ClientSocket<ClientState>>) =>
     runKanna(autoArchiveStaleChatsEffect(extraSockets))
 
-  const deleteStaleChatsEffect = Effect.fn("WsRouter.deleteStaleChats")(function* (extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
+  const deleteStaleChatsEffect = Effect.fn("WsRouter.deleteStaleChats")(function* (extraSockets?: Iterable<ClientSocket<ClientState>>) {
     const activeChatIds = getProtectedChatIds()
     const protectedDraftChatIds = getProtectedDraftChatIds(extraSockets)
     return yield* store.deleteStaleChats({
@@ -329,7 +339,7 @@ export function createWsRouter({
       protectedChatIds: protectedDraftChatIds,
     })
   })
-  const maybeDeleteStaleChats = (extraSockets?: Iterable<ServerWebSocket<ClientState>>) =>
+  const maybeDeleteStaleChats = (extraSockets?: Iterable<ClientSocket<ClientState>>) =>
     runKanna(deleteStaleChatsEffect(extraSockets))
 
   /**
@@ -448,7 +458,7 @@ export function createWsRouter({
    * reset. The serialized patch is cached on the snapshot by base revision,
    * so sockets at the same point share one diff and one stringify.
    */
-  function sendSidebarPatch(ws: ServerWebSocket<ClientState>, id: string, sidebar: SidebarSnapshotEntry): boolean {
+  function sendSidebarPatch(ws: ClientSocket<ClientState>, id: string, sidebar: SidebarSnapshotEntry): boolean {
     ws.data.sidebarPatchBases ??= new Map()
     const bases = ws.data.sidebarPatchBases
     const base = bases.get(id)
@@ -481,7 +491,35 @@ export function createWsRouter({
       : `project-git:${projectId}:none`
   }
 
-  function createEnvelope(id: string, topic: SubscriptionTopic, cache?: SnapshotComputationCache): ServerEnvelope {
+  const createLocalProjectsEnvelope = Effect.fn("WsRouter.localProjectsEnvelope")(function* (id: string) {
+    const machine = Context.get(platform, Machine)
+    const readModifiedAt = folderModifiedAtReader(Context.get(platform, FileSystemExtras), machine.homeDirectory)
+    const facts = {
+      displayName: machineDisplayName,
+      platform: machine.platform,
+      homeDirectory: machine.homeDirectory,
+    }
+    const initial = deriveLocalProjectsSnapshot(store.state, getDiscoveredProjects(), {
+      displayName: machineDisplayName,
+      platform: machine.platform,
+      homeDirectory: machine.homeDirectory,
+      folderModifiedAt: () => undefined,
+    })
+    // Only the visible projects need stat calls. All state derivations above
+    // run together; file IO may yield without blocking the event loop.
+    const times = new Map(yield* Effect.forEach(initial.projects, (project) => readModifiedAt(project.localPath).pipe(
+      Effect.map((modifiedAt) => [project.localPath, modifiedAt] as const),
+    ), { concurrency: 16 }))
+    // Derive again after IO so an older request cannot restore a project
+    // hidden or removed while its stat calls were in flight.
+    const data = deriveLocalProjectsSnapshot(store.state, getDiscoveredProjects(), {
+      ...facts,
+      folderModifiedAt: (localPath) => times.get(localPath),
+    })
+    return { v: PROTOCOL_VERSION, type: "snapshot", id, snapshot: { type: "local-projects", data } } satisfies ServerEnvelope
+  })
+
+  function createEnvelope(id: string, topic: Exclude<SubscriptionTopic, { type: "local-projects" }>, cache?: SnapshotComputationCache): ServerEnvelope {
     if (topic.type === "sidebar") {
       const sidebar = getSidebarSnapshotCacheEntry(cache)
       return {
@@ -491,21 +529,6 @@ export function createWsRouter({
         snapshot: {
           type: "sidebar",
           data: sidebar.data,
-        },
-      }
-    }
-
-    if (topic.type === "local-projects") {
-      const discoveredProjects = getDiscoveredProjects()
-      const data = deriveLocalProjectsSnapshot(store.state, discoveredProjects, machineDisplayName)
-
-      return {
-        v: PROTOCOL_VERSION,
-        type: "snapshot",
-        id,
-        snapshot: {
-          type: "local-projects",
-          data,
         },
       }
     }
@@ -663,14 +686,14 @@ export function createWsRouter({
     return data
   }
 
-  function ensureChatWindowStarts(ws: ServerWebSocket<ClientState>) {
+  function ensureChatWindowStarts(ws: ClientSocket<ClientState>) {
     if (!ws.data.chatWindowStarts) {
       ws.data.chatWindowStarts = new Map()
     }
     return ws.data.chatWindowStarts
   }
 
-  function ensureChatOutlineCounts(ws: ServerWebSocket<ClientState>) {
+  function ensureChatOutlineCounts(ws: ClientSocket<ClientState>) {
     if (!ws.data.chatOutlineCounts) {
       ws.data.chatOutlineCounts = new Map()
     }
@@ -682,7 +705,7 @@ export function createWsRouter({
   }
 
   /** The socket's window start for a chat subscription, sizing it on first use. */
-  function getChatWindowStart(ws: ServerWebSocket<ClientState>, subscriptionId: string, chatId: string) {
+  function getChatWindowStart(ws: ClientSocket<ClientState>, subscriptionId: string, chatId: string) {
     const starts = ensureChatWindowStarts(ws)
     const existing = starts.get(subscriptionId)
     if (existing !== undefined) return existing
@@ -743,7 +766,7 @@ export function createWsRouter({
    * which is always correct and only costs bytes.
    */
   function seedChatEntrySpanFromClient(
-    ws: ServerWebSocket<ClientState>,
+    ws: ClientSocket<ClientState>,
     subscriptionId: string,
     topic: SubscriptionTopic
   ) {
@@ -774,7 +797,7 @@ export function createWsRouter({
    * arms a single trailing push rather than being dropped, so the last state
    * of a turn — its status flipping to idle — always arrives.
    */
-  function admitBackgroundChatPush(ws: ServerWebSocket<ClientState>, subscriptionId: string) {
+  function admitBackgroundChatPush(ws: ClientSocket<ClientState>, subscriptionId: string) {
     const pushes = ws.data.chatBackgroundPushes ??= new Map()
     const entry = pushes.get(subscriptionId)
     const now = Date.now()
@@ -799,14 +822,14 @@ export function createWsRouter({
     return false
   }
 
-  function clearBackgroundChatPush(ws: ServerWebSocket<ClientState>, subscriptionId: string) {
+  function clearBackgroundChatPush(ws: ClientSocket<ClientState>, subscriptionId: string) {
     const entry = ws.data.chatBackgroundPushes?.get(subscriptionId)
     if (entry?.timer) Effect.runFork(Fiber.interrupt(entry.timer))
     ws.data.chatBackgroundPushes?.delete(subscriptionId)
   }
 
   const pushSnapshotsEffect = Effect.fn("WsRouter.pushSnapshots")(function* (
-    ws: ServerWebSocket<ClientState>,
+    ws: ClientSocket<ClientState>,
     options?: {
       skipPrune?: boolean
       filter?: SnapshotBroadcastFilter
@@ -842,7 +865,8 @@ export function createWsRouter({
       }
       if (topic.type === "chat") {
         if (topic.background && !admitBackgroundChatPush(ws, id)) continue
-        if (store.prepareTranscript && store.getChat(topic.chatId)) yield* store.prepareTranscript(topic.chatId)
+        // Held until this push ends: the reads below answer from the cache.
+        if (store.retainTranscript && store.getChat(topic.chatId)) yield* store.retainTranscript(topic.chatId)
         if (ws.data.subscriptions.get(id) !== topic) continue
         const started = performance.now()
         const spans = ensureChatEntrySpans(ws)
@@ -925,7 +949,10 @@ export function createWsRouter({
       if (precomputedSignature !== null && snapshotSignatures.get(id) === precomputedSignature) {
         continue
       }
-      const envelope = createEnvelope(id, topic, options?.cache)
+      const envelope = topic.type === "local-projects"
+        ? yield* createLocalProjectsEnvelope(id)
+        : createEnvelope(id, topic, options?.cache)
+      if (ws.data.subscriptions.get(id) !== topic) continue
       if (envelope.type !== "snapshot") continue
       const signature = precomputedSignature ?? JSON.stringify(envelope.snapshot)
       if (snapshotSignatures.get(id) === signature) {
@@ -934,7 +961,7 @@ export function createWsRouter({
       snapshotSignatures.set(id, signature)
       send(ws, envelope)
     }
-  })
+  }, Effect.scoped)
 
   const broadcastSnapshotsEffect = Effect.fn("WsRouter.broadcastSnapshots")(function* () {
     const cache: SnapshotComputationCache = {}
@@ -1015,7 +1042,7 @@ export function createWsRouter({
 
   /** Ack a chat command, then push what it changed: the ack first, so the sender never sees its own push before its answer. */
   const finishChatCommandEffect = Effect.fn("WsRouter.finishChatCommand")(function* (
-    ws: ServerWebSocket<ClientState>, id: string, outcome: ChatCommandOutcome<unknown>,
+    ws: ClientSocket<ClientState>, id: string, outcome: ChatCommandOutcome<unknown>,
   ) {
     yield* Effect.sync(() => send(ws, {
       v: PROTOCOL_VERSION,
@@ -1026,7 +1053,7 @@ export function createWsRouter({
     if (outcome.changed) yield* broadcastChatChangeEffect(outcome.changed)
   })
   const createChatEffect = Effect.fn("WsRouter.createChat")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "chat.create" }>,
   ) {
     const requestedId = command.chatId
@@ -1044,14 +1071,14 @@ export function createWsRouter({
   })
 
   const ackResultEffect = Effect.fn("WsRouter.ackResult")(function* <A, E>(
-    ws: ServerWebSocket<ClientState>, id: string, operation: Effect.Effect<A, E>,
+    ws: ClientSocket<ClientState>, id: string, operation: Effect.Effect<A, E>,
   ) {
     const result = yield* operation
     yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
   })
 
   const ackVoidEffect = Effect.fn("WsRouter.ackVoid")(function* <A, E>(
-    ws: ServerWebSocket<ClientState>, id: string, operation: Effect.Effect<A, E>,
+    ws: ClientSocket<ClientState>, id: string, operation: Effect.Effect<A, E>,
   ) {
     yield* operation
     yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
@@ -1185,11 +1212,11 @@ export function createWsRouter({
   agent.setBackgroundErrorReporter?.(broadcastError)
 
   const openProjectEffect = Effect.fn("WsRouter.openProject")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "project.open" }>,
   ) {
-    yield* ensureProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform))
-    const normalizedPath = resolveLocalPath(command.localPath)
+    yield* ensureProjectDirectory(command.localPath).pipe(Effect.provide(platform))
+    const normalizedPath = resolveLocalPath(command.localPath, Context.get(platform, Machine).homeDirectory)
     const existingProjectId = store.state.projectIdsByPath.get(normalizedPath)
     const project = yield* store.openProject(command.localPath)
     yield* refreshDiscovery()
@@ -1199,10 +1226,10 @@ export function createWsRouter({
   })
 
   const createProjectEffect = Effect.fn("WsRouter.createProject")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "project.create" }>,
   ) {
-    const resolved = yield* initializeProjectDirectory(command.localPath).pipe(Effect.provide(ServerPlatform))
+    const resolved = yield* initializeProjectDirectory(command.localPath).pipe(Effect.provide(platform))
     const existingProjectId = store.state.projectIdsByPath.get(resolved)
     const project = yield* store.openProject(resolved, command.title)
     yield* refreshDiscovery()
@@ -1212,11 +1239,11 @@ export function createWsRouter({
   })
 
   const cloneProjectEffect = Effect.fn("WsRouter.cloneProject")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "project.clone" }>,
   ) {
-    const cloneDest = yield* resolveClonePath(command.localPath, command.fallbackPath).pipe(Effect.provide(ServerPlatform))
-    yield* cloneRepository(command.cloneUrl, cloneDest).pipe(Effect.provide(ServerPlatform))
+    const cloneDest = yield* resolveClonePath(command.localPath, command.fallbackPath).pipe(Effect.provide(platform))
+    yield* cloneRepository(command.cloneUrl, cloneDest).pipe(Effect.provide(platform))
     const project = yield* store.openProject(cloneDest, command.title)
     yield* refreshDiscovery()
     yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: cloneDest } }))
@@ -1224,7 +1251,7 @@ export function createWsRouter({
   })
 
   const renameProjectEffect = Effect.fn("WsRouter.renameProject")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "project.rename" }>,
   ) {
     const projectId = "projectId" in command
@@ -1236,7 +1263,7 @@ export function createWsRouter({
   })
 
   const pinProjectEffect = Effect.fn("WsRouter.pinProject")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "project.setPinned" }>,
   ) {
     const pinnedAt = typeof command.pinnedAt === "number" && Number.isFinite(command.pinnedAt)
@@ -1248,7 +1275,7 @@ export function createWsRouter({
   })
 
   const removeProjectEffect = Effect.fn("WsRouter.removeProject")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "project.remove" }>,
   ) {
     // Discovered folders need a saved record so Hide survives discovery and restarts.
@@ -1263,7 +1290,7 @@ export function createWsRouter({
   })
 
   const reorderProjectGroupsEffect = Effect.fn("WsRouter.reorderProjectGroups")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "sidebar.reorderProjectGroups" }>,
   ) {
     yield* store.setSidebarProjectOrder(command.projectIds)
@@ -1272,13 +1299,13 @@ export function createWsRouter({
   })
 
   const createTerminalEffect = Effect.fn("WsRouter.createTerminal")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "terminal.create" }>,
   ) {
     // A null projectId is the dev-box home terminal.
     let projectPath: string
     if (command.projectId === null) {
-      projectPath = homedir()
+      projectPath = Context.get(platform, Machine).homeDirectory
     } else {
       const project = store.getProject(command.projectId)
       if (!project) {
@@ -1300,7 +1327,7 @@ export function createWsRouter({
   })
 
   const writeTerminalEffect = Effect.fn("WsRouter.writeTerminal")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "terminal.input" }>,
   ) {
     yield* terminals.write(command.terminalId, command.data)
@@ -1308,7 +1335,7 @@ export function createWsRouter({
   })
 
   const resizeTerminalEffect = Effect.fn("WsRouter.resizeTerminal")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "terminal.resize" }>,
   ) {
     yield* terminals.resize(command.terminalId, command.cols, command.rows)
@@ -1316,7 +1343,7 @@ export function createWsRouter({
   })
 
   const closeTerminalEffect = Effect.fn("WsRouter.closeTerminal")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "terminal.close" }>,
   ) {
     yield* terminals.close(command.terminalId)
@@ -1327,7 +1354,7 @@ export function createWsRouter({
   })
 
   const tailTerminalEffect = Effect.fn("WsRouter.tailTerminal")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "terminal.tail" }>,
   ) {
     const result = yield* terminals.tail(command.terminalId, command.sinceVersion)
@@ -1335,7 +1362,7 @@ export function createWsRouter({
   })
 
   const listLocalHttpServersEffect = Effect.fn("WsRouter.listLocalHttpServers")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "browser.listLocalHttpServers" }>,
   ) {
     const project = command.projectId ? store.getProject(command.projectId) : null
@@ -1354,7 +1381,7 @@ export function createWsRouter({
   })
 
   const killLocalHttpServerEffect = Effect.fn("WsRouter.killLocalHttpServer")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "browser.killLocalHttpServer" }>,
   ) {
     const result = yield* killLocalHttpServer(command.port)
@@ -1363,7 +1390,7 @@ export function createWsRouter({
   })
 
   const exportStandaloneEffect = Effect.fn("WsRouter.exportStandalone")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "chat.exportStandalone" }>,
   ) {
     const { chat, project } = resolveChatProject(command.chatId)
@@ -1377,12 +1404,12 @@ export function createWsRouter({
       attachmentMode: command.attachmentMode,
       messages,
       resolveMediaPath: (url) => store.resolveTranscriptMediaPath(url),
-    }).pipe(Effect.provide(ServerPlatform))
+    }, { viewerDistDir: exportViewerDistDir }).pipe(Effect.provide(platform))
     yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result }))
   })
 
   const writeAppSettingsPatchEffect = Effect.fn("WsRouter.writeAppSettingsPatch")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "settings.writeAppSettingsPatch" }>,
   ) {
     const previousAnalyticsEnabled = (yield* appSettings.snapshot).analyticsEnabled
@@ -1397,7 +1424,7 @@ export function createWsRouter({
   })
 
   const writeAnalyticsSettingsEffect = Effect.fn("WsRouter.writeAnalyticsSettings")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "settings.writeAppSettings" }>,
   ) {
     const previousAnalyticsEnabled = (yield* appSettings.snapshot).analyticsEnabled
@@ -1412,7 +1439,7 @@ export function createWsRouter({
   })
 
   const refreshUsageEffect = Effect.fn("WsRouter.refreshUsage")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "usage.refresh" }>,
   ) {
     if (!usageLimits) {
@@ -1425,7 +1452,7 @@ export function createWsRouter({
   })
 
   const refreshAuthEffect = Effect.fn("WsRouter.refreshAuth")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "auth.refresh" }>,
   ) {
     if (!providerAuth) {
@@ -1438,7 +1465,7 @@ export function createWsRouter({
   })
 
   const exchangeOpenRouterEffect = Effect.fn("WsRouter.exchangeOpenRouter")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "auth.openrouter.exchange" }>,
   ) {
     if (!providerAuth) throw new Error("Provider auth unavailable.")
@@ -1448,14 +1475,14 @@ export function createWsRouter({
   })
 
   const readLlmProviderEffect = Effect.fn("WsRouter.readLlmProvider")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
   ) {
     const snapshot = yield* llmProvider.read()
     yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
   })
 
   const writeLlmProviderEffect = Effect.fn("WsRouter.writeLlmProvider")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "settings.writeLlmProvider" }>,
   ) {
     const faveModels = command.faveModels ?? (yield* llmProvider.read()).faveModels
@@ -1474,7 +1501,7 @@ export function createWsRouter({
   })
 
   const validateLlmProviderEffect = Effect.fn("WsRouter.validateLlmProvider")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "settings.validateLlmProvider" }>,
   ) {
     const result = yield* llmProvider.validate({
@@ -1501,7 +1528,7 @@ export function createWsRouter({
    * the git snapshot changed.
    */
   const handleChatGitCommandEffect = Effect.fn("WsRouter.handleChatGitCommand")(function* <E>(
-    ws: ServerWebSocket<ClientState>,
+    ws: ClientSocket<ClientState>,
     id: string,
     chatId: string,
     run: (project: ReturnType<typeof resolveChatProject>["project"]) => Effect.Effect<{ result?: unknown; changed?: boolean }, E>,
@@ -1523,7 +1550,7 @@ export function createWsRouter({
    * project that produced that selection even if the active chat has moved on.
    */
   const handleProjectGitCommandEffect = Effect.fn("WsRouter.handleProjectGitCommand")(function* <E>(
-    ws: ServerWebSocket<ClientState>,
+    ws: ClientSocket<ClientState>,
     id: string,
     projectId: string,
     run: (project: ReturnType<typeof resolveChatProject>["project"]) => Effect.Effect<{ result?: unknown; changed?: boolean }, E>,
@@ -1536,7 +1563,7 @@ export function createWsRouter({
   })
 
   const runProjectGitCommandEffect = Effect.fn("WsRouter.runProjectGitCommand")(function* <E>(
-    ws: ServerWebSocket<ClientState>,
+    ws: ClientSocket<ClientState>,
     id: string,
     project: ReturnType<typeof resolveChatProject>["project"],
     run: (project: ReturnType<typeof resolveChatProject>["project"]) => Effect.Effect<{ result?: unknown; changed?: boolean }, E>,
@@ -1558,7 +1585,7 @@ export function createWsRouter({
   })
 
   const setChatReadAnchorEffect = Effect.fn("WsRouter.setChatReadAnchor")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "chat.setReadAnchor" }>,
   ) {
     // The anchor is absent from snapshots, so scrolling has no fan-out.
@@ -1575,7 +1602,7 @@ export function createWsRouter({
   })
 
   const getChatToolEntriesEffect = Effect.fn("WsRouter.getChatToolEntries")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "chat.getToolEntries" }>,
   ) {
     if (command.entryIds.length > MAX_TOOL_ENTRY_REQUEST) {
@@ -1586,7 +1613,7 @@ export function createWsRouter({
   })
 
   const checkForUpdatesEffect = Effect.fn("WsRouter.checkForUpdates")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "update.check" }>,
   ) {
     const snapshot = updateManager
@@ -1605,7 +1632,7 @@ export function createWsRouter({
   })
 
   const loadOlderChatEffect = Effect.fn("WsRouter.loadOlderChat")(function* (
-    ws: ServerWebSocket<ClientState>, id: string,
+    ws: ClientSocket<ClientState>, id: string,
     command: Extract<ClientCommand, { type: "chat.loadOlder" }>,
   ) {
     // Only this socket's foreground subscriptions widen. Each older slice
@@ -1629,15 +1656,16 @@ export function createWsRouter({
     send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { startIndex } })
   })
 
-  const handleCommandEffect = Effect.fn("WsRouter.handleCommand")(function* (ws: ServerWebSocket<ClientState>, message: Extract<ClientEnvelope, { type: "command" }>) {
+  const handleCommandEffect = Effect.fn("WsRouter.handleCommand")(function* (ws: ClientSocket<ClientState>, message: Extract<ClientEnvelope, { type: "command" }>) {
     const { command, id } = message
     return yield* Effect.gen(function* () {
       if (command.type !== "chat.create" && "chatId" in command && typeof command.chatId === "string") {
         yield* (chatCreatedEffect(command.chatId))
       }
-      if ("chatId" in command && typeof command.chatId === "string" && store.prepareTranscript && store.getChat(command.chatId)) {
+      if ("chatId" in command && typeof command.chatId === "string" && store.retainTranscript && store.getChat(command.chatId)) {
         if (["chat.getEntryDebugRaw", "chat.getToolEntries", "chat.loadOlder", "chat.getReadAnchor"].includes(command.type)) {
-          yield* (store.prepareTranscript(command.chatId))
+          // Held until the command finishes (see the Effect.scoped below).
+          yield* (store.retainTranscript(command.chatId))
         }
       }
       switch (command.type) {
@@ -1646,11 +1674,11 @@ export function createWsRouter({
           return
         }
         case "fs.list": {
-          yield* (ackResultEffect(ws, id, listDirectory(command.path, { nearest: command.nearest }).pipe(Effect.provide(ServerPlatform))))
+          yield* (ackResultEffect(ws, id, listDirectory(command.path, { nearest: command.nearest }).pipe(Effect.provide(platform))))
           return
         }
         case "fs.mkdir": {
-          yield* (ackResultEffect(ws, id, createDirectory(command.path).pipe(Effect.provide(ServerPlatform))))
+          yield* (ackResultEffect(ws, id, createDirectory(command.path).pipe(Effect.provide(platform))))
           return
         }
         case "browser.listLocalHttpServers": {
@@ -1676,7 +1704,7 @@ export function createWsRouter({
           if (!project) {
             return yield* Effect.fail(new RouterCommandError({ message: "Project not found" }))
           }
-          yield* (ackResultEffect(ws, id, readProjectQuickActions(project.localPath).pipe(Effect.provide(ServerPlatform))))
+          yield* (ackResultEffect(ws, id, readProjectQuickActions(project.localPath).pipe(Effect.provide(platform))))
           return
         }
         case "project.writeQuickActions": {
@@ -1684,7 +1712,7 @@ export function createWsRouter({
           if (!project) {
             return yield* Effect.fail(new RouterCommandError({ message: "Project not found" }))
           }
-          yield* (ackResultEffect(ws, id, writeProjectQuickActions(project.localPath, command.quickActions).pipe(Effect.provide(ServerPlatform))))
+          yield* (ackResultEffect(ws, id, writeProjectQuickActions(project.localPath, command.quickActions).pipe(Effect.provide(platform))))
           return
         }
         case "update.check": {
@@ -1793,19 +1821,19 @@ export function createWsRouter({
           return
         }
         case "skills.install": {
-          yield* (ackResultEffect(ws, id, installSkill(command.source, command.skillId)))
+          yield* (ackResultEffect(ws, id, installSkill(command.source, command.skillId).pipe(Effect.provide(platform))))
           return
         }
         case "skills.uninstall": {
-          yield* (ackResultEffect(ws, id, uninstallSkill(command.skillId)))
+          yield* (ackResultEffect(ws, id, uninstallSkill(command.skillId).pipe(Effect.provide(platform))))
           return
         }
         case "skills.listInstalled": {
-          yield* (ackResultEffect(ws, id, listInstalledSkills().pipe(Effect.provide(ServerPlatform))))
+          yield* (ackResultEffect(ws, id, listInstalledSkills().pipe(Effect.provide(platform))))
           return
         }
         case "skills.listGlobal": {
-          yield* (ackResultEffect(ws, id, listGlobalSkillsWithSources().pipe(Effect.provide(ServerPlatform))))
+          yield* (ackResultEffect(ws, id, listGlobalSkillsWithSources().pipe(Effect.provide(platform))))
           return
         }
         case "project.open": {
@@ -1817,7 +1845,7 @@ export function createWsRouter({
           return
         }
         case "github.listRecentRepos": {
-          yield* (ackResultEffect(ws, id, listRecentGitHubRepos()))
+          yield* (ackResultEffect(ws, id, listRecentGitHubRepos().pipe(Effect.provide(platform))))
           return
         }
         case "project.rename": {
@@ -1875,7 +1903,7 @@ export function createWsRouter({
           return
         }
         case "system.openExternal": {
-          yield* (ackVoidEffect(ws, id, openExternal(command).pipe(Effect.provide(ServerPlatform))))
+          yield* (ackVoidEffect(ws, id, openExternal(command).pipe(Effect.provide(platform))))
           return
         }
         // The chat actions are defined in chat-commands.ts, where the agents'
@@ -2178,10 +2206,10 @@ export function createWsRouter({
       })
       send(ws, { v: PROTOCOL_VERSION, type: "error", id, message: messageText })
     })))
-  })
+  }, Effect.scoped)
 
   const subscribeEffect = Effect.fn("WsRouter.subscribe")(function* (
-    ws: ServerWebSocket<ClientState>,
+    ws: ClientSocket<ClientState>,
     message: Extract<ClientEnvelope, { type: "subscribe" }>,
   ) {
     const snapshotSignatures = ensureSnapshotSignatures(ws)
@@ -2202,8 +2230,9 @@ export function createWsRouter({
       yield* chatCreatedEffect(chatId)
       if (ws.data.subscriptions.get(message.id) !== message.topic) return
     }
-    if (message.topic.type === "chat" && store.prepareTranscript && store.getChat(message.topic.chatId)) {
-      const prepared = yield* Effect.exit(store.prepareTranscript(message.topic.chatId))
+    if (message.topic.type === "chat" && store.retainTranscript && store.getChat(message.topic.chatId)) {
+      // Held through the first push below (the handler is scoped).
+      const prepared = yield* Effect.exit(store.retainTranscript(message.topic.chatId))
       if (Exit.isFailure(prepared)) {
         send(ws, { v: PROTOCOL_VERSION, type: "error", id: message.id, message: "Cannot read transcript" })
         return
@@ -2232,10 +2261,10 @@ export function createWsRouter({
     if (message.topic.type === "app-settings") {
       refreshInstalledApps?.()
     }
-  })
+  }, Effect.scoped)
 
   const handleMessageEffect = Effect.fn("WsRouter.handleMessage")(function* (
-    ws: ServerWebSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array,
+    ws: ClientSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array,
   ) {
     const json = yield* Effect.result(decodeFrameJson(String(raw)))
     if (Result.isFailure(json)) {
@@ -2293,10 +2322,10 @@ export function createWsRouter({
       }
       return { sockets: sockets.size, subscriptions, subscriptionProviderEntries: providerEntries, chatWindows: windows }
     },
-    handleOpen(ws: ServerWebSocket<ClientState>) {
+    handleOpen(ws: ClientSocket<ClientState>) {
       sockets.add(ws)
     },
-    handleClose(ws: ServerWebSocket<ClientState>) {
+    handleClose(ws: ClientSocket<ClientState>) {
       sockets.delete(ws)
       ws.data.subscriptions.clear()
       ws.data.snapshotSignatures?.clear()
@@ -2323,8 +2352,8 @@ export function createWsRouter({
     pruneStaleEmptyChats: () => maybePruneStaleEmptyChats(),
     autoArchiveStaleChats: () => maybeAutoArchiveStaleChats(),
     deleteStaleChats: () => maybeDeleteStaleChats(),
-    handleMessage(ws: ServerWebSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array) {
-      return runKanna(handleMessageEffect(ws, raw))
+    handleMessage(ws: ClientSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array) {
+      return runKanna(handleMessageEffect(ws, raw).pipe(Effect.provide(platform)))
     },
     disposeEffect,
     dispose: () => { void runKanna(disposeEffect()) },

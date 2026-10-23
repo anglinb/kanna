@@ -1,5 +1,4 @@
 import { query } from "@anthropic-ai/claude-agent-sdk"
-import { homedir } from "node:os"
 import OpenAI from "openai"
 import { Context, Effect, FileSystem, Layer, Option, Schema, Scope, Stream } from "effect"
 import { getDataRootDir } from "../shared/branding"
@@ -7,8 +6,11 @@ import type { LlmProviderSnapshot } from "../shared/types"
 import { type ClaudeExecutableError, requireClaudeExecutable } from "./claude-executable"
 import { CodexAppServer, makeCodexAppServer } from "./codex-app-server"
 import { runKannaSync } from "./effect/bridge"
-import { ServerPlatform } from "./effect/runtime"
+import type { PlatformServices } from "./platform"
 import { type LlmProviderFileError, readLlmProviderSnapshot } from "./llm-provider"
+import { FileSystemExtras } from "./platform/file-system-extras"
+import { Machine } from "./platform/machine"
+import { ProcessSpawner } from "./platform/process-spawner"
 import type { CommandSpawnError } from "./process-utils"
 
 const CLAUDE_STRUCTURED_TIMEOUT_MS = 5_000
@@ -99,8 +101,8 @@ export class QuickResponse extends Context.Service<QuickResponse, {
   }))
 }
 
-export function getQuickResponseWorkspace(env: Record<string, string | undefined> = process.env) {
-  return getDataRootDir(homedir(), env)
+export function getQuickResponseWorkspace(env: Record<string, string | undefined>, homeDirectory: string) {
+  return getDataRootDir(homeDirectory, env)
 }
 
 const decodeJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
@@ -161,6 +163,7 @@ const requestError = (provider: QuickResponseProvider) => (cause: unknown) =>
  */
 export const runClaudeStructured = Effect.fn("QuickResponse.runClaude")(function* (request: QuickResponseRequest) {
   const pathToClaudeCodeExecutable = yield* requireClaudeExecutable()
+  const machine = yield* Machine
   return yield* Effect.acquireUseRelease(
     Effect.try({
       try: () => query({
@@ -178,7 +181,7 @@ export const runClaudeStructured = Effect.fn("QuickResponse.runClaude")(function
             type: "json_schema",
             schema: request.schema,
           },
-          env: { ...process.env },
+          env: machine.env.snapshot(),
         },
       }),
       catch: requestError("claude"),
@@ -241,14 +244,17 @@ export const runCodexStructured = Effect.fn("QuickResponse.runCodex")(function* 
 })
 
 const makeQuickResponse = Effect.fn("QuickResponse.make")(function* (options: QuickResponseOptions) {
-  const fs = yield* FileSystem.FileSystem
+  const machine = yield* Machine
+  const platformContext = Context.pick(FileSystem.FileSystem, Machine, ProcessSpawner, FileSystemExtras)(
+    yield* Effect.context<FileSystem.FileSystem | Machine | ProcessSpawner | FileSystemExtras>(),
+  )
   // Its sessions are killed when the layer closes.
   const codexManager = options.codexManager ?? (yield* makeCodexAppServer())
   const readLlmProvider = options.readLlmProvider
-    ?? readLlmProviderSnapshot().pipe(Effect.provideService(FileSystem.FileSystem, fs))
+    ?? readLlmProviderSnapshot().pipe(Effect.provide(platformContext))
   const runOpenAI = options.runOpenAIStructured ?? runOpenAIStructured
   const runClaude: QuickResponseRunner = options.runClaudeStructured
-    ?? ((request) => runClaudeStructured(request).pipe(Effect.provideService(FileSystem.FileSystem, fs)))
+    ?? ((request) => runClaudeStructured(request).pipe(Effect.provide(platformContext)))
   const runCodex: QuickResponseRunner = options.runCodexStructured
     ?? ((request) => runCodexStructured(codexManager, request))
 
@@ -293,7 +299,7 @@ const makeQuickResponse = Effect.fn("QuickResponse.make")(function* (options: Qu
     Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan("task", args.task)
       const request: QuickResponseRequest = {
-        cwd: getQuickResponseWorkspace(),
+        cwd: getQuickResponseWorkspace(machine.env.snapshot(), machine.homeDirectory),
         task: args.task,
         prompt: args.prompt,
         schema: args.schema,
@@ -331,12 +337,15 @@ let sharedQuickResponse: QuickResponse["Service"] | null = null
  * CodexAppServer instead of building a fallback stack per request.
  * Goes away when those callers get the service from the server's runtime.
  */
-export function getSharedQuickResponse(): QuickResponse["Service"] {
+export function getSharedQuickResponse(platform: Context.Context<PlatformServices>): QuickResponse["Service"] {
   // A scope never closed, as the process-wide instance lives as long as the process.
-  sharedQuickResponse ??= runKannaSync(makeQuickResponse({}).pipe(Effect.provide(ServerPlatform), Scope.provide(Scope.makeUnsafe())))
+  sharedQuickResponse ??= runKannaSync(makeQuickResponse({}).pipe(Effect.provide(platform), Scope.provide(Scope.makeUnsafe())))
   return sharedQuickResponse
 }
 
-/** Runs `effect` against the process-wide `QuickResponse`. */
-export const withSharedQuickResponse = <A, E>(effect: Effect.Effect<A, E, QuickResponse>): Effect.Effect<A, E> =>
-  Effect.suspend(() => Effect.provideService(effect, QuickResponse, getSharedQuickResponse()))
+/** Runs `effect` against the process-wide `QuickResponse`, built on `platform` the first time. */
+export const withSharedQuickResponse = <A, E>(
+  platform: Context.Context<PlatformServices>,
+  effect: Effect.Effect<A, E, QuickResponse>,
+): Effect.Effect<A, E> =>
+  Effect.suspend(() => Effect.provideService(effect, QuickResponse, getSharedQuickResponse(platform)))

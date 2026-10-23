@@ -15,7 +15,7 @@ compatible: this is a refactor, not a behaviour change.
 
 | File | What it is |
 |---|---|
-| `runtime.ts` | `ServerPlatform`: Bun's FileSystem, Path and process services plus the logger. Every service layer is provided with it. |
+| `runtime.ts` | `ServerPlatform`: the Bun platform bindings (`platform/bun`: FileSystem, Path, ProcessSpawner, PtySpawner, Machine, HostProcess, FileSystemExtras, HttpHost) plus the logger. Only composition roots import it; see `docs/runtime-portability.md`. |
 | `logger.ts` | Keeps the `[kanna] message` console shape for `Effect.log*`. Don't prefix messages with `LOG_PREFIX` yourself. |
 | `bridge.ts` | `runKanna` / `runKannaSync` / `subscribeKanna`: the boundary for Bun, SDK, and test APIs that require Promise or listener interfaces. Service-to-service calls use Effects directly. |
 | `testing.ts` | `runTest(effect)`: runs an Effect test body scoped, with `ServerPlatform`. Stands in for `it.effect`/`it.scoped`. |
@@ -168,7 +168,7 @@ fakes retain Promise entry points at their boundaries.
 | Terminals & serving | terminal-manager, local-http-servers, port-tunnels, share, auth, transcribe, png-thumbnail, project-icons | done |
 | Cloud | cloud/*, discovery, background-tasks | done |
 | Harness helpers & shared | harness-skills, skills, harness-instructions, visualization-*, handoff, agent-to-agent, session-artifacts; Schema for `shared/protocol.ts` client envelopes and `shared/tools.ts` parsing | done |
-| Event store | event-store, read-models, transcript-payloads (sync readers) | done |
+| Event store | event-store, read-models, transcript-payloads (async loading and scoped cache leases) | done |
 | Git | diff-store, github, github-branch-pr, github-checks | done |
 | Derived state | worktree-probe, worktree-snapshot, touched-file-backfill, visualization-heights | done |
 | Provider plumbing | provider-auth, claude-executable, quick-response, generate-commit-message, generate-title | done |

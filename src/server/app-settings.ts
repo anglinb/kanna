@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto"
-import { homedir } from "node:os"
 import path from "node:path"
 import { Context, Effect, FileSystem, Latch, Layer, Option, Schema, Stream, SubscriptionRef } from "effect"
 import { getSettingsFilePath } from "../shared/branding"
@@ -10,6 +9,7 @@ import {
 } from "../shared/transcript-window"
 import { getDefaultEditorCommandTemplate, isEditorPreset } from "../shared/editor-presets"
 import { formatDisplayPath } from "./paths"
+import { Machine } from "./platform/machine"
 import {
   mergeProviderDefaultsPatch,
   normalizeProviderDefaults,
@@ -235,7 +235,8 @@ function toSnapshot(
 
 function normalizeAppSettings(
   value: unknown,
-  filePath = getSettingsFilePath(homedir())
+  filePath: string,
+  homeDir: string,
 ): NormalizedAppSettings {
   const source = value && typeof value === "object" && !Array.isArray(value)
     ? value as AppSettingsFile
@@ -320,7 +321,7 @@ function normalizeAppSettings(
     setupCompleted: source?.setupCompleted === true,
     setupDismissed: source?.setupDismissed === true,
     warning: null,
-    filePathDisplay: formatDisplayPath(filePath),
+    filePathDisplay: formatDisplayPath(filePath, homeDir),
   }
 
   const shouldWrite = JSON.stringify(source ? toComparablePayload(source) : null) !== JSON.stringify(toFilePayload(state))
@@ -364,7 +365,7 @@ function toComparablePayload(source: AppSettingsFile) {
   }
 }
 
-function applyPatch(state: AppSettingsState, patch: AppSettingsPatch): AppSettingsState {
+function applyPatch(state: AppSettingsState, patch: AppSettingsPatch, homeDir: string): AppSettingsState {
   return normalizeAppSettings({
     ...toFilePayload(state),
     ...patch,
@@ -385,7 +386,7 @@ function applyPatch(state: AppSettingsState, patch: AppSettingsPatch): AppSettin
       ...patch.paneVisibility,
     },
     providerDefaults: mergeProviderDefaultsPatch(state.providerDefaults, patch.providerDefaults),
-  }, state.filePathDisplay).payload
+  }, state.filePathDisplay, homeDir).payload
 }
 
 export class AppSettingsFileError extends Schema.TaggedError<AppSettingsFileError>()(
@@ -399,11 +400,12 @@ export class AppSettingsFileError extends Schema.TaggedError<AppSettingsFileErro
 
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
 
-export const defaultAppSettingsFilePath = () => getSettingsFilePath(homedir())
+/** The runtime profile's settings file under `homeDir` (the machine's home, `Machine.homeDirectory`). */
+export const defaultAppSettingsFilePath = (homeDir: string) => getSettingsFilePath(homeDir)
 
 /** The snapshot of a machine with no settings file. Its analytics user id is fresh each call. */
-export function defaultAppSettingsSnapshot(filePath = defaultAppSettingsFilePath()): AppSettingsSnapshot {
-  return toSnapshot(normalizeAppSettings(undefined, filePath).payload)
+export function defaultAppSettingsSnapshot(filePath: string, homeDir: string): AppSettingsSnapshot {
+  return toSnapshot(normalizeAppSettings(undefined, filePath, homeDir).payload)
 }
 
 /** The settings file's text, or none when it does not exist. */
@@ -422,28 +424,31 @@ const parseSettingsJson = (text: string) =>
     Effect.catchTag("SchemaError", () => Effect.succeedNone),
   )
 
+/** `filePath` defaults to the machine's settings file. */
 export const readAppSettingsSnapshot = Effect.fn("AppSettings.readSnapshot")(function* (
-  filePath: string = defaultAppSettingsFilePath(),
+  filePathOption?: string,
 ) {
+  const homeDir = (yield* Machine).homeDirectory
+  const filePath = filePathOption ?? defaultAppSettingsFilePath(homeDir)
   yield* Effect.annotateCurrentSpan("filePath", filePath)
   const text = yield* readSettingsText(yield* FileSystem.FileSystem, filePath)
   if (Option.isNone(text)) {
-    return toSnapshot(normalizeAppSettings(undefined, filePath).payload)
+    return toSnapshot(normalizeAppSettings(undefined, filePath, homeDir).payload)
   }
   if (!text.value.trim()) {
     return {
-      ...toSnapshot(normalizeAppSettings(undefined, filePath).payload),
+      ...toSnapshot(normalizeAppSettings(undefined, filePath, homeDir).payload),
       warning: "Settings file was empty. Using defaults.",
     } satisfies AppSettingsSnapshot
   }
   const parsed = yield* parseSettingsJson(text.value)
   if (Option.isNone(parsed)) {
     return {
-      ...toSnapshot(normalizeAppSettings(undefined, filePath).payload),
+      ...toSnapshot(normalizeAppSettings(undefined, filePath, homeDir).payload),
       warning: "Settings file is invalid JSON. Using defaults.",
     } satisfies AppSettingsSnapshot
   }
-  return toSnapshot(normalizeAppSettings(parsed.value, filePath).payload)
+  return toSnapshot(normalizeAppSettings(parsed.value, filePath, homeDir).payload)
 })
 
 interface AppSettingsCurrent {
@@ -478,12 +483,15 @@ export class AppSettings extends Context.Service<AppSettings, {
   /** Publish the terminal-detection result; same shape as the editor one. */
   readonly setInstalledTerminals: (installedTerminals: TerminalPreset[]) => Effect.Effect<void>
 }>()("@kanna/server/AppSettings") {
-  static readonly layer = (filePath = defaultAppSettingsFilePath(), options: { devbox?: boolean } = {}) =>
+  /** `filePath` defaults to the machine's settings file. */
+  static readonly layer = (filePath?: string, options: { devbox?: boolean } = {}) =>
     Layer.effect(this, makeAppSettings(filePath, options))
 }
 
-const makeAppSettings = Effect.fn("AppSettings.make")(function* (filePath: string, options: { devbox?: boolean }) {
+const makeAppSettings = Effect.fn("AppSettings.make")(function* (filePathOption: string | undefined, options: { devbox?: boolean }) {
   const fs = yield* FileSystem.FileSystem
+  const homeDir = (yield* Machine).homeDirectory
+  const filePath = filePathOption ?? defaultAppSettingsFilePath(homeDir)
   yield* Effect.annotateCurrentSpan("filePath", filePath)
 
   const makeDirectory = fs.makeDirectory(path.dirname(filePath), { recursive: true }).pipe(
@@ -501,17 +509,17 @@ const makeAppSettings = Effect.fn("AppSettings.make")(function* (filePath: strin
     const text = yield* readSettingsText(fs, filePath)
     const hasText = Option.isSome(text) && text.value.trim().length > 0
     if (Option.isSome(text) && !hasText) {
-      const normalized = normalizeAppSettings(undefined, filePath)
+      const normalized = normalizeAppSettings(undefined, filePath, homeDir)
       if (persistNormalized) yield* writeState(normalized.payload)
       return { ...normalized.payload, warning: "Settings file was empty. Using defaults." } satisfies AppSettingsState
     }
     const parsed = Option.isSome(text) ? yield* parseSettingsJson(text.value) : Option.none()
     if (Option.isSome(parsed)) {
-      const normalized = normalizeAppSettings(parsed.value, filePath)
+      const normalized = normalizeAppSettings(parsed.value, filePath, homeDir)
       if (persistNormalized && normalized.shouldWrite) yield* writeState(normalized.payload)
       return normalized.payload
     }
-    const normalized = normalizeAppSettings(undefined, filePath)
+    const normalized = normalizeAppSettings(undefined, filePath, homeDir)
     if (persistNormalized) yield* writeState(normalized.payload)
     return {
       ...normalized.payload,
@@ -535,9 +543,9 @@ const makeAppSettings = Effect.fn("AppSettings.make")(function* (filePath: strin
   const writePatch = Effect.fn("AppSettings.writePatch")(function* (patch: AppSettingsPatch) {
     const current = yield* SubscriptionRef.get(ref)
     const nextState: AppSettingsState = {
-      ...applyPatch(current.state, patch),
+      ...applyPatch(current.state, patch, homeDir),
       warning: null,
-      filePathDisplay: formatDisplayPath(filePath),
+      filePathDisplay: formatDisplayPath(filePath, homeDir),
     }
     yield* makeDirectory
     yield* writeState(nextState)

@@ -8,13 +8,14 @@
  * log lines, so they stay plain callbacks.
  */
 
-import process from "node:process"
-import { createInterface } from "node:readline/promises"
 import { Effect, type FileSystem, Match, Schedule, Schema } from "effect"
 import { renderANSI } from "uqr"
 import { getCloudFilePathDisplay, LOG_PREFIX } from "../../shared/branding"
 import { getMachineDisplayName } from "../machine-name"
-import { createCloudApiClient, describeError, type CloudApiClient } from "./api-client"
+import type { HostProcess } from "../platform/host-process"
+import { Machine } from "../platform/machine"
+import type { ProcessSpawner } from "../platform/process-spawner"
+import { createCloudApiClient, type CloudApiClient } from "./api-client"
 import {
   deleteCloudIdentity,
   readCloudIdentity,
@@ -40,7 +41,7 @@ export class PairPromptError extends Schema.TaggedError<PairPromptError>()(
   },
 ) {}
 
-type IdentityEffect<A> = Effect.Effect<A, CloudIdentityFileError, FileSystem.FileSystem>
+type IdentityEffect<A> = Effect.Effect<A, CloudIdentityFileError, FileSystem.FileSystem | Machine | HostProcess>
 
 export interface PairCommandDeps {
   log: (message: string) => void
@@ -49,31 +50,22 @@ export interface PairCommandDeps {
   writeIdentity?: (identity: CloudIdentity) => IdentityEffect<void>
   deleteIdentity?: () => IdentityEffect<boolean>
   createApiClient?: (controlUrl?: string) => CloudApiClient
-  getMachineName?: () => Effect.Effect<string, never, FileSystem.FileSystem>
+  getMachineName?: () => Effect.Effect<string, never, MachineNameServices>
+  /**
+   * Asks the user a yes/no question. The CLI passes its terminal prompt
+   * (cli-runtime.ts); without one, nobody is there to ask and the answer is yes.
+   */
   confirm?: (question: string) => Effect.Effect<boolean, PairPromptError>
   /** Device-code flow seams (bare `kanna pair`). */
   createPairSession?: CreatePairSession
   renderQr?: (url: string) => string
 }
 
-type CreatePairSession = (
-  deps: PairSessionDeps<FileSystem.FileSystem>,
-) => Effect.Effect<PairSessionManager, never, FileSystem.FileSystem>
+type MachineNameServices = FileSystem.FileSystem | Machine | ProcessSpawner
 
-const promptConfirm = Effect.fn("PairCommand.confirm")(function* (question: string) {
-  if (!process.stdin.isTTY) {
-    return true
-  }
-  const answer = yield* Effect.acquireUseRelease(
-    Effect.sync(() => createInterface({ input: process.stdin, output: process.stdout })),
-    (rl) => Effect.tryPromise({
-      try: (signal) => rl.question(`${question} [y/N] `, { signal }),
-      catch: (cause) => new PairPromptError({ message: describeError(cause), cause }),
-    }),
-    (rl) => Effect.sync(() => rl.close()),
-  )
-  return /^y(es)?$/i.test(answer.trim())
-})
+type CreatePairSession = (
+  deps: PairSessionDeps<MachineNameServices | HostProcess>,
+) => Effect.Effect<PairSessionManager, never, MachineNameServices | HostProcess>
 
 /** How often the terminal flow re-reads the (server-side) session state. */
 const DEVICE_FLOW_TICK = "500 millis"
@@ -90,7 +82,7 @@ const runDeviceCodePairing = Effect.fn("PairCommand.deviceCode")(function* (args
   createPairSession: CreatePairSession
   createApiClient: (controlUrl?: string) => CloudApiClient
   writeIdentity: (identity: CloudIdentity) => IdentityEffect<void>
-  getMachineName: () => Effect.Effect<string, never, FileSystem.FileSystem>
+  getMachineName: () => Effect.Effect<string, never, MachineNameServices>
   renderQr: (url: string) => string
 }) {
   const { log, warn } = args
@@ -143,9 +135,10 @@ export const runPairCommand = Effect.fn("PairCommand.run")(function* (args: Pair
   const readIdentity = deps.readIdentity ?? ((warn?: (message: string) => void) => readCloudIdentity(undefined, warn))
   const writeIdentity = deps.writeIdentity ?? ((identity: CloudIdentity) => writeCloudIdentity(identity))
   const deleteIdentity = deps.deleteIdentity ?? (() => deleteCloudIdentity())
-  const createApiClient = deps.createApiClient ?? ((controlUrl?: string) => createCloudApiClient({ controlUrl }))
+  const machine = yield* Machine
+  const createApiClient = deps.createApiClient ?? ((controlUrl?: string) => createCloudApiClient({ controlUrl, env: machine.env.snapshot() }))
   const getMachineName = deps.getMachineName ?? (() => getMachineDisplayName())
-  const confirm = deps.confirm ?? promptConfirm
+  const confirm = deps.confirm ?? (() => Effect.succeed(true))
   const { log, warn } = deps
 
   // While pairing, an unreadable/outdated cloud.json is irrelevant — it's

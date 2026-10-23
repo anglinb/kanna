@@ -1,3 +1,4 @@
+import { homedir } from "node:os"
 import { describe, expect, test } from "bun:test"
 import { Effect, Result } from "effect"
 import type { LlmProviderSnapshot } from "../shared/types"
@@ -139,7 +140,7 @@ describe("QuickResponse", () => {
         }),
       })
 
-      expect(claudeCwd).toBe(getQuickResponseWorkspace(process.env))
+      expect(claudeCwd).toBe(getQuickResponseWorkspace(process.env, homedir()))
       expect(claudeCwd.endsWith("/.kanna-dev")).toBe(true)
     } finally {
       if (previousProfile === undefined) {

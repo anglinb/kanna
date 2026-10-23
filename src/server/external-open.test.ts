@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, type FileSystem, Result } from "effect"
+import { Effect, Result } from "effect"
 import { runTest } from "./effect/testing"
+import type { PlatformServices } from "./platform"
 import {
   buildDefaultOpenCommand,
   buildEditorCommand,
@@ -10,7 +11,7 @@ import {
   tokenizeCommandTemplate,
 } from "./external-open"
 
-async function failure<A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) {
+async function failure<A, E>(effect: Effect.Effect<A, E, PlatformServices>) {
   const result = await runTest(Effect.result(effect))
   if (!Result.isFailure(result)) throw new Error("expected the effect to fail")
   return result.failure
