@@ -1,3 +1,5 @@
+import type { McpBridgeServers } from "../shared/mcp"
+import type { ToolDefinition } from "@mariozechner/pi-coding-agent"
 import path from "node:path"
 import type {
   AuthStorage,
@@ -274,6 +276,8 @@ export const MISSING_PI_CONNECTION_MESSAGE =
   "Pi needs a Model Registry connection. Add an API key under Settings → Providers → Model Registry (OpenRouter, OpenAI, or a custom OpenAI-compatible URL), or export OPENROUTER_API_KEY."
 
 export interface StartPiTurnArgs {
+  mcpServers?: McpBridgeServers
+  mcpTools?: ToolDefinition[]
   customTools?: KannaToolHost
   chatId: string
   cwd: string
@@ -291,6 +295,7 @@ export interface StartPiTurnArgs {
 }
 
 interface PiChatSession {
+  mcpSignature?: string
   session: AgentSession
   authStorage: AuthStorage
   modelRegistry: ModelRegistry
@@ -432,7 +437,7 @@ export class PiAgentManager {
     const connectionUnchanged = existing
       && existing.connectionProvider === args.connection.provider
       && existing.connectionBaseUrl === args.connection.baseUrl
-    if (existing && connectionUnchanged && existing.cwd === args.cwd && existing.delegator === Boolean(args.delegator) && !args.forkSession) {
+    if (existing && connectionUnchanged && existing.cwd === args.cwd && existing.delegator === Boolean(args.delegator) && (existing.mcpSignature ?? "{}") === JSON.stringify(args.mcpServers ?? {}) && !args.forkSession) {
       existing.authStorage.setRuntimeApiKey(args.connection.provider, args.connection.apiKey)
       if (existing.model !== args.model) {
         yield* piCall("setModel", () => existing.session.setModel(this.resolveModel(existing.modelRegistry, args.connection, args.model)))
@@ -496,11 +501,12 @@ export class PiAgentManager {
       resourceLoader,
       model: this.resolveModel(modelRegistry, args.connection, args.model),
       thinkingLevel: args.effort,
-      tools: [...PI_TOOL_NAMES, ...(args.customTools ? KANNA_TOOL_NAMES : [])],
-      customTools: args.customTools ? createPiKannaTools(args.customTools) : undefined,
+      tools: [...PI_TOOL_NAMES, ...(args.customTools ? KANNA_TOOL_NAMES : []), ...(args.mcpTools ?? []).map((tool) => tool.name)],
+      customTools: [...(args.customTools ? createPiKannaTools(args.customTools) : []), ...(args.mcpTools ?? [])],
     }))
 
     const chatSession: PiChatSession = {
+      mcpSignature: JSON.stringify(args.mcpServers ?? {}),
       session,
       authStorage,
       modelRegistry,
