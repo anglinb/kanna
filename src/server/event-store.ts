@@ -1,3 +1,4 @@
+import { existingAccountId } from "../shared/accounts"
 import path from "node:path"
 import { Context, Deferred, Effect, FileSystem, Layer, Option, Result, Schema, type Scope } from "effect"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
@@ -277,6 +278,7 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_created":
       return 1
     case "chat_renamed":
+    case "chat_account_set":
     case "chat_provider_set":
     case "chat_plan_mode_set":
     case "chat_auto_plan_set":
@@ -581,6 +583,7 @@ export class EventStore extends Context.Service<EventStore, {
   readonly pruneStaleEmptyChats: (options?: StaleChatSweepOptions) => Effect.Effect<string[], EventStoreFileError | TranscriptMediaError>
   readonly autoArchiveStaleChats: (options?: StaleChatSweepOptions) => Effect.Effect<string[], EventStoreFileError>
   readonly deleteStaleChats: (options?: StaleChatSweepOptions) => Effect.Effect<string[], EventStoreFileError | TranscriptMediaError>
+  readonly setChatAccount: (chatId: string, provider: AgentProvider, accountId: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setChatProvider: (chatId: string, provider: AgentProvider) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setPlanMode: (chatId: string, planMode: boolean) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setAutoPlan: (chatId: string, autoPlan: boolean) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
@@ -986,6 +989,11 @@ class StoreMemory {
         if (!chat) break
         delete chat.archivedAt
         chat.updatedAt = event.timestamp
+        break
+      }
+      case "chat_account_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (chat) chat.accountIds = { ...chat.accountIds, [event.provider]: event.accountId }
         break
       }
       case "chat_provider_set": {
@@ -2311,6 +2319,10 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     Effect.flatMap((chat) => unchanged(chat) ? Effect.void : appendEvent(filePath, makeEvent())),
   )
 
+  const setChatAccount = (chatId: string, provider: AgentProvider, accountId: string) => chatSetting(paths.chatsLog, chatId,
+    (chat) => chat.accountIds?.[provider] === accountId,
+    (): ChatEvent => ({ v: STORE_VERSION, type: "chat_account_set", timestamp: Date.now(), chatId, provider, accountId }))
+
   const setChatProvider = Effect.fn("EventStore.setChatProvider")(function* (chatId: string, provider: AgentProvider) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
     yield* chatSetting(paths.chatsLog, chatId, (chat) => chat.provider === provider, (): ChatEvent => ({
@@ -2444,6 +2456,8 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     if (sourceChat.touchedFiles?.length) {
       yield* recordFilesTouched(chatId, sourceChat.touchedFiles)
     }
+    for (const [provider, accountId] of Object.entries(sourceChat.accountIds ?? {})) yield* setChatAccount(chatId, provider as AgentProvider, accountId)
+    if (!sourceChat.accountIds?.[sourceProvider]) yield* setChatAccount(chatId, sourceProvider, existingAccountId(sourceProvider))
     yield* setChatProvider(chatId, sourceProvider)
     yield* setPlanMode(chatId, sourceChat.planMode)
     yield* setAutoPlan(chatId, sourceChat.autoPlan)
@@ -3166,6 +3180,7 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     pruneStaleEmptyChats,
     autoArchiveStaleChats,
     deleteStaleChats,
+    setChatAccount,
     setChatProvider,
     setPlanMode,
     setAutoPlan,

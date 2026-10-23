@@ -24,6 +24,10 @@ import { createWsRouter } from "./ws-router"
 import { makeFakeUpdateManager } from "./update-manager.fake"
 import { testLocalMachine } from "./testing/local-machine"
 import { testPlatformContext } from "./platform/testing"
+import { makeProviderAccounts } from "./provider-accounts"
+import { ProviderAuth } from "./provider-auth"
+import { Analytics, NoopAnalytics } from "./analytics"
+import { runTest } from "./effect/testing"
 
 function withSidebarGroupDefaults(group: {
   groupKey: string
@@ -234,6 +238,43 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
     ...overrides,
   })
 }
+
+test("managed accounts cross the WebSocket boundary without secrets and reject removal while referenced", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "kanna-router-accounts-"))
+  try {
+    await runTest(Effect.gen(function* () {
+      const legacy = makeFakeProviderAuth({ services: [] })
+      const accounts = yield* makeProviderAccounts(dir).pipe(Effect.provideService(ProviderAuth, legacy.providerAuth), Effect.provideService(Analytics, NoopAnalytics))
+      const state = createEmptyState()
+      const router = createTestRouter({
+        providerAuth: legacy.providerAuth, providerAccounts: accounts,
+        store: createFakeStore({ state }),
+        agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set(), isBusy: () => true } as never,
+      })
+      const ws = new FakeWebSocket()
+      const command = (id: string, command: unknown) => Effect.promise(() => router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "command", id, command })))
+      router.handleOpen(ws as never)
+      try {
+        yield* Effect.promise(() => router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "subscribe", id: "accounts", topic: { type: "provider-auth" } })))
+        yield* command("add", { type: "accounts.create", account: { provider: "cursor", label: "Work", apiKey: "private-cursor-key" } })
+        const acknowledgement = ws.sent.find((message: any) => message.type === "ack" && message.id === "add") as { result: { accountId: string } }
+        expect(acknowledgement.result.accountId).toBeString()
+        const accountId = acknowledgement.result.accountId
+        yield* command("default", { type: "accounts.setDefault", provider: "cursor", accountId })
+        yield* Effect.sleep("10 millis")
+        expect(JSON.stringify(ws.sent)).not.toContain("private-cursor-key")
+        expect(JSON.stringify(ws.sent)).toContain('"cursor":"' + accountId + '"')
+        state.chatsById.set("bound", { id: "bound", accountIds: { cursor: accountId } } as never)
+        yield* command("remove", { type: "accounts.remove", accountId })
+        expect(ws.sent.some((message: any) => message.type === "error" && message.id === "remove")).toBe(true)
+        expect((yield* accounts.snapshot).accounts.some((account) => account.id === accountId)).toBe(true)
+        yield* command("wrong-provider", { type: "auth.login.start", service: "claude", accountId })
+        expect(ws.sent.some((message: any) => message.type === "error" && message.id === "wrong-provider")).toBe(true)
+        expect(legacy.calls).not.toContain("start:claude")
+      } finally { router.dispose() }
+    }))
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
 
 describe("ws-router", () => {
   test("keeps JSON and envelope errors distinct at the WebSocket boundary", async () => {

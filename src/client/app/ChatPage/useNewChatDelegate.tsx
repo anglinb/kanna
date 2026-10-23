@@ -15,6 +15,7 @@ import type { KannaSocket } from "../socket"
 
 /** What a send carries from the composer; see `ChatInput`'s `buildSubmitOptions`. */
 export interface DelegatedSendOptions {
+  accountId?: string
   provider?: AgentProvider
   model?: string
   modelOptions?: ModelOptions
@@ -98,6 +99,7 @@ export function useNewChatDelegate({ enabled, projectId, socket, dialog }: {
       content,
       attachments: options?.attachments ?? [],
       provider: options?.provider,
+      accountId: options?.accountId,
       model: options?.model,
       modelOptions: options?.modelOptions,
       planMode: options?.planMode,

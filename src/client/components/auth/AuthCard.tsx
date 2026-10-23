@@ -113,14 +113,14 @@ export function LoginFlowPanel({
   if (login.phase === "idle") return null
 
   const retry = () => {
-    void socket.command({ type: "auth.login.start", service: service.service }).catch(() => undefined)
+    void socket.command({ type: "auth.login.start", service: service.service, accountId: service.accountId }).catch(() => undefined)
   }
   const submitCode = async () => {
     const cleaned = code.trim()
     if (!cleaned || submitting) return
     setSubmitting(true)
     try {
-      await socket.command({ type: "auth.login.submitCode", service: service.service, code: cleaned })
+      await socket.command({ type: "auth.login.submitCode", service: service.service, accountId: service.accountId, code: cleaned })
       setCode("")
     } catch {
       // Errors surface via the snapshot's login state.
@@ -273,13 +273,13 @@ export function AuthCard({
       void startOpenRouterOauth(socket).catch(() => undefined)
       return
     }
-    void socket.command({ type: "auth.login.start", service: service.service }).catch(() => undefined)
+    void socket.command({ type: "auth.login.start", service: service.service, accountId: service.accountId }).catch(() => undefined)
   }
   const install = () => {
     void socket.command({ type: "auth.install", service: service.service }).catch(() => undefined)
   }
   const cancelLogin = () => {
-    void socket.command({ type: "auth.login.cancel", service: service.service }).catch(() => undefined)
+    void socket.command({ type: "auth.login.cancel", service: service.service, accountId: service.accountId }).catch(() => undefined)
   }
 
   let action: React.ReactNode = null

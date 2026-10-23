@@ -92,6 +92,7 @@ export interface CodexAppServerProcess {
 /** Starts `codex app-server` in `cwd`; the process belongs to the scope. */
 export type SpawnCodexAppServer = (
   cwd: string,
+  environment?: Record<string, string | undefined>,
 ) => Effect.Effect<CodexAppServerProcess, CommandSpawnError, Scope.Scope | ProcessSpawner>
 
 export interface CodexAppServerOptions {
@@ -217,6 +218,7 @@ interface SpawnedAgent {
  * PTY sessions).
  */
 interface SessionContext {
+  accountId?: string
   mcpSignature?: string
   customTools?: KannaMcpEndpoint
   chatId: string
@@ -240,6 +242,8 @@ interface SessionContext {
 }
 
 export interface StartCodexSessionArgs {
+  accountId?: string
+  environment?: Record<string, string | undefined>
   mcpServers?: McpBridgeServers
   customTools?: KannaToolHost
   chatId: string
@@ -946,10 +950,11 @@ function eventSurface(events: ProcessEvents) {
  * node's did. A binary that can't start doesn't fail the spawn: it reports
  * an `error`, which fails the session's first request, as node's spawn did.
  */
-const spawnCodexAppServer: SpawnCodexAppServer = Effect.fn("CodexAppServer.spawnProcess")(function* (cwd: string) {
+const spawnCodexAppServer: SpawnCodexAppServer = Effect.fn("CodexAppServer.spawnProcess")(function* (cwd: string, environment?: Record<string, string | undefined>) {
   const spawner = yield* ProcessSpawner
   const events = new ProcessEvents()
-  const spawned = yield* Effect.result(spawner.spawn(["codex", "app-server"], {
+  const spawned = yield* Effect.result(spawner.spawn(["codex", ...(environment?.CODEX_HOME ? ["-c", 'cli_auth_credentials_store="file"'] : []), "app-server"], {
+    env: environment,
     cwd,
     stdin: "pipe",
     stdout: "pipe",
@@ -1239,11 +1244,12 @@ export const makeCodexAppServer = Effect.fn("CodexAppServer.make")(function* (op
     cwd: string
     customTools?: KannaToolHost
     register: boolean
+    environment?: Record<string, string | undefined>
   }) {
     yield* Effect.annotateCurrentSpan("chatId", args.chatId)
     const scope = yield* Scope.fork(layerScope)
     return yield* Effect.gen(function* () {
-      const child = yield* spawnProcess(args.cwd).pipe(
+      const child = yield* spawnProcess(args.cwd, args.environment).pipe(
         Effect.catchTag("@kanna/server/process-utils/CommandSpawnError", (error) =>
           Effect.fail(new CodexSpawnError({ chatId: args.chatId, cwd: args.cwd, message: error.message, cause: error.cause }))),
         Effect.tap((child) => Effect.addFinalizer(() => Effect.sync(() => killQuietly(child)))),
@@ -1434,14 +1440,15 @@ export const makeCodexAppServer = Effect.fn("CodexAppServer.make")(function* (op
   const startSession = Effect.fn("CodexAppServer.startSession")(function* (args: StartCodexSessionArgs) {
     yield* Effect.annotateCurrentSpan("chatId", args.chatId)
     const existing = sessions.get(args.chatId)
-    if (existing && !existing.closed && existing.cwd === args.cwd && existing.mcpSignature === JSON.stringify(args.mcpServers ?? {}) && !args.pendingForkSessionToken) {
+    if (existing && !existing.closed && existing.cwd === args.cwd && existing.accountId === args.accountId && existing.mcpSignature === JSON.stringify(args.mcpServers ?? {}) && !args.pendingForkSessionToken) {
       return undefined
     }
     if (existing) {
       yield* stopSession(args.chatId)
     }
 
-    const context = yield* openSession({ chatId: args.chatId, cwd: args.cwd, customTools: args.customTools, register: true })
+    const context = yield* openSession({ chatId: args.chatId, cwd: args.cwd, customTools: args.customTools, environment: args.environment, register: true })
+    context.accountId = args.accountId
     context.mcpSignature = JSON.stringify(args.mcpServers ?? {})
     return yield* startThread(context, args).pipe(
       Effect.onError(() => stopSession(args.chatId)),

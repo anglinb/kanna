@@ -37,6 +37,7 @@ export interface ChatReadAnchor {
 }
 
 export interface ChatRecord {
+  accountIds?: Partial<Record<AgentProvider, string>>
   id: string
   projectId: string
   title: string
@@ -355,6 +356,14 @@ export type ChatEvent =
       type: "chat_unarchived"
       timestamp: number
       chatId: string
+    }
+  | {
+      v: 2
+      type: "chat_account_set"
+      timestamp: number
+      chatId: string
+      provider: AgentProvider
+      accountId: string
     }
   | {
       v: 2
