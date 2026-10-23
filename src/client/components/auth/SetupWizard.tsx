@@ -1,3 +1,4 @@
+import { useServerCapabilities } from "../../stores/serverCapabilitiesStore"
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 import { ArrowUpRight, Check, ChevronLeft, Cloud, Flower, LaptopMinimal } from "lucide-react"
@@ -203,7 +204,8 @@ export const SetupWizard = memo(function SetupWizard() {
     }
   }, [])
 
-  const cloud = useCloudPairSession({ enabled: open })
+  const capabilities = useServerCapabilities()
+  const cloud = useCloudPairSession({ enabled: open && capabilities?.cloud === true })
   // Decided once per open, from the first status that lands: a machine that
   // pairs mid-wizard must not yank its own step out from under itself.
   const [cloudStepEnabled, setCloudStepEnabled] = useState(false)
@@ -228,10 +230,10 @@ export const SetupWizard = memo(function SetupWizard() {
     () => [
       ...(macStepEnabled ? (["mac"] as const) : []),
       ...BASE_STEPS.filter((base) => base !== "github" || githubStepEnabled),
-      ...(cloudStepEnabled ? (["cloud"] as const) : []),
+      ...(cloudStepEnabled && capabilities?.cloud ? (["cloud"] as const) : []),
       "done",
     ],
-    [macStepEnabled, githubStepEnabled, cloudStepEnabled]
+    [macStepEnabled, githubStepEnabled, cloudStepEnabled, capabilities?.cloud]
   )
 
   // Steps push sideways: forward, the step leaves to the left as the next

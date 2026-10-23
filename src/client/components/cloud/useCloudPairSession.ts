@@ -45,13 +45,14 @@ export function useCloudPairSession({ enabled = true }: { enabled?: boolean } = 
   }, [enabled])
 
   const begin = useCallback(() => {
+    if (!enabled) return
     setStarting(true)
     void startPairSession().then((next) => {
       setSession(next)
       setLoaded(true)
       setStarting(false)
     })
-  }, [])
+  }, [enabled])
 
   useEffect(() => {
     if (!enabled || session.status !== "waiting") return

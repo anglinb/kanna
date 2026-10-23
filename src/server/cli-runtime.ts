@@ -9,7 +9,7 @@ import type { UpdateInstallErrorCode } from "../shared/types"
 import { repairBunGlobalManifest, type NightlyInstallResult } from "./nightly"
 import { PROD_SERVER_PORT } from "../shared/ports"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
-import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
+import type { startShareTunnel, StartedShareTunnel } from "./share"
 import { probeExistingInstance, type ExistingInstance } from "./instance"
 import {
   claimInstance,
@@ -21,10 +21,11 @@ import {
 } from "./instance-socket"
 import type { Analytics } from "./analytics"
 import type { UpdateManager } from "./update-manager"
-import { createCloudRuntime, type CloudRuntime } from "./cloud"
-import { describeError } from "./cloud/api-client"
-import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
-import { PairPromptError, runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
+import type { CloudRuntime } from "./cloud"
+import type { readCloudIdentity, CloudIdentity } from "./cloud/identity"
+import type { runPairCommand, PairCommandArgs, PairAction } from "./cloud/pair-command"
+import { PairPromptError } from "./cloud/pair-error"
+import { readRuntimePolicy, type RuntimePolicy, type RuntimePolicyError } from "./runtime-policy"
 import type { ServerPlatform } from "./effect/runtime"
 
 /** The platform services the CLI runs on (effect/runtime.ts). */
@@ -37,7 +38,7 @@ export interface CliOptions {
   share: ShareMode
   password: string | null
   strictPort: boolean
-  /** One-shot: skip bringing a paired machine online for this run. */
+  /** Disable the entire cloud feature (pairing, Fleet, hosted mode and sharing). */
   noCloud: boolean
   /**
    * Run as a cloud dev-box (`kanna --cloud`): requires a provisioned cloud
@@ -63,6 +64,7 @@ export interface CliServerOptions extends CliOptions {
   onMigrationProgress?: (message: string) => void
   trustProxy?: boolean
   cloud?: CloudRuntime | null
+  cloudEnabled?: boolean
   allowCloudPairing?: boolean
 }
 
@@ -125,6 +127,7 @@ export interface CliRuntimeDeps {
     args: PairCommandArgs,
     deps: { log: (message: string) => void; warn: (message: string) => void },
   ) => Effect.Effect<number, PairCommandError, CliPlatform>
+  readRuntimePolicyImpl?: (cliOverride?: boolean) => Effect.Effect<RuntimePolicy, RuntimePolicyError, CliPlatform>
   readCloudIdentityImpl?: (warn: (message: string) => void) => Effect.Effect<CloudIdentity | null, CloudIdentityError, CliPlatform>
   createCloudRuntimeImpl?: (identity: CloudIdentity) => CloudRuntime
   probeExistingInstanceImpl?: (port: number) => Effect.Effect<ExistingInstance | null>
@@ -253,7 +256,7 @@ Options:
   --password <secret>  Require a password before loading the app
   --strict-port        Fail instead of trying another port
   --no-open            Don't open browser automatically
-  --no-cloud           Skip bringing a paired machine online for this run
+  --no-cloud           Disable cloud, pairing, Fleet, and public sharing for this run
   --cloud              Run as a cloud dev-box (direct mode, no cloudflared)
   --inspect[=<port>]   Run the server under Bun's inspector: debugger, CPU profiles,
                        heap snapshots (also --inspect-wait, --inspect-brk)
@@ -495,9 +498,27 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
     return { kind: "exited", code: 0 } satisfies CliRunResult
   }
 
+  const override = parsedArgs.kind === "run"
+    ? parsedArgs.options.noCloud ? false : parsedArgs.options.directCloud ? true : undefined
+    : undefined
+  const policy = parsedArgs.kind === "run" || parsedArgs.kind === "pair"
+    ? yield* (deps.readRuntimePolicyImpl ?? readRuntimePolicy)(override).pipe(
+      Effect.catchTag("@kanna/server/RuntimePolicyError", (cause) => Effect.fail(new CliUsageError({ message: cause.message, cause }))),
+    )
+    : { cloudEnabled: true }
+  if (!policy.cloudEnabled && parsedArgs.kind === "pair") {
+    deps.warn(`${LOG_PREFIX} cloud is disabled by startup policy; pairing is unavailable`)
+    return { kind: "exited", code: 1 } satisfies CliRunResult
+  }
+  if (!policy.cloudEnabled && parsedArgs.kind === "run" && (parsedArgs.options.directCloud || isShareEnabled(parsedArgs.options.share))) {
+    deps.warn(`${LOG_PREFIX} cloud is disabled; hosted mode and public sharing are unavailable`)
+    return { kind: "exited", code: 1 } satisfies CliRunResult
+  }
+
   if (parsedArgs.kind === "pair") {
     const pairDeps = { log: deps.log, warn: deps.warn, confirm: promptConfirm }
-    const code = yield* (deps.runPairCommandImpl ?? runPairCommand)(parsedArgs.args, pairDeps)
+    const pair = deps.runPairCommandImpl ?? (yield* Effect.promise(() => import("./cloud/pair-command"))).runPairCommand
+    const code = yield* pair(parsedArgs.args, pairDeps)
     if (code !== 0 || parsedArgs.args.action !== "pair") {
       return { kind: "exited", code } satisfies CliRunResult
     }
@@ -554,9 +575,12 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
     return { kind: "restarting", reason: shouldRestart.value } satisfies CliRunResult
   }
 
-  const readIdentity = deps.readCloudIdentityImpl
-    ?? ((warn: (message: string) => void) => readCloudIdentity(undefined, warn))
-  let identity = yield* readIdentity((message) => deps.warn(`${LOG_PREFIX} ${message}`))
+  let identity: CloudIdentity | null = null
+  if (policy.cloudEnabled) {
+    const readIdentity = deps.readCloudIdentityImpl ?? ((warn: (message: string) => void) =>
+      Effect.promise(() => import("./cloud/identity")).pipe(Effect.flatMap(({ readCloudIdentity }) => readCloudIdentity(undefined, warn))))
+    identity = yield* readIdentity((message) => deps.warn(`${LOG_PREFIX} ${message}`))
+  }
   if (runOptions.directCloud) {
     if (!identity) {
       deps.warn(`${LOG_PREFIX} --cloud needs a provisioned cloud identity (~/.kanna/cloud.json) — dev-boxes get one from kanna.sh`)
@@ -584,6 +608,14 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
     ? { localUrl: `http://localhost:${claim.status!.port}`, port: claim.status!.port! }
     : yield* probeExisting(runOptions.port)
   if (existing) {
+    // Connection state is not feature policy: an unpaired cloud-capable
+    // process is also incompatible with a request to disable the feature.
+    const runningPolicy = claim.kind === "running" ? claim.status?.cloudEnabled : existing.cloudEnabled
+    if (runningPolicy !== undefined && runningPolicy !== null && runningPolicy !== policy.cloudEnabled
+      || !policy.cloudEnabled && runningPolicy == null) {
+      deps.warn(`${LOG_PREFIX} Kanna is already running with a different or unknown cloud policy; run kanna stop, then start it with the requested setting`)
+      return { kind: "exited", code: 1 } satisfies CliRunResult
+    }
     const hostedUrl = identity?.enabled ? identity.appOrigin : null
     deps.log(`${LOG_PREFIX} kanna is already running at ${existing.localUrl}${hostedUrl ? ` (and ${hostedUrl})` : ""}`)
     if (hostedUrl) {
@@ -600,11 +632,12 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
   // it once; --share/--host/--remote imply a different exposure and win.
   let cloudRuntime: CloudRuntime | null = null
   const cloudEligible =
-    !runOptions.noCloud &&
+    policy.cloudEnabled &&
     !isShareEnabled(runOptions.share) &&
     (runOptions.host === "127.0.0.1" || runOptions.directCloud)
   if (cloudEligible && identity?.enabled) {
-    cloudRuntime = (deps.createCloudRuntimeImpl ?? createCloudRuntime)(identity)
+    const createRuntime = deps.createCloudRuntimeImpl ?? (yield* Effect.promise(() => import("./cloud"))).createCloudRuntime
+    cloudRuntime = createRuntime(identity)
   }
 
   // Two scopes inside the caller's, so the server can be stopped on its own
@@ -618,6 +651,7 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
       ...runOptions,
       trustProxy: isShareEnabled(runOptions.share) || cloudRuntime !== null,
       cloud: cloudRuntime,
+      cloudEnabled: policy.cloudEnabled,
       // Unpaired but cloud-capable: the sidebar can claim this machine in one
       // click and the server attaches the runtime without a restart.
       allowCloudPairing: cloudEligible && !identity,
@@ -652,7 +686,8 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
   const openedInMacApp = wantsOpen && (yield* openInMacApp(launchUrl))
 
   if (isShareEnabled(runOptions.share)) {
-    const startTunnel = deps.startShareTunnel ?? ((localUrl, shareMode) => startShareTunnel(localUrl, shareMode, {
+    const sharing = yield* Effect.promise(() => import("./share"))
+    const startTunnel = deps.startShareTunnel ?? ((localUrl, shareMode) => sharing.startShareTunnel(localUrl, shareMode, {
       log: (message) => deps.log(`${LOG_PREFIX} ${message}`),
     }))
     const shareTunnel = yield* Effect.result(Effect.acquireRelease(
@@ -668,7 +703,7 @@ export const runCli = Effect.fn("Cli.run")(function* (argv: string[], deps: CliR
       return { kind: "exited", code: 1 } satisfies CliRunResult
     }
     if (shareTunnel.success.publicUrl) {
-      logShareDetails(deps.log, shareTunnel.success.publicUrl, launchUrl, deps.renderShareQr ?? renderTerminalQr)
+      sharing.logShareDetails(deps.log, shareTunnel.success.publicUrl, launchUrl, deps.renderShareQr ?? sharing.renderTerminalQr)
     } else {
       deps.warn(`${LOG_PREFIX} named tunnel started but no public hostname was detected`)
       if (isTokenShareMode(runOptions.share)) {
@@ -875,7 +910,7 @@ const promptConfirm = Effect.fn("Cli.confirm")(function* (question: string) {
     Effect.sync(() => createInterface({ input: process.stdin, output: process.stdout })),
     (rl) => Effect.tryPromise({
       try: (signal) => rl.question(`${question} [y/N] `, { signal }),
-      catch: (cause) => new PairPromptError({ message: describeError(cause), cause }),
+      catch: (cause) => new PairPromptError({ message: cause instanceof Error ? cause.message : String(cause), cause }),
     }),
     (rl) => Effect.sync(() => rl.close()),
   )

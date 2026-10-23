@@ -1,3 +1,4 @@
+import { useServerCapabilities } from "../../../stores/serverCapabilitiesStore"
 import { Copy, Folder, Globe, GlobeLock, Layers, ListFilter, Loader2, RadioTower, SquareArrowOutUpRight, Trash2 } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { LocalHttpServerInfo } from "../../../../shared/protocol"
@@ -97,7 +98,9 @@ export function PortsWidget({
     postRunRefreshTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId))
   }, [])
 
+  const capabilities = useServerCapabilities()
   const exposeServer = useCallback(async (server: LocalHttpServerInfo) => {
+    if (!capabilities?.publicSharing) return
     if (server.publicUrl) return server.publicUrl
     setExposingPorts((current) => new Set(current).add(server.port))
     try {
@@ -117,7 +120,7 @@ export function PortsWidget({
         return next
       })
     }
-  }, [socket])
+  }, [socket, capabilities?.publicSharing])
 
   const openServer = useCallback((server: LocalHttpServerInfo) => {
     const url = viewerIsLocal ? server.address : server.publicUrl
@@ -259,12 +262,12 @@ export function PortsWidget({
                   <span>Stop Exposing</span>
                 </ContextMenuItem>
               </>
-            ) : (
+            ) : capabilities?.publicSharing ? (
               <ContextMenuItem disabled={isExposing} onSelect={() => void exposeServer(server)}>
                 <Globe className="size-3.5" />
                 <span>Expose to Internet</span>
               </ContextMenuItem>
-            )}
+            ) : null}
             <ContextMenuItem onSelect={() => killServer(server)} className="text-destructive focus:text-destructive">
               <Trash2 className="size-3.5" />
               <span>Kill Process</span>

@@ -3,8 +3,9 @@ import { spawn, type ChildProcess } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { desktopCloudEnabled, serverCloudPolicyMatches } from "./cloud-policy"
 import { instanceStatus, releaseInstance, stopInstance } from "./instance"
-import { currentMode, devCheckout, fingerprint, pageURL, sameMode, saveMode, type ServerMode } from "./server-mode"
+import { currentMode, dataRoot, devCheckout, fingerprint, pageURL, sameMode, saveMode, type ServerMode } from "./server-mode"
 import { reloadShellEnv, shellEnv, which, type Env } from "./shell-env"
 
 /**
@@ -105,7 +106,7 @@ class ServerAgent {
     if (this.mode.kind === "installed") {
       const running = await this.waitForInstance()
       if (running) {
-        this.adopt(running)
+        await this.adopt(running)
         return
       }
     }
@@ -115,7 +116,7 @@ class ServerAgent {
     for (const candidate of candidates) {
       const url = await probe(candidate, fingerprint(this.mode))
       if (url) {
-        this.adopt(url)
+        await this.adopt(url)
         return
       }
     }
@@ -146,7 +147,7 @@ class ServerAgent {
   private async connectToCustom(url: string) {
     const ready = await probe(url, null)
     if (ready) {
-      this.adopt(ready)
+      await this.adopt(ready)
       return
     }
     this.setState({ kind: "waiting", url })
@@ -176,7 +177,17 @@ class ServerAgent {
     this.stop(() => this.start())
   }
 
-  private adopt(url: string) {
+  private async adopt(url: string) {
+    const mode = this.mode
+    if (mode.kind !== "custom") {
+      const desired = desktopCloudEnabled(dataRoot(mode), await shellEnv())
+      const matches = await serverCloudPolicyMatches(url, desired)
+      if (!sameMode(mode, this.mode) || this.stopping) return
+      if (!matches) {
+        this.setState({ kind: "failed", message: "The running server's cloud setting differs or could not be verified. Run kanna stop, then restart Kanna with the desired cloud setting. Older servers need an upgrade to fully disable cloud." })
+        return
+      }
+    }
     if (this.child) this.reachedRunning = true
     this.setState({ kind: "running", url })
     this.missedHealthChecks = 0
@@ -257,7 +268,7 @@ class ServerAgent {
       const ready = status?.port != null ? localURL(status.port) : await probe(pageURL(this.mode), print)
       if (ready && token === this.readinessToken && this.child === child) {
         this.failures = 0
-        this.adopt(ready)
+        await this.adopt(ready)
         return
       }
       await sleep(500)
