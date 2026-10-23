@@ -8,4 +8,3 @@ export class PairPromptError extends Schema.TaggedError<PairPromptError>()(
     cause: Schema.Defect(),
   },
 ) {}
-
