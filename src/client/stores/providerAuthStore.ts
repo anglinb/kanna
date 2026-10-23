@@ -107,6 +107,7 @@ export function getUnauthenticatedHarnesses(snapshot: ProviderAuthSnapshot | nul
   const result = new Set<AgentProvider>()
   if (!snapshot) return result
   for (const provider of ["claude", "codex", "cursor"] as const) {
+    if (snapshot.accounts?.some((account) => account.provider === provider && account.authStatus === "signed_in")) continue
     const serviceId = authServiceForProvider(provider)
     if (!serviceId) continue
     const service = selectAuthService(snapshot, serviceId)

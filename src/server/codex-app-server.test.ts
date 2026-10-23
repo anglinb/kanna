@@ -54,6 +54,30 @@ class FakeCodexProcess extends EventEmitter {
 const collectStream = (stream: Stream.Stream<HarnessEvent>): Effect.Effect<any[]> => Stream.runCollect(stream)
 
 describe("CodexAppServer", () => {
+  test("keeps concurrent account environments separate and replaces a process when its account changes", () => runTest(Effect.gen(function* () {
+    const processes: FakeCodexProcess[] = []
+    const environments: Array<Record<string, string | undefined> | undefined> = []
+    const manager = yield* makeCodexAppServer({ spawnProcess: (_cwd, environment) => Effect.sync(() => {
+      environments.push(environment)
+      const process = new FakeCodexProcess((message, child) => {
+        if (message.method === "initialize") child.writeServerMessage({ id: message.id, result: { userAgent: "test" } })
+        if (message.method === "thread/start" || message.method === "thread/resume") child.writeServerMessage({ id: message.id, result: { thread: { id: `thread-${processes.length}` }, model: "gpt-5.4" } })
+      })
+      processes.push(process)
+      return process
+    }) })
+    const common = { cwd: "/project", model: "gpt-5.4", sessionToken: null }
+    yield* manager.startSession({ ...common, chatId: "work", accountId: "work", environment: { CODEX_HOME: "/profiles/work" } })
+    yield* manager.startSession({ ...common, chatId: "personal", accountId: "personal", environment: { CODEX_HOME: "/profiles/personal" } })
+    yield* manager.startSession({ ...common, chatId: "work", accountId: "work", environment: { CODEX_HOME: "/profiles/work" } })
+    expect(processes).toHaveLength(2)
+    expect(environments).toEqual([{ CODEX_HOME: "/profiles/work" }, { CODEX_HOME: "/profiles/personal" }])
+    yield* manager.startSession({ ...common, chatId: "work", accountId: "replacement", environment: { CODEX_HOME: "/profiles/replacement" } })
+    expect(processes[0]?.killed).toBe(true)
+    expect(processes[1]?.killed).toBe(false)
+    expect(environments.at(-1)?.CODEX_HOME).toBe("/profiles/replacement")
+  })))
+
   test("initializes app-server and starts a fresh thread", () => runTest(Effect.gen(function* () {
     const process = new FakeCodexProcess((message, child) => {
       if (message.method === "initialize") {

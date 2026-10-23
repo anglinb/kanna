@@ -30,6 +30,7 @@ export function makeFakeProviderAuth(
       refresh: () => record("refresh"),
       probeService: (service) => record(`probe:${service}`),
       install: (service) => record(`install:${service}`),
+      signOut: (service) => record(`signOut:${service}`),
       startLogin: (service) => record(`start:${service}`),
       submitLoginCode: (service, code) => record(`submit:${service}:${code}`),
       cancelLogin: (service) => record(`cancel:${service}`),

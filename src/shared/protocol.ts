@@ -172,13 +172,21 @@ export type ClientCommand =
   | { type: "settings.writeAppSettingsPatch"; patch: AppSettingsPatch }
   | { type: "settings.readLlmProvider" }
   | { type: "usage.refresh"; force?: boolean }
+  | { type: "accounts.create"; account: import("./accounts").AccountInput }
+  | { type: "accounts.setDefault"; provider: AgentProvider; accountId: string }
+  | { type: "accounts.updateKey"; accountId: string; apiKey: string }
+  | { type: "accounts.rename"; accountId: string; label: string }
+  | { type: "accounts.remove"; accountId: string }
+  | { type: "accounts.login"; accountId: string }
+  | { type: "accounts.submitCode"; accountId: string; code: string }
+  | { type: "accounts.cancelLogin"; accountId: string }
   | { type: "auth.refresh"; force?: boolean }
   /** Install (or update to the latest version of) a service's CLI. */
   | { type: "auth.install"; service: AuthServiceId }
-  | { type: "auth.login.start"; service: AuthServiceId }
+  | { type: "auth.login.start"; service: AuthServiceId; accountId?: string }
   /** claude only: the code the user pasted back from the OAuth page. */
-  | { type: "auth.login.submitCode"; service: AuthServiceId; code: string }
-  | { type: "auth.login.cancel"; service: AuthServiceId }
+  | { type: "auth.login.submitCode"; service: AuthServiceId; accountId?: string; code: string }
+  | { type: "auth.login.cancel"; service: AuthServiceId; accountId?: string }
   /** Ack result: `{ authUrl: string }` — open in a popup. */
   | { type: "auth.openrouter.start"; callbackUrl: string }
   /** Ack result: LlmProviderSnapshot with the exchanged key saved. */
@@ -285,6 +293,7 @@ export type ClientCommand =
   | { type: "chat.loadOlder"; chatId: string; untilMessageId?: string; all?: boolean }
   | {
       type: "chat.send"
+      accountId?: string
       chatId?: string
       projectId?: string
       provider?: AgentProvider
@@ -345,6 +354,7 @@ export type ClientCommand =
   | { type: "chat.respondTool"; chatId: string; toolUseId: string; result: unknown }
   | {
       type: "message.enqueue"
+      accountId?: string
       chatId: string
       content: string
       attachments?: ChatAttachment[]

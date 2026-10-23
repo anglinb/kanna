@@ -1,3 +1,4 @@
+import { withAccounts, type ProviderAccounts } from "./provider-accounts"
 import type { ManagedMcp } from "./managed-mcp"
 import type { PerformanceLog } from "./performance-log"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Stream } from "effect"
@@ -158,6 +159,7 @@ interface CreateWsRouterArgs {
   machineDisplayName: string
   updateManager: UpdateManager["Service"] | null
   usageLimits?: Pick<UsageLimits["Service"], "snapshot" | "refresh" | "changes"> | null
+  providerAccounts?: ProviderAccounts["Service"]
   providerAuth?: ProviderAuth["Service"] | null
   /** Overrides `BACKGROUND_CHAT_PUSH_INTERVAL_MS`; tests shorten it. */
   backgroundChatPushIntervalMs?: number
@@ -239,6 +241,7 @@ export function createWsRouter({
   updateManager,
   usageLimits,
   providerAuth,
+  providerAccounts,
   backgroundChatPushIntervalMs = BACKGROUND_CHAT_PUSH_INTERVAL_MS,
   chatCommands: providedChatCommands,
 }: CreateWsRouterArgs) {
@@ -450,6 +453,27 @@ export function createWsRouter({
    * push: the client replaces its whole snapshot with an ack, so one without
    * the catalog put those pickers back on the static list after any write.
    */
+  const validateAuthAccount = (service: string, accountId: string) => Effect.gen(function* () {
+    if (!providerAccounts) return yield* Effect.fail(new RouterCommandError({ message: "Account management unavailable." }))
+    const snapshot = yield* providerAccounts.snapshot
+    if (!snapshot.accounts.some((account) => account.id === accountId && account.provider === service && account.mode === "native")) {
+      return yield* Effect.fail(new RouterCommandError({ message: "This sign-in account does not belong to that provider." }))
+    }
+  })
+
+  const startAccountLogin = (accountId: string) => Effect.gen(function* () {
+    if (!providerAccounts) return yield* Effect.fail(new RouterCommandError({ message: "Account management unavailable." }))
+    const boundChats = [...store.state.chatsById.values()].filter((chat) => !chat.deletedAt && Object.values(chat.accountIds ?? {}).includes(accountId))
+    if (boundChats.some((chat) => agent.isBusy(chat.id))) return yield* Effect.fail(new RouterCommandError({ message: "Wait for this account's running chats to finish." }))
+    for (const chat of boundChats) yield* agent.closeChatEffect(chat.id)
+    yield* providerAccounts.login(accountId)
+  })
+
+  const authSnapshot = () => {
+    const auth = providerAuth ? runKannaSync(providerAuth.snapshot) : { services: [] }
+    return providerAccounts ? withAccounts(auth, runKannaSync(providerAccounts.snapshot)) : auth
+  }
+
   function withProviderCatalog(snapshot: AppSettingsSnapshot): AppSettingsSnapshot {
     return { ...snapshot, availableProviders: [...SERVER_PROVIDERS] }
   }
@@ -580,7 +604,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "provider-auth",
-          data: providerAuth ? runKannaSync(providerAuth.snapshot) : { services: [] },
+          data: authSnapshot(),
         },
       }
     }
@@ -1197,7 +1221,7 @@ export function createWsRouter({
     }
   })
 
-  if (providerAuth) listen(providerAuth.changes, () => {
+  const broadcastAuth = () => {
     for (const ws of sockets) {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
@@ -1210,7 +1234,9 @@ export function createWsRouter({
         send(ws, envelope)
       }
     }
-  })
+  }
+  if (providerAuth) listen(providerAuth.changes, broadcastAuth)
+  if (providerAccounts) listen(providerAccounts.changes, broadcastAuth)
 
   agent.setBackgroundErrorReporter?.(broadcastError)
 
@@ -1463,8 +1489,8 @@ export function createWsRouter({
       return
     }
     yield* providerAuth.refresh({ force: command.force ?? false })
-    const snapshot = yield* providerAuth.snapshot
-    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot }))
+    if (providerAccounts) yield* providerAccounts.refresh({ force: command.force ?? false })
+    yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: authSnapshot() }))
   })
 
   const exchangeOpenRouterEffect = Effect.fn("WsRouter.exchangeOpenRouter")(function* (
@@ -1763,6 +1789,37 @@ export function createWsRouter({
           yield* (refreshAuthEffect(ws, id, command))
           return
         }
+        case "accounts.create":
+        case "accounts.setDefault":
+        case "accounts.updateKey":
+        case "accounts.rename":
+        case "accounts.remove":
+        case "accounts.login":
+        case "accounts.submitCode":
+        case "accounts.cancelLogin": {
+          if (!providerAccounts) return yield* Effect.fail(new RouterCommandError({ message: "Account management unavailable." }))
+          if (command.type === "accounts.create") {
+            const accountId = yield* providerAccounts.create(command.account)
+            yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { accountId } }))
+            return
+          }
+          if (command.type === "accounts.setDefault") yield* providerAccounts.setDefault(command.provider, command.accountId)
+          if (command.type === "accounts.rename") yield* providerAccounts.rename(command.accountId, command.label)
+          if (command.type === "accounts.remove" || command.type === "accounts.login" || command.type === "accounts.updateKey") {
+            const boundChats = [...store.state.chatsById.values()].filter((chat) => !chat.deletedAt && Object.values(chat.accountIds ?? {}).includes(command.accountId))
+            if (boundChats.some((chat) => agent.isBusy(chat.id))) return yield* Effect.fail(new RouterCommandError({ message: "Wait for this account's running chats to finish." }))
+            if (command.type === "accounts.remove" && boundChats.length) return yield* Effect.fail(new RouterCommandError({ message: "This account is attached to saved chats. Delete those chats before removing it." }))
+            if (command.type === "accounts.remove") yield* providerAccounts.remove(command.accountId)
+            else if (command.type === "accounts.updateKey") {
+              for (const chat of boundChats) yield* agent.closeChatEffect(chat.id)
+              yield* providerAccounts.updateKey(command.accountId, command.apiKey)
+            } else yield* startAccountLogin(command.accountId)
+          }
+          if (command.type === "accounts.submitCode") yield* providerAccounts.submitCode(command.accountId, command.code)
+          if (command.type === "accounts.cancelLogin") yield* providerAccounts.cancelLogin(command.accountId)
+          yield* Effect.sync(() => send(ws, { v: PROTOCOL_VERSION, type: "ack", id }))
+          return
+        }
         case "auth.install": {
           if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
           // Fire-and-forget: progress travels via provider-auth snapshots.
@@ -1771,18 +1828,25 @@ export function createWsRouter({
           return
         }
         case "auth.login.start": {
+          if (command.accountId) yield* validateAuthAccount(command.service, command.accountId)
           if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
-          yield* (ackVoidEffect(ws, id, providerAuth.startLogin(command.service)))
+          if (command.accountId && providerAccounts) yield* startAccountLogin(command.accountId)
+          else yield* providerAuth.startLogin(command.service)
+          yield* ackVoidEffect(ws, id, Effect.void)
           return
         }
         case "auth.login.submitCode": {
+          if (command.accountId) yield* validateAuthAccount(command.service, command.accountId)
           if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
-          yield* (ackVoidEffect(ws, id, providerAuth.submitLoginCode(command.service, command.code)))
+          if (command.accountId && providerAccounts) yield* providerAccounts.submitCode(command.accountId, command.code)
+          else yield* providerAuth.submitLoginCode(command.service, command.code)
+          yield* ackVoidEffect(ws, id, Effect.void)
           return
         }
         case "auth.login.cancel": {
+          if (command.accountId) yield* validateAuthAccount(command.service, command.accountId)
           if (!providerAuth) return yield* Effect.fail(new RouterCommandError({ message: "Provider auth unavailable." }))
-          yield* (ackVoidEffect(ws, id, providerAuth.cancelLogin(command.service)))
+          yield* (ackVoidEffect(ws, id, command.accountId && providerAccounts ? providerAccounts.cancelLogin(command.accountId) : providerAuth.cancelLogin(command.service)))
           return
         }
         case "auth.openrouter.start": {
@@ -2294,7 +2358,7 @@ export function createWsRouter({
       forkRouter("usage refresh", usageLimits.refresh())
     }
     if (message.topic.type === "provider-auth" && providerAuth) {
-      forkRouter("provider refresh", providerAuth.refresh())
+      forkRouter("provider refresh", providerAccounts ? providerAccounts.refresh() : providerAuth.refresh())
     }
     if (message.topic.type === "app-settings") {
       refreshInstalledApps?.()

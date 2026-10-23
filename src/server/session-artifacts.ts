@@ -23,6 +23,7 @@ export interface SessionArtifactQuery {
   sessionToken: string | null | undefined
   /** Injectable home directory; defaults to the machine's. Tests pass a temp dir. */
   home?: string
+  claudeConfigDir?: string
 }
 
 /**
@@ -75,7 +76,7 @@ export const checkSessionArtifact = Effect.fn("SessionArtifacts.check")(function
 
   return yield* Match.value(provider).pipe(
     Match.when("claude", () => {
-      const parent = claudeProjectDir(home, query.cwd)
+      const parent = query.claudeConfigDir ? path.join(query.claudeConfigDir, "projects", query.cwd.replace(/[^a-zA-Z0-9]/g, "-")) : claudeProjectDir(home, query.cwd)
       return statusFor(parent, path.join(parent, `${sessionToken}.jsonl`))
     }),
     Match.when("cursor", () => {

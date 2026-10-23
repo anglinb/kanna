@@ -1,3 +1,5 @@
+import { existingAccountId } from "../shared/accounts"
+import type { AccountRuntime, ProviderAccounts } from "./provider-accounts"
 import { mcpBridgeName, type McpBridgeServers } from "../shared/mcp"
 import type { ManagedMcp } from "./managed-mcp"
 import {
@@ -89,7 +91,7 @@ import { asRecord } from "../shared/json"
 import { maxClaudeContextWindowFromModelUsage, normalizeClaudeContextUsage, normalizeClaudeUsageSnapshot } from "./claude-usage"
 import { buildHandoffContext, buildHandoffMessageContent } from "./handoff"
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
-import { Cause, Context, Effect, Exit, Fiber, Queue, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Queue, Schema, Semaphore, Stream } from "effect"
 import { runKanna } from "./effect/bridge"
 import type { PlatformServices } from "./platform"
 import { timestamped } from "./transcript"
@@ -359,6 +361,7 @@ interface ClaudeSessionState {
 }
 
 interface AgentCoordinatorArgs {
+  providerAccounts?: ProviderAccounts["Service"]
   managedMcp?: ManagedMcp["Service"]
   /** The native service; a `{ service }` wrapper remains accepted for older test fixtures. */
   store: EventStore["Service"] | { readonly service: EventStore["Service"] }
@@ -392,6 +395,7 @@ interface AgentCoordinatorArgs {
     resumeSessionAt?: string
     customTools?: KannaToolHost
     mcpServers?: McpBridgeServers
+    environment?: Record<string, string | undefined>
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
     onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
     onSubagentActivity?: (update: SubagentActivityUpdate) => void
@@ -404,7 +408,7 @@ interface AgentCoordinatorArgs {
    */
   checkSessionArtifact?: (
     provider: AgentProvider,
-    query: { cwd: string; sessionToken: string | null | undefined }
+    query: { cwd: string; sessionToken: string | null | undefined; claudeConfigDir?: string }
   ) => SessionArtifactStatus | Promise<SessionArtifactStatus>
 }
 
@@ -929,6 +933,7 @@ function subagentHooks(
 
 async function startClaudeSession(args: {
   /** The platform to resolve `claude` and read the environment through. */
+  environment?: Record<string, string | undefined>
   platform: Context.Context<PlatformServices>
   localPath: string
   model: string
@@ -1057,7 +1062,7 @@ async function startClaudeSession(args: {
       // enabling it while the UI shows "Standard".
       settings: { enableWorkflows: true, fastMode: args.serviceTier === "fast" },
       pathToClaudeCodeExecutable: claudeExecutable.path,
-      env: (() => { const { CLAUDECODE: _, ...env } = machine.env.snapshot(); return env })(),
+      env: (() => { const { CLAUDECODE: _, ...env } = { ...machine.env.snapshot(), ...args.environment }; return env })(),
       // The SDK spawns `claude` itself, on this computer. A binding whose
       // machine is elsewhere would hand it `spawnClaudeCodeProcess`, backed by
       // that machine's `ProcessSpawner`.
@@ -1148,6 +1153,8 @@ async function startClaudeSession(args: {
 }
 
 export class AgentCoordinator {
+  private readonly accountBindingLock = Semaphore.makeUnsafe(1)
+  private readonly providerAccounts?: ProviderAccounts["Service"]
   private readonly managedMcp?: ManagedMcp["Service"]
   private readonly store: EventStore["Service"]
   private readonly onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
@@ -1164,7 +1171,7 @@ export class AgentCoordinator {
   private readonly startClaudeSessionFn: NonNullable<AgentCoordinatorArgs["startClaudeSession"]>
   private readonly checkSessionArtifactEffect: (
     provider: AgentProvider,
-    query: { cwd: string; sessionToken: string | null | undefined },
+    query: { cwd: string; sessionToken: string | null | undefined; claudeConfigDir?: string },
   ) => Effect.Effect<SessionArtifactStatus, Error>
   private reportBackgroundError: ((message: string) => void) | null = null
   private onClaudeRateLimit: ((info: ClaudeRateLimitInfoRaw) => void) | null = null
@@ -1227,6 +1234,7 @@ export class AgentCoordinator {
   onChatStopped?: (chatId: string) => void
 
   constructor(args: AgentCoordinatorArgs) {
+    this.providerAccounts = args.providerAccounts
     this.managedMcp = args.managedMcp
     this.store = "service" in args.store ? args.store.service : args.store
     this.onStateChange = args.onStateChange
@@ -1921,6 +1929,21 @@ export class AgentCoordinator {
     }
   }
 
+  private bindAccountEffect = Effect.fn("Agent.bindAccount")((chatId: string, provider: AgentProvider, requested?: string) => {
+    const self = this
+    return self.accountBindingLock.withPermits(1)(Effect.gen(function* () {
+      if (!self.providerAccounts) return {} as AccountRuntime
+      const chat = self.store.requireChat(chatId)
+      const pinned = chat.accountIds?.[provider] ?? (chat.hasMessages && chat.provider === provider ? existingAccountId(provider) : undefined)
+      if (pinned && requested && pinned !== requested) return yield* Effect.fail(new Error("This chat is attached to another account. Start a new chat to use a different account."))
+      const parent = self.store.getChat(chat.createdByChatId ?? chat.parentChatId ?? "")
+      const inherited = parent?.accountIds?.[provider]
+      const account = yield* self.providerAccounts.runtime(provider, pinned ?? requested ?? inherited).pipe(Effect.mapError((error) => new Error(error.message)))
+      if (!chat.accountIds?.[provider]) yield* storeWriteEffect(self.store.setChatAccount(chatId, provider, account.accountId))
+      return account
+    }))
+  })
+
   private enqueueMessageEffect = Effect.fn("Agent.enqueueMessage")((
     chatId: string,
     content: string,
@@ -2074,6 +2097,7 @@ export class AgentCoordinator {
     serviceTier?: "fast"
     sessionToken: string | null | undefined
     pendingForkSessionToken: string | null | undefined
+    account?: AccountRuntime
   }) => {
     const self = this
     return Effect.gen(function* () {
@@ -2081,7 +2105,7 @@ export class AgentCoordinator {
       case "claude": {
         if (self.claudeSessions.has(args.chatId)) return false
         const token = args.pendingForkSessionToken ?? args.sessionToken
-        const status = yield* self.checkSessionArtifactEffect("claude", { cwd: args.cwd, sessionToken: token })
+        const status = yield* self.checkSessionArtifactEffect("claude", { cwd: args.cwd, sessionToken: token, claudeConfigDir: args.account?.environment?.CLAUDE_CONFIG_DIR })
         return status === "missing"
       }
       case "cursor": {
@@ -2105,6 +2129,8 @@ export class AgentCoordinator {
             serviceTier: args.serviceTier,
             sessionToken: args.sessionToken,
             pendingForkSessionToken: null,
+            accountId: args.account?.accountId,
+            environment: args.account?.environment,
           }))
         return Exit.isSuccess(started) && started.value?.resumeFellBack === true
       }
@@ -2187,6 +2213,7 @@ export class AgentCoordinator {
   private startTurnEffect = Effect.fn("Agent.startTurn")((args: StartTurnArgs) => {
     const self = this
     return Effect.gen(function* () {
+    const account = yield* self.bindAccountEffect(args.chatId, args.provider)
     const { chat, project, handoff, restore, shouldGenerateTitle, optimisticTitle } = yield* Effect.gen(function* () {
       // A prior result can leave its provider stream draining after the UI is idle.
       const draining = self.drainingStreams.get(args.chatId)
@@ -2230,6 +2257,7 @@ export class AgentCoordinator {
           serviceTier: args.serviceTier,
           sessionToken: chat.sessionToken,
           pendingForkSessionToken: chat.pendingForkSessionToken,
+          account,
         }))
         ? yield* self.prepareSessionRestoreEffect(args.chatId, args.provider, (yield* existingMessages))
         : null
@@ -2341,6 +2369,7 @@ export class AgentCoordinator {
         return yield* self.startClaudeTurnEffect({
             chatId: args.chatId,
             localPath: project.localPath,
+            environment: account.environment,
             model: args.model,
             effort: args.effort,
             serviceTier: args.serviceTier,
@@ -2369,6 +2398,7 @@ export class AgentCoordinator {
           customTools,
           mcpServers,
           content: cursorContent,
+          environment: account.environment,
           model: args.model,
           sessionToken: chat.sessionToken,
         }))
@@ -2391,7 +2421,7 @@ export class AgentCoordinator {
         }))
       }
       if (args.provider === "pi") {
-        const connection = yield* self.resolvePiConnectionEffect()
+        const connection = account.connection ?? (yield* self.resolvePiConnectionEffect())
         return yield* openHarnessTurn(self.piManager.startTurn({
           chatId: args.chatId,
           cwd: project.localPath,
@@ -2408,6 +2438,8 @@ export class AgentCoordinator {
         }).pipe(Effect.provide(self.platform)))
       }
       const started = yield* self.codexManager.startSession({
+        accountId: account.accountId,
+        environment: account.environment,
         chatId: args.chatId,
         cwd: project.localPath,
         customTools,
@@ -2530,6 +2562,7 @@ export class AgentCoordinator {
     resumeSessionAt?: string
     customTools?: KannaToolHost
     mcpServers?: McpBridgeServers
+    environment?: Record<string, string | undefined>
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   }) => {
     const self = this
@@ -2560,6 +2593,7 @@ export class AgentCoordinator {
       const started = yield* Effect.tryPromise({
         try: (signal) => self.startClaudeSessionFn({
         platform: self.platform,
+        environment: args.environment,
         localPath: args.localPath,
         model: args.model,
         effort: args.effort,
@@ -2660,6 +2694,7 @@ export class AgentCoordinator {
     }
 
     const chat = self.store.requireChat(chatId)
+    yield* self.bindAccountEffect(chatId, self.resolveProvider(command, chat.provider), command.accountId)
     // Sending a message to an archived chat resurrects it (viewing alone
     // never unarchives).
     if (chat.archivedAt) {
@@ -2716,6 +2751,7 @@ export class AgentCoordinator {
     const self = this
     return Effect.gen(function* () {
     if (!extras?.source) yield* self.analytics.track("message_sent")
+    yield* self.bindAccountEffect(command.chatId, self.resolveProvider(command, self.store.requireChat(command.chatId).provider), command.accountId)
     const queuedMessage = yield* self.enqueueMessageEffect(command.chatId, command.content, command.attachments ?? [], {
       provider: command.provider,
       model: command.model,

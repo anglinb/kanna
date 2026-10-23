@@ -222,7 +222,7 @@ interface HarnessOptions {
   exec?: (argv: string[], opts?: { stdin?: string }) => ExecResult | Promise<ExecResult>
   /** A command that can't start: the spawn error's message, or null to run it. */
   spawnFails?: (argv: ReadonlyArray<string>) => string | null
-  spawnStreaming?: (argv: ReadonlyArray<string>, opts?: { env?: Record<string, string> }) => FakeChild
+  spawnStreaming?: (argv: ReadonlyArray<string>, opts?: { env?: Record<string, string | undefined> }) => FakeChild
   spawnPty?: (argv: ReadonlyArray<string>) => FakeChild
   fetchFn?: typeof fetch
   llmProvider?: LlmProviderSnapshot
@@ -860,7 +860,7 @@ describe("cursor login flow", () => {
   test("passes NO_OPEN_BROWSER and completes on exit 0", () => authTest(Effect.gen(function* () {
     const child = new FakeChild()
     let cursorSignedIn = false
-    let sawEnv: Record<string, string> | undefined
+    let sawEnv: Record<string, string | undefined> | undefined
     const harness = yield* makeHarness({
       exec: (argv) => {
         if (argv.join(" ").includes("cursor-agent status") || (argv[0].includes("cursor-agent") && argv[1] === "status")) {
@@ -1047,12 +1047,12 @@ describe("flow lifecycle", () => {
 
 describe("openrouter oauth", () => {
   test("start returns an auth url whose challenge matches the verifier sent at exchange", () => authTest(Effect.gen(function* () {
-    let exchangeBody: Record<string, string> | null = null
+    let exchangeBody: Record<string, string | undefined> | null = null
     const harness = yield* makeHarness({
       exec: signedOutExec,
       fetchFn: (async (url: string | URL | Request, init?: RequestInit) => {
         if (String(url).includes("openrouter.ai/api/v1/auth/keys")) {
-          exchangeBody = JSON.parse(String(init?.body)) as Record<string, string>
+          exchangeBody = JSON.parse(String(init?.body)) as Record<string, string | undefined>
           return Response.json({ key: "sk-or-v1-new-key" })
         }
         return new Response("{}", { status: 200 })
@@ -1066,7 +1066,7 @@ describe("openrouter oauth", () => {
     expect(parsed.searchParams.get("code_challenge_method")).toBe("S256")
 
     const snapshot = yield* harness.auth.exchangeOpenRouterCode("auth-code-123")
-    const body = exchangeBody as Record<string, string> | null
+    const body = exchangeBody as Record<string, string | undefined> | null
     expect(body!.code).toBe("auth-code-123")
     expect(parsed.searchParams.get("code_challenge")).toBe(pkceChallengeS256(body!.code_verifier!))
     expect(snapshot.provider).toBe("openrouter")

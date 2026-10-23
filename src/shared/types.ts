@@ -1617,6 +1617,8 @@ export type AuthLoginFlowState =
   | { phase: "error"; message: string; hint: string | null }
 
 export interface AuthServiceSnapshot {
+  /** Managed profile to target for login actions. Omitted for the existing CLI login. */
+  accountId?: string
   service: AuthServiceId
   label: string
   /** openrouter is not a CLI — always true there. */
@@ -1635,7 +1637,7 @@ export interface AuthServiceSnapshot {
   checkedAt: number | null
 }
 
-export interface ProviderAuthSnapshot {
+export interface ProviderAuthSnapshot extends Partial<import("./accounts").AccountsSnapshot> {
   services: AuthServiceSnapshot[]
 }
 
@@ -2611,6 +2613,7 @@ export interface WorkflowAgent {
 }
 
 export interface ChatRuntime {
+  accountIds?: Partial<Record<AgentProvider, string>>
   chatId: string
   projectId: string
   localPath: string

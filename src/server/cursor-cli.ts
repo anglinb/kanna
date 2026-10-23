@@ -35,6 +35,7 @@ import { timestamped } from "./transcript"
  */
 
 export interface StartCursorTurnArgs {
+  environment?: Record<string, string | undefined>
   mcpServers?: McpBridgeServers
   customTools?: KannaToolHost
   cwd: string
@@ -404,7 +405,7 @@ export const makeCursorCli = Effect.fn("CursorCli.make")(function* (options: Cur
     let sawResult = false
     const proc = yield* pumpCliTurn({
       // The prompt goes over stdin, which is then closed so the agent starts.
-      spawn: spawnProcess({ cwd: args.cwd, argv, stdin: args.content }),
+      spawn: spawnProcess({ cwd: args.cwd, argv, stdin: args.content, env: args.environment }),
       onLine: (line) => Effect.forEach(parseCursorLine(line, args.model), (event) => {
         if (event.type === "transcript" && event.entry?.kind === "result") sawResult = true
         return Queue.offer(queue, event)
