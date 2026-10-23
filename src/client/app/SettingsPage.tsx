@@ -1,3 +1,4 @@
+import { McpSection } from "./settings/McpSection"
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowLeft,
@@ -316,6 +317,8 @@ export function SettingsPage() {
                   <ProvidersSection state={state} />
                 ) : selectedPage === "keybindings" ? (
                   <KeybindingsSection state={state} />
+                ) : selectedPage === "mcp" ? (
+                  <McpSection state={state} />
                 ) : selectedPage === "skills" ? (
                   <SkillsSection state={state} />
                 ) : selectedPage === "usage" ? (

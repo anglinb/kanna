@@ -1,3 +1,4 @@
+import { ManagedMcp } from "./managed-mcp"
 import { Effect, Fiber, Layer, ManagedRuntime, Option, Result, Schema, Scope } from "effect"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
@@ -245,6 +246,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(options.keybindingsPath),
+      ManagedMcp.layer(dataDir),
       CursorCli.layer(),
       GrokCli.layer(),
       PiAgent.layer(),
@@ -362,9 +364,10 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   store.hooks.onTurnEnded = (chatId) => {
     void runKanna(turnFiles.endTurn(chatId).pipe(Effect.andThen(worktreeProbe.refreshForChat(chatId))))
   }
-  const { keybindings, appSettings, analytics, usageLimits: resolvedUsageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager, codexManager, quickResponse, cursorManager, grokManager, piManager } = yield* Effect.gen(function* () {
+  const { managedMcp, keybindings, appSettings, analytics, usageLimits: resolvedUsageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager, codexManager, quickResponse, cursorManager, grokManager, piManager } = yield* Effect.gen(function* () {
     return {
       updateManager: Option.getOrNull(yield* Effect.serviceOption(UpdateManager)),
+      managedMcp: yield* ManagedMcp,
       keybindings: yield* Keybindings,
       appSettings: yield* AppSettings,
       analytics: yield* Analytics,
@@ -401,6 +404,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   yield* refreshDiscoveryEffect()
   const agent = new AgentCoordinator({
     platform,
+    managedMcp,
     store,
     analytics,
     codexManager,
@@ -436,6 +440,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   const router = createWsRouter({
     platform,
     exportViewerDistDir: options.assetDirs?.exportViewer,
+    managedMcp,
     diagnostics,
     store,
     diffStore,

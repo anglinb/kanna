@@ -1,3 +1,5 @@
+import { mcpBridgeName, type McpBridgeServers } from "../shared/mcp"
+import type { ManagedMcp } from "./managed-mcp"
 import {
   query,
   type BackgroundTaskSummary,
@@ -312,6 +314,7 @@ function effectClaudeSession(chatId: string, handle: ClaudeSessionHandle): Claud
 }
 
 interface ClaudeSessionState {
+  mcpSignature?: string
   id: string
   chatId: string
   session: ClaudeSessionEffect
@@ -356,6 +359,7 @@ interface ClaudeSessionState {
 }
 
 interface AgentCoordinatorArgs {
+  managedMcp?: ManagedMcp["Service"]
   /** The native service; a `{ service }` wrapper remains accepted for older test fixtures. */
   store: EventStore["Service"] | { readonly service: EventStore["Service"] }
   onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
@@ -387,6 +391,7 @@ interface AgentCoordinatorArgs {
     forkSession: boolean
     resumeSessionAt?: string
     customTools?: KannaToolHost
+    mcpServers?: McpBridgeServers
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
     onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
     onSubagentActivity?: (update: SubagentActivityUpdate) => void
@@ -942,6 +947,7 @@ async function startClaudeSession(args: {
    */
   resumeSessionAt?: string
   customTools?: KannaToolHost
+  mcpServers?: McpBridgeServers
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
   /**
@@ -1026,9 +1032,10 @@ async function startClaudeSession(args: {
       ...(args.forkSession && args.resumeSessionAt ? { resumeSessionAt: args.resumeSessionAt } : {}),
       permissionMode: args.planMode ? "plan" : "acceptEdits",
       canUseTool,
-      ...(args.customTools ? {
-        mcpServers: { kanna: createClaudeKannaTools(args.customTools) },
-      } : {}),
+      mcpServers: {
+        ...Object.fromEntries(Object.entries(args.mcpServers ?? {}).map(([name, endpoint]) => [mcpBridgeName(name), { type: "http" as const, ...endpoint }])),
+        ...(args.customTools ? { kanna: createClaudeKannaTools(args.customTools) } : {}),
+      },
       tools: claudeToolset(args.autoPlan),
       ...(args.onSubagentActivity ? { hooks: subagentHooks(args.onSubagentActivity) } : {}),
       // By default the SDK forwards only a subagent's tool calls. Its text
@@ -1141,6 +1148,7 @@ async function startClaudeSession(args: {
 }
 
 export class AgentCoordinator {
+  private readonly managedMcp?: ManagedMcp["Service"]
   private readonly store: EventStore["Service"]
   private readonly onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   private readonly analytics: Analytics["Service"]
@@ -1219,6 +1227,7 @@ export class AgentCoordinator {
   onChatStopped?: (chatId: string) => void
 
   constructor(args: AgentCoordinatorArgs) {
+    this.managedMcp = args.managedMcp
     this.store = "service" in args.store ? args.store.service : args.store
     this.onStateChange = args.onStateChange
     this.analytics = args.analytics ?? NoopAnalytics
@@ -1835,6 +1844,7 @@ export class AgentCoordinator {
       }
       self.forkBackground(self.codexManager.stopSession(chatId))
       self.piManager.closeChat(chatId)
+      if (self.managedMcp) yield* self.managedMcp.releaseChat(chatId)
       self.emitStateChange(chatId)
     }).pipe(Effect.withSpan("Agent.closeChat"))
   }
@@ -2244,6 +2254,9 @@ export class AgentCoordinator {
     const onToolRequest = (request: HarnessToolRequest) => self.requestToolInput(args.chatId, request)
     let markToolsReady!: () => void
     const toolsReady = new Promise<void>((resolve) => { markToolsReady = resolve })
+    const mcpServers = self.managedMcp && args.provider !== "grok"
+      ? yield* self.managedMcp.endpoints(args.provider, project.localPath, args.chatId)
+      : {}
     const customTools: KannaToolHost = {
       execute: async (name, input, signal) => {
         await toolsReady
@@ -2339,6 +2352,7 @@ export class AgentCoordinator {
             ...(chat.pendingForkSessionToken && chat.pendingForkAt ? { resumeSessionAt: chat.pendingForkAt } : {}),
             onToolRequest,
             customTools,
+            mcpServers,
         })
       }
       if (args.provider === "cursor") {
@@ -2353,6 +2367,7 @@ export class AgentCoordinator {
         return yield* openHarnessTurn(self.cursorManager.startTurn({
           cwd: project.localPath,
           customTools,
+          mcpServers,
           content: cursorContent,
           model: args.model,
           sessionToken: chat.sessionToken,
@@ -2381,6 +2396,8 @@ export class AgentCoordinator {
           chatId: args.chatId,
           cwd: project.localPath,
           customTools,
+          mcpServers,
+          mcpTools: self.managedMcp ? yield* self.managedMcp.piTools(project.localPath, args.chatId) : [],
           content: buildPromptText(wireContent, args.attachments),
           model: args.model,
           effort: normalizePiModelOptions(undefined, args.effort).reasoningEffort,
@@ -2394,6 +2411,7 @@ export class AgentCoordinator {
         chatId: args.chatId,
         cwd: project.localPath,
         customTools,
+        mcpServers,
         model: args.model,
         serviceTier: args.serviceTier,
         sessionToken: chat.sessionToken,
@@ -2511,6 +2529,7 @@ export class AgentCoordinator {
     forkSession: boolean
     resumeSessionAt?: string
     customTools?: KannaToolHost
+    mcpServers?: McpBridgeServers
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   }) => {
     const self = this
@@ -2529,6 +2548,7 @@ export class AgentCoordinator {
       || session.effort !== args.effort
       || session.autoPlan !== args.autoPlan
       || session.delegator !== args.delegator
+      || session.mcpSignature !== JSON.stringify(args.mcpServers ?? {})
       || args.forkSession
     ) {
       if (session) {
@@ -2552,6 +2572,7 @@ export class AgentCoordinator {
         ...(args.resumeSessionAt ? { resumeSessionAt: args.resumeSessionAt } : {}),
         onToolRequest: args.onToolRequest,
         customTools: args.customTools,
+        mcpServers: args.mcpServers,
         onRateLimitEvent: (info) => self.onClaudeRateLimit?.(info),
         onSubagentActivity: (update) => self.applySubagentActivity(args.chatId, update),
         signal,
@@ -2568,6 +2589,7 @@ export class AgentCoordinator {
 
       session = {
         id: crypto.randomUUID(),
+        mcpSignature: JSON.stringify(args.mcpServers ?? {}),
         chatId: args.chatId,
         session: effectClaudeSession(args.chatId, started),
         localPath: args.localPath,

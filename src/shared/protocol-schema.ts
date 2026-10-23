@@ -1,3 +1,4 @@
+import { McpServerInputSchema, McpProviderSchema } from "./mcp-schema"
 import { Effect, Schema, Struct } from "effect"
 import { isClientEnvelope, type ClientEnvelope } from "./protocol"
 
@@ -209,6 +210,13 @@ export const ClientCommandSchema = Schema.Union([
   command("auth.openrouter.start", { callbackUrl: Schema.String }),
   command("auth.openrouter.exchange", { code: Schema.String }),
   command("chat.listSkills", { provider: AgentProvider, chatId: optionalString, projectId: optionalString }),
+  command("mcp.read"),
+  command("mcp.save", { server: McpServerInputSchema }),
+  command("mcp.remove", { id: Schema.String }),
+  command("mcp.connect", { id: Schema.String }),
+  command("mcp.disconnect", { id: Schema.String }),
+  command("mcp.importConfig", { content: Schema.String, providers: Schema.Array(McpProviderSchema), projectPath: optionalString }),
+  command("mcp.importProvider", { provider: Schema.Literals(["claude", "codex", "cursor"]), projectPath: optionalString }),
   command("skills.search", { query: Schema.String, limit: optionalNumber }),
   command("skills.install", { source: Schema.String, skillId: Schema.String }),
   command("skills.uninstall", { skillId: Schema.String }),

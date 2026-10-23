@@ -349,6 +349,7 @@ describe("Cursor shared tools", () => {
     const fake = yield* makeFakeCli()
     const turn = yield* (yield* cursorWith(fake)).startTurn({
       cwd: "/repo", content: "Test tools", model: "composer-2.5", sessionToken: null,
+      mcpServers: { github: { url: "http://127.0.0.1:12345/servers/fixture", headers: { Authorization: "Bearer local-bridge-token" } } },
       customTools: { execute: async () => ({ content: [{ type: "text", text: "ok" }] }) },
     })
     const argv = fake.spawns[0]?.argv ?? []
@@ -358,6 +359,7 @@ describe("Cursor shared tools", () => {
       config: await Bun.file(`${pluginPath}/mcp.json`).json(),
       plugin: await Bun.file(`${pluginPath}/.cursor-plugin/plugin.json`).json(),
     }))
+    expect(config.mcpServers["kanna-github"]).toEqual({ url: "http://127.0.0.1:12345/servers/fixture", headers: { Authorization: "Bearer local-bridge-token" } })
     expect(plugin.name).toBe("kanna-tools")
     expect(config.mcpServers.kanna.url).toStartWith("http://127.0.0.1:")
     expect(argv).toContain("--approve-mcps")

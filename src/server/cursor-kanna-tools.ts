@@ -1,3 +1,4 @@
+import { mcpBridgeName, type McpBridgeServers } from "../shared/mcp"
 import path from "node:path"
 import { Effect, Exit, FileSystem, Schema, Scope } from "effect"
 import type { KannaToolHost } from "./kanna-tools"
@@ -26,7 +27,7 @@ export interface CursorKannaTools {
  * caller's scope; `close` ends them sooner (when the CLI exits or is
  * interrupted).
  */
-export const createCursorKannaTools = Effect.fn("CursorKannaTools.create")(function* (host: KannaToolHost) {
+export const createCursorKannaTools = Effect.fn("CursorKannaTools.create")(function* (host: KannaToolHost, mcpServers: McpBridgeServers = {}) {
   const fs = yield* FileSystem.FileSystem
   // A failed removal is left behind, as before: it is a temp directory.
   const removeDirectory = (directory: string) =>
@@ -61,6 +62,7 @@ export const createCursorKannaTools = Effect.fn("CursorKannaTools.create")(funct
   }))
   yield* write("mcp.json", JSON.stringify({
     mcpServers: {
+      ...Object.fromEntries(Object.entries(mcpServers).map(([name, endpoint]) => [mcpBridgeName(name), endpoint])),
       kanna: { url: server.url, headers: server.headers },
     },
   }), { mode: 0o600 })

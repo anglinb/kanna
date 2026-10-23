@@ -1,4 +1,4 @@
-import { BookText, Command, FlaskConical, Gauge, LaptopMinimal, MessageSquareQuote, ScrollText, Settings2, type LucideIcon } from "lucide-react"
+import { BookText, Command, FlaskConical, Gauge, LaptopMinimal, MessageSquareQuote, ScrollText, Settings2, Plug, type LucideIcon } from "lucide-react"
 import { macSetupAvailable } from "../../lib/macApp"
 
 /**
@@ -29,6 +29,12 @@ export const SETTINGS_SECTIONS = [
     label: "Providers",
     icon: MessageSquareQuote as LucideIcon,
     subtitle: "Sign-ins, the default provider, and model defaults for each harness.",
+  },
+  {
+    id: "mcp",
+    label: "MCP Servers",
+    icon: Plug as LucideIcon,
+    subtitle: "Configure tools and share one sign-in across providers.",
   },
   {
     id: "skills",

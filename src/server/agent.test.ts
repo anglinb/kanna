@@ -1,3 +1,6 @@
+import { ManagedMcp } from "./managed-mcp"
+import type { McpBridgeServers } from "../shared/mcp"
+import { runTest } from "./effect/testing"
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -1583,6 +1586,48 @@ describe("AgentCoordinator claude integration", () => {
     expect(store.chat.sessionToken).toBe("claude-session-1")
 
     events.close()
+  })
+
+  test("MCP changes reconnect Claude with the existing conversation and only local bridge credentials", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "kanna-agent-mcp-"))
+    try {
+      await runTest(Effect.gen(function* () {
+        const mcp = yield* ManagedMcp
+        const snapshot = yield* mcp.save({ name: "github", transport: "http", url: "https://upstream.example/mcp", headers: { Authorization: "Bearer upstream-secret" }, providers: ["claude"] })
+        const configured = snapshot.servers[0]!
+        const store = createFakeStore()
+        const starts: Array<{ servers: McpBridgeServers; sessionToken: string | null }> = []
+        const coordinator = new AgentCoordinator({
+          platform: testPlatformContext, managedMcp: mcp, store: store as never, onStateChange: () => {},
+          startClaudeSession: async (args) => {
+            starts.push({ servers: args.mcpServers ?? {}, sessionToken: args.sessionToken })
+            const events = new AsyncEventQueue<any>()
+            return {
+              provider: "claude", stream: events, getAccountInfo: async () => null,
+              interrupt: async () => {}, close: () => events.close(), setModel: async () => {}, setPermissionMode: async () => {},
+              sendPrompt: async () => {
+                events.push({ type: "session_token" as const, sessionToken: "claude-mcp-session" })
+                events.push({ type: "transcript" as const, entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "done" }) })
+              },
+            }
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => coordinator.dispose()))
+        const send = (content: string) => coordinator.send({ type: "chat.send", chatId: "chat-1", provider: "claude", content, model: "claude-opus-4-1" })
+        yield* Effect.promise(() => send("one"))
+        yield* Effect.promise(() => waitFor(() => store.turnFinishedCount === 1))
+        yield* Effect.promise(() => send("two"))
+        yield* Effect.promise(() => waitFor(() => store.turnFinishedCount === 2))
+        expect(starts).toHaveLength(1)
+        expect(starts[0]?.servers.github?.url).toStartWith("http://127.0.0.1:")
+        expect(JSON.stringify(starts)).not.toContain("upstream-secret")
+        yield* mcp.save({ id: configured.id, name: configured.name, transport: "http", url: configured.url, providers: [] })
+        yield* Effect.promise(() => send("three"))
+        yield* Effect.promise(() => waitFor(() => store.turnFinishedCount === 3))
+        expect(starts).toHaveLength(2)
+        expect(starts[1]).toEqual({ servers: {}, sessionToken: "claude-mcp-session" })
+      }).pipe(Effect.provide(ManagedMcp.layer(dataDir))))
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
   })
 
   test("a chat made a delegator restarts its Claude session, which resumes with the delegator instructions", async () => {

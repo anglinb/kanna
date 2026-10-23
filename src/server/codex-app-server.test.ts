@@ -2688,20 +2688,24 @@ describe("Codex shared tools", () => {
   for (const method of ["thread/start", "thread/resume", "thread/fork"] as const) {
     test(`registers the chat MCP server on ${method}`, () => runTest(Effect.gen(function* () {
       let config: any
+      let externalConfig: any
       const process = new FakeCodexProcess((message, child) => {
         if (message.method === "initialize") child.writeServerMessage({ id: message.id, result: {} })
         if (message.method === method) {
           config = message.params.config["mcp_servers.kanna"]
+          externalConfig = message.params.config["mcp_servers.kanna-github"]
           child.writeServerMessage({ id: message.id, result: { thread: { id: "thread-tools" } } })
         }
       })
       const manager = yield* makeCodexAppServer({ spawnProcess: () => Effect.sync(() => process) })
       yield* manager.startSession({
         chatId: "tools", cwd: "/repo", model: "gpt-5.4",
+        mcpServers: { github: { url: "http://127.0.0.1:12345/servers/fixture", headers: { Authorization: "Bearer local-bridge-token" } } },
         sessionToken: method === "thread/resume" ? "existing" : null,
         pendingForkSessionToken: method === "thread/fork" ? "parent" : null,
         customTools: { execute: async () => ({ content: [{ type: "text", text: "ok" }] }) },
       })
+      expect(externalConfig).toEqual({ url: "http://127.0.0.1:12345/servers/fixture", http_headers: { Authorization: "Bearer local-bridge-token" }, tool_timeout_sec: 86400, enabled: true })
       expect(config.url).toStartWith("http://127.0.0.1:")
       expect(config.tool_timeout_sec).toBeGreaterThan(3600)
       expect((yield* Effect.promise(() => fetch(config.url))).status).toBe(401)
