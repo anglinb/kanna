@@ -1,3 +1,4 @@
+import { ProviderAccounts } from "./provider-accounts"
 import { ManagedMcp } from "./managed-mcp"
 import { Effect, Fiber, Layer, ManagedRuntime, Option, Result, Schema, Scope } from "effect"
 import { PerformanceLog } from "./performance-log"
@@ -243,43 +244,44 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   const quickResponseLayer = QuickResponse.layerWithCodex.pipe(
     Layer.provideMerge(CodexAppServer.layer()),
   )
+  const providerAuthLayer = ProviderAuth.layer({
+    fetchLatestNpmVersion: (packageName) => fetchLatestPackageVersion(packageName).pipe(
+      Effect.catchTag("@kanna/server/cli-runtime/PackageRegistryError", (cause) =>
+        Effect.fail(new LatestVersionError({ packageName, cause }))),
+    ),
+    // Runs only after a sign-in, long after startup has built `agent`
+    // and read `usageLimits` out of this runtime.
+    onSignedIn: (service) => Effect.gen(function* () {
+      // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
+      // flip from auth → usage) and the live Cursor/Codex model catalogs.
+      yield* usageLimitsSlot.get().refresh({ force: true }).pipe(Effect.forkDetach)
+      if (service === "cursor") {
+        void agentSlot.get().refreshCursorModelCatalog()
+      }
+      if (service === "grok") {
+        void agentSlot.get().refreshGrokModelCatalog()
+      }
+      if (service === "codex") {
+        void agentSlot.get().refreshCodexModelCatalog()
+      }
+      if (service === "gh") {
+        // Never let a cached "unauthenticated" repo list outlive the sign-in
+        // (clone palette / home repos section fetch through this cache).
+        clearGitHubRepoCache()
+      }
+    }),
+  }).pipe(Layer.provideMerge(analyticsLayer))
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Keybindings.layer(options.keybindingsPath),
       ManagedMcp.layer(dataDir),
+      ProviderAccounts.layer(dataDir).pipe(Layer.provideMerge(providerAuthLayer)),
       CursorCli.layer(),
       GrokCli.layer(),
       PiAgent.layer(),
       DiffStore.layer.pipe(Layer.provideMerge(quickResponseLayer)),
       eventStoreLayer,
       orchestratorLayer,
-      ProviderAuth.layer({
-        fetchLatestNpmVersion: (packageName) => fetchLatestPackageVersion(packageName).pipe(
-          Effect.catchTag("@kanna/server/cli-runtime/PackageRegistryError", (cause) =>
-            Effect.fail(new LatestVersionError({ packageName, cause }))),
-        ),
-        // Runs only after a sign-in, long after startup has built `agent`
-        // and read `usageLimits` out of this runtime.
-        onSignedIn: (service) => Effect.gen(function* () {
-          // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
-          // flip from auth → usage) and the live Cursor/Codex model catalogs.
-          yield* usageLimitsSlot.get().refresh({ force: true }).pipe(Effect.forkDetach)
-          if (service === "cursor") {
-            void agentSlot.get().refreshCursorModelCatalog()
-          }
-          if (service === "grok") {
-            void agentSlot.get().refreshGrokModelCatalog()
-          }
-          if (service === "codex") {
-            void agentSlot.get().refreshCodexModelCatalog()
-          }
-          if (service === "gh") {
-            // Never let a cached "unauthenticated" repo list outlive the sign-in
-            // (clone palette / home repos section fetch through this cache).
-            clearGitHubRepoCache()
-          }
-        }),
-      }).pipe(Layer.provideMerge(analyticsLayer)),
       // Self-update exists only when the CLI asked for it; it tracks through Analytics.
       options.update
         ? updateManagerLayer(options.update, runtimeProfile === "dev").pipe(Layer.provideMerge(analyticsLayer))
@@ -364,9 +366,10 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   store.hooks.onTurnEnded = (chatId) => {
     void runKanna(turnFiles.endTurn(chatId).pipe(Effect.andThen(worktreeProbe.refreshForChat(chatId))))
   }
-  const { managedMcp, keybindings, appSettings, analytics, usageLimits: resolvedUsageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager, codexManager, quickResponse, cursorManager, grokManager, piManager } = yield* Effect.gen(function* () {
+  const { providerAccounts, managedMcp, keybindings, appSettings, analytics, usageLimits: resolvedUsageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager, codexManager, quickResponse, cursorManager, grokManager, piManager } = yield* Effect.gen(function* () {
     return {
       updateManager: Option.getOrNull(yield* Effect.serviceOption(UpdateManager)),
+      providerAccounts: yield* ProviderAccounts,
       managedMcp: yield* ManagedMcp,
       keybindings: yield* Keybindings,
       appSettings: yield* AppSettings,
@@ -405,6 +408,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   const agent = new AgentCoordinator({
     platform,
     managedMcp,
+    providerAccounts,
     store,
     analytics,
     codexManager,
@@ -441,6 +445,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
     platform,
     exportViewerDistDir: options.assetDirs?.exportViewer,
     managedMcp,
+    providerAccounts,
     diagnostics,
     store,
     diffStore,

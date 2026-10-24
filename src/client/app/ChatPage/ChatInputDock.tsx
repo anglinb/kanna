@@ -18,6 +18,7 @@ interface ChatInputDockProps {
   projectId: string | null
   projectPath: string | null
   projectRepoLabel: string | null
+  accountIds?: Partial<Record<AgentProvider, string>>
   activeProvider: AgentProvider | null
   availableProviders: KannaState["availableProviders"]
   contextWindowSnapshot: ContextWindowSnapshot | null
@@ -46,6 +47,7 @@ export const ChatInputDock = memo(function ChatInputDock({
   projectPath,
   projectRepoLabel,
   activeProvider,
+  accountIds,
   availableProviders,
   contextWindowSnapshot,
   onSubmit,
@@ -83,6 +85,7 @@ export const ChatInputDock = memo(function ChatInputDock({
             projectPath={projectPath}
             projectRepoLabel={projectRepoLabel}
             activeProvider={activeProvider}
+            accountIds={accountIds}
             availableProviders={availableProviders}
             contextWindowSnapshot={contextWindowSnapshot}
             previousPrompt={previousPrompt}

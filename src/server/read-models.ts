@@ -474,6 +474,7 @@ export function deriveChatSnapshot(
 
   const status = deriveStatus(chat, activeStatuses.get(chat.id))
   const runtime: ChatRuntime = {
+    ...(chat.accountIds ? { accountIds: chat.accountIds } : {}),
     chatId: chat.id,
     projectId: project.id,
     localPath: project.localPath,

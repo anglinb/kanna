@@ -1,5 +1,6 @@
+import { existingAccountId } from "../../../shared/accounts"
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, AudioLines, Check, Copy, Loader2, Paperclip, Trash2 } from "lucide-react"
+import { ArrowUp, AudioLines, Check, Copy, Loader2, Paperclip, Trash2, UserRound } from "lucide-react"
 import {
   chatModeFromFlags,
   type AgentProvider,
@@ -30,11 +31,11 @@ import { delegatorDisplayTitle } from "../../lib/delegators"
 import { abbreviatePathHead, formatPathWithTilde } from "../../lib/pathUtils"
 import { copyTextToClipboard } from "../../lib/clipboard"
 import { buildUploadErrorReport, simpleUploadError, type UploadErrorReport } from "../../lib/uploadError"
-import { useUnauthenticatedHarnesses } from "../../stores/providerAuthStore"
+import { useProviderAuthStore, useUnauthenticatedHarnesses } from "../../stores/providerAuthStore"
 import { useAppSettingsStore } from "../../stores/appSettingsStore"
 import { shouldSteerSubmit } from "../../../shared/submit-mode"
 import { SignInDialog } from "../auth/SignInDialog"
-import { ChatPreferenceControls } from "./ChatPreferenceControls"
+import { InputPopover, PopoverMenuItem, ChatPreferenceControls } from "./ChatPreferenceControls"
 import { ContextWindowMeter } from "./ContextWindowMeter"
 import { AttachmentFileCard, AttachmentImageCard } from "../messages/AttachmentCard"
 import { classifyAttachmentPreview } from "../messages/attachmentPreview"
@@ -184,7 +185,7 @@ interface ComposerAttachment extends ChatAttachment {
 interface Props {
   onSubmit: (
     value: string,
-    options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; autoPlan?: boolean; attachments?: ChatAttachment[]; steer?: boolean }
+    options?: { accountId?: string; provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; autoPlan?: boolean; attachments?: ChatAttachment[]; steer?: boolean }
   ) => Promise<void>
   onLayoutChange?: () => void
   onCancel?: () => void
@@ -201,6 +202,7 @@ interface Props {
    */
   projectRepoLabel?: string | null
   inputElementRef?: React.Ref<HTMLTextAreaElement>
+  accountIds?: Partial<Record<AgentProvider, string>>
   activeProvider: AgentProvider | null
   availableProviders: ProviderCatalogEntry[]
   contextWindowSnapshot?: ContextWindowSnapshot | null
@@ -257,6 +259,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   projectRepoLabel,
   inputElementRef,
   activeProvider,
+  accountIds,
   availableProviders,
   contextWindowSnapshot = null,
   previousPrompt = null,
@@ -373,6 +376,13 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   // codex, whose native sigil is "$" — accepting still completes to the
   // canonical "/" form); menu items render in ascending match quality so the
   // best match sits at the bottom, next to the input.
+  const authSnapshot = useProviderAuthStore((store) => store.snapshot)
+  const [accountChoices, setAccountChoices] = useState<Partial<Record<AgentProvider, string>>>({})
+  const providerAccounts = authSnapshot?.accounts?.filter((entry) => entry.provider === selectedProvider) ?? []
+  const pinnedAccountId = accountIds?.[selectedProvider] ?? (activeProvider === selectedProvider && previousPrompt ? existingAccountId(selectedProvider) : undefined)
+  const selectedAccountId = pinnedAccountId ?? accountChoices[selectedProvider] ?? authSnapshot?.defaultAccountIds?.[selectedProvider]
+  const selectedAccount = providerAccounts.find((entry) => entry.id === selectedAccountId)
+
   const skillMenuTriggers = selectedProvider === "codex" ? CODEX_SKILL_MENU_TRIGGERS : DEFAULT_SKILL_MENU_TRIGGERS
   const skillMention = onListSkills && !disabled ? getActiveSkillMention(value, caretPosition, skillMenuTriggers) : null
   const slashQuery = skillMention?.query ?? null
@@ -878,6 +888,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     return {
       steer,
       provider: selectedProvider,
+      accountId: delegateSettings ? undefined : selectedAccountId,
       model: providerPrefs.model,
       modelOptions,
       planMode: showModePicker ? providerPrefs.planMode : false,
@@ -1405,6 +1416,18 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               }}
             />
           </label>
+          {!delegateSettings && providerAccounts.length > 1 ? <InputPopover
+            disabled={Boolean(pinnedAccountId)}
+            disabledTitle="This chat keeps its selected account. Start a new chat to change accounts."
+            trigger={<><UserRound className="size-3.5" /><span>{selectedAccount?.label ?? "Account unavailable"}</span></>}
+          >{(close) => providerAccounts.map((account) => <PopoverMenuItem
+            key={account.id}
+            selected={account.id === selectedAccountId}
+            onClick={() => { setAccountChoices((choices) => ({ ...choices, [selectedProvider]: account.id })); close() }}
+            icon={<UserRound className="size-4" />}
+            label={account.label}
+            description={account.identity ?? account.authStatus.replaceAll("_", " ")}
+          />)}</InputPopover> : null}
           <ChatPreferenceControls
             availableProviders={availableProviders}
             selectedProvider={selectedProvider}

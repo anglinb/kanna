@@ -1405,6 +1405,7 @@ export function ChatPage() {
         projectPath={state.navbarLocalPath ?? null}
         projectRepoLabel={state.navbarRepoLabel}
         activeProvider={state.runtime?.provider ?? null}
+        accountIds={state.runtime?.accountIds}
         availableProviders={state.availableProviders}
         contextWindowSnapshot={contextWindowSnapshot}
         onSubmit={handleChatSubmit}

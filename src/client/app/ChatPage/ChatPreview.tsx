@@ -381,6 +381,7 @@ function ChatPreviewSession({ chatId, title, projectId: sidebarProjectId, projec
           projectPath={projectPath}
           projectRepoLabel={projectRepoLabel}
           activeProvider={session.runtime?.provider ?? provider}
+          accountIds={session.runtime?.accountIds}
           availableProviders={session.availableProviders}
           contextWindowSnapshot={contextWindowSnapshot}
           onSubmit={session.handleSend}

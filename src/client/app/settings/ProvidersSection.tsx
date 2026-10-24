@@ -1,3 +1,4 @@
+import { AccountsSection } from "./AccountsSection"
 import { useEffect, useState } from "react"
 import { History, Loader2 } from "lucide-react"
 import {
@@ -214,7 +215,8 @@ export function ProvidersSection({
     <>
       {providersError ? <SettingsErrorBanner message={providersError} /> : null}
       <SettingsGroups>
-        <SettingsGroup title="Accounts">
+        <AccountsSection socket={state.socket} />
+        <SettingsGroup title="Provider setup">
           {providerAuthSnapshot ? (
             providerAuthSnapshot.services.map((service) => (
               // One surface for every account: each card drops its own
