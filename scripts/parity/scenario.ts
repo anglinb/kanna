@@ -34,7 +34,14 @@ export interface Scenario {
   route: string
   themes?: Theme[]
   viewports?: ViewportName[]
-  /** Fraction of pixels allowed to differ (antialiasing noise). Default 0. */
+  /**
+   * Parts of the page compared on their own, by name: a Playwright selector
+   * each, e.g. { sidebar: "[data-slot=sidebar]" }. Every capture is taken for
+   * the whole page ("page") and for each region; `--region` picks which ones
+   * decide the run. A ported slice passes on its regions first.
+   */
+  regions?: Record<string, string>
+  /** Fraction of pixels allowed to differ (antialiasing noise). Default 0.0001. */
   pixelTolerance?: number
   /** What the scenario exercises, for the coverage audit. */
   covers?: { commands?: string[]; keybindings?: string[]; routes?: string[] }

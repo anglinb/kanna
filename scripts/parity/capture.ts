@@ -82,9 +82,53 @@ export async function settle(page: Page, errors: string[]) {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 
-export async function capture(page: Page, errors: string[]): Promise<{ capture: Capture; screenshot: Buffer }> {
-  const screenshot = await page.screenshot({ animations: "disabled", caret: "hide" })
-  const paint = await page.evaluate((properties: readonly string[]) => {
+/**
+ * Captures the whole page, or with `region` (a Playwright selector) just that
+ * element: its screenshot, the painted elements inside it with boxes relative
+ * to its corner, and its accessibility subtree. A slice can then pass parity
+ * for its own region while the rest of its page is still React-only.
+ */
+export async function capture(page: Page, errors: string[], region?: string): Promise<{ capture: Capture; screenshot: Buffer }> {
+  // Frozen for the whole capture, not just the screenshot: a spinner's box
+  // turns and a pulsing dot's opacity moves between the screenshot and the
+  // style read, which made the paint check flaky.
+  await page.evaluate(() => {
+    const style = document.createElement("style")
+    style.id = "__parity-freeze"
+    style.textContent = "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}"
+    document.head.append(style)
+  })
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  try {
+    return await captureFrozen(page, errors, region)
+  } finally {
+    await page.evaluate(() => document.getElementById("__parity-freeze")?.remove())
+  }
+}
+
+async function captureFrozen(page: Page, errors: string[], region?: string): Promise<{ capture: Capture; screenshot: Buffer }> {
+  let bounds: { x: number; y: number; width: number; height: number } | null = null
+  let screenshot: Buffer
+  let aria: string
+  if (region) {
+    const locator = page.locator(region).first()
+    const present = (await locator.count()) > 0
+    const visible = present && (await locator.isVisible())
+    if (!visible) {
+      // Absent or hidden is a state both apps must agree on, not an error:
+      // the mobile layout has no sidebar beside the page.
+      screenshot = await page.screenshot({ animations: "disabled", caret: "hide", clip: { x: 0, y: 0, width: 1, height: 1 } })
+      aria = present ? "<region hidden>" : "<region absent>"
+    } else {
+      bounds = await locator.boundingBox()
+      screenshot = await locator.screenshot({ animations: "disabled", caret: "hide" })
+      aria = await locator.ariaSnapshot()
+    }
+  } else {
+    screenshot = await page.screenshot({ animations: "disabled", caret: "hide" })
+    aria = await page.locator("body").ariaSnapshot()
+  }
+  const allPaint = await page.evaluate((properties: readonly string[]) => {
     const items: PaintItem[] = []
     const viewportWidth = window.innerWidth
     const viewportHeight = window.innerHeight
@@ -132,7 +176,13 @@ export async function capture(page: Page, errors: string[]): Promise<{ capture: 
     items.sort((a, b) => a.box[1] - b.box[1] || a.box[0] - b.box[0])
     return items
   }, STYLE_PROPERTIES)
-  const aria = await page.locator("body").ariaSnapshot()
+  const paint = bounds === null
+    ? (region ? [] : allPaint)
+    : allPaint
+      .filter((item) => item.box[0] >= bounds!.x - 1 && item.box[1] >= bounds!.y - 1
+        && item.box[0] + item.box[2] <= bounds!.x + bounds!.width + 1
+        && item.box[1] + item.box[3] <= bounds!.y + bounds!.height + 1)
+      .map((item) => ({ ...item, box: [item.box[0] - Math.round(bounds!.x), item.box[1] - Math.round(bounds!.y), item.box[2], item.box[3]] as PaintItem["box"] }))
   const probe = await page.evaluate(() => {
     const p = (window as unknown as { __parity?: { commands(): unknown[]; subscriptions(): unknown[]; unhandled(): unknown[] } }).__parity
     return p

@@ -6,6 +6,7 @@
 //
 //   bun run parity                       every scenario
 //   bun run parity chat-featured home    just these
+//   bun run parity home --region sidebar just one region of each capture
 //   bun run parity --selfcheck           React against React: must pass
 //   bun run parity --selfcheck --inject-css 'button{letter-spacing:.01em}' --expect-fail
 //                                        proves a one-rule change is caught
@@ -17,6 +18,7 @@
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { open, readFile, stat } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import pixelmatch from "pixelmatch"
 import { chromium, type Browser } from "playwright"
@@ -28,18 +30,24 @@ import { scenarios as allScenarios } from "./scenarios"
 
 const ROOT = path.resolve(import.meta.dirname, "../..")
 const PARITY_DIR = path.join(ROOT, ".parity")
-const LOCK_PATH = path.join(PARITY_DIR, "lock")
+// Machine-wide, not per checkout: port agents each run in their own worktree.
+const LOCK_PATH = path.join(tmpdir(), "kanna-parity.lock")
 const FIXED_TIME = new Date("2026-06-01T12:00:00Z")
 // Exact color match per pixel. pixelmatch's default (0.1) can't see a dark
 // theme's surfaces: the sidebar is a few levels off the page background, and
 // a blank candidate scored under 1% different. Antialiased pixels are still
 // skipped (includeAA: false), which absorbs text rasterization noise.
 const PIXEL_THRESHOLD = 0
+// Chromium rasterizes a small curve a few levels differently from run to run
+// (19 px of a toggle's edge on one React-vs-React run). 0.01% of the page
+// absorbs that; anything structural also fails the paint check, which has
+// no tolerance.
+const DEFAULT_PIXEL_TOLERANCE = 0.0001
 
 // Inputs of each app's build. A change to any of them rebuilds that app.
 const BUILD_INPUTS = {
   react: ["src/client", "src/demo", "src/shared", "src/parity", "src/index.css", "public", "vite.parity.config.ts", "vite-plugin-message-scroller.ts", "package.json", "bun.lock"],
-  foldkit: ["src/foldkit", "src/demo", "src/shared", "src/parity", "src/index.css", "public", "vite.parity.config.ts", "package.json", "bun.lock"],
+  foldkit: ["src/foldkit", "src/client", "src/demo", "src/shared", "src/parity", "src/index.css", "public", "vite.parity.config.ts", "package.json", "bun.lock"],
 } as const
 type AppName = keyof typeof BUILD_INPUTS
 
@@ -48,15 +56,18 @@ interface Options {
   selfcheck: boolean
   injectCss: string | null
   expectFail: boolean
+  /** Region names to compare ("page" is the whole page). Empty: all of them. */
+  regions: string[]
 }
 
 function parseArgs(argv: string[]): Options {
-  const options: Options = { names: [], selfcheck: false, injectCss: null, expectFail: false }
+  const options: Options = { names: [], selfcheck: false, injectCss: null, expectFail: false, regions: [] }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === "--selfcheck") options.selfcheck = true
     else if (arg === "--expect-fail") options.expectFail = true
     else if (arg === "--inject-css") options.injectCss = argv[++i] ?? ""
+    else if (arg === "--region") options.regions.push(...(argv[++i] ?? "").split(","))
     else if (arg === "--scenario") options.names.push(...(argv[++i] ?? "").split(","))
     else if (arg.startsWith("--")) throw new Error(`unknown flag ${arg}`)
     else options.names.push(arg)
@@ -146,7 +157,7 @@ interface Run {
   screenshot: Buffer
 }
 
-async function runApp(browser: Browser, origin: string, scenario: Scenario, theme: Theme, viewport: ViewportName, injectCss: string | null): Promise<Run[]> {
+async function runApp(browser: Browser, origin: string, scenario: Scenario, theme: Theme, viewport: ViewportName, injectCss: string | null, regionFilter: string[]): Promise<Run[]> {
   const size = VIEWPORTS[viewport]
   const context = await browser.newContext({
     viewport: { width: size.width, height: size.height },
@@ -171,10 +182,14 @@ async function runApp(browser: Browser, origin: string, scenario: Scenario, them
     }, injectCss)
   }
   const runs: Run[] = []
+  const regions: [string, string | undefined][] = [["page", undefined], ...Object.entries(scenario.regions ?? {})]
   const take = async (label: string) => {
     await settle(page, errors)
-    const result = await capture(page, errors)
-    runs.push({ label, ...result })
+    for (const [name, selector] of regions) {
+      if (regionFilter.length > 0 && !regionFilter.includes(name)) continue
+      const result = await capture(page, errors, selector)
+      runs.push({ label: name === "page" ? label : `${label}@${name}`, ...result })
+    }
   }
   try {
     const separator = scenario.route.includes("?") ? "&" : "?"
@@ -241,8 +256,8 @@ async function main() {
       for (const viewport of scenario.viewports ?? (["desktop", "mobile"] as ViewportName[])) {
         for (const theme of scenario.themes ?? (["dark", "light"] as Theme[])) {
           const variant = `${viewport}-${theme}`
-          const refRuns = await runApp(browser, reference.origin, scenario, theme, viewport, null)
-          const candRuns = await runApp(browser, candidate.origin, scenario, theme, viewport, options.injectCss)
+          const refRuns = await runApp(browser, reference.origin, scenario, theme, viewport, null, options.regions)
+          const candRuns = await runApp(browser, candidate.origin, scenario, theme, viewport, options.injectCss, options.regions)
           const labels = [...new Set([...refRuns, ...candRuns].map((run) => run.label))]
           for (const label of labels) {
             const id = `${scenario.name}/${variant}/${label}`
@@ -260,7 +275,7 @@ async function main() {
             writeFileSync(path.join(dir, "candidate.json"), JSON.stringify(cand.capture, null, 2))
             const pixels = diffImages(ref.screenshot, cand.screenshot)
             if (pixels.diff) writeFileSync(path.join(dir, "diff.png"), pixels.diff)
-            const pixelResult = comparePixels(pixels.different, pixels.total, scenario.pixelTolerance ?? 0)
+            const pixelResult = comparePixels(pixels.different, pixels.total, scenario.pixelTolerance ?? DEFAULT_PIXEL_TOLERANCE)
             if (pixels.note) pixelResult.detail.unshift(pixels.note)
             const results = [pixelResult, ...compareCaptures(ref.capture, cand.capture, { reference: reference.origin, candidate: candidate.origin })]
             writeFileSync(path.join(dir, "result.json"), JSON.stringify(results, null, 2))

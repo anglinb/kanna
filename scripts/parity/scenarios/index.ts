@@ -1,23 +1,26 @@
-import { defineScenario, type Scenario } from "../scenario"
+import { readdirSync } from "node:fs"
+import path from "node:path"
+import type { Scenario } from "../scenario"
 
-// The scenario list. Seeded with one per main route for the harness
-// selfcheck; the full list (every route, dialog, menu, keybinding and
-// ClientCommand) is written before any porting starts.
+// Every other file in this folder exports `scenarios: Scenario[]`, one file
+// per area (routes.ts, sidebar.ts, gallery-buttons.ts, …), so authors adding
+// scenarios in parallel never edit the same file. Names must be unique.
 
-export const scenarios: Scenario[] = [
-  defineScenario({
-    name: "home",
-    route: "/home",
-    covers: { routes: ["/home"] },
-  }),
-  defineScenario({
-    name: "chat-featured",
-    route: "/chat/demo-chat-units",
-    covers: { routes: ["/chat/:chatId"] },
-  }),
-  defineScenario({
-    name: "settings-general",
-    route: "/settings/general",
-    covers: { routes: ["/settings/:sectionId"] },
-  }),
-]
+const files = readdirSync(import.meta.dirname)
+  .filter((file) => file.endsWith(".ts") && file !== "index.ts" && !file.endsWith(".test.ts"))
+  .sort()
+
+const loaded: Scenario[] = []
+for (const file of files) {
+  const module = (await import(path.join(import.meta.dirname, file))) as { scenarios?: Scenario[] }
+  if (!module.scenarios) throw new Error(`${file} exports no scenarios`)
+  loaded.push(...module.scenarios)
+}
+
+const seen = new Set<string>()
+for (const scenario of loaded) {
+  if (seen.has(scenario.name)) throw new Error(`duplicate scenario name ${scenario.name}`)
+  seen.add(scenario.name)
+}
+
+export const scenarios = loaded
