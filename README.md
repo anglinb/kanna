@@ -123,6 +123,28 @@ kanna --cloudflared <token>  # run a named Cloudflare tunnel from a token
 
 Default URL: `http://localhost:3210`
 
+### Disabling cloud
+
+Cloud features are enabled by default. Disable them for one launch with:
+
+```bash
+kanna --no-cloud
+```
+
+For a persistent setting, create `~/.kanna/config.json` (`~/.kanna-dev/config.json` for development):
+
+```json
+{ "cloud": { "enabled": false } }
+```
+
+Or launch with `KANNA_CLOUD_ENABLED=false kanna`. Precedence is CLI, environment, config, then the enabled default. `KANNA_CLOUD_ENABLED=true` overrides a disabled config; `--cloud` explicitly enables hosted mode. Invalid settings report an error instead of silently enabling cloud.
+
+Restart the server after changing this policy (`kanna stop`, then launch again). The CLI and Mac app refuse to reuse a server with a conflicting policy; older servers must be upgraded to attest that cloud is fully disabled. The Mac app reads the same config and shell environment.
+
+With cloud disabled, Kanna does not load pairing credentials, start cloud connections or heartbeats, discover Fleet machines, mint cloud tokens, or accept cloud proxy authentication. Cloud endpoints return 404, and pairing/Fleet controls disappear. `kanna pair`, public sharing (`--share`, `--cloudflared`), and exposing local ports are unavailable. Existing pairing credentials stay on disk for re-enabling cloud later.
+
+Local chats, agents, password authentication, and LAN/Tailscale access still work. This setting controls Kanna Cloud and public tunnels; provider requests, Git operations, analytics, and update checks have their own behavior.
+
 ### Network access (Tailscale / LAN)
 
 By default Kanna binds to `127.0.0.1` (localhost only). Use `--host` to bind a specific interface, or `--remote` as a shorthand for `0.0.0.0`:

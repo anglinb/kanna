@@ -56,6 +56,8 @@ export interface InstanceStatus {
   runningChats: number | null
   /** Serving this Mac's Kanna Cloud address. */
   cloud: boolean | null
+  /** Startup policy, distinct from whether a tunnel is connected. */
+  cloudEnabled?: boolean | null
 }
 
 export type InstanceRequest = { type: "status" } | { type: "release" } | { type: "stop" }
@@ -64,7 +66,7 @@ export type InstanceRequest = { type: "status" } | { type: "release" } | { type:
 export interface AttachedServer {
   port: number
   version: string
-  state?: () => { runningChats: number; cloud: boolean }
+  state?: () => { runningChats: number; cloud: boolean; cloudEnabled?: boolean }
 }
 
 /**
@@ -203,7 +205,7 @@ export class InstanceLock {
     listener.on("connection", (socket) => this.serve(socket))
   }
 
-  private linkState: { runningChats: number; cloud: boolean } | null = null
+  private linkState: { runningChats: number; cloud: boolean; cloudEnabled?: boolean } | null = null
 
   /** The server this process runs in-process (no supervisor). */
   attach(server: AttachedServer) {
@@ -216,7 +218,7 @@ export class InstanceLock {
   }
 
   status(): InstanceStatus {
-    let state: { runningChats: number; cloud: boolean } | null = null
+    let state: { runningChats: number; cloud: boolean; cloudEnabled?: boolean } | null = null
     try {
       state = this.server?.state?.() ?? null
     } catch {}
@@ -230,6 +232,7 @@ export class InstanceLock {
       version: this.server?.version ?? null,
       runningChats: state?.runningChats ?? null,
       cloud: state?.cloud ?? null,
+      ...(state?.cloudEnabled !== undefined ? { cloudEnabled: state.cloudEnabled } : {}),
     }
   }
 
@@ -261,6 +264,7 @@ export class InstanceLock {
           this.linkState = {
             runningChats: typeof message.runningChats === "number" ? message.runningChats : 0,
             cloud: message.cloud === true,
+            cloudEnabled: typeof message.cloudEnabled === "boolean" ? message.cloudEnabled : undefined,
           }
           break
       }

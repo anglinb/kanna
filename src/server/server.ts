@@ -6,19 +6,12 @@ import path from "node:path"
 import { getDataDir, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
 import type { EditorPreset, TerminalPreset } from "../shared/types"
 import type { ShareMode } from "../shared/share"
-import {
-  CLOUD_BROWSER_PATH_PREFIX,
-  CLOUD_FLEET_PATH,
-  CLOUD_PAIR_SESSION_PATH,
-  CLOUD_WS_ENDPOINT_PATH,
-  type CloudWsEndpointResponse,
-} from "../shared/cloud-api"
+import { SERVER_CAPABILITIES_PATH, capabilitiesForCloud } from "../shared/server-capabilities"
+import { readRuntimePolicy } from "./runtime-policy"
 import { createAuthManager } from "./auth"
-import { classifyCloudRequest, isAllowedCloudWsUpgrade, type CloudRequestClass } from "./cloud/guard"
-import { createCloudRuntime, type CloudRuntime } from "./cloud"
-import { CloudFleet } from "./cloud/fleet"
-import { writeCloudIdentity } from "./cloud/identity"
-import { createPairSessionManager, type PairSessionSnapshot } from "./cloud/pair-session"
+import type { CloudRuntime } from "./cloud"
+import { CloudFeature, isCloudPath } from "./cloud/feature"
+import { cloudFeatureLayer } from "./cloud/layer"
 import { EventStore } from "./event-store"
 import { AgentCoordinator } from "./agent"
 import { CodexAppServer } from "./codex-app-server"
@@ -64,7 +57,7 @@ import { applyPiFaveModels } from "./provider-catalog"
 import { LatestVersionError, ProviderAuth } from "./provider-auth"
 import { fetchLatestPackageVersion, type CliUpdateOptions } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
-import { PortTunnels } from "./port-tunnels"
+import { PortTunnels, PortTunnelsDisabled } from "./port-tunnels"
 import { Terminals } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
 import { fetchMainCommitSha } from "./nightly"
@@ -81,7 +74,7 @@ const STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS = 60 * 1000
 const STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS = 6 * 60 * 60 * 1000
 const STALE_CHAT_DELETE_INTERVAL_MS = 24 * 60 * 60 * 1000
 
-async function withOriginAgentCluster(response: Response | Promise<Response> | undefined) {
+async function withOriginAgentCluster(response: Response | Promise<Response | undefined> | undefined) {
   const resolved = await response
   // Chrome groups localhost ports into one site. Origin-keying reduces the
   // chance that a busy preview shares Kanna's renderer.
@@ -129,6 +122,8 @@ export interface StartKannaServerOptions {
    * /ws upgrade.
    */
   cloud?: CloudRuntime | null
+  /** Startup feature policy, resolved by the CLI or read from config/env. */
+  cloudEnabled?: boolean
   /**
    * Offer device-code pairing from the sidebar (`/api/cloud/pair-session`).
    * Set by the CLI when this run could host a cloud machine but isn't paired
@@ -186,7 +181,12 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   const platform = yield* capturePlatform<PlatformServices>()
   const machine = yield* Machine
   const http = yield* HttpHost
+  const cloudEnabled = (yield* readRuntimePolicy(options.cloudEnabled)).cloudEnabled
+  if (!cloudEnabled && (options.directCloud || options.share)) {
+    return yield* new ServerStartupError({ operation: "cloud policy", cause: new Error("Cloud is disabled; hosted mode and public sharing are unavailable.") })
+  }
   const port = options.port ?? 3210
+  let actualPort = port
   const hostname = options.host ?? "127.0.0.1"
   const strictPort = options.strictPort ?? false
   const runtimeProfile = getRuntimeProfile()
@@ -202,7 +202,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
-  const devboxUi = Boolean(options.directCloud) || machine.env.get("KANNA_DEVBOX_UI") === "1"
+  const devboxUi = cloudEnabled && (Boolean(options.directCloud) || machine.env.get("KANNA_DEVBOX_UI") === "1")
   const agentSlot = startupSlot<AgentStartupPort>("agent")
   const routerSlot = startupSlot<RouterStartupPort>("router")
   const storeSlot = startupSlot<StoreStartupPort>("event store")
@@ -290,9 +290,13 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
       EditorDetection.layer(),
       TerminalDetection.layer(),
       Terminals.layer,
-      PortTunnels.layer(),
+      cloudEnabled ? PortTunnels.layer() : PortTunnelsDisabled,
       ProjectDiscovery.layer(),
-      CloudFleet.layer(),
+      cloudFeatureLayer(cloudEnabled, {
+        runtime: cloudEnabled ? options.cloud : null,
+        allowPairing: cloudEnabled && options.allowCloudPairing,
+        localUrl: () => `http://localhost:${actualPort}`,
+      }),
       ProjectIcons.layer({
         dataDir,
         projectPaths: Effect.sync((): string[] =>
@@ -322,12 +326,8 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   const store = yield* EventStore.pipe(Effect.provideContext(runtimeContext))
   storeSlot.bind(store)
   const diffStore = yield* DiffStore.pipe(Effect.provideContext(runtimeContext))
-  const machineDisplayName = yield* getMachineDisplayName().pipe(Effect.provide(platform))
-  // Mutable: device-code pairing can attach a cloud runtime mid-flight, and
-  // every request path below reads the current value.
-  let cloud: CloudRuntime | null = options.cloud ?? null
-  /** Only set when *this* process paired; the CLI owns a handed-in runtime. */
-  let selfPairedCloud: CloudRuntime | null = null
+  const machineDisplayName = yield* getMachineDisplayName(cloudEnabled ? undefined : null).pipe(Effect.provide(platform))
+  const cloudFeature = yield* CloudFeature.pipe(Effect.provideContext(runtimeContext))
   yield* store.migrateLegacyTranscripts(options.onMigrationProgress)
   // Not awaited: this streams every transcript once per data dir, which on a
   // machine with a few 100 MB chats takes longer than a boot should. The
@@ -366,7 +366,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   store.hooks.onTurnEnded = (chatId) => {
     void runKanna(turnFiles.endTurn(chatId).pipe(Effect.andThen(worktreeProbe.refreshForChat(chatId))))
   }
-  const { providerAccounts, managedMcp, keybindings, appSettings, analytics, usageLimits: resolvedUsageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, fleet, providerAuth, updateManager, codexManager, quickResponse, cursorManager, grokManager, piManager } = yield* Effect.gen(function* () {
+  const { providerAccounts, managedMcp, keybindings, appSettings, analytics, usageLimits: resolvedUsageLimits, editorDetection, terminalDetection, terminals, portTunnels, projectIcons, discovery, providerAuth, updateManager, codexManager, quickResponse, cursorManager, grokManager, piManager } = yield* Effect.gen(function* () {
     return {
       updateManager: Option.getOrNull(yield* Effect.serviceOption(UpdateManager)),
       providerAccounts: yield* ProviderAccounts,
@@ -381,7 +381,6 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
       portTunnels: yield* PortTunnels,
       projectIcons: yield* ProjectIcons,
       discovery: yield* ProjectDiscovery,
-      fleet: yield* CloudFleet,
       providerAuth: yield* ProviderAuth,
       codexManager: yield* CodexAppServer,
       quickResponse: yield* QuickResponse,
@@ -545,33 +544,6 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   const distDir = options.assetDirs?.client
 
   const MAX_PORT_ATTEMPTS = 20
-  let actualPort = port
-
-  // One-click cloud setup: the sidebar asks for a claim URL, the user opens
-  // it (or scans it) on any device, and pairing lands back here — credentials
-  // to ~/.kanna/cloud.json and the tunnel up, without restarting kanna.
-  const pairSession =
-    options.allowCloudPairing && !cloud
-      ? yield* createPairSessionManager({
-          machineName: machineDisplayName,
-          onPaired: (identity) => Effect.gen(function* () {
-            yield* writeCloudIdentity(identity).pipe(Effect.provide(platform))
-            const runtime = createCloudRuntime(identity)
-            cloud = runtime
-            selfPairedCloud = runtime
-            yield* runtime.start({
-              // Byte-identical to the CLI's launch URL for a paired machine
-              // (cli-runtime builds `http://localhost:<port>`; pairing is only
-              // offered when we're bound to 127.0.0.1). The control plane
-              // re-syncs the tunnel's remote ingress whenever the reported
-              // local service changes, so a different spelling here would cost
-              // a pointless Cloudflare round-trip on the next boot.
-              localUrl: `http://localhost:${actualPort}`,
-            })
-          }),
-        })
-      : null
-
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
     const listened = yield* Effect.result(http.listen<ClientState>({
         port: actualPort,
@@ -590,16 +562,13 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
         },
         async fetch(req, serverInstance) {
           const url = new URL(req.url)
-          const requestClass: CloudRequestClass = cloud
-            ? classifyCloudRequest(req, cloud.identity.proxySecret)
-            : "local"
-
-          // The proxy answers /__cloud/* itself and never forwards it; the
-          // machine 404s the prefix explicitly so the client can
-          // feature-detect cloud mode (the SPA fallback would otherwise
-          // return index.html with a 200).
-          if (url.pathname === CLOUD_BROWSER_PATH_PREFIX || url.pathname.startsWith(`${CLOUD_BROWSER_PATH_PREFIX}/`)) {
-            return withOriginAgentCluster(Response.json({ error: "Not found" }, { status: 404 }))
+          const requestClass = cloudFeature.classify(req)
+          // Reserved cloud routes never fall through to the SPA shell.
+          if (!cloudEnabled && isCloudPath(url.pathname)) {
+            return withOriginAgentCluster(runKanna(cloudFeature.handleRequest(req)))
+          }
+          if (url.pathname === "/__cloud" || url.pathname.startsWith("/__cloud/")) {
+            return withOriginAgentCluster(new Response(null, { status: 404 }))
           }
 
           const upgradeWebSocket = () => {
@@ -610,12 +579,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
             return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 })
           }
 
-          const allowCloudWsUpgrade = () =>
-            cloud !== null &&
-            isAllowedCloudWsUpgrade(req, {
-              appOrigin: cloud.identity.appOrigin,
-              validateToken: cloud.connectTokens.validate,
-            })
+          const allowCloudWsUpgrade = () => cloudFeature.allowsWebSocket(req)
 
           // Raw tunnel traffic (not through the kanna.sh proxy, not local):
           // expose only the public health check and the token-gated WS
@@ -632,6 +596,11 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
               return withOriginAgentCluster(new Response("Unauthorized", { status: 401 }))
             }
             return withOriginAgentCluster(new Response("Not found", { status: 404 }))
+          }
+
+          if (url.pathname === SERVER_CAPABILITIES_PATH) {
+            if (req.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } })
+            return withOriginAgentCluster(Response.json({ capabilities: capabilitiesForCloud(cloudEnabled) }, { headers: { "Cache-Control": "no-store" } }))
           }
 
           if (url.pathname === "/auth/status") {
@@ -714,65 +683,11 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
             // data dir is already being served (single-instance guard). Only
             // exposed on local/proxied requests — the raw-tunnel /health
             // above stays minimal.
-            return withOriginAgentCluster(Response.json({ ok: true, port: actualPort, instance: instanceFingerprint(store.dataDir) }))
+            return withOriginAgentCluster(Response.json({ ok: true, port: actualPort, instance: instanceFingerprint(store.dataDir), cloudEnabled }))
           }
 
-          if (url.pathname === CLOUD_PAIR_SESSION_PATH) {
-            // Local requests only: claiming a machine is something you do at
-            // the keyboard, never through the proxy or the raw tunnel.
-            if (requestClass !== "local") {
-              return withOriginAgentCluster(Response.json({ error: "Not found" }, { status: 404 }))
-            }
-            const respond = (snapshot: PairSessionSnapshot | { status: "unsupported" }) =>
-              Response.json(snapshot, { headers: { "Cache-Control": "no-store" } })
-
-            if (cloud) {
-              return withOriginAgentCluster(respond({ status: "paired", appOrigin: cloud.identity.appOrigin }))
-            }
-            if (!pairSession) {
-              return withOriginAgentCluster(respond({ status: "unsupported" }))
-            }
-            if (req.method === "POST") {
-              return withOriginAgentCluster(respond(await runKanna(pairSession.start)))
-            }
-            if (req.method === "GET") {
-              return withOriginAgentCluster(respond(await runKanna(pairSession.status)))
-            }
-            return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
-          }
-
-          // The account's machines, asked for with this machine's own
-          // credentials (see cloud/fleet.ts). Through the proxy the page asks
-          // kanna.sh instead, but answering there too costs nothing.
-          if (url.pathname === CLOUD_FLEET_PATH) {
-            if (req.method !== "GET") {
-              return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
-            }
-            return withOriginAgentCluster(Response.json(await runKanna(fleet.get(cloud?.identity ?? null)), {
-              headers: { "Cache-Control": "no-store" },
-            }))
-          }
-
-          if (url.pathname === CLOUD_WS_ENDPOINT_PATH) {
-            if (req.method !== "GET") {
-              return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
-            }
-            // Proxied requests get the machine's permanent tunnel WS URL + a
-            // short-lived token so the browser's WebSocket bypasses the proxy
-            // entirely. Local requests get null → same-origin connect. The
-            // hostname is static (named tunnel), so no runtime tunnel state.
-            if (cloud && requestClass === "proxied") {
-              const minted = cloud.connectTokens.mint()
-              const payload: CloudWsEndpointResponse = {
-                wsUrl: `wss://${cloud.identity.tunnelHost}/ws`,
-                connectToken: minted.token,
-                expiresInMs: minted.expiresInMs,
-              }
-              return withOriginAgentCluster(Response.json(payload, { headers: { "Cache-Control": "no-store" } }))
-            }
-            const payload: CloudWsEndpointResponse = { wsUrl: null }
-            return withOriginAgentCluster(Response.json(payload, { headers: { "Cache-Control": "no-store" } }))
-          }
+          const cloudResponse = await runKanna(cloudFeature.handleRequest(req))
+          if (cloudResponse) return withOriginAgentCluster(cloudResponse)
 
           const uploadResponse = await runKanna(handleProjectUploadEffect(req, url, store).pipe(Effect.provide(platform)))
           if (uploadResponse) {
@@ -853,6 +768,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
       }))
     if (Result.isSuccess(listened)) {
       server = listened.success
+      actualPort = server.port
       break
     }
     // Anything but a taken port, or a taken port we may not move off, fails
@@ -871,7 +787,7 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
     share: options.share ?? false,
     password: options.password ?? null,
     strictPort,
-    cloud: Boolean(options.cloud),
+    cloud: cloudFeature.connected(),
   })
 
   yield* diagnostics.start(() => ({
@@ -883,10 +799,6 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
   }))
 
   const shutdown = Effect.fn("Server.shutdown")(function* () {
-    if (pairSession) yield* pairSession.stop
-    // A runtime handed in by the CLI is stopped by the CLI; one this process
-    // attached at pair time is ours to take down.
-    if (selfPairedCloud) yield* selfPairedCloud.stop
     yield* stopServerMaintenance(recoveryFiber, maintenanceScope)
     // The probe's passes stop with the runtime below; nothing hears them from here on.
     yield* Effect.sync(() => {
@@ -921,6 +833,6 @@ export const startKannaServerEffect = Effect.fn("Server.start")(function* (optio
     stop: () => runKanna(shutdown()),
     /** For the single-instance lock's status (instance-socket.ts), which the
      *  Mac app's quit dialog shows. */
-    state: () => ({ runningChats: agent.activeTurns.size, cloud: Boolean(options.cloud ?? selfPairedCloud) }),
+    state: () => ({ runningChats: agent.activeTurns.size, cloud: cloudFeature.connected(), cloudEnabled }),
   }
 })

@@ -1,3 +1,4 @@
+import { getServerCapabilities } from "../stores/serverCapabilitiesStore"
 import { recordClientPerformance, startClientPerformance } from "./clientPerformance"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
@@ -125,6 +126,7 @@ function sameOriginWsUrl() {
  * unchanged.
  */
 async function wsUrlProvider(): Promise<string> {
+  if (!(await getServerCapabilities()).cloud) return sameOriginWsUrl()
   try {
     const response = await fetch(CLOUD_WS_ENDPOINT_PATH, {
       headers: { Accept: "application/json" },
