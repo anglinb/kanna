@@ -67,6 +67,7 @@
     "@effect/platform-browser": "4.0.5",
     "@effect/platform-bun": "4.0.5",
     "@foldkit/ui": "0.169.0",
+    "@foldkit/vite-plugin": "0.28.0",
     "@fontsource-variable/bricolage-grotesque": "^5.2.10",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@pierre/diffs": "^1.1.12",

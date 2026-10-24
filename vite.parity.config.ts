@@ -1,6 +1,7 @@
 import path from "node:path"
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
+import { foldkit } from "@foldkit/vite-plugin"
 import { messageScrollerPatch } from "./vite-plugin-message-scroller"
 
 // One of the two parity apps (src/parity), chosen by PARITY_APP: the React
@@ -12,7 +13,7 @@ const app = process.env.PARITY_APP === "foldkit" ? "foldkit" : "react"
 
 export default defineConfig({
   root: path.resolve(import.meta.dirname, "src/parity", app),
-  plugins: app === "react" ? [messageScrollerPatch(), react()] : [],
+  plugins: app === "react" ? [messageScrollerPatch(), react()] : [foldkit()],
   publicDir: path.resolve(import.meta.dirname, "public"),
   server: {
     host: "127.0.0.1",

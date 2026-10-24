@@ -128,7 +128,7 @@ async function build(app: AppName) {
     return outDir
   }
   console.log(`building ${app}…`)
-  const proc = Bun.spawn(["bunx", "vite", "build", "--config", "vite.parity.config.ts", "--logLevel", "warn"], {
+  const proc = Bun.spawn(["bunx", "vite", "build", "--config", "vite.parity.config.ts", "--logLevel", "error"], {
     cwd: ROOT,
     env: { ...process.env, PARITY_APP: app },
     stdout: "inherit",

@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Queue, Stream } from "effect"
+import { Effect, Queue, Stream } from "effect"
+import { ManagedResource } from "foldkit"
 import { KannaSocket, type SocketStatus, type WsUrlSource } from "../../client/app/socket"
 import { getServerCapabilities } from "../../client/stores/serverCapabilitiesStore"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
@@ -6,16 +7,21 @@ import type { ClientCommand, SubscriptionTopic, TerminalEvent, TerminalSnapshot 
 
 // The app's one WebSocket. `KannaSocket` (React-free, unchanged) does the
 // reconnects, heartbeat, outbound queue and resubscribes; this file makes it
-// an app-lifetime Foldkit resource and gives Commands and Subscriptions an
-// Effect view of it:
+// a ManagedResource and gives Commands and Subscriptions an Effect view of it:
 //
 //   sendCommand<R>(command)      Effect<R, Error, KannaSocketService>
 //   topicStream<T>(topic, opts)  Stream<T, never, KannaSocketService>
 //   statusStream                 Stream<SocketStatus, never, KannaSocketService>
+//
+// Managed, not app-lifetime: the React client opened it only once the auth
+// check passed (KannaLayout mounted), and a locked server must not see a
+// socket knocking before the password. The root acquires it when auth is
+// ready (`socketEntry`) and Subscriptions wait for `onAcquired`.
 
 export type { SocketStatus }
 
-export class KannaSocketService extends Context.Service<KannaSocketService, KannaSocket>()("KannaSocketService") {}
+export const KannaSocketResource = ManagedResource.tag<KannaSocket>()("KannaSocket")
+export type KannaSocketService = ManagedResource.ServiceOf<typeof KannaSocketResource>
 
 function sameOriginWsUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
@@ -52,25 +58,25 @@ export async function wsUrlProvider(): Promise<string> {
   return sameOriginWsUrl()
 }
 
-/** Started when the runtime builds its resources, disposed at teardown. */
-export function kannaSocketLayer(url: WsUrlSource = wsUrlProvider) {
-  return Layer.effect(
-    KannaSocketService,
-    Effect.acquireRelease(
-      Effect.sync(() => {
-        const socket = new KannaSocket(url)
-        socket.start()
-        return socket
-      }),
-      (socket) => Effect.sync(() => socket.dispose()),
-    ),
-  )
+/** For the root's ManagedResource entry: start on acquire, dispose on release. */
+export function acquireSocket(url: WsUrlSource = wsUrlProvider) {
+  return Effect.sync(() => {
+    const socket = new KannaSocket(url)
+    socket.start()
+    return socket
+  })
 }
+
+export function releaseSocket(socket: KannaSocket) {
+  return Effect.sync(() => socket.dispose())
+}
+
+const notAvailable = () => new Error("Not connected")
 
 /** One ClientCommand; succeeds with the ack's result, fails with the server's error. */
 export function sendCommand<Result = unknown>(command: ClientCommand): Effect.Effect<Result, Error, KannaSocketService> {
   return Effect.gen(function* () {
-    const socket = yield* KannaSocketService
+    const socket = yield* KannaSocketResource.get.pipe(Effect.mapError(notAvailable))
     return yield* Effect.tryPromise({
       try: () => socket.command<Result>(command),
       catch: (error) => (error instanceof Error ? error : new Error(String(error))),
@@ -96,7 +102,7 @@ export function topicStream<Snapshot>(
 ): Stream.Stream<Snapshot, never, KannaSocketService> {
   return Stream.callback<Snapshot, never, KannaSocketService>((queue) =>
     Effect.gen(function* () {
-      const socket = yield* KannaSocketService
+      const socket = yield* KannaSocketResource.get.pipe(Effect.orDie)
       yield* Effect.acquireRelease(
         Effect.sync(() => socket.subscribe<Snapshot>(topic, (snapshot) => {
           Queue.offerUnsafe(queue, snapshot)
@@ -115,7 +121,7 @@ export type TerminalStreamItem =
 export function terminalStream(terminalId: string): Stream.Stream<TerminalStreamItem, never, KannaSocketService> {
   return Stream.callback<TerminalStreamItem, never, KannaSocketService>((queue) =>
     Effect.gen(function* () {
-      const socket = yield* KannaSocketService
+      const socket = yield* KannaSocketResource.get.pipe(Effect.orDie)
       yield* Effect.acquireRelease(
         Effect.sync(() => socket.subscribeTerminal(terminalId, {
           onSnapshot: (snapshot) => {
@@ -135,7 +141,7 @@ export function terminalStream(terminalId: string): Stream.Stream<TerminalStream
 export const statusStream: Stream.Stream<SocketStatus, never, KannaSocketService> =
   Stream.callback<SocketStatus, never, KannaSocketService>((queue) =>
     Effect.gen(function* () {
-      const socket = yield* KannaSocketService
+      const socket = yield* KannaSocketResource.get.pipe(Effect.orDie)
       yield* Effect.acquireRelease(
         Effect.sync(() => socket.onStatus((status) => {
           Queue.offerUnsafe(queue, status)

@@ -5,6 +5,8 @@ import "../fixture"
 import "@fontsource-variable/bricolage-grotesque"
 import "@xterm/xterm/css/xterm.css"
 import "../../index.css"
+import { createDemoAppSettings } from "../../demo/backend"
+import { readThemeParam } from "../../demo/environment"
 import { runKanna } from "../../foldkit/app/run"
 import { galleryName } from "../gallery"
 import type { GalleryPage } from "./gallery-page"
@@ -26,5 +28,6 @@ if (gallery) {
   if (page) page.run(container)
   else container.textContent = `No gallery named ${gallery}`
 } else {
-  runKanna(container)
+  // As the React entry seeds its store: start on the fixture's theme.
+  runKanna(container, { initialAppSettings: createDemoAppSettings(readThemeParam()) })
 }
