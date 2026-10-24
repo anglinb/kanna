@@ -2648,6 +2648,12 @@ export interface ChatRuntime {
   delegator?: true
   /** With `status: "waiting_on_subagent"`, and only then. The same value as `SidebarChatRow.waitingOn`. */
   waitingOn?: WaitingOn
+  /**
+   * Set while the chat waits for its provider's usage to come back: its last
+   * turn hit the limit, and Kanna sends it a "carry on" at `at` (epoch ms).
+   * Omitted otherwise. Cancelled or sent early with `chat.usageLimitResume`.
+   */
+  usageLimitResume?: { at: number; provider: AgentProvider }
 }
 
 export interface ChatSnapshot {

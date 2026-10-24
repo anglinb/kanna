@@ -256,6 +256,7 @@ export interface KannaState {
   handleSend: (content: string, options?: { accountId?: string; provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; autoPlan?: boolean }) => Promise<void>
   handleSteerQueuedMessage: (queuedMessageId: string) => Promise<void>
   handleRemoveQueuedMessage: (queuedMessageId: string) => Promise<void>
+  handleUsageLimitResume: (action: "cancel" | "now") => Promise<void>
   handleCancel: () => Promise<void>
   handleStopDraining: () => Promise<void>
   handleRenameChat: (chat: SidebarChatRow) => Promise<void>
@@ -1266,6 +1267,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const {
     handleSteerQueuedMessage,
     handleRemoveQueuedMessage,
+    handleUsageLimitResume,
     handleCancel,
     handleStopDraining,
     handleRenameChat,
@@ -1393,6 +1395,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleSend,
     handleSteerQueuedMessage,
     handleRemoveQueuedMessage,
+    handleUsageLimitResume,
     handleCancel,
     handleStopDraining,
     handleRenameChat,

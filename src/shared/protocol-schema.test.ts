@@ -294,6 +294,10 @@ const samples: CommandSamples = {
   "chat.discardDiffFile": [{ type: "chat.discardDiffFile", chatId: "c1", path: "a.ts" }],
   "chat.ignoreDiffFile": [{ type: "chat.ignoreDiffFile", chatId: "c1", path: "a.ts" }],
   "chat.cancel": [{ type: "chat.cancel", chatId: "c1" }],
+  "chat.usageLimitResume": [
+    { type: "chat.usageLimitResume", chatId: "c1", action: "cancel" },
+    { type: "chat.usageLimitResume", chatId: "c1", action: "now" },
+  ],
   "chat.stopDraining": [{ type: "chat.stopDraining", chatId: "c1" }],
   "chat.stopTask": [{ type: "chat.stopTask", chatId: "c1", taskId: "t1" }],
   "chat.exportStandalone": [

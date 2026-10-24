@@ -49,6 +49,12 @@ export function useChatCommands(params: {
     await wrapCommand({ type: "message.dequeue", chatId: activeChatId, queuedMessageId })
   }, [activeChatId, wrapCommand])
 
+  /** The chat waiting for its usage limit: `cancel` turns the resume off, `now` sends it at once. */
+  const handleUsageLimitResume = useCallback(async (action: "cancel" | "now") => {
+    if (!activeChatId) return
+    await wrapCommand({ type: "chat.usageLimitResume", chatId: activeChatId, action })
+  }, [activeChatId, wrapCommand])
+
   const handleCancel = useCallback(async () => {
     if (!activeChatId) return
     await wrapCommand({ type: "chat.cancel", chatId: activeChatId }, { keepCommandError: true })
@@ -201,6 +207,7 @@ export function useChatCommands(params: {
   return {
     handleSteerQueuedMessage,
     handleRemoveQueuedMessage,
+    handleUsageLimitResume,
     handleCancel,
     handleStopDraining,
     handleRenameChat,

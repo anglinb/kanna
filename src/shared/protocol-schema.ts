@@ -304,6 +304,7 @@ export const ClientCommandSchema = Schema.Union([
   command("chat.discardDiffFile", { chatId: Schema.String, path: Schema.String }),
   command("chat.ignoreDiffFile", { chatId: Schema.String, path: Schema.String }),
   command("chat.cancel", { chatId: Schema.String }),
+  command("chat.usageLimitResume", { chatId: Schema.String, action: Schema.Literals(["cancel", "now"]) }),
   command("chat.stopDraining", { chatId: Schema.String }),
   command("chat.stopTask", { chatId: Schema.String, taskId: Schema.String }),
   command("chat.exportStandalone", {

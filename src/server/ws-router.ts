@@ -2244,6 +2244,13 @@ export function createWsRouter({
           yield* (chatCommands.cancel(command.chatId).pipe(Effect.flatMap((outcome) => finishChatCommandEffect(ws, id, outcome))))
           return
         }
+        case "chat.usageLimitResume": {
+          yield* (command.action === "now"
+            ? agent.resumeAfterUsageLimitEffect(command.chatId)
+            : agent.cancelUsageLimitResumeEffect(command.chatId))
+          yield* finishChatCommandEffect(ws, id, { result: undefined, changed: { sidebar: true, chatIds: [command.chatId] } })
+          return
+        }
         case "chat.stopDraining": {
           yield* agent.stopDrainingEffect(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })

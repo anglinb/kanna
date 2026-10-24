@@ -132,6 +132,13 @@ export interface ChatRecord {
    */
   resumePending?: boolean
   /**
+   * Set when the chat's last turn failed because its provider's usage ran
+   * out, with the time the usage comes back. Kanna sends the chat a "carry
+   * on" at that time and holds its queued messages until then. Cleared when
+   * it resumes, when the user cancels it, and when any other turn starts.
+   */
+  usageLimitResume?: UsageLimitResume
+  /**
    * Files this chat has changed, unioned across its turns and measured by
    * diffing worktree snapshots at each turn boundary (see `TurnFileTracker`).
    * Intersected with the currently-dirty paths to decide whether a chat is
@@ -462,6 +469,13 @@ export type QueuedMessageEvent =
       queuedMessageId: string
     }
 
+/** When a chat stopped by a usage limit continues, and whose limit it was. */
+export interface UsageLimitResume {
+  /** Epoch ms: the provider's reset time, plus a little slack. */
+  at: number
+  provider: AgentProvider
+}
+
 export type TurnEvent =
   | {
       v: 2
@@ -496,6 +510,14 @@ export type TurnEvent =
       timestamp: number
       chatId: string
       pending: boolean
+    }
+  | {
+      v: 2
+      type: "usage_limit_resume_set"
+      timestamp: number
+      chatId: string
+      /** Null clears it. */
+      resume: UsageLimitResume | null
     }
   | {
       v: 2

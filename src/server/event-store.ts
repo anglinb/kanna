@@ -42,7 +42,7 @@ import {
   type TranscriptPayload,
   type TranscriptPayloadReadError,
 } from "./transcript-payloads"
-import { INLINE_TOOL_KINDS } from "./events"
+import { INLINE_TOOL_KINDS, type UsageLimitResume } from "./events"
 import {
   copyTranscriptMedia,
   externalizeEntryImages,
@@ -296,6 +296,7 @@ function getReplayEventPriority(event: StoreEvent) {
       return 6
     case "turn_cancelled":
     case "turn_resume_pending_set":
+    case "usage_limit_resume_set":
       return 7
     case "turn_finished":
     case "turn_failed":
@@ -619,6 +620,8 @@ export class EventStore extends Context.Service<EventStore, {
   readonly recordTurnFailed: (chatId: string, error: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly recordTurnCancelled: (chatId: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setTurnResumePending: (chatId: string, pending: boolean) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
+  /** Set (or, with null, clear) when a chat stopped by a usage limit continues. See `ChatRecord.usageLimitResume`. */
+  readonly setUsageLimitResume: (chatId: string, resume: UsageLimitResume | null) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setSessionToken: (chatId: string, sessionToken: string | null) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   /** `pendingForkAt` is where the fork branches off that session (`ChatRecord.pendingForkAt`); cleared with the token. */
   readonly setPendingForkSessionToken: (
@@ -1148,6 +1151,16 @@ class StoreMemory {
           chat.resumePending = true
         } else {
           delete chat.resumePending
+        }
+        break
+      }
+      case "usage_limit_resume_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        if (event.resume) {
+          chat.usageLimitResume = { ...event.resume }
+        } else {
+          delete chat.usageLimitResume
         }
         break
       }
@@ -2977,6 +2990,21 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     }))
   })
 
+  /** Bookkeeping like `setTurnResumePending`, so it leaves `updatedAt` alone too. */
+  const setUsageLimitResume = Effect.fn("EventStore.setUsageLimitResume")(function* (chatId: string, resume: UsageLimitResume | null) {
+    yield* Effect.annotateCurrentSpan("chatId", chatId)
+    yield* chatSetting(paths.turnsLog, chatId, (chat) =>
+      (chat.usageLimitResume?.at ?? null) === (resume?.at ?? null)
+      && (chat.usageLimitResume?.provider ?? null) === (resume?.provider ?? null),
+    (): TurnEvent => ({
+      v: STORE_VERSION,
+      type: "usage_limit_resume_set",
+      timestamp: Date.now(),
+      chatId,
+      resume,
+    }))
+  })
+
   const setSessionToken = Effect.fn("EventStore.setSessionToken")(function* (chatId: string, sessionToken: string | null) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
     yield* chatSetting(paths.turnsLog, chatId, (chat) => chat.sessionToken === sessionToken, (): TurnEvent => ({
@@ -3202,6 +3230,7 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     recordTurnFailed,
     recordTurnCancelled,
     setTurnResumePending,
+    setUsageLimitResume,
     setSessionToken,
     setPendingForkSessionToken,
     compact: compact(),

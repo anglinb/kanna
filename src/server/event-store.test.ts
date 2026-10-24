@@ -988,6 +988,28 @@ describe("EventStore", () => {
     expect(afterCompaction.requireChat(chat.id).resumePending).toBeUndefined()
   })
 
+  test("a usage-limit resume survives a restart and a compaction, and its clear does too", async () => {
+    const dataDir = await createTempDataDir()
+    const store = await openEventStore(dataDir)
+    const project = await store.openProject("/tmp/project")
+    const chat = await store.createChat(project.id)
+    const updatedAt = store.requireChat(chat.id).updatedAt
+
+    await store.setUsageLimitResume(chat.id, { at: 1_900_000_060_000, provider: "claude" })
+    expect(store.requireChat(chat.id).usageLimitResume).toEqual({ at: 1_900_000_060_000, provider: "claude" })
+    // Bookkeeping, like the restart marker: the sidebar does not reorder for it.
+    expect(store.requireChat(chat.id).updatedAt).toBe(updatedAt)
+
+    const reloaded = await openEventStore(dataDir)
+    expect(reloaded.requireChat(chat.id).usageLimitResume).toEqual({ at: 1_900_000_060_000, provider: "claude" })
+    await reloaded.compact()
+    expect((await openEventStore(dataDir)).requireChat(chat.id).usageLimitResume).toEqual({ at: 1_900_000_060_000, provider: "claude" })
+
+    await reloaded.setUsageLimitResume(chat.id, null)
+    expect(reloaded.requireChat(chat.id).usageLimitResume).toBeUndefined()
+    expect((await openEventStore(dataDir)).requireChat(chat.id).usageLimitResume).toBeUndefined()
+  })
+
   test("lastAgentMessageAt tracks agent entries mid-turn, ignoring user prompts", async () => {
     const dataDir = await createTempDataDir()
     const store = await openEventStore(dataDir)

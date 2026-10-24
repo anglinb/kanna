@@ -27,6 +27,8 @@ function sameRuntime(left: ChatSnapshot["runtime"] | null | undefined, right: Ch
     && left.autoPlan === right.autoPlan
     && left.sessionToken === right.sessionToken
     && sameSubagents(left.subagents, right.subagents)
+    && left.usageLimitResume?.at === right.usageLimitResume?.at
+    && left.usageLimitResume?.provider === right.usageLimitResume?.provider
 }
 
 // Subagent activity changes on its own, without a transcript entry: a hook

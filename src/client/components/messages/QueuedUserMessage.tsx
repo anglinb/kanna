@@ -28,13 +28,13 @@ const QUEUED_BUBBLE_CLASS = "rounded-2xl border border-dashed border-border bg-t
  */
 const QUEUED_CONTROL_CLASS = "transition-[color,background-color,scale] duration-150 ease-snappy active:scale-[0.95] motion-reduce:transition-none motion-reduce:active:scale-100"
 
-function SendNowButton({ onSendNow, disabled }: { onSendNow: () => void; disabled: boolean }) {
+export function SendNowButton({ onSendNow, disabled, label = "Send now" }: { onSendNow: () => void; disabled: boolean; label?: string }) {
   return (
     <Button
       type="button"
       variant="default"
       size="none"
-      aria-label="Send now"
+      aria-label={label}
       disabled={disabled}
       className={cn(
         QUEUED_CONTROL_CLASS,
@@ -57,13 +57,13 @@ function SendNowButton({ onSendNow, disabled }: { onSendNow: () => void; disable
  * does not exist on a touch screen, and on a desktop it has to be found
  * before it can be used.
  */
-function RemoveButton({ corner, onRemove, disabled }: { corner: "start" | "end"; onRemove: () => void; disabled: boolean }) {
+export function RemoveButton({ corner, onRemove, disabled, label = "Remove from queue" }: { corner: "start" | "end"; onRemove: () => void; disabled: boolean; label?: string }) {
   return (
     <Button
       type="button"
       variant="none"
       size="none"
-      aria-label="Remove from queue"
+      aria-label={label}
       disabled={disabled}
       className={cn(
         QUEUED_CONTROL_CLASS,
