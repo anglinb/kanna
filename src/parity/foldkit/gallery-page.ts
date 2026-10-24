@@ -10,10 +10,12 @@ export interface GalleryPage {
   run(container: HTMLElement): void
 }
 
-export function galleryPage<Config extends Omit<Parameters<typeof Runtime.makeApplication>[0], "container">>(config: Config): GalleryPage {
+export function galleryPage<Model, Message extends { _tag: string }, Resources = never>(
+  config: Omit<Runtime.ApplicationConfig<Model, Message, Resources>, "container">,
+): GalleryPage {
   return {
     run(container) {
-      Runtime.run(Runtime.makeApplication({ ...config, container } as Parameters<typeof Runtime.makeApplication>[0]))
+      Runtime.run(Runtime.makeApplication<Model, Message, Resources>({ ...config, container } as Runtime.ApplicationConfig<Model, Message, Resources>))
     },
   }
 }

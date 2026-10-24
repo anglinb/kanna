@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 // The candidate app for parity runs: the Foldkit client on the fixture
 // backend. Must stay the first import.
 import "../fixture"
