@@ -1,3 +1,4 @@
+import type { McpBridgeServers } from "../shared/mcp"
 import { randomUUID } from "node:crypto"
 import { Cause, Context, Effect, FileSystem, Layer, Match, Option, Queue, Schema, Stream, type Scope } from "effect"
 import type { ContextWindowUsageSnapshot } from "../shared/types"
@@ -34,6 +35,7 @@ import { timestamped } from "./transcript"
  */
 
 export interface StartCursorTurnArgs {
+  mcpServers?: McpBridgeServers
   customTools?: KannaToolHost
   cwd: string
   content: string
@@ -394,7 +396,7 @@ export const makeCursorCli = Effect.fn("CursorCli.make")(function* (options: Cur
     yield* Effect.addFinalizer(() => Queue.end(queue))
 
     const customTools = args.customTools
-      ? yield* createCursorKannaTools(args.customTools).pipe(Effect.provide(kannaToolsContext))
+      ? yield* createCursorKannaTools(args.customTools, args.mcpServers).pipe(Effect.provide(kannaToolsContext))
       : undefined
     if (customTools) argv.push("--plugin-dir", customTools.directory, "--approve-mcps")
     const closeTools = customTools?.close ?? Effect.void

@@ -1,3 +1,4 @@
+import { mcpBridgeName, type McpBridgeServers } from "../shared/mcp"
 import { randomUUID } from "node:crypto"
 import { Cause, Context, Deferred, Effect, Exit, Layer, Match, PubSub, Queue, Result, Schema, Scope, Stream } from "effect"
 import type {
@@ -216,6 +217,7 @@ interface SpawnedAgent {
  * PTY sessions).
  */
 interface SessionContext {
+  mcpSignature?: string
   customTools?: KannaMcpEndpoint
   chatId: string
   cwd: string
@@ -238,6 +240,7 @@ interface SessionContext {
 }
 
 export interface StartCodexSessionArgs {
+  mcpServers?: McpBridgeServers
   customTools?: KannaToolHost
   chatId: string
   cwd: string
@@ -1431,7 +1434,7 @@ export const makeCodexAppServer = Effect.fn("CodexAppServer.make")(function* (op
   const startSession = Effect.fn("CodexAppServer.startSession")(function* (args: StartCodexSessionArgs) {
     yield* Effect.annotateCurrentSpan("chatId", args.chatId)
     const existing = sessions.get(args.chatId)
-    if (existing && !existing.closed && existing.cwd === args.cwd && !args.pendingForkSessionToken) {
+    if (existing && !existing.closed && existing.cwd === args.cwd && existing.mcpSignature === JSON.stringify(args.mcpServers ?? {}) && !args.pendingForkSessionToken) {
       return undefined
     }
     if (existing) {
@@ -1439,6 +1442,7 @@ export const makeCodexAppServer = Effect.fn("CodexAppServer.make")(function* (op
     }
 
     const context = yield* openSession({ chatId: args.chatId, cwd: args.cwd, customTools: args.customTools, register: true })
+    context.mcpSignature = JSON.stringify(args.mcpServers ?? {})
     return yield* startThread(context, args).pipe(
       Effect.onError(() => stopSession(args.chatId)),
     )
@@ -1449,13 +1453,13 @@ export const makeCodexAppServer = Effect.fn("CodexAppServer.make")(function* (op
 
     // Resume and fork accept MCP config, but this CLI only accepts dynamic tools on thread/start.
     const customTools = context.customTools
-    const toolConfig = customTools ? {
+    const managed = Object.fromEntries(Object.entries(args.mcpServers ?? {}).map(([name, endpoint]) => [
+      `mcp_servers.${mcpBridgeName(name)}`, { url: endpoint.url, http_headers: endpoint.headers, tool_timeout_sec: 86400, enabled: true },
+    ]))
+    const toolConfig = customTools || Object.keys(managed).length ? {
       config: {
-        "mcp_servers.kanna": {
-          url: customTools.url,
-          http_headers: customTools.headers,
-          tool_timeout_sec: 86400,
-        },
+        ...managed,
+        ...(customTools ? { "mcp_servers.kanna": { url: customTools.url, http_headers: customTools.headers, tool_timeout_sec: 86400 } } : {}),
       },
     } : {}
     // Standard speed is an explicit null. An omitted tier inherits the

@@ -1,3 +1,4 @@
+import type { ManagedMcp } from "./managed-mcp"
 import type { PerformanceLog } from "./performance-log"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Stream } from "effect"
 import { PROTOCOL_VERSION } from "../shared/types"
@@ -133,6 +134,7 @@ interface CreateWsRouterArgs {
   platform: Context.Context<PlatformServices>
   /** The standalone transcript viewer's build (dist/export-viewer); exports fail without it. */
   exportViewerDistDir?: string
+  managedMcp?: ManagedMcp["Service"]
   diagnostics?: PerformanceLog["Service"]
   store: EventStore["Service"]
   diffStore: Pick<DiffStore["Service"], "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
@@ -217,6 +219,7 @@ function ensureSnapshotSignatures(ws: ClientSocket<ClientState>) {
 export function createWsRouter({
   platform,
   exportViewerDistDir,
+  managedMcp,
   diagnostics,
   store,
   diffStore,
@@ -1814,6 +1817,41 @@ export function createWsRouter({
         case "chat.listSkills": {
           const snapshot = yield* agent.listSkillsEffect(command)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          return
+        }
+        case "mcp.read": {
+          if (!managedMcp) return yield* new RouterCommandError({ message: "MCP settings are unavailable." })
+          yield* ackResultEffect(ws, id, managedMcp.snapshot)
+          return
+        }
+        case "mcp.save": {
+          if (!managedMcp) return yield* new RouterCommandError({ message: "MCP settings are unavailable." })
+          yield* ackResultEffect(ws, id, managedMcp.save(command.server))
+          return
+        }
+        case "mcp.remove": {
+          if (!managedMcp) return yield* new RouterCommandError({ message: "MCP settings are unavailable." })
+          yield* ackResultEffect(ws, id, managedMcp.remove(command.id))
+          return
+        }
+        case "mcp.connect": {
+          if (!managedMcp) return yield* new RouterCommandError({ message: "MCP settings are unavailable." })
+          yield* ackResultEffect(ws, id, managedMcp.connect(command.id))
+          return
+        }
+        case "mcp.disconnect": {
+          if (!managedMcp) return yield* new RouterCommandError({ message: "MCP settings are unavailable." })
+          yield* ackResultEffect(ws, id, managedMcp.disconnect(command.id))
+          return
+        }
+        case "mcp.importConfig": {
+          if (!managedMcp) return yield* new RouterCommandError({ message: "MCP settings are unavailable." })
+          yield* ackResultEffect(ws, id, managedMcp.importConfig(command.content, [...command.providers], command.projectPath))
+          return
+        }
+        case "mcp.importProvider": {
+          if (!managedMcp) return yield* new RouterCommandError({ message: "MCP settings are unavailable." })
+          yield* ackResultEffect(ws, id, managedMcp.importProvider(command.provider, command.projectPath))
           return
         }
         case "skills.search": {

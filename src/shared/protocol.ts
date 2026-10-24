@@ -1,3 +1,4 @@
+import type { McpServerInput, McpProvider } from "./mcp"
 import type {
   AppSettingsSnapshot,
   AppSettingsPatch,
@@ -183,6 +184,13 @@ export type ClientCommand =
   /** Ack result: LlmProviderSnapshot with the exchanged key saved. */
   | { type: "auth.openrouter.exchange"; code: string }
   | { type: "chat.listSkills"; provider: AgentProvider; chatId?: string; projectId?: string }
+  | { type: "mcp.read" }
+  | { type: "mcp.save"; server: McpServerInput }
+  | { type: "mcp.remove"; id: string }
+  | { type: "mcp.connect"; id: string }
+  | { type: "mcp.disconnect"; id: string }
+  | { type: "mcp.importConfig"; content: string; providers: McpProvider[]; projectPath?: string }
+  | { type: "mcp.importProvider"; provider: "claude" | "codex" | "cursor"; projectPath?: string }
   | { type: "skills.search"; query: string; limit?: number }
   | { type: "skills.install"; source: string; skillId: string }
   | { type: "skills.uninstall"; skillId: string }
