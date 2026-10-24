@@ -45,9 +45,12 @@ const PIXEL_THRESHOLD = 0
 const DEFAULT_PIXEL_TOLERANCE = 0.0001
 
 // Inputs of each app's build. A change to any of them rebuilds that app.
+// Both hash all of src/: gallery pages cross over (the React icon gallery
+// reads the Foldkit icon list), and the Foldkit app imports React-free
+// modules from src/client.
 const BUILD_INPUTS = {
-  react: ["src/client", "src/demo", "src/shared", "src/parity", "src/index.css", "public", "vite.parity.config.ts", "vite-plugin-message-scroller.ts", "package.json", "bun.lock"],
-  foldkit: ["src/foldkit", "src/client", "src/demo", "src/shared", "src/parity", "src/index.css", "public", "vite.parity.config.ts", "package.json", "bun.lock"],
+  react: ["src", "public", "vite.parity.config.ts", "vite-plugin-message-scroller.ts", "package.json", "bun.lock"],
+  foldkit: ["src", "public", "vite.parity.config.ts", "package.json", "bun.lock"],
 } as const
 type AppName = keyof typeof BUILD_INPUTS
 
