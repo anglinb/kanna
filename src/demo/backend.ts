@@ -28,6 +28,7 @@ import {
   type ChatPreview,
   type ChatSnapshot,
   type ChatTouchedFilesResult,
+  type GitHubRecentReposResult,
   type KannaStatus,
   type KeybindingsSnapshot,
   type LlmProviderSnapshot,
@@ -592,6 +593,9 @@ export class DemoBackend {
       }
       case "project.readQuickActions":
         return []
+      // The home page and the command palette list these; the demo has no gh.
+      case "github.listRecentRepos":
+        return { available: false, repos: [] } satisfies GitHubRecentReposResult
       case "sidebar.reorderProjectGroups":
         return null
 

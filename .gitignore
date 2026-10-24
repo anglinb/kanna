@@ -40,3 +40,6 @@ ios/
 # Mac app: the bundled main process and preloads (dist/ above covers the
 # packaged app and release files).
 macos/build/
+
+# Parity harness runs (scripts/parity)
+/.parity/

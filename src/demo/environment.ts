@@ -1,6 +1,6 @@
 import type { ClientEnvelope, ServerEnvelope } from "../shared/protocol"
 import type { AppThemePreference } from "../shared/types"
-import { DEMO_UNAVAILABLE_MESSAGE, DemoBackend } from "./backend"
+import { DEMO_UNAVAILABLE_MESSAGE, DemoBackend, type DemoClock } from "./backend"
 
 /**
  * Puts the browser in a state where the real Kanna client runs with no
@@ -69,14 +69,37 @@ export function readThemeParam(): AppThemePreference {
 let backend: DemoBackend | null = null
 let openSocket: DemoWebSocket | null = null
 
+/**
+ * Hooks for the parity harness (src/parity), which runs the React and the
+ * Foldkit client on this same fake backend. `clock` drives the scripted
+ * turns, so a test can hold them still; `onClientEnvelope` and
+ * `onServerEnvelope` see every frame. Must be called before the first socket
+ * opens. The demo itself never calls it.
+ */
+export interface DemoEnvironmentOptions {
+  clock?: DemoClock
+  onClientEnvelope?: (envelope: ClientEnvelope) => void
+  onServerEnvelope?: (envelope: ServerEnvelope) => void
+}
+
+let environmentOptions: DemoEnvironmentOptions = {}
+
+export function configureDemoEnvironment(options: DemoEnvironmentOptions) {
+  if (backend) throw new Error("configureDemoEnvironment must run before the first socket opens")
+  environmentOptions = options
+}
+
 function getBackend() {
   if (!backend) {
     backend = new DemoBackend((envelope: ServerEnvelope) => {
       const socket = openSocket
       if (!socket) return
       const data = JSON.stringify(envelope)
-      window.setTimeout(() => socket.deliver(data), LATENCY_MS)
-    }, undefined, { theme: readThemeParam() })
+      window.setTimeout(() => {
+        environmentOptions.onServerEnvelope?.(envelope)
+        socket.deliver(data)
+      }, LATENCY_MS)
+    }, environmentOptions.clock, { theme: readThemeParam() })
     backend.start()
   }
   return backend
@@ -118,6 +141,7 @@ class DemoWebSocket extends EventTarget {
   send(data: string) {
     if (this.readyState !== DemoWebSocket.OPEN) return
     const envelope = JSON.parse(data) as ClientEnvelope
+    environmentOptions.onClientEnvelope?.(envelope)
     window.setTimeout(() => getBackend().receive(envelope), LATENCY_MS)
   }
 
