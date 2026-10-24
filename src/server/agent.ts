@@ -3088,7 +3088,7 @@ export class AgentCoordinator {
       const resetsAt = provider === "claude"
         ? claudeReset ?? null
         : provider === "codex" && isCodexUsageLimitFailure(resultText)
-          ? codexUsageLimitResetAt(yield* self.codexManager.readAccountRateLimits(homedir()), Date.now())
+          ? codexUsageLimitResetAt(yield* self.codexManager.readAccountRateLimits(self.machine.homeDirectory), Date.now())
           : null
       if (resetsAt === null) return
       yield* storeWriteEffect(self.store.setUsageLimitResume(chatId, { at: resetsAt + USAGE_LIMIT_RESUME_SLACK_MS, provider }))
@@ -3141,7 +3141,7 @@ export class AgentCoordinator {
     return Effect.gen(function* () {
       const chat = self.store.getChat(chatId)
       if (!chat || chat.deletedAt || !chat.provider) return false
-      const last = [...self.store.getMessages(chatId)].reverse().find((entry) => entry.kind === "user_prompt")
+      const last = [...(yield* storeWriteEffect(self.store.readMessages(chatId)))].reverse().find((entry) => entry.kind === "user_prompt")
       if (!last || last.kind !== "user_prompt") return false
       const settings = self.getProviderSettings(chat.provider, { model: chat.lastModel, planMode: chat.planMode, autoPlan: chat.autoPlan })
       yield* self.startTurnForChatEffect({

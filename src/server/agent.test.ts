@@ -3870,6 +3870,7 @@ describe("usage limit resume", () => {
     ;(store as { recordTurnFailed: () => Promise<void> }).recordTurnFailed = async () => {}
     const prompts: string[] = []
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async (args) => {
@@ -3956,6 +3957,7 @@ describe("usage limit resume", () => {
     store.chat.provider = "claude"
     ;(store as { recordTurnFailed: () => Promise<void> }).recordTurnFailed = async () => {}
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       startClaudeSession: async () => {
@@ -3985,6 +3987,7 @@ describe("usage limit resume", () => {
     store.chat.provider = "codex"
     ;(store as { recordTurnFailed: () => Promise<void> }).recordTurnFailed = async () => {}
     const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
       store: store as never,
       onStateChange: () => {},
       codexManager: {
