@@ -1,6 +1,6 @@
 import type { Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { CHATS, click, hover, parkPointer, press, quietReadAnchor, reduceMotion, REGIONS, regions } from "./_lib/helpers"
+import { CHATS, click, hover, parkPointer, press, quietReadAnchor, reduceMotion, REGIONS, regions, sidebarChatRow } from "./_lib/helpers"
 
 // The transcript viewport around its rows: the minimap (a tick's card, a
 // jump from it), the scroll-to-bottom button, a local link's right-click
@@ -61,6 +61,34 @@ export const scenarios: Scenario[] = [
       await parkPointer(context)
       await quietReadAnchor(context)
       await context.capture("at-end")
+    },
+  }),
+  defineScenario({
+    // Where the reader left a chat is where it opens again: the position is
+    // written (chat.setReadAnchor, with the offset into the row) and restored.
+    name: "transcript-read-anchor-restore",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("transcript"),
+    covers: { commands: ["chat.setReadAnchor"] },
+    async run(context) {
+      const { page } = context
+      await reduceMotion(context)
+      await openToolGroup(context)
+      // The reader's own scroll: a press in the transcript marks it theirs,
+      // then one step down (set, not animated, so one scroll event).
+      await transcript(page).dispatchEvent("pointerdown")
+      await page.locator(REGIONS.transcript).evaluate((viewport) => {
+        viewport.scrollTop = 260
+      })
+      await quietReadAnchor(context)
+      await context.capture("scrolled")
+      await click(context, sidebarChatRow(page, "demo-chat-deploy"))
+      await quietReadAnchor(context)
+      await click(context, sidebarChatRow(page, "demo-chat-units"))
+      await parkPointer(context)
+      await quietReadAnchor(context)
+      await context.capture("restored")
     },
   }),
   defineScenario({
