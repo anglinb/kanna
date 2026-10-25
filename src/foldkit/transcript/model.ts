@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
 import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import { opaque } from "../core/schema"
+import * as ChatCard from "../ui/chat-hover-card"
 import * as ContextMenu from "../ui/context-menu"
 import * as Messages from "./messages/model"
 import * as ScheduleCard from "../widgets/scheduleCard"
@@ -58,6 +59,13 @@ export const Model = Schema.Struct({
   cardMenus: Schema.Record(Schema.String, ContextMenu.Model),
   /** Live schedule cards (the Schedules widget's row, menu and hover card), by schedule; made on first use. */
   scheduleCards: Schema.Record(Schema.String, ScheduleCard.Model),
+  /**
+   * The live chat card whose hover card is up (SidebarChatHoverCard beneath
+   * it): which card, by the id its tracker gave it, and the chat it is on.
+   */
+  chatCardHover: Schema.NullOr(Schema.Struct({ instance: Schema.String, chatId: Schema.String, key: Schema.String })),
+  /** That hover card's fetches and what it holds (ui/chat-hover-card.ts). */
+  chatCard: ChatCard.CardData,
 })
 export type Model = typeof Model.Type
 
@@ -81,5 +89,7 @@ export function init(): Model {
     linkMenuTarget: null,
     cardMenus: {},
     scheduleCards: {},
+    chatCardHover: null,
+    chatCard: ChatCard.initCardData(),
   }
 }

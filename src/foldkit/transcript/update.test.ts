@@ -11,6 +11,9 @@ import { Message } from "./message"
 import { init, type Model } from "./model"
 import { DelayScrollButton, update } from "./update"
 import { DriveViewport, JumpViewportToRow } from "./viewport"
+import { AppAction } from "../app/action"
+import * as ViewerStore from "../core/stores/viewer"
+import * as ChatCard from "../ui/chat-hover-card"
 
 // The viewport's update: the scroll-to-bottom button's delay, the jump
 // flash, the minimap's jumps (loaded and not), a spent jump, a chat switch,
@@ -163,5 +166,51 @@ describe("transcript viewport: a chat switch", () => {
     expect(narrowed.minimap.pointerY).toBeNull()
     expect(narrowed.minimap.heldTurnId).toBeNull()
     expect(run(hovered, Message.ResizedViewport({ width: 1160 })).model.minimap.pointerY).toBe(100)
+  })
+})
+
+describe("transcript: a live chat card's hover card", () => {
+  const hovered = run(init(), Message.ChangedChatCardHover({ instance: "a", chatId: "c2", key: "c2" })).model
+  const card = (message: ChatCard.CardMessage) => Message.GotChatCardMessage({ message })
+
+  test("its card's tracker puts it up; only that card's leaving takes it down", () => {
+    expect(hovered.chatCardHover).toEqual({ instance: "a", chatId: "c2", key: "c2" })
+    expect(run(hovered, Message.ChangedChatCardHover({ instance: "b", chatId: "c3", key: null })).model.chatCardHover).toEqual(hovered.chatCardHover)
+    const waiting = run(hovered, card(ChatCard.CardMessage.RequestedCardLoad({ chatId: "c2", kind: "files", cacheKey: "k" }))).model
+    expect(waiting.chatCard.cardFilesKey).toBe("k")
+    const left = run(waiting, Message.ChangedChatCardHover({ instance: "a", chatId: "c2", key: null })).model
+    expect(left.chatCardHover).toBeNull()
+    // A card that leaves stops waiting on its answers.
+    expect(left.chatCard.cardFilesKey).toBeNull()
+    // A viewport mounting (another chat) takes it down too.
+    expect(run(hovered, Message.MountedViewport({ chatId: "c3" })).model.chatCardHover).toBeNull()
+  })
+
+  test("the sidebar's fetches serve it", () => {
+    const preview = { lastUserMessagePreview: "Deploy it", lastAgentMessagePreview: null } as never
+    const known = { ...app, sidebar: { ...app.sidebar, card: { ...app.sidebar.card, previewCache: { p: preview } } } }
+    const served = update(hovered, card(ChatCard.CardMessage.RequestedCardLoad({ chatId: "c2", kind: "preview", cacheKey: "p" })), known)
+    expect(names(served)).toEqual([])
+    expect(served.model.chatCard.heldPreview).toEqual({ chatId: "c2", preview })
+  })
+
+  test("a preview opens its chat at that message, dismissing the card first", () => {
+    const jumped = run(hovered, card(ChatCard.CardMessage.ClickedCardMessage({ chatId: "c2", role: "reply" })))
+    expect(calls(jumped)).toEqual([["DismissTranscriptChatCardHover", { instance: "a" }]])
+    expect(jumped.outMessage?.action).toEqual(AppAction.OpenChatAt({ chatId: "c2", jump: "reply" }))
+    // The draft's Open is the card's own click: the chat, plainly.
+    const opened = run(hovered, card(ChatCard.CardMessage.ClickedCardChat({ chatId: "c2", archived: false })))
+    expect(opened.outMessage?.action).toEqual(AppAction.Navigate({ path: "/chat/c2", replace: false }))
+  })
+
+  test("beside a chat with a previewer, the chat opens there and the jump follows it", () => {
+    const page = { ...app, stores: { ...app.stores, viewer: { ...app.stores.viewer, chatKey: "c1", chatPreviewHosts: 1 } } }
+    const jumped = update(hovered, card(ChatCard.CardMessage.ClickedCardMessage({ chatId: "c2", role: "prompt" })), page)
+    const action = jumped.outMessage?.action
+    expect(action?._tag === "Store" && action.message._tag === "GotViewerMessage" ? action.message.message._tag : null).toBe("OpenedItem")
+    expect(calls(jumped)).toEqual([["DismissTranscriptChatCardHover", { instance: "a" }], ["JumpInPreviewedChat", { chatId: "c2", target: "prompt" }]])
+    const made = ViewerStore.Message.ChangedChatJump({ chatId: "c2", target: "prompt", requestId: "r1" })
+    expect(update(jumped.model, Message.MadePreviewJump({ message: made }), page).outMessage?.action)
+      .toEqual(AppAction.Store({ message: Stores.Message.GotViewerMessage({ message: made }) }))
   })
 })

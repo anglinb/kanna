@@ -3,7 +3,6 @@ import { defineMessageUnion } from "foldkit/message"
 import type { MacSetupState } from "../core/macApp"
 import type { ChatBrowserNotificationPreference, FsListResult, GitHubRecentReposResult } from "../../shared/types"
 import { opaque } from "../core/schema"
-import * as AppDialog from "../ui/app-dialog"
 import type { RepoMeta } from "./model"
 import * as Usage from "./usage"
 
@@ -12,9 +11,8 @@ export const Message = defineMessageUnion({
   /** The openCommandPalette keybinding, anywhere on the page. */
   PressedPaletteShortcut: { at: Schema.Number },
   /**
-   * An open on a page: AppAction.OpenCommandPalette (through `requestOpen`),
-   * or `kanna:open-command-palette`, which pages not yet moved to the action
-   * still dispatch. `at` snaps the age labels' clock.
+   * An open, optionally on a page: AppAction.OpenCommandPalette, through
+   * `requestOpen`. `at` snaps the age labels' clock.
    */
   ReceivedOpenRequest: { page: Schema.NullOr(Schema.String), at: Schema.Number },
   /** Escape at the root, or a pointerdown outside (Radix's onOpenChange(false)). */
@@ -58,11 +56,6 @@ export const Message = defineMessageUnion({
   GeneratedTerminalId: { projectId: Schema.String, terminalId: Schema.String, chatKey: Schema.NullOr(Schema.String) },
 
   GotUsageMessage: { message: Usage.Message },
-
-  // New Delegator (chat-ui/create-delegator.ts)
-  GotDialogMessage: { message: AppDialog.Message },
-  SucceededCreateDelegator: { projectId: Schema.String, chatId: Schema.String },
-  FailedCreateDelegator: { error: Schema.String },
 
   CompletedSideEffect: {},
 })

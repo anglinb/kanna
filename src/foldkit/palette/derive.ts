@@ -1,4 +1,3 @@
-import { Command, type Update } from "foldkit"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import {
   computeSidebarThreadSections,
@@ -42,7 +41,6 @@ import * as RightSidebar from "../core/stores/rightSidebar"
 import * as SidebarView from "../core/stores/sidebarView"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import * as Viewer from "../core/stores/viewer"
-import * as AppDialog from "../ui/app-dialog"
 import {
   Archive, Box, Brain, Check, CircleCheck, CircleDashed, Columns2, Copy, CornerDownRight, ExternalLink, EyeOff, File,
   Folder, FolderOpen, Gauge, GitBranch, GitFork, Hash, History, House, ListFilter, ListTodo, Loader2, Lock, LockOpen,
@@ -69,7 +67,7 @@ import {
   trailingHint,
   trailingPath,
 } from "./rows"
-import { closePalette, closeWith, newProjectsDir, pushPage, runProjectAction, startClone, withCommands, type Return } from "./steps"
+import { closeWith, newProjectsDir, pushPage, runProjectAction, startClone, withCommands, type Return } from "./steps"
 import { DELEGATORS_GROUP_KEY, getProjectChatGroups, threadRowContent, type ThreadDetailScope } from "./threadRow"
 
 // CommandPalette's render: everything it worked out from its state and the
@@ -319,23 +317,8 @@ export function derive(model: Model, app: AppModel): PaletteData {
       keywords: ["delegator", "delegate", "delegation", "delegated", "create delegator", "hand off", "orchestrate", "manager", "sub-chats", "subchats"],
       icon: (h) => DelegatorIcon({ class: ICON_CLASS }, h),
       searchOnly: true,
-      run: () => {
-        const closed = closePalette(model)
-        // createDelegator's prompt.
-        const requestId = `palette-new-delegator-${closed.model.dialogSeq + 1}`
-        const opened = AppDialog.open(closed.model.dialog, AppDialog.prompt({
-          requestId,
-          title: "New Delegator",
-          description: "A chat that hands work to the chats under it instead of doing it. Name it for what it looks after.",
-          placeholder: "Name (optional)",
-          allowEmpty: true,
-          confirmLabel: "Create",
-        }))
-        return {
-          model: { ...closed.model, dialog: opened.model, dialogSeq: closed.model.dialogSeq + 1, delegatorRequest: { requestId, projectId } },
-          commands: [...(closed.commands ?? []), ...dialogCommands(opened.commands)],
-        }
-      },
+      // createDelegator: the root's prompt, then the server.
+      run: () => close(AppAction.CreateDelegator({ projectId })),
     })
     // The new chat page's delegate control: where a message typed there goes.
     if (projectDelegatorThreads.length > 0) {
@@ -1478,9 +1461,4 @@ function jumpToTypedPath(model: Model): Return {
     model: { ...model, browser: { ...model.browser, seq, error: null, loading: true } },
     commands: [Commands.JumpToPath({ seq, input })],
   }
-}
-
-/** The New Delegator prompt's commands, as the palette's. */
-export function dialogCommands(commands: Update.Return<AppDialog.Model, AppDialog.Message>["commands"]): NonNullable<Return["commands"]> {
-  return Command.mapMessages(commands, (message: AppDialog.Message) => Message.GotDialogMessage({ message })) as NonNullable<Return["commands"]>
 }

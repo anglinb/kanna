@@ -22,9 +22,6 @@ import type { KeybindingsSnapshot, UsageLimitsSnapshot } from "../../shared/type
 import { errorMessage, sendCommand } from "../core/socket"
 import { newTerminalId } from "../core/stores/terminalLayout"
 
-/** CommandPalette.tsx's OPEN_COMMAND_PALETTE_EVENT (a React file: restated). */
-export const OPEN_COMMAND_PALETTE_EVENT = "kanna:open-command-palette"
-
 // The page's Mounts and Commands: the work ChatPage's refs, layout effects
 // and observers did against the live DOM.
 
@@ -594,16 +591,6 @@ export const OpenWindow = Command.define("OpenChatPageWindow", {
   messages: [Message.CompletedSideEffect],
   execute: ({ url }) => Effect.sync(() => {
     window.open(url, "_blank", "noopener,noreferrer")
-    return Message.CompletedSideEffect()
-  }),
-})
-
-/** The command palette listens for this (`openCommandPalette`). */
-export const OpenCommandPalette = Command.define("OpenCommandPalette", {
-  args: { page: Schema.NullOr(Schema.String) },
-  messages: [Message.CompletedSideEffect],
-  execute: ({ page }) => Effect.sync(() => {
-    window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT, { detail: page ? { page } : undefined }))
     return Message.CompletedSideEffect()
   }),
 })

@@ -12,7 +12,7 @@
 //   view.ts, rows.ts, threadRow.ts, icons.ts   the markup
 //   mounts.ts         the Radix dialog content, the root's keydown
 //   commands.ts       socket requests, the repo metadata fetch, window calls
-//   subscriptions.ts  the shortcut, open requests, This Mac, the phone layout
+//   subscriptions.ts  the shortcut, This Mac, the phone layout
 //   composer.ts       lib/composer + useComposer, for the model/mode rows
 //   openIn.ts         the "Open in…" destinations
 

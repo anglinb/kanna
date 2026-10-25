@@ -1,23 +1,8 @@
 import { Effect, Schema } from "effect"
 
-// What the page reads of the browser it runs in, and the window events it
-// sends. Copied from React files the Foldkit bundle must not import:
-// src/client/lib/macApp.ts (it also builds a zustand store, which pulls in
-// React) and CommandPalette.tsx (the open event).
-
-/** CommandPalette.tsx's OPEN_COMMAND_PALETTE_EVENT. */
-export const OPEN_COMMAND_PALETTE_EVENT = "kanna:open-command-palette"
-
-/** CommandPalette.tsx's CommandPaletteTargetPage. */
-export type CommandPaletteTargetPage = "new-thread" | "project-chats" | "add-project" | "clone-github"
-
-/**
- * Opens the command palette from anywhere. Pass a target page to land directly
- * on a sub-page (e.g. "new-thread" for the "New Chat In…" project picker).
- */
-export function openCommandPalette(page?: CommandPaletteTargetPage) {
-  window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT, { detail: page ? { page } : undefined }))
-}
+// What the page reads of the browser it runs in. Copied from a React file
+// the Foldkit bundle must not import: src/client/lib/macApp.ts (it also
+// builds a zustand store, which pulls in React).
 
 interface MacAppHandler {
   postMessage: (message: unknown) => void

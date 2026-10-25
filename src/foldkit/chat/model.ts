@@ -7,6 +7,7 @@ import * as Terminal from "../terminal"
 import * as Transcript from "../transcript"
 import * as Viewer from "../viewer"
 import * as Widgets from "../widgets"
+import * as ChatCard from "../ui/chat-hover-card"
 import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
@@ -242,7 +243,7 @@ export function init(): Model {
     tabMenus: {},
     tabDrag: null,
     tabsInitial: null,
-    tabCard: { hovered: null, previewCache: {}, touchedFilesCache: {}, heldPreview: null, heldTouchedFiles: null, cardFilesKey: null, cardPreviewKey: null },
+    tabCard: { hovered: null, card: ChatCard.initCardData() },
     washes: { transcript: wash, widgets: wash },
     washTokens: 0,
     title: { draft: null, submitted: null, submittedOver: null },

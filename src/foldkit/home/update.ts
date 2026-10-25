@@ -5,7 +5,7 @@ import { editorPresetFromOpenAppValue, resolveEffectiveEditorPreset } from "../.
 import { DEFAULT_NEW_PROJECTS_DIRECTORY, type LocalProjectSummary } from "../../shared/types"
 import { AppAction } from "../app/action"
 import { routePath } from "../app/route"
-import { requestAction, type AppModel, type SliceReturn } from "../app/slice"
+import { requestAction, type AppModel, type SliceObserve, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
 import * as Connection from "../core/stores/connection"
 import * as ProviderAuth from "../core/stores/providerAuth"
@@ -17,7 +17,6 @@ import * as Tooltip from "../ui/tooltip"
 import {
   FetchRecentRepos,
   OpenArchive,
-  OpenCommandPalette,
   OpenMachineInMacApp,
   OpenWindow,
   WaitArrivalFade,
@@ -232,6 +231,9 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       const next: Model = {
         ...model,
         environment,
+        pageMounted: true,
+        // The preview shows no list: a sign-in change has no request to owe.
+        signInChangedBeforeList: environment.preview === null && model.signInChangedBeforeList,
         failingSince: app.connectionStatus === "connected" ? null : environment.nowMs,
         connectionFailed: false,
         waitingSince: waiting ? environment.nowMs : null,
@@ -243,10 +245,16 @@ export function update(model: Model, message: Message, app: AppModel): Return {
         ? { model: next, commands: [Command.mapMessage(Connection.LoadConnection(), (child) => Message.GotConnectionMessage({ message: child }))] }
         : { model: next }
     },
-    LeftPage: () => ({ model: { ...model, ...closeArchiveNow(model), failingSince: null, connectionFailed: false, waitingSince: null, revealChildren: false } }),
+    LeftPage: () => ({ model: { ...model, ...closeArchiveNow(model), pageMounted: false, signInChangedBeforeList: false, failingSince: null, connectionFailed: false, waitingSince: null, revealChildren: false } }),
     MountedProjectsList: () => {
-      const version = model.reposRequestVersion + 1
-      return { model: { ...model, reposRequestVersion: version }, commands: [FetchRecentRepos({ version })] }
+      // The mount's request, and the one owed for a sign-in that changed
+      // while the list was on its way (`observe`): only the later one lands.
+      const owed = model.signInChangedBeforeList
+      const version = model.reposRequestVersion + (owed ? 2 : 1)
+      return {
+        model: { ...model, reposRequestVersion: version, reposFetchedFor: ghAuthStatus(app), signInChangedBeforeList: false },
+        commands: owed ? [FetchRecentRepos({ version: version - 1 }), FetchRecentRepos({ version })] : [FetchRecentRepos({ version })],
+      }
     },
     // ProjectsHome's state goes with it; an answer still on its way is dropped.
     LeftProjectsList: () => ({ model: { ...model, ...initProjectsHome(), reposRequestVersion: model.reposRequestVersion + 1 } }),
@@ -270,8 +278,8 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     PressedSearchKey: ({ key }) => (key === "Escape" ? { model: { ...model, query: "" } } : { model }),
     ClickedClearSearch: () => ({ model: { ...model, query: "" } }),
     ChoseFilter: ({ source, account }) => ({ model: { ...model, source, account } }),
-    ClickedAddProject: () => ({ model, commands: [OpenCommandPalette({ page: "add-project" })] }),
-    ClickedSearchGitHub: () => ({ model, commands: [OpenCommandPalette({ page: "clone-github" })] }),
+    ClickedAddProject: () => requestAction(model, AppAction.OpenCommandPalette({ page: "add-project" })),
+    ClickedSearchGitHub: () => requestAction(model, AppAction.OpenCommandPalette({ page: "clone-github" })),
     ClickedSetup: () => requestAction(model, AppAction.Store({
       message: Stores.Message.GotProviderAuthMessage({ message: ProviderAuth.Message.OpenedSetupWizard() }),
     })),
@@ -326,6 +334,39 @@ export function update(model: Model, message: Message, app: AppModel): Return {
 
     CompletedSideEffect: () => ({ model }),
   })
+}
+
+// OBSERVE (app/slice.ts): useGitHubRecentRepos's `[ghAuthStatus]` dependency
+
+/**
+ * GitHub's sign-in changed (the setup wizard just connected it): with the
+ * list up, fetch again, as the hook's effect reran.
+ *
+ * A change on a projects page before the list is up is owed to the list's
+ * mount instead. React's list was up by then: its root subscribes
+ * `local-projects`, which gates the list, ahead of `provider-auth`, so the
+ * sign-in landed under a mounted list and made a second request. This root
+ * subscribes them the other way round, and draws a frame later, so the
+ * sign-in can land first; the boot still sends React's two requests.
+ */
+export const observe: SliceObserve<Model, Message> = (model, previousApp, app) => {
+  const status = ghAuthStatus(app)
+  if (model.reposFetchedFor !== null) {
+    if (status === model.reposFetchedFor) return { model }
+    const version = model.reposRequestVersion + 1
+    return {
+      model: { ...model, reposRequestVersion: version, reposFetchedFor: status },
+      commands: [FetchRecentRepos({ version })],
+    }
+  }
+  const onPage = isProjectsRoute(app) && !(model.pageMounted && model.environment.preview !== null)
+  if (model.signInChangedBeforeList || !onPage || status === ghAuthStatus(previousApp)) return { model }
+  return { model: { ...model, signInChangedBeforeList: true } }
+}
+
+function isProjectsRoute(app: AppModel) {
+  const route = app.route._tag
+  return route === "Root" || route === "Home" || route === "Project"
 }
 
 /** The dialog leaves with the page: no exit to wait for. */
