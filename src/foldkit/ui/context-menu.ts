@@ -195,6 +195,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 // MOUNT
 
 const ITEM_SELECTOR = "[role=menuitem]"
+const ROVING_FOCUS_INTENT: Record<string, "first" | "last" | "prev" | "next"> = {
+  ArrowUp: "prev",
+  ArrowDown: "next",
+  PageUp: "first",
+  Home: "first",
+  PageDown: "last",
+  End: "last",
+}
 const FIRST_KEYS = ["ArrowDown", "PageUp", "Home"]
 const LAST_KEYS = ["ArrowUp", "PageDown", "End"]
 
@@ -252,14 +260,23 @@ export const ContextMenuContent = Mount.defineStream("ContextMenuContent", {
             if (next) setTimeout(() => next.focus())
           }
         }
-        // Arrow keys between items (RovingFocusGroup, vertical, no loop).
+        // Keys between items: Radix's RovingFocusGroup (vertical, no loop).
+        // It moves focus a task later, from the item the key was pressed on,
+        // so two quick presses both start from that item.
         const enabled = items()
         const index = enabled.indexOf(target)
-        if (index !== -1 && (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End")) {
+        const intent = ROVING_FOCUS_INTENT[event.key]
+        if (index !== -1 && intent !== undefined) {
           event.preventDefault()
-          const next = event.key === "Home" ? enabled[0] : event.key === "End" ? enabled[enabled.length - 1]
-            : event.key === "ArrowDown" ? enabled[index + 1] : enabled[index - 1]
-          next?.focus({ preventScroll: true })
+          let candidates = intent === "last" || intent === "prev" ? enabled.slice().reverse() : enabled
+          if (intent === "prev" || intent === "next") candidates = candidates.slice(candidates.indexOf(target) + 1)
+          setTimeout(() => {
+            for (const candidate of candidates) {
+              const previous = document.activeElement
+              candidate.focus({ preventScroll: true })
+              if (document.activeElement !== previous) break
+            }
+          })
           return
         }
         if (target !== content || ![...FIRST_KEYS, ...LAST_KEYS].includes(event.key)) return

@@ -15,7 +15,10 @@ export const scenarios: Scenario[] = [
       await capture("open")
       await page.getByRole("menuitem", { name: "Rename" }).hover()
       await capture("hover-item")
+      // Apart: Radix moves focus a task after the key, so two presses in one
+      // task would both start from the same item.
       await page.keyboard.press("ArrowDown")
+      await page.waitForTimeout(100)
       await page.keyboard.press("ArrowDown")
       await capture("arrows-skip-disabled")
       await page.keyboard.press("Escape")
