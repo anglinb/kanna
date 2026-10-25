@@ -113,6 +113,12 @@ export const Message = defineMessageUnion({
 
   // The empty state
   ClickedProjectPicker: {},
+  ClickedSetup: {},
+  StartedProjectChats: { nowMs: Schema.Number },
+  ElapsedProjectChatsCascade: {},
+  ChangedProjectChatsStuck: { stuck: Schema.Boolean },
+  ChangedProjectChatsQuery: { value: Schema.String },
+  ClickedProjectChat: { chatId: Schema.String },
 
   // Shortcuts and the mobile sheet
   PressedShortcut: { action: ShortcutAction },

@@ -17,10 +17,12 @@ export const scenarios: Scenario[] = [
     regions: { navbar: NAVBAR },
     covers: { routes: ["/chat/:chatId"] },
   }),
+  // Its button shows on a desktop only beside the open widget column; on a
+  // phone it is always there and carries the "Open in…" destinations too.
   defineScenario({
     name: "chat-navbar-overflow-menu",
     route: "/chat/demo-chat-units",
-    viewports: ["desktop", "mobile"],
+    viewports: ["mobile"],
     regions: { navbar: NAVBAR, menu: MENU },
     async run({ page, capture }) {
       await page.getByRole("button", { name: "More actions" }).click()
@@ -68,14 +70,17 @@ export const scenarios: Scenario[] = [
     route: "/chat/demo-chat-units",
     viewports: ["desktop"],
     regions: { navbar: NAVBAR, listbox: LISTBOX },
-    covers: { commands: ["system.openExternal"] },
+    // Choosing one sends `system.openExternal`, which the demo backend
+    // doesn't answer: the list itself, then.
     async run({ page, capture }) {
+      await page.getByRole("button", { name: "Open in Cursor" }).hover()
+      await capture("primary-tooltip")
       await page.getByRole("combobox", { name: "Choose open destination" }).click()
       await capture("open")
-      await page.getByRole("option", { name: "Finder" }).click()
-      await capture("chose-finder")
-      await page.getByRole("button", { name: "Open in Finder" }).click()
-      await capture("opened-again")
+      await page.keyboard.press("ArrowDown")
+      await capture("highlighted")
+      await page.keyboard.press("Escape")
+      await capture("closed")
     },
   }),
   defineScenario({
@@ -83,6 +88,7 @@ export const scenarios: Scenario[] = [
     route: "/chat/demo-chat-units",
     viewports: ["desktop", "mobile"],
     regions: { navbar: NAVBAR },
+    covers: { keybindings: ["toggleRightSidebar"] },
     async run({ page, viewport, capture }) {
       await page.getByRole("button", { name: "Show widgets" }).click()
       await capture("widgets-open")
@@ -91,11 +97,36 @@ export const scenarios: Scenario[] = [
       if (viewport === "mobile") await page.getByRole("button", { name: "Close widgets" }).click({ position: { x: 12, y: 400 } })
       else await page.getByRole("button", { name: "Hide widgets" }).click()
       await capture("widgets-closed")
-      await page.getByRole("button", { name: "More actions" }).click()
-      await page.getByRole("menuitem", { name: "Toggle Terminal" }).click()
+      await page.keyboard.press("Control+b")
+      await capture("widgets-by-key")
+      await page.keyboard.press("Control+b")
+      await capture("widgets-closed-by-key")
+    },
+  }),
+  defineScenario({
+    name: "chat-terminal-toggle",
+    route: "/chat/demo-chat-units",
+    viewports: ["desktop", "mobile"],
+    regions: { navbar: NAVBAR },
+    covers: { keybindings: ["toggleEmbeddedTerminal"], commands: ["terminal.create"] },
+    async run({ page, viewport, capture }) {
+      // The terminal's toggle has no name of its own (its tooltip is a
+      // hotkey), so by its shortcut, and on a phone from the overflow menu.
+      const toggleTerminal = async () => {
+        if (viewport === "mobile") {
+          await page.getByRole("button", { name: "More actions" }).click()
+          await page.getByRole("menuitem", { name: "Toggle Terminal" }).click()
+        } else {
+          await page.keyboard.press("Control+Backquote")
+        }
+      }
+      await toggleTerminal()
+      // The first terminal sizes itself once its pane has opened, then
+      // creates its session: wait that out, so the capture has it.
+      await page.waitForTimeout(800)
       await capture("terminal-open")
-      await page.getByRole("button", { name: "More actions" }).click()
-      await page.getByRole("menuitem", { name: "Toggle Terminal" }).click()
+      await toggleTerminal()
+      await page.waitForTimeout(800)
       await capture("terminal-closed")
     },
   }),

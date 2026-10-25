@@ -12,6 +12,7 @@ import * as Composer from "../composer"
 import * as Delegate from "../core/stores/delegate"
 import * as OpenDestination from "../core/stores/openDestination"
 import * as PendingSend from "../core/stores/pendingSend"
+import * as ProviderAuth from "../core/stores/providerAuth"
 import { delegatorIsBusy, newChatDelegate, SendToDelegator, StampDelegatedSend } from "./newChatDelegate"
 import * as RightSidebar from "../core/stores/rightSidebar"
 import * as TerminalLayout from "../core/stores/terminalLayout"
@@ -286,11 +287,20 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
     commands.push(RefreshDiffs({ chatId: watch.chatId }))
   }
 
-  // The empty state types its line each time it appears.
+  // The empty state types its line each time it appears, and animates in
+  // when it does: on a new chat's viewport while it is up, as it then is.
   if (watch.showEmptyState && !previous?.showEmptyState) {
-    next = modifyFields(next, { emptyStateTyping: () => ({ started: true, count: 0, complete: false }) })
+    next = modifyFields(next, {
+      emptyStateTyping: () => ({ started: true, count: 0, complete: false }),
+      emptyStateEntrance: () => ({ chatId: watch.chatId, animatesIn: true }),
+    })
   } else if (!watch.showEmptyState && next.emptyStateTyping.started) {
     next = modifyFields(next, { emptyStateTyping: () => ({ started: false, count: 0, complete: false }) })
+  }
+  if (!watch.showEmptyState) {
+    next = modifyFields(next, { emptyStateEntrance: () => null })
+  } else if (next.emptyStateEntrance?.chatId !== watch.chatId) {
+    next = modifyFields(next, { emptyStateEntrance: () => ({ chatId: watch.chatId, animatesIn: !next.emptyStateTyping.complete }) })
   }
 
   // Focus goes back to the composer when the viewer closes, and when the
@@ -426,6 +436,13 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ClickedBranch: ({ url }) => ({ model, commands: [OpenWindow({ url })] }),
 
     ClickedProjectPicker: () => ({ model, commands: [OpenCommandPalette({ page: "new-thread" })] }),
+    ClickedSetup: () => withActions({ model }, [store(Stores.Message.GotProviderAuthMessage({ message: ProviderAuth.Message.OpenedSetupWizard() }))]),
+    StartedProjectChats: ({ nowMs }) => ({ model: modifyFields(model, { projectChats: () => ({ query: "", cascadeDone: false, nowMs, stuck: false }) }) }),
+    ElapsedProjectChatsCascade: () => ({ model: modifyFields(model, { projectChats: (state) => ({ ...state, cascadeDone: true }) }) }),
+    ChangedProjectChatsStuck: ({ stuck }) => (model.projectChats.stuck === stuck ? { model } : { model: modifyFields(model, { projectChats: (state) => ({ ...state, stuck }) }) }),
+    // Typing a search ends the cascade early: results should land at once.
+    ChangedProjectChatsQuery: ({ value }) => ({ model: modifyFields(model, { projectChats: (state) => ({ ...state, query: value, cascadeDone: true }) }) }),
+    ClickedProjectChat: ({ chatId }) => withActions({ model }, [AppAction.Navigate({ path: `/chat/${chatId}`, replace: false })]),
 
     PressedShortcut: ({ action }) => shortcut(model, facts(), action),
     PressedEscapeOnSheet: () => hideWidgets(model, facts()),

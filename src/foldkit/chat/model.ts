@@ -59,6 +59,22 @@ export const Model = Schema.Struct({
     complete: Schema.Boolean,
   }),
 
+  /**
+   * Whether the empty state on screen came in typing its line out (the
+   * viewport's `emptyStateAnimatesInRef`), for the chat it came in on: the
+   * viewport is per chat, and one that mounts on an empty state already typed
+   * shows it as is.
+   */
+  emptyStateEntrance: Schema.NullOr(Schema.Struct({ chatId: Schema.NullOr(Schema.String), animatesIn: Schema.Boolean })),
+  /** The project's chats under the empty state (EmptyStateProjectChats). */
+  projectChats: Schema.Struct({
+    query: Schema.String,
+    cascadeDone: Schema.Boolean,
+    /** The clock its ages read against, taken as it appeared. */
+    nowMs: Schema.NullOr(Schema.Number),
+    stuck: Schema.Boolean,
+  }),
+
   washes: Schema.Struct({ transcript: Wash, widgets: Wash }),
   washTokens: Schema.Number,
 
@@ -131,6 +147,8 @@ export function init(): Model {
     lastGitRefreshProjectId: null,
     settledShowEmptyState: false,
     emptyStateTyping: { started: false, count: 0, complete: false },
+    emptyStateEntrance: null,
+    projectChats: { query: "", cascadeDone: false, nowMs: null, stuck: false },
     washes: { transcript: wash, widgets: wash },
     washTokens: 0,
     title: { draft: null, submitted: null, submittedOver: null },
