@@ -35,7 +35,7 @@ import {
   activeChatId,
   appSettings,
   currentProjectId,
-  editorLabel,
+
   focusedProjectGroup,
   isConnecting,
   isLocalProjectsActive,
@@ -50,9 +50,10 @@ import {
   visibleProjectGroups,
 } from "./derived"
 import { archivedChatsDialog } from "./dialogs"
+import { inputPopoverTriggerClass, popoverMenuItem } from "./view-parts"
 import { channelList } from "./channels"
-import { chatHoverCard, LIST_HOVER_ATTRIBUTE } from "./hoverCard"
-import { machineSwitcher } from "./machine"
+import { chatHoverCard, LIST_HOVER_ATTRIBUTE, ListHoverTracker } from "./hoverCard"
+import { connectionLoadNeeded, machineSwitcher, pairSessionEnabled } from "./machine"
 import { rowMenu } from "./menus"
 import { Message } from "./message"
 import type { Model } from "./model"
@@ -159,34 +160,6 @@ const VIEW_OPTIONS: ReadonlyArray<{ view: SidebarView.SidebarView; label: string
   { view: "archived", label: "Archived", icon: Archive },
 ]
 
-/** PopoverMenuItem (ChatPreferenceControls.tsx): a flush, divider-separated row. */
-export function popoverMenuItem(options: { onClick: Message; selected: boolean; icon: Html; label: ReadonlyArray<Html | string>; trailing?: Html | null; disabled?: boolean }, h: H): Html {
-  return h.button([
-    h.OnClick(options.onClick),
-    ...(options.disabled ? [h.Disabled(true)] : []),
-    h.Class(cn(
-      "w-full flex items-center gap-2 text-left [&>svg]:shrink-0 px-3 py-2 transition-colors",
-      options.selected ? "bg-muted" : "hover:bg-muted/50",
-      options.disabled && "opacity-40 cursor-not-allowed",
-    )),
-  ], [
-    options.icon,
-    h.div([h.Class("min-w-0 flex-1")], [
-      h.div([h.Class("text-sm font-medium")], options.label),
-    ]),
-    options.trailing ?? null,
-  ])
-}
-
-/** InputPopover's trigger classes, with the caller's. */
-export function inputPopoverTriggerClass(triggerClassName: string) {
-  return cn(
-    "flex items-center gap-1.5 px-2 py-1 text-sm rounded-md transition-colors text-muted-foreground [&>svg]:shrink-0 [&>span]:whitespace-nowrap",
-    "hover:bg-muted/50",
-    triggerClassName,
-  )
-}
-
 /** SidebarViewSwitcher: the Chats / Projects / Channels / Archived filter at the New Chat row's end. */
 function viewSwitcher(model: Model, view: SidebarView.SidebarView, h: H): Html {
   return h.submodel({
@@ -235,7 +208,7 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
   const focused = focusedProjectGroup(app)
   const data = sidebarData(app)
   const allProjectsData = app.stores.sidebar.data
-  const routeProject = routeProjectId(app)
+
   const currentProject = currentProjectId(app)
   const keybindings = resolvedKeybindings(app)
   const focusShortcutHint = formatActionShortcut(keybindings, "toggleFocusMode")
@@ -382,6 +355,7 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
     h.Id("kanna-sidebar-scroller"),
     h.DataAttribute("sidebar-scroller", ""),
     h.Attribute(LIST_HOVER_ATTRIBUTE, "chats"),
+    h.OnMount(ListHoverTracker({ list: "chats" })),
     h.Class("flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"),
     h.Style({ "touch-action": "pan-y" }),
   ], [
@@ -445,6 +419,10 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
       toggleFocusMode: keybindings.bindings.toggleFocusMode,
     })),
     h.DataAttribute("sidebar-active-chat", chatId ?? ""),
+    h.DataAttribute("sidebar-connection-load", connectionLoadNeeded(app) ? "1" : "0"),
+    h.DataAttribute("sidebar-pair-enabled", pairSessionEnabled(app) ? "1" : "0"),
+    // Sends come from the composer; heard only while the Archived view is up.
+    h.DataAttribute("sidebar-sends", sidebarView === "archived" ? JSON.stringify(app.stores.pendingSend.sentAt) : ""),
     h.Class(cn(
       "fixed inset-0 z-50 bg-background dark:bg-card flex flex-col h-[100dvh] select-none",
       "md:relative md:inset-auto md:w-[var(--sidebar-width)] md:mr-0 md:h-[calc(100dvh-16px)] md:my-2 md:ml-2 md:border md:border-border md:rounded-2xl",
@@ -462,7 +440,7 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
     h.div([h.Class("relative flex min-h-0 flex-1 flex-col overflow-hidden md:rounded-t-[15px] mac-app:md:rounded-t-[calc(var(--mac-window-radius)-9px)]")], [
       h.div([h.Class("relative flex min-h-0 flex-1 flex-col")], [header, scroller]),
     ]),
-    chatHoverCard({ list: "chats", containerId: "kanna-sidebar-scroller" }, app, model, h),
+    chatHoverCard({ list: "chats" }, app, model, h),
     machineSwitcher(app, model, h),
     h.div([h.Class(cn("hidden md:block border-t border-border p-2", model.isStandalone && "pb-[55px]"))], [
       h.button([

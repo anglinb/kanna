@@ -55,6 +55,17 @@ export const PortalToBody = Mount.define("SidebarPortalToBody", {
     }),
 })
 
+/** Whether a chat's send time moved between two serialized `sentAt` maps (a removal is not a send). */
+function sendStarted(previous: string, next: string) {
+  try {
+    const before = JSON.parse(previous) as Record<string, number>
+    const after = JSON.parse(next) as Record<string, number>
+    return Object.keys(after).some((chatId) => after[chatId] !== before[chatId])
+  } catch {
+    return false
+  }
+}
+
 /** How far past the panel's inner edge the mouse may stray before the panel leaves. */
 const PEEK_SLOP_PX = 16
 const PEEK_EDGE_PX = 8
@@ -97,9 +108,9 @@ function scrollActiveIntoView(card: HTMLElement) {
  * view keeps current.
  */
 export const SidebarCard = Mount.defineStream("SidebarCard", {
-  messages: [Message.ChangedPeek, Message.RequestedConnectionLoad, Message.RequestedPairSession],
+  messages: [Message.ChangedPeek, Message.RequestedConnectionLoad, Message.RequestedPairSession, Message.ObservedSendStarted],
   execute: ({ element }) =>
-    domStream<typeof Message.ChangedPeek.Type | typeof Message.RequestedConnectionLoad.Type | typeof Message.RequestedPairSession.Type>((emit) => {
+    domStream<typeof Message.ChangedPeek.Type | typeof Message.RequestedConnectionLoad.Type | typeof Message.RequestedPairSession.Type | typeof Message.ObservedSendStarted.Type>((emit) => {
       const card = element as HTMLElement
       const cleanups: Array<() => void> = []
 
@@ -107,6 +118,7 @@ export const SidebarCard = Mount.defineStream("SidebarCard", {
       let activeChat = card.dataset.sidebarActiveChat ?? ""
       let connectionLoad = card.dataset.sidebarConnectionLoad === "1"
       let pairEnabled = card.dataset.sidebarPairEnabled === "1"
+      let sends = card.dataset.sidebarSends ?? ""
       scrollActiveIntoView(card)
       if (connectionLoad) emit(Message.RequestedConnectionLoad())
       if (pairEnabled) emit(Message.RequestedPairSession())
@@ -126,11 +138,17 @@ export const SidebarCard = Mount.defineStream("SidebarCard", {
           pairEnabled = nextPair
           if (nextPair) emit(Message.RequestedPairSession())
         }
+        const nextSends = card.dataset.sidebarSends ?? ""
+        if (nextSends !== sends) {
+          const previous = sends
+          sends = nextSends
+          if (previous && nextSends && sendStarted(previous, nextSends)) emit(Message.ObservedSendStarted())
+        }
         syncPeek()
       })
       observer.observe(card, {
         attributes: true,
-        attributeFilter: ["data-sidebar-active-chat", "data-sidebar-connection-load", "data-sidebar-pair-enabled", "data-sidebar-collapsed"],
+        attributeFilter: ["data-sidebar-active-chat", "data-sidebar-connection-load", "data-sidebar-pair-enabled", "data-sidebar-collapsed", "data-sidebar-sends"],
       })
       cleanups.push(() => observer.disconnect())
 

@@ -107,6 +107,9 @@ export const Model = Schema.Struct({
   /** A claim URL was asked for once already this load: reopening never burns a code. */
   pairBegun: Schema.Boolean,
   pairPollVersion: Schema.Number,
+  /** The claim link was just copied: the button shows a check for 1.6s. */
+  pairCopied: Schema.Boolean,
+  pairCopyVersion: Schema.Number,
   /** Tooltips, one per trigger, made the first time each is pointed at. */
   tooltips: Schema.Record(Schema.String, Tooltip.Model),
   /** The row each list's hover card is up for. */
@@ -119,6 +122,9 @@ export const Model = Schema.Struct({
   /** What the open card holds while a newer one loads, and for which chat. */
   heldPreview: Schema.NullOr(Schema.Struct({ chatId: Schema.String, preview: opaque<ChatPreview>("ChatPreview") })),
   heldTouchedFiles: Schema.NullOr(Schema.Struct({ chatId: Schema.String, result: opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult") })),
+  /** The keys the open card last asked for: an answer for any other lands in the cache only (React's `cancelled`). */
+  cardFilesKey: Schema.NullOr(Schema.String),
+  cardPreviewKey: Schema.NullOr(Schema.String),
   /** A Cmd/Ctrl-click on a chat, heard before the row's own click. */
   backgroundClickChatId: Schema.NullOr(Schema.String),
   projectDrag: Schema.NullOr(ProjectDrag),
@@ -131,9 +137,25 @@ export type Model = typeof Model.Type
 
 export const ROW_MENU_ID = "sidebar-row-menu"
 
+function matchesMedia(query: string) {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches
+}
+
+export const PHONE_LAYOUT_QUERY = "(max-width: 767px)"
+export const FINE_POINTER_QUERY = "(hover: hover) and (pointer: fine)"
+export const STANDALONE_QUERY = "(display-mode: standalone)"
+
+export function isStandaloneNow() {
+  if (typeof window === "undefined") return false
+  return (navigator as { standalone?: boolean }).standalone === true || matchesMedia(STANDALONE_QUERY)
+}
+
 export function init(storage?: Storage): Model {
   return {
-    nowMs: 0,
+    // React read these synchronously on the first render (useState's
+    // initializer, useSyncExternalStore); the fine pointer waits for its
+    // effect, so it starts false as useHasFinePointer's did.
+    nowMs: Date.now(),
     projectFolds: {},
     expandedGroups: [],
     showNumberJumpHints: false,
@@ -142,8 +164,8 @@ export function init(storage?: Storage): Model {
     resizeStart: null,
     peeking: false,
     hasFinePointer: false,
-    isPhoneLayout: false,
-    isStandalone: false,
+    isPhoneLayout: matchesMedia(PHONE_LAYOUT_QUERY),
+    isStandalone: isStandaloneNow(),
     archivedProjectId: null,
     archivedDialog: Dialog.init({ id: "sidebar-archived-chats" }),
     rowMenu: ContextMenu.init({ id: ROW_MENU_ID }),
@@ -157,6 +179,8 @@ export function init(storage?: Storage): Model {
     pairStarting: false,
     pairBegun: false,
     pairPollVersion: 0,
+    pairCopied: false,
+    pairCopyVersion: 0,
     tooltips: {},
     hovered: { chats: null, channels: null, peek: null },
     pinnedChannelId: null,
@@ -164,6 +188,8 @@ export function init(storage?: Storage): Model {
     touchedFilesCache: {},
     heldPreview: null,
     heldTouchedFiles: null,
+    cardFilesKey: null,
+    cardPreviewKey: null,
     backgroundClickChatId: null,
     projectDrag: null,
     suppressProjectToggle: false,

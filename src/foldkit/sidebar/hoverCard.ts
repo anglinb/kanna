@@ -611,15 +611,39 @@ export function cardTouchedFiles(model: Model, row: SidebarChatRow): ChatTouched
     ?? (model.heldTouchedFiles?.chatId === row.chatId ? model.heldTouchedFiles.result : null)
 }
 
+const FILES_KEY_ATTRIBUTE = "data-card-files-key"
+const PREVIEW_KEY_ATTRIBUTE = "data-card-preview-key"
+
 /**
- * Reports a card shown for a row, keyed by what would change its fetched
- * parts: a new key is a new element, so the card asks again exactly when its
- * row's turn count, last turn or messages move (React's effects on `cacheKey`).
+ * On a chat card's body, one per chat: React's two effects on the card's
+ * cache keys (`useChatTouchedFiles`, then `useChatPreview`). It asks when the
+ * card comes up for a chat, and again for whichever key moves while it is up
+ * (the row's turn count, last turn or messages), files before preview.
  */
-export const ShowChatCard = Mount.define("ShowChatCard", {
-  args: { chatId: Schema.String, previewKey: Schema.String, filesKey: Schema.String },
-  messages: [Message.ShowedChatCard],
-  execute: ({ chatId, previewKey, filesKey }) => Effect.succeed(Message.ShowedChatCard({ chatId, previewKey, filesKey })),
+export const ChatCardLoader = Mount.defineStream("ChatCardLoader", {
+  args: { chatId: Schema.String },
+  messages: [Message.RequestedCardLoad],
+  execute: ({ element, chatId }) =>
+    domStream<typeof Message.RequestedCardLoad.Type>((emit) => {
+      let filesKey = element.getAttribute(FILES_KEY_ATTRIBUTE) ?? ""
+      let previewKey = element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? ""
+      emit(Message.RequestedCardLoad({ chatId, kind: "files", cacheKey: filesKey }))
+      emit(Message.RequestedCardLoad({ chatId, kind: "preview", cacheKey: previewKey }))
+      const observer = new MutationObserver(() => {
+        const nextFiles = element.getAttribute(FILES_KEY_ATTRIBUTE) ?? ""
+        const nextPreview = element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? ""
+        if (nextFiles !== filesKey) {
+          filesKey = nextFiles
+          emit(Message.RequestedCardLoad({ chatId, kind: "files", cacheKey: filesKey }))
+        }
+        if (nextPreview !== previewKey) {
+          previewKey = nextPreview
+          emit(Message.RequestedCardLoad({ chatId, kind: "preview", cacheKey: previewKey }))
+        }
+      })
+      observer.observe(element, { attributes: true, attributeFilter: [FILES_KEY_ATTRIBUTE, PREVIEW_KEY_ATTRIBUTE] })
+      return () => observer.disconnect()
+    }),
 })
 
 /** ChatHoverCardContent inside SidebarChatCard's wrapper. */
@@ -643,9 +667,11 @@ export function chatCardBody(thread: SidebarThread, list: HoverList, app: AppMod
   const previewKey = getPreviewCacheKey(row)
   const filesKey = getTouchedFilesCacheKey(row)
 
-  return h.keyed("div")(`${previewKey}|${filesKey}`, [
+  return h.keyed("div")(`card-${row.chatId}`, [
     ...(touchedFiles?.files.length ? [h.Class("-mb-0.5")] : []),
-    h.OnMount(ShowChatCard({ chatId: row.chatId, previewKey, filesKey })),
+    h.Attribute(FILES_KEY_ATTRIBUTE, filesKey),
+    h.Attribute(PREVIEW_KEY_ATTRIBUTE, previewKey),
+    h.OnMount(ChatCardLoader({ chatId: row.chatId })),
   ], [
     turnCardMetaRow({}, [
       label.currentBranch

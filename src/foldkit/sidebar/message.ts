@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { defineMessageUnion } from "foldkit/message"
 import type { ChatPreview, ChatTouchedFilesResult } from "../../shared/types"
 import type { PairSessionState } from "../../client/lib/pairSession"
+import { AppAction } from "../app/action"
 import { opaque } from "../core/schema"
 import * as Connection from "../core/stores/connection"
 import { SidebarView } from "../core/stores/sidebarView"
@@ -29,6 +30,8 @@ export const Message = defineMessageUnion({
   ClickedExitFocus: {},
   ClickedHistoryBack: {},
   ClickedHistoryForward: {},
+  /** Leaving a project's page with no history behind it: to the menu, in its place. */
+  FoundNoHistoryToLeave: {},
   GotViewSwitcherMessage: { message: Popover.Message },
   ChoseSidebarView: { view: SidebarView },
 
@@ -48,7 +51,9 @@ export const Message = defineMessageUnion({
   ToggledExpandedGroup: { projectId: Schema.String },
   ClickedNewProjectChat: { localPath: Schema.String },
   PressedProjectHeader: { projectId: Schema.String, pointerId: Schema.Number, y: Schema.Number },
-  MovedProjectDrag: { y: Schema.Number, overId: Schema.NullOr(Schema.String) },
+  /** The drag passed its 2px activation distance. */
+  ActivatedProjectDrag: { activeHeight: Schema.Number },
+  MovedProjectDrag: { deltaY: Schema.Number, overId: Schema.NullOr(Schema.String) },
   ReleasedProjectDrag: {},
   CancelledProjectDrag: {},
 
@@ -72,7 +77,8 @@ export const Message = defineMessageUnion({
 
   // Hover cards (ListHoverCard)
   ChangedHoveredRow: { list: HoverList, key: Schema.NullOr(Schema.String) },
-  ShowedChatCard: { chatId: Schema.String, previewKey: Schema.String, filesKey: Schema.String },
+  /** A card is up for a chat, or its row's key moved: fetch what the cache lacks (React's two effects). */
+  RequestedCardLoad: { chatId: Schema.String, kind: Schema.Literals(["files", "preview"]), cacheKey: Schema.String },
   SucceededLoadPreview: { chatId: Schema.String, cacheKey: Schema.String, preview: opaque<ChatPreview>("ChatPreview") },
   SucceededLoadTouchedFiles: { chatId: Schema.String, cacheKey: Schema.String, result: opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult") },
   /** A card's fetch failed: it stays without, quietly (the card is a peek). */
@@ -114,15 +120,25 @@ export const Message = defineMessageUnion({
   GotConnectionMessage: { message: Connection.Message },
   ReceivedPairSession: { session: opaque<PairSessionState>("PairSessionState") },
   ClickedRetryPair: {},
+  FinishedPairStart: { session: opaque<PairSessionState>("PairSessionState") },
+  ClickedCopyPairLink: { text: Schema.String },
+  CopiedPairLink: {},
+  ElapsedPairCopied: { version: Schema.Number },
   ElapsedPairPoll: { version: Schema.Number },
 
   // The machine switcher
   GotMachineSwitcherMessage: { message: Popover.Message },
+  ClosedMachineSwitcher: {},
   ChoseMachine: { subdomain: Schema.NullOr(Schema.String), name: Schema.String, appOrigin: Schema.NullOr(Schema.String) },
   ClickedManageFleet: {},
   ClickedSetupCloud: {},
   GotPairDialogMessage: { message: Dialog.Message },
   ElapsedSwitchPending: { version: Schema.Number },
+
+  /** A send started while the Archived view was up: that visit is over. */
+  ObservedSendStarted: {},
+  /** The rest of a sequence of root actions (one OutMessage carries one). */
+  ContinuedActions: { actions: Schema.Array(AppAction) },
 
   /** A DOM side effect ran (storage write, a dispatched event, a window opened). */
   CompletedSideEffect: {},
