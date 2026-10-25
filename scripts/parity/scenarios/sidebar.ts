@@ -1,5 +1,5 @@
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, click, contextClick, hover, parkPointer, press, REGIONS, regions, rest, sidebarChatRow, switchSidebarView } from "./_lib/helpers"
+import { CHATS, click, contextClick, countUuids, hover, parkPointer, press, REGIONS, regions, rest, sidebarChatRow, switchSidebarView } from "./_lib/helpers"
 
 // The desktop sidebar: its views (Chats, Projects, Channels, Archived), its
 // sections, chat rows and their buttons, and the row and project menus.
@@ -377,6 +377,153 @@ export const scenarios: Scenario[] = [
       await click(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "Settings Connected" }))
       await parkPointer(context)
       await context.capture("settings")
+    },
+  }),
+  defineScenario({
+    // New Chat starts an empty chat in the open chat's project.
+    name: "sidebar-new-chat",
+    route: CHATS.units,
+    regions: regions("sidebar", "composer"),
+    covers: { commands: ["chat.create"] },
+    async run(context) {
+      await countUuids(context)
+      await click(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "New Chat" }))
+      await parkPointer(context)
+      await context.capture("new-chat")
+    },
+  }),
+  defineScenario({
+    // A new chat, then its first prompt: the chat takes its title from it.
+    name: "sidebar-new-chat-first-prompt",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("sidebar", "transcript"),
+    covers: { commands: ["chat.create", "chat.send"] },
+    async run(context) {
+      const { page } = context
+      await countUuids(context)
+      await click(context, page.locator(REGIONS.sidebar).getByRole("button", { name: "New Chat" }))
+      const composer = page.locator("textarea[data-chat-input]")
+      await composer.click()
+      await composer.pressSequentially("Add a dark mode to the forecast page")
+      await composer.press("Enter")
+      await rest(context)
+      await context.capture("sent")
+      await context.advance(30_000)
+      await parkPointer(context)
+      await context.capture("finished")
+    },
+  }),
+  defineScenario({
+    // In the Channels view a channel opens a new chat in its project.
+    name: "sidebar-channel-open",
+    route: "/",
+    ...desktop,
+    regions: regions("sidebar"),
+    covers: { commands: ["chat.create"] },
+    async run(context) {
+      await switchSidebarView(context, "Channels")
+      await countUuids(context)
+      await click(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "portfolio" }))
+      await parkPointer(context)
+      await context.capture("opened")
+    },
+  }),
+  defineScenario({
+    name: "sidebar-channel-hover-card",
+    route: "/",
+    ...desktop,
+    regions: regions("popover"),
+    async run(context) {
+      await switchSidebarView(context, "Channels")
+      await hover(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "tidepool 2" }))
+      await context.capture("card")
+    },
+  }),
+  defineScenario({
+    name: "sidebar-channel-pin",
+    route: "/",
+    ...desktop,
+    regions: regions("sidebar"),
+    covers: { commands: ["project.setPinned"] },
+    async run(context) {
+      const { page } = context
+      await switchSidebarView(context, "Channels")
+      await contextClick(context, page.locator(REGIONS.sidebar).getByRole("button", { name: "portfolio" }))
+      await click(context, page.getByRole("menuitem", { name: "Pin" }))
+      await parkPointer(context)
+      await context.capture("pinned")
+    },
+  }),
+  defineScenario({
+    // Search opens the command palette.
+    name: "sidebar-search-button",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("dialog"),
+    async run(context) {
+      await click(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "Search" }))
+      await context.capture("palette")
+    },
+  }),
+  defineScenario({
+    // Add project opens the palette on its Add Project page.
+    name: "sidebar-add-project-button",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("dialog"),
+    async run(context) {
+      await click(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "Add project" }))
+      await context.capture("palette")
+    },
+  }),
+  defineScenario({
+    // The Kanna title goes to the projects page.
+    name: "sidebar-title-button",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("sidebar"),
+    covers: { routes: ["/"] },
+    async run(context) {
+      await click(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "Kanna" }).first())
+      await parkPointer(context)
+      await context.capture("projects")
+    },
+  }),
+  defineScenario({
+    // The Projects view: a project's new-chat and collapse buttons, with their tooltips.
+    name: "sidebar-project-header-buttons",
+    route: "/",
+    ...desktop,
+    regions: regions("sidebar", "tooltip", "menu"),
+    async run(context) {
+      const { page } = context
+      await switchSidebarView(context, "Projects")
+      const sidebar = page.locator(REGIONS.sidebar)
+      // (Not via the project's name: its path tooltip would cover the buttons.)
+      // CSS: the header's icon buttons have no accessible name, only a
+      // tooltip; they are told apart by their lucide icons.
+      const more = sidebar.locator("button:has(svg.lucide-ellipsis)").first()
+      await hover(context, more)
+      await context.capture("more-tooltip")
+      await click(context, more)
+      await context.capture("more-menu")
+    },
+  }),
+  defineScenario({
+    // The header's pen button starts a chat in that project.
+    name: "sidebar-project-header-new-chat",
+    route: "/",
+    ...desktop,
+    regions: regions("sidebar", "composer"),
+    covers: { commands: ["chat.create"] },
+    async run(context) {
+      await switchSidebarView(context, "Projects")
+      await countUuids(context)
+      // CSS: the first pen is the sidebar's own New Chat; the next is the first project's.
+      await click(context, context.page.locator(REGIONS.sidebar).locator("button:has(svg.lucide-square-pen)").nth(1))
+      await parkPointer(context)
+      await context.capture("new-chat")
     },
   }),
 ]

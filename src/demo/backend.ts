@@ -739,7 +739,7 @@ export class DemoBackend {
       }
       case "project.writeQuickActions":
         this.requireProject(command.projectId).quickActions = command.quickActions
-        return null
+        return command.quickActions
       case "project.setPinned": {
         const project = this.projects.get(command.projectId)
         if (!project) throw new Error("Project not found")

@@ -1,6 +1,6 @@
 import type { Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { CHATS, click, openPalette, parkPointer, press, regions, rest } from "./_lib/helpers"
+import { CHATS, click, countUuids, openPalette, parkPointer, press, regions, rest } from "./_lib/helpers"
 
 // The command palette (⌘K): its root list, search, every sub-page, and the
 // actions that run from it. Driven by the keyboard, as it is used.
@@ -70,6 +70,7 @@ export const scenarios: Scenario[] = [
     ...desktop,
     regions: paletteRegions,
     async run(context) {
+      await countUuids(context)
       await openPalette(context)
       await search(context, "tide")
       await context.capture("tide")
@@ -121,6 +122,7 @@ export const scenarios: Scenario[] = [
     regions: paletteRegions,
     covers: { commands: ["chat.create"] },
     async run(context) {
+      await countUuids(context)
       await openPalette(context)
       await choose(context, "New Chat in…")
       await context.capture("page")
@@ -136,6 +138,7 @@ export const scenarios: Scenario[] = [
     regions: regions("composer", "sidebar"),
     covers: { commands: ["chat.create"] },
     async run(context) {
+      await countUuids(context)
       await openPalette(context)
       await choose(context, /^New Chat in tidepool/)
       await parkPointer(context)
@@ -201,6 +204,7 @@ export const scenarios: Scenario[] = [
     regions: regions("dialog", "sidebar"),
     covers: { commands: ["project.create", "fs.list"] },
     async run(context) {
+      await countUuids(context)
       await openPalette(context)
       await choose(context, /^Add Project…/)
       await choose(context, "Create New…")
@@ -252,6 +256,7 @@ export const scenarios: Scenario[] = [
     regions: regions("sidebar", "composer"),
     covers: { commands: ["project.open"] },
     async run(context) {
+      await countUuids(context)
       await openPalette(context)
       await choose(context, /^Add Project…/)
       await choose(context, /^portfolio/)

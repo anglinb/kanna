@@ -19,8 +19,11 @@ export const REGIONS = {
   transcript: "[role=region][aria-label=Messages]",
   /** The composer dock: the box around the chat input and its controls. Class + data attribute: the dock has no role. */
   composer: ".pointer-events-auto:has(textarea[data-chat-input])",
-  /** The widget column on the right of a chat. */
-  widgets: "[data-widgets-column]",
+  /**
+   * The widget column on the right of a chat: its content box, which both
+   * layouts mark (the desktop column and the phone's slide-over).
+   */
+  widgets: "[data-right-sidebar-visual]",
   /** The settings page (nav and content). */
   settings: "[data-settings-page]",
   /** The open settings section's content, beside the settings nav. */
@@ -164,6 +167,25 @@ export async function switchSidebarView(context: ScenarioContext, view: "Chats" 
   await context.page.locator(`${REGIONS.sidebar} button[aria-haspopup=dialog]`).first().click()
   await context.page.getByRole("dialog").getByRole("button", { name: view, exact: true }).click()
   await parkPointer(context)
+}
+
+/**
+ * Makes `crypto.randomUUID` count (00000000-0000-4000-8000-000000000001, …)
+ * from here on. A new chat's id is made by the client and goes into the URL
+ * at once, and the runner compares URLs as they are, so without this two
+ * runs of the same scenario never agree. Call it before the action that
+ * creates the chat. (Ids in the command log are normalized by the runner;
+ * the URL isn't. A harness change that normalizes it too would make this
+ * unnecessary.)
+ */
+export async function countUuids(context: ScenarioContext) {
+  await context.page.evaluate(() => {
+    let next = 0
+    crypto.randomUUID = () => {
+      next += 1
+      return `00000000-0000-4000-8000-${next.toString(16).padStart(12, "0")}` as `${string}-${string}-${string}-${string}-${string}`
+    }
+  })
 }
 
 /** Opens the command palette with its keybinding (cmd+k). */
