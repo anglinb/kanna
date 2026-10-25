@@ -12,7 +12,7 @@ import * as TerminalLayout from "../core/stores/terminalLayout"
 import { CloseTerminal, DisposeCachedTerminal } from "./commands"
 import { TerminalPane, TerminalWorkspaceScroller } from "./mounts"
 import * as Resizable from "./resizable"
-import { HOME_TERMINAL_LAYOUT_KEY, init, Message, type Model, observe, update, view, type WorkspaceOptions } from "./index"
+import { chatWorkspaceOptions, HOME_TERMINAL_LAYOUT_KEY, init, Message, type Model, observe, update, view, type WorkspaceOptions } from "./index"
 
 class MemoryStorage {
   values = new Map<string, string>()
@@ -254,6 +254,23 @@ describe("terminal views", () => {
       ...mountWorkspace(["t-1"], "project-1"),
       Scene.click(Scene.role("button", { name: "Hide terminal" })),
       Scene.expectOutMessage(layoutAction(TerminalLayout.Message.HidTerminals({ projectId: "project-1", chatKey: "chat-1" }))),
+    )
+  })
+
+  test("the chat page's context makes the panel's workspace, and a split there closes", () => {
+    const chatApp = withTerminals(boot("/terminal", true), "project-1", ["t-1", "t-2"])
+    const page = { projectId: "project-1", terminal: { focusRequestVersion: 0, pendingCommandsByTerminalId: {}, chatKey: null } }
+    expect(chatWorkspaceOptions(chatApp, page)).toMatchObject({ layoutKey: "project-1", paneProjectId: "project-1", surface: "chat", lastPaneClose: "hide", splitTerminalShortcut: ["cmd+/", "ctrl+/"] })
+    expect(chatWorkspaceOptions(chatApp, { ...page, projectId: null })).toBeNull()
+    Scene.scene(
+      { update: updateWith(chatApp), view: Scene.withViewInputs(view, { app: chatApp, page })() },
+      Scene.given(init()),
+      ...mountWorkspace(["t-1", "t-2"], "project-1"),
+      Scene.click(Scene.last(Scene.all.role("button", { name: "Close terminal" }))),
+      Scene.expectOutMessage(layoutAction(TerminalLayout.Message.RemovedTerminal({ projectId: "project-1", terminalId: "t-2" }))),
+      Scene.Command.expectExact(CloseTerminal({ terminalId: "t-2" }), DisposeCachedTerminal({ terminalId: "t-2" })),
+      Scene.Command.resolve(CloseTerminal, Message.CompletedSideEffect()),
+      Scene.Command.resolve(DisposeCachedTerminal, Message.CompletedSideEffect()),
     )
   })
 

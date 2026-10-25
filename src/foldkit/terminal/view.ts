@@ -1,6 +1,7 @@
 import { Submodel } from "foldkit"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { getMinimumTerminalWidth } from "../../client/components/chat-ui/TerminalWorkspaceLayout"
+import { getResolvedKeybindings } from "../../client/lib/keybindings"
 import type { AppModel, SliceViewInputs } from "../app/slice"
 import { resolveTheme, themePreference } from "../app/theme"
 import type { ProjectTerminalLayout } from "../core/stores/terminalLayout"
@@ -45,8 +46,43 @@ export interface WorkspaceOptions {
   splitTerminalShortcut?: ReadonlyArray<string>
 }
 
+/**
+ * What the chat page hands its sub-slices (chat/pageInputs.ts's
+ * `ChatPageContext`), the part the terminal reads: TerminalWorkspaceShell's
+ * props. Typed here structurally so this slice needn't import chat/.
+ */
+export interface ChatTerminalContext {
+  projectId: string | null
+  terminal: {
+    focusRequestVersion: number
+    pendingCommandsByTerminalId: Readonly<Record<string, string>>
+    /** Per chat (`paneVisibility.terminal`), or null when the pane follows the project. */
+    chatKey: string | null
+  }
+}
+
+/**
+ * The /terminal page passes neither; the chat page passes its `page`
+ * context (or a ready `workspace`), and gets the panel's workspace.
+ */
 export interface ViewInputs extends SliceViewInputs {
   workspace?: WorkspaceOptions
+  page?: ChatTerminalContext
+}
+
+/** TerminalWorkspaceShell's TerminalWorkspace props, from the chat page's context. */
+export function chatWorkspaceOptions(app: AppModel, page: ChatTerminalContext): WorkspaceOptions | null {
+  if (!page.projectId) return null
+  return {
+    layoutKey: page.projectId,
+    paneProjectId: page.projectId,
+    surface: "chat",
+    lastPaneClose: "hide",
+    chatKey: page.terminal.chatKey,
+    focusRequestVersion: page.terminal.focusRequestVersion,
+    pendingCommandsByTerminalId: page.terminal.pendingCommandsByTerminalId,
+    splitTerminalShortcut: getResolvedKeybindings(app.keybindings).bindings.addSplitTerminal,
+  }
 }
 
 interface PaneCloseAction {
@@ -68,8 +104,14 @@ const PAGE_WORKSPACE: WorkspaceOptions = {
   pendingCommandsByTerminalId: {},
 }
 
-export const view = Submodel.defineView<Model, Message, ViewInputs>((model, { app, workspace }, h) =>
-  workspace ? workspaceView(model, app, workspace, h) : pageView(model, app, h))
+export const view = Submodel.defineView<Model, Message, ViewInputs>((model, { app, workspace, page }, h) => {
+  if (workspace) return workspaceView(model, app, workspace, h)
+  if (page) {
+    const options = chatWorkspaceOptions(app, page)
+    return options ? workspaceView(model, app, options, h) : null
+  }
+  return pageView(model, app, h)
+})
 
 /**
  * TerminalPage (`/terminal`): the dev box's full-screen terminal, the same

@@ -8,7 +8,8 @@ import { socketBridge } from "./socketBridge"
 // chat page's terminal workspace (TerminalWorkspace, TerminalPane), one
 // Submodel serving both. The root embeds it as `terminalPage` and renders
 // the page; the chat page embeds it as `terminal` and renders the workspace
-// by passing `workspace` in the view inputs (see view.ts).
+// by passing its `page` context (chat/pageInputs.ts) in the view inputs, or
+// a ready `workspace` (see view.ts).
 //
 // The pieces:
 //   view.ts           TerminalPage and TerminalWorkspace's markup
@@ -25,7 +26,7 @@ import { socketBridge } from "./socketBridge"
 export { init, Model } from "./model"
 export { Message, Surface } from "./message"
 export { HOME_TERMINAL_LAYOUT_KEY, observe, update } from "./update"
-export { view, workspaceView, type ViewInputs, type WorkspaceOptions } from "./view"
+export { chatWorkspaceOptions, view, workspaceView, type ChatTerminalContext, type ViewInputs, type WorkspaceOptions } from "./view"
 export { disposeCachedTerminal } from "./pane"
 
 /** Lends the app's socket to the panes while the app runs (see socketBridge.ts). */
