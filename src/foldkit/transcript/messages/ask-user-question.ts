@@ -75,7 +75,9 @@ function checkbox(selected: boolean, multiSelect: boolean | undefined, onClick: 
 
 function optionRow(option: AskUserQuestionOption, selected: boolean, multiSelect: boolean | undefined, onClick: Message, h: HtmlBuilder<Message>): Html {
   const baseClasses = "w-full text-left p-3 pt-2.5 pl-4 pr-5 bg-surface"
-  return h.button([h.OnClick(onClick), h.Class(cn(baseClasses, "border-b border-border", "transition-all cursor-pointer"))], [
+  // Keyed by label, as React's list is: the next question's options are new
+  // elements, so the one just pressed doesn't stay focused under them.
+  return h.keyed("button")(option.label, [h.OnClick(onClick), h.Class(cn(baseClasses, "border-b border-border", "transition-all cursor-pointer"))], [
     h.div([h.Class("flex items-center justify-between gap-3")], [
       h.div([h.Class("flex-1 min-w-0")], optionContent(option.label, option.description, h)),
       checkbox(selected, multiSelect, undefined, h),

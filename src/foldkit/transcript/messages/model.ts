@@ -81,14 +81,16 @@ export type DebugRawState = typeof DebugRawState.Type
 export const ChartState = Schema.Struct({
   hidden: Schema.Array(Schema.String),
   active: Schema.NullOr(Schema.String),
-  /** The category (or pie slice) under the pointer, and where the pointer is in the plot, px. */
-  hover: Schema.NullOr(Schema.Struct({ index: Schema.Number, x: Schema.Number, y: Schema.Number })),
-  /** The render area's size, once measured (ResponsiveContainer). */
+  /** Where the pointer is over the chart, px from its top left, rounded (recharts' relative coordinate). */
+  hover: Schema.NullOr(Schema.Struct({ x: Schema.Number, y: Schema.Number })),
+  /** The render area's size, once measured and rounded (ResponsiveContainer). */
   size: Schema.NullOr(Schema.Struct({ width: Schema.Number, height: Schema.Number })),
+  /** The tooltip's box, once drawn: where it goes depends on it. */
+  tooltip: Schema.NullOr(Schema.Struct({ width: Schema.Number, height: Schema.Number })),
 })
 export type ChartState = typeof ChartState.Type
 
-export const EMPTY_CHART: ChartState = { hidden: [], active: null, hover: null, size: null }
+export const EMPTY_CHART: ChartState = { hidden: [], active: null, hover: null, size: null, tooltip: null }
 
 /** An attachments strip's scroll edges (AttachmentsCard's measure). */
 export const StripState = Schema.Struct({ moreLeft: Schema.Boolean, moreRight: Schema.Boolean, scrollbarHeight: Schema.Number })
@@ -213,8 +215,9 @@ export const Message = defineMessageUnion({
   // Display tools
   ToggledChartSeries: { key: Schema.String, series: Schema.String },
   HoveredChartSeries: { key: Schema.String, series: Schema.NullOr(Schema.String) },
-  MovedOverChart: { key: Schema.String, index: Schema.NullOr(Schema.Number), x: Schema.Number, y: Schema.Number },
+  MovedOverChart: { key: Schema.String, pointer: Schema.NullOr(Schema.Struct({ x: Schema.Number, y: Schema.Number })) },
   MeasuredChart: { key: Schema.String, width: Schema.Number, height: Schema.Number },
+  MeasuredChartTooltip: { key: Schema.String, width: Schema.Number, height: Schema.Number },
   ClickedDownloadChartCsv: { csv: Schema.String, filename: Schema.String },
   CompletedDownload: {},
   ClickedExpandChart: { payload: opaque<ChartToolPayload>("ChartToolPayload") },
@@ -282,7 +285,7 @@ export type OutMessage = typeof OutMessage.Type
 
 const COPIED_FEEDBACK_MS = 2000
 
-const CopyText = Command.define("CopyTranscriptText", {
+export const CopyText = Command.define("CopyTranscriptText", {
   args: { key: Schema.String, block: Schema.Number, text: Schema.String },
   messages: [Message.CompletedCopy],
   execute: ({ key, block, text }) =>
@@ -295,26 +298,26 @@ const CopyText = Command.define("CopyTranscriptText", {
     ),
 })
 
-const WaitCopied = Command.define("WaitTranscriptCopied", {
+export const WaitCopied = Command.define("WaitTranscriptCopied", {
   args: { version: Schema.Number },
   messages: [Message.ElapsedCopied],
   execute: ({ version }) => Effect.sleep(COPIED_FEEDBACK_MS).pipe(Effect.as(Message.ElapsedCopied({ version }))),
 })
 
 /** One request per tick, as toolPayloadStore batches its prefetches. */
-const FlushPayloadRequests = Command.define("FlushPayloadRequests", {
+export const FlushPayloadRequests = Command.define("FlushPayloadRequests", {
   messages: [Message.FlushedPayloadRequests],
   execute: Effect.sleep(0).pipe(Effect.as(Message.FlushedPayloadRequests())),
 })
 
 /** Single select moves on 150ms after the pick, so the check is seen landing. */
-const AdvanceQuestion = Command.define("AdvanceQuestion", {
+export const AdvanceQuestion = Command.define("AdvanceQuestion", {
   args: { toolId: Schema.String, index: Schema.Number },
   messages: [Message.AdvancedQuestion],
   execute: ({ toolId, index }) => Effect.sleep(150).pipe(Effect.as(Message.AdvancedQuestion({ toolId, index }))),
 })
 
-const DownloadCsv = Command.define("DownloadChartCsv", {
+export const DownloadCsv = Command.define("DownloadChartCsv", {
   args: { csv: Schema.String, filename: Schema.String },
   messages: [Message.CompletedDownload],
   execute: ({ csv, filename }) => Effect.sync(() => {
@@ -329,7 +332,7 @@ const DownloadCsv = Command.define("DownloadChartCsv", {
   }),
 })
 
-const OpenInNewTab = Command.define("OpenAttachmentInNewTab", {
+export const OpenInNewTab = Command.define("OpenAttachmentInNewTab", {
   args: { url: Schema.String },
   messages: [Message.CompletedOpenInNewTab],
   execute: ({ url }) => Effect.sync(() => {
@@ -378,7 +381,7 @@ function startsAboveView(element: HTMLElement): boolean {
 
 const runningClampAnimations = new Map<string, Animation>()
 
-const MoveClamp = Command.define("MoveClampedText", {
+export const MoveClamp = Command.define("MoveClampedText", {
   args: { id: Schema.String, expanding: Schema.Boolean, from: Schema.Number, byKeyboard: Schema.Boolean, lines: Schema.Number, scope: ClampScope },
   messages: [Message.CompletedClampMotion],
   execute: ({ id, expanding, from, byKeyboard, lines, scope: scopeKind }) => Effect.gen(function* () {
@@ -419,7 +422,7 @@ const MoveClamp = Command.define("MoveClampedText", {
 })
 
 /** Focus a plan's edit box when it opens (ExitPlanModeMessage's effect). */
-const FocusPlanDraft = Command.define("FocusPlanDraft", {
+export const FocusPlanDraft = Command.define("FocusPlanDraft", {
   args: { toolId: Schema.String },
   messages: [Message.CompletedFocus],
   execute: ({ toolId }) => Effect.gen(function* () {
@@ -611,11 +614,15 @@ export const update = (model: Model, message: Message): Return =>
       return { model: withChart(model, key, { ...chart, hidden }) }
     },
     HoveredChartSeries: ({ key, series }) => ({ model: withChart(model, key, { ...chartOf(model, key), active: series }) }),
-    MovedOverChart: ({ key, index, x, y }) => {
+    MovedOverChart: ({ key, pointer }) => {
       const chart = chartOf(model, key)
-      const hover = index === null ? null : { index, x, y }
-      if (chart.hover?.index === hover?.index && chart.hover?.x === hover?.x && chart.hover?.y === hover?.y) return { model }
-      return { model: withChart(model, key, { ...chart, hover }) }
+      if (chart.hover?.x === pointer?.x && chart.hover?.y === pointer?.y) return { model }
+      return { model: withChart(model, key, { ...chart, hover: pointer }) }
+    },
+    MeasuredChartTooltip: ({ key, width, height }) => {
+      const chart = chartOf(model, key)
+      if (chart.tooltip?.width === width && chart.tooltip?.height === height) return { model }
+      return { model: withChart(model, key, { ...chart, tooltip: { width, height } }) }
     },
     MeasuredChart: ({ key, width, height }) => {
       const chart = chartOf(model, key)
