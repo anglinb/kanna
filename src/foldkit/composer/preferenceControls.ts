@@ -1,4 +1,4 @@
-import type { Html, HtmlBuilder } from "foldkit/html"
+import type { ChildAttribute, Html, HtmlBuilder } from "foldkit/html"
 import {
   DEFAULT_CLAUDE_MODEL_OPTIONS,
   resolveModelLabel,
@@ -15,8 +15,8 @@ import type { Child } from "../ui/attributes"
 import type { Icon } from "../ui/icon"
 import * as Icons from "../ui/icons"
 import * as Popover from "../ui/popover"
+import { PROVIDER_ICONS } from "../ui/provider-icons"
 import { CHAT_MODE_LABELS, deriveComposerOptionControls } from "./controls"
-import { PROVIDER_ICONS } from "./providerIcons"
 
 // ChatPreferenceControls.tsx: the options row's pickers (harness, model,
 // effort, context window, speed, mode), each an InputPopover of
@@ -25,7 +25,9 @@ import { PROVIDER_ICONS } from "./providerIcons"
 
 /** Flush table-like row inside an InputPopover: flat edges, divider-separated. */
 export function popoverMenuItem<Message>(options: {
-  onClick: Message
+  /** What a click says; or `attributes`, a click handled elsewhere (the page's). */
+  onClick?: Message
+  attributes?: ReadonlyArray<ChildAttribute>
   selected: boolean
   icon: Html
   label: ReadonlyArray<Child>
@@ -36,7 +38,8 @@ export function popoverMenuItem<Message>(options: {
   key: string
 }, h: HtmlBuilder<Message>): Html {
   return h.keyed("button")(options.key, [
-    h.OnClick(options.onClick),
+    ...(options.onClick !== undefined ? [h.OnClick(options.onClick)] : []),
+    ...(options.attributes ?? []),
     ...(options.disabled ? [h.Disabled(true)] : []),
     h.Class(cn(
       "w-full flex items-center gap-2 text-left [&>svg]:shrink-0 px-3 py-2 transition-colors",
@@ -134,8 +137,8 @@ export interface PreferenceControlsInputs<Message> {
   popovers: Record<PreferencePicker, Popover.Model>
   /** The model picker's filter, for long lists. */
   modelQuery: string
-  /** "Add models…" under pi's models, when given. */
-  editModels?: Message
+  /** "Add models…" under pi's models, when given: the page's handler (`requests.editModels`). */
+  editModels?: ReadonlyArray<ChildAttribute>
   toPopoverMessage: (name: PreferencePicker, message: Popover.Message) => Message
   onProviderChange?: (provider: AgentProvider) => Message
   onModelChange: (model: string) => Message
@@ -277,7 +280,7 @@ export function preferenceControls<Message>(inputs: PreferenceControlsInputs<Mes
         footer: selectedProvider === "pi" && inputs.editModels
           ? popoverMenuItem({
             key: "add-models",
-            onClick: inputs.editModels,
+            attributes: inputs.editModels,
             selected: false,
             icon: Icons.Plus({ class: "h-4 w-4 text-muted-foreground" }, h),
             label: ["Add models…"],

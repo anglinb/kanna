@@ -10,9 +10,11 @@ import {
   type ModelOptions,
   type ProviderCatalogEntry,
 } from "../../shared/types"
-import { delegatorDisplayTitle } from "../../client/lib/delegators"
-import { overrideContextWindowMaxTokens, type ContextWindowSnapshot } from "../../client/lib/contextWindow"
+import { getProjectIdForChat } from "../../client/app/kannaStateHelpers"
+import { delegatorDisplayTitle, projectDelegators, resolveDelegateTarget } from "../../client/lib/delegators"
+import { deriveLatestContextWindowSnapshot, overrideContextWindowMaxTokens, type ContextWindowSnapshot } from "../../client/lib/contextWindow"
 import { abbreviatePathHead, formatPathWithTilde } from "../../client/lib/pathUtils"
+import { getProjectSidebarLabel } from "../../client/lib/project-label"
 import {
   CODEX_SKILL_MENU_TRIGGERS,
   DEFAULT_SKILL_MENU_TRIGGERS,
@@ -27,7 +29,7 @@ import {
   type ActiveProjectMention,
   type ProjectMentionItem,
 } from "../../client/lib/project-mention"
-import type { SidebarThread } from "../../client/lib/thread-sections"
+import { flattenSidebarThreads, type SidebarThread } from "../../client/lib/thread-sections"
 import { routeChatId } from "../app/route"
 import type { Model as AppModel } from "../app/model"
 import type * as Stores from "../app/stores"
@@ -44,7 +46,7 @@ import type { ComposerAttachment, Model } from "./model"
 // What ChatInput was handed (its props) and read from the stores, and what
 // it worked out from both on each render.
 
-/** The new chat page's delegate control (`ComposerDelegate` and `DelegateControl`'s props, as data). */
+/** The new chat page's delegate control (`DelegateControl`'s props, as data): chat/newChatDelegate's `NewChatDelegate`. */
 export interface ComposerDelegate {
   /** The project's delegators, most recently active first. Never empty. */
   delegators: ReadonlyArray<SidebarThread>
@@ -75,8 +77,6 @@ export interface ComposerProps {
   placeholder?: string
   secondary: boolean
   delegate: ComposerDelegate | null
-  /** useIsStandalone: an installed web app. */
-  isStandalone: boolean
 }
 
 export interface Context {
@@ -84,52 +84,127 @@ export interface Context {
   stores: Stores.Model
 }
 
+/** What the chat page hands its composer on top of the root Model (ChatInputDock's props; `page.composer` and `page.delegate`). */
+export interface PageComposerInputs {
+  hasSelectedProject: boolean
+  canCancel: boolean
+  projectPath: string | null
+  projectRepoLabel: string | null
+  contextWindowSnapshot: ContextWindowSnapshot | null
+  delegate: ComposerDelegate | null
+}
+
+// The chat page's selectors (chat/page.ts), restated: a value import of
+// chat/ from here would be a cycle (chat/ imports this slice).
+
+function activeSnapshot(app: AppModel) {
+  const chatId = routeChatId(app.route)
+  return app.chat && app.chat.chatId === chatId ? ChatSession.snapshotOf(app.chat) : null
+}
+
+function activeProjectId(app: AppModel): string | null {
+  const chatId = routeChatId(app.route)
+  return activeSnapshot(app)?.runtime.projectId
+    ?? (chatId ? getProjectIdForChat(app.stores.sidebar.data.projectGroups, chatId) : null)
+    ?? app.selectedProjectId
+}
+
+function navbarLocalPath(app: AppModel): string | null {
+  const chatId = routeChatId(app.route)
+  const projectId = activeProjectId(app)
+  const sidebar = app.stores.sidebar.data
+  const fromSidebar = chatId && projectId
+    ? sidebar.projectGroups.find((group) => group.groupKey === projectId)?.localPath ?? null
+    : null
+  return activeSnapshot(app)?.runtime.localPath
+    ?? fromSidebar
+    ?? app.localProjects?.projects[0]?.localPath
+    ?? sidebar.projectGroups[0]?.localPath
+    ?? null
+}
+
 /**
- * The chat page's props for its main composer, from the root Model: what
- * ChatPage passed ChatInputDock. The chat page has the fuller picture (its
- * delegate control, the context meter's snapshot) and passes its own props;
- * this is the fallback that keeps the slice contract's `update(model,
- * message, app)` working.
+ * useNewChatDelegate's control, as chat/newChatDelegate works it out. The
+ * page holds the empty state over while an unknown chat loads; that hold is
+ * the page's own state, so here such a chat has no control (the view has
+ * the page's, exact).
  */
-export function propsFromApp(app: AppModel, overrides: Partial<ComposerProps> = {}): ComposerProps {
+function delegateFromApp(app: AppModel): ComposerDelegate | null {
+  const chatId = routeChatId(app.route)
+  const snapshot = activeSnapshot(app)
+  const chat = app.chat && app.chat.chatId === chatId ? app.chat : null
+  const messageCount = chat?.messages.length ?? 0
+  const sidebar = app.stores.sidebar
+  const isChatLoading = Boolean(chatId && !snapshot)
+  const started = Boolean(chatId && app.actions.startedChat?.chatId === chatId && !snapshot)
+  const isKnownNewChat = Sidebar.sidebarChatIsNew(sidebar, chatId) || started
+  const showEmptyState = isChatLoading
+    ? isKnownNewChat && messageCount === 0
+    : messageCount === 0 && snapshot?.runtime.title === "New Chat"
+  const enabled = showEmptyState && (!isChatLoading || isKnownNewChat) && !Sidebar.chatIsDelegator(sidebar, chatId)
+  const projectId = activeProjectId(app)
+  if (!enabled || !projectId) return null
+  const group = sidebar.data.projectGroups.find((item) => item.groupKey === projectId) ?? null
+  if (!group) return null
+  const delegators = projectDelegators(flattenSidebarThreads({ projectGroups: [group] }), group.groupKey)
+  if (delegators.length === 0) return null
+  return {
+    delegators,
+    target: resolveDelegateTarget(delegators, app.stores.delegate.projects[projectId]),
+    projectName: getProjectSidebarLabel(group).name,
+  }
+}
+
+/** The page's inputs for its composer, from the root Model alone (what `update` has). */
+export function pageInputsFromApp(app: AppModel): PageComposerInputs {
+  const chatId = routeChatId(app.route)
+  const snapshot = activeSnapshot(app)
+  const sidebar = app.stores.sidebar
+  const chat = app.chat && app.chat.chatId === chatId ? app.chat : null
+  const projectId = activeProjectId(app)
+  const projectPath = navbarLocalPath(app)
+  return {
+    hasSelectedProject: Boolean(app.selectedProjectId ?? snapshot?.runtime.projectId ?? Sidebar.firstProjectGroup(sidebar).groupKey ?? app.localProjects?.projects[0]?.localPath),
+    canCancel: chat ? ChatSession.canCancel(chat, Sidebar.sidebarChatStatus(sidebar, chat.chatId)) : false,
+    projectPath,
+    projectRepoLabel: Sidebar.navbarRepoLabel(sidebar, projectId, projectPath ?? undefined),
+    contextWindowSnapshot: deriveLatestContextWindowSnapshot(snapshot?.messages ?? []),
+    delegate: delegateFromApp(app),
+  }
+}
+
+/**
+ * The chat page's props for its main composer: what ChatPage passed
+ * ChatInputDock. `page` is the chat page's own (its view inputs); without
+ * it, the same worked out from the root Model.
+ */
+export function propsFromApp(app: AppModel, page: PageComposerInputs = pageInputsFromApp(app)): ComposerProps {
   const chatId = routeChatId(app.route)
   const chat = app.chat && app.chat.chatId === chatId ? app.chat : null
-  const snapshot = chat ? ChatSession.snapshotOf(chat) : null
-  const sidebar = app.stores.sidebar
-  const sidebarStatus = Sidebar.sidebarChatStatus(sidebar, chatId)
-  const projectId = snapshot?.runtime.projectId ?? Sidebar.projectIdForChat(sidebar, chatId) ?? app.selectedProjectId
-  const firstGroup = Sidebar.firstProjectGroup(sidebar)
-  const fallbackLocalPath = app.localProjects?.projects[0]?.localPath ?? null
-  const projectPath = snapshot?.runtime.localPath
-    ?? sidebar.data.projectGroups.find((group) => group.groupKey === projectId)?.localPath
-    ?? fallbackLocalPath
-    ?? firstGroup.localPath
-    ?? null
+  const snapshot = activeSnapshot(app)
   const appSettings = AppSettings.appSettings(app.stores.appSettings)
   const fallbackProviders = withPiFaveModels(appSettings?.availableProviders ?? PROVIDERS, app.llmProvider?.faveModels ?? [])
   return {
     chatId,
-    projectId,
-    projectPath,
-    projectRepoLabel: Sidebar.navbarRepoLabel(sidebar, projectId, projectPath ?? undefined),
-    disabled: !(app.selectedProjectId ?? snapshot?.runtime.projectId ?? firstGroup.groupKey ?? fallbackLocalPath),
-    canCancel: chat ? ChatSession.canCancel(chat, sidebarStatus) : false,
+    projectId: activeProjectId(app),
+    projectPath: page.projectPath,
+    projectRepoLabel: page.projectRepoLabel,
+    disabled: !page.hasSelectedProject,
+    canCancel: page.canCancel,
     activeProvider: snapshot?.runtime.provider ?? null,
     accountIds: snapshot?.runtime.accountIds,
     availableProviders: chat ? ChatSession.availableProviders(chat, fallbackProviders) : fallbackProviders,
-    contextWindowSnapshot: null,
+    contextWindowSnapshot: page.contextWindowSnapshot,
     previousPrompt: chat ? ChatSession.previousPrompt(chat) : null,
     listSkills: true,
     editModels: true,
     secondary: false,
-    delegate: null,
-    isStandalone: false,
-    ...overrides,
+    delegate: page.delegate,
   }
 }
 
-export function contextFromApp(app: AppModel, overrides: Partial<ComposerProps> = {}): Context {
-  return { props: propsFromApp(app, overrides), stores: app.stores }
+export function contextFromApp(app: AppModel, page?: PageComposerInputs): Context {
+  return { props: propsFromApp(app, page), stores: app.stores }
 }
 
 // DERIVED
@@ -150,8 +225,10 @@ export function delegateSettingsOf(props: ComposerProps) {
   return target?.row.provider ? { chatId: target.chatId, title: target.title, provider: target.row.provider } : null
 }
 
+export type ComposerViewState = ComposerView & { optionControls: ComposerOptionControls }
+
 /** useComposer, as data: the view of the chat's composer state. */
-export function composerViewOf(ctx: Context): ComposerView & { optionControls: ComposerOptionControls } {
+export function composerViewOf(ctx: Context): ComposerViewState {
   const { props, stores } = ctx
   const delegateSettings = delegateSettingsOf(props)
   const chatId = delegateSettings?.chatId ?? props.chatId ?? null

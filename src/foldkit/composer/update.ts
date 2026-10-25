@@ -1,11 +1,10 @@
 import { Command } from "foldkit"
-import { modifyFields } from "foldkit/struct"
 import { classifyAttachmentPreview } from "../../client/components/messages/attachmentPreview"
 import { applyProjectMention, getActiveProjectMention } from "../../client/lib/project-mention"
 import { applySkillCompletion } from "../../client/lib/skill-menu"
 import { simpleUploadError } from "../../client/lib/uploadError"
 import type { AgentProvider, ChatMode, ClaudeContextWindow } from "../../shared/types"
-import { AppAction } from "../app/action"
+import { AppAction, batch } from "../app/action"
 import type { AppModel, SliceReturn } from "../app/slice"
 import { SliceOutMessage } from "../app/slice"
 import * as Stores from "../app/stores"
@@ -17,6 +16,7 @@ import type { ComposerState } from "../core/stores/chatPreferences"
 import * as Delegate from "../core/stores/delegate"
 import * as ProviderAuth from "../core/stores/providerAuth"
 import * as Viewer from "../core/stores/viewer"
+import { closeSignInDialog, openSignInDialog, updateSignInDialog, type SignInDialogMessage } from "../settings/auth-cards"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
 import * as Commands from "./commands"
@@ -40,7 +40,7 @@ import {
 } from "./context"
 import { applyModelToComposerState, isModelSelectable } from "./controls"
 import { Message } from "./message"
-import { init, POPOVER_NAMES, type ComposerAttachment, type Instance, type Model, type PopoverName } from "./model"
+import { init, popoversFor, tooltipsFor, type ComposerAttachment, type Instance, type Model, type PopoverName } from "./model"
 
 // ChatInput's handlers and effects, as one update. The effects that watched
 // a value (the draft id, the project, the "/" query, the attachments) run as
@@ -91,24 +91,21 @@ function previewUrls(attachments: ReadonlyArray<ComposerAttachment>): string[] {
   return attachments.flatMap((attachment) => (attachment.previewUrl ? [attachment.previewUrl] : []))
 }
 
-/** A fresh composer for `instance`: React's remount under a new key. */
-function freshModel(instance: Instance, ctx: Context): Model {
+/**
+ * A fresh composer for `instance`: React's remount under a new key. What
+ * isn't the composer's own (whether the app is installed) carries over.
+ */
+function freshModel(instance: Instance, ctx: Context, previous: Model): Model {
   const value = storedDraft(ctx, instance.draftId) ?? ""
-  const base = init()
-  const popovers = Object.fromEntries(
-    POPOVER_NAMES.map((name) => [name, Popover.init({ id: `${instance.domId}-${name}` })]),
-  ) as Model["popovers"]
   return {
-    ...base,
+    ...init(),
     instance,
     value,
     writtenDraft: value === "" ? null : value,
     attachments: hydrateComposerAttachments(storedAttachmentDrafts(ctx, instance.draftId)),
-    popovers,
-    tooltips: {
-      inlineMeter: Tooltip.init({ id: `${instance.domId}-meter-inline`, delayDuration: 0 }),
-      dockedMeter: Tooltip.init({ id: `${instance.domId}-meter-docked`, delayDuration: 0 }),
-    },
+    popovers: popoversFor(instance.domId),
+    tooltips: tooltipsFor(instance.domId),
+    isStandalone: previous.isStandalone,
   }
 }
 
@@ -148,7 +145,7 @@ export function reconcile(model: Model, ctx: Context): Step {
       if (urls.length > 0) commands.push(Commands.RevokePreviews({ urls }))
       if (model.recording) commands.push(Commands.CancelRecording({ key: model.instance.domId }))
     }
-    next = freshModel(instance, ctx)
+    next = freshModel(instance, ctx, model)
   } else if (model.instance.projectId !== instance.projectId || model.instance.secondary !== instance.secondary) {
     next = { ...next, instance }
     // A project switch empties the staging area: those files are on the
@@ -219,6 +216,15 @@ function finish(before: Model, step: Step, ctx: Context): Step {
   }
   if (menus.projectMention?.query !== menusBefore.projectMention?.query) model = { ...model, projectMenuOffset: 0 }
 
+  // The highlighted row stays in view as it moves.
+  const after = menusOf(model, ctx, view.selectedProvider)
+  if (
+    (after.skillMenuOpen && (!menusBefore.skillMenuOpen || after.selectedSkillIndex !== menusBefore.selectedSkillIndex))
+    || (after.projectMenuOpen && (!menusBefore.projectMenuOpen || after.selectedProjectIndex !== menusBefore.selectedProjectIndex))
+  ) {
+    commands.push(Commands.RevealSelected({ domId }))
+  }
+
   // Refetch on every menu-open transition (skills change on disk and via
   // harness pushes); the stale list stays drawn while the fetch runs.
   if (menus.skillMention && !model.skillsFetch.pending && !(model.skillsFetch.provider === view.selectedProvider && model.skills !== null)) {
@@ -236,7 +242,9 @@ function finish(before: Model, step: Step, ctx: Context): Step {
   // A switch blocked on sign-in applies once the harness is signed in.
   if (model.pendingSignInProvider && !ProviderAuth.unauthenticatedHarnesses(ctx.stores.providerAuth).has(model.pendingSignInProvider)) {
     actions.push(...selectProviderActions(ctx, model.pendingSignInProvider))
-    model = { ...model, pendingSignInProvider: null }
+    const closed = closeSignInDialog(model.signIn)
+    model = { ...model, pendingSignInProvider: null, signIn: closed.model }
+    commands.push(...Command.mapMessages(closed.commands ?? [], (message: SignInDialogMessage) => Message.GotSignInMessage({ message })))
   }
 
   // Housekeeping: once the server confirms the switch (the chat's session
@@ -249,13 +257,14 @@ function finish(before: Model, step: Step, ctx: Context): Step {
   return { model, commands, actions }
 }
 
-/** One AppAction to the root now, the rest a Command apiece behind it. */
+/** The step's AppActions to the root, in order: one, or a batch. */
 function toReturn(step: Step): Return {
-  const [first, ...rest] = step.actions ?? []
+  const actions = step.actions ?? []
+  const action = actions.length === 0 ? null : actions.length === 1 ? actions[0]! : batch(...actions)
   return {
     model: step.model,
-    commands: [...(step.commands ?? []), ...rest.map((action) => Commands.DeliverAction({ action }))],
-    ...(first ? { outMessage: SliceOutMessage.RequestedAppAction({ action: first }) } : {}),
+    commands: [...(step.commands ?? [])],
+    ...(action ? { outMessage: SliceOutMessage.RequestedAppAction({ action }) } : {}),
   }
 }
 
@@ -423,11 +432,11 @@ function step(model: Model, message: Message, ctx: Context): Step {
     }),
     ChangedInput: ({ value, caret }) => ({ model: { ...model, value, caret } }),
     MovedCaret: ({ caret }) => ({ model: caret === model.caret ? model : { ...model, caret } }),
-    PastedText: ({ value, caret }) => ({
-      model: { ...model, value },
-      commands: [Commands.PlaceCaret({ domId, caret, focus: false })],
-    }),
-    PastedFiles: ({ files }) => enqueueFiles(model, files, ctx),
+    Pasted: ({ files, text }) => {
+      const enqueued = files.length > 0 ? enqueueFiles(model, files, ctx) : { model }
+      if (!text) return enqueued
+      return withCommands({ ...enqueued, model: { ...enqueued.model, value: text.value } }, [Commands.PlaceCaret({ domId, caret: text.caret, focus: false })])
+    },
     PressedEnter: ({ withModifier }) => submit(model, ctx, withModifier),
     PressedTab: () => ({ model, commands: [Commands.FocusNextChatInput({ domId })] }),
     // Cycles the provider's modes in picker order: two for codex
@@ -539,10 +548,8 @@ function step(model: Model, message: Message, ctx: Context): Step {
       }
     },
 
-    PickedFiles: ({ files }) => {
-      const cleared = [Commands.ClearFileInput({ selector: Commands.fileInputSelector(domId, "palette") }), Commands.ClearFileInput({ selector: Commands.fileInputSelector(domId, "attach") })]
-      return files.length > 0 ? withCommands(enqueueFiles(model, files, ctx), cleared) : { model, commands: cleared }
-    },
+    // OnFileChange has emptied the input already (`event.target.value = ""`).
+    PickedFiles: ({ files }) => (files.length > 0 ? enqueueFiles(model, files, ctx) : { model }),
     StartedUpload: ({ tempId, file, previewUrl, generation }) => {
       if (generation !== model.uploadGeneration || !ctx.props.projectId) {
         return { model, commands: previewUrl ? [Commands.RevokePreviews({ urls: [previewUrl] })] : [] }
@@ -658,7 +665,11 @@ function step(model: Model, message: Message, ctx: Context): Step {
       // stashed, a sign-in dialog opens, and the switch applies once the
       // auth store reports the service signed in.
       if (provider !== view.selectedProvider && ProviderAuth.unauthenticatedHarnesses(ctx.stores.providerAuth).has(provider)) {
-        return { ...closed, model: { ...closed.model, pendingSignInProvider: provider } }
+        const opened = openSignInDialog(closed.model.signIn, provider, ctx.stores.providerAuth)
+        return withCommands(
+          { ...closed, model: { ...closed.model, pendingSignInProvider: provider, signIn: opened.model } },
+          Command.mapMessages(opened.commands ?? [], (message: SignInDialogMessage) => Message.GotSignInMessage({ message })),
+        )
       }
       return withCommands(closed, [], selectProviderActions(ctx, provider))
     },
@@ -710,6 +721,17 @@ function step(model: Model, message: Message, ctx: Context): Step {
     },
     // createDelegator's prompt and chat.create are the root's (see the report).
     ClickedNewDelegator: () => closePopover(model, "delegate"),
+    GotSignInMessage: ({ message: child }) => {
+      const result = updateSignInDialog(model.signIn, child)
+      const commands = Command.mapMessages(result.commands ?? [], (message: SignInDialogMessage) => Message.GotSignInMessage({ message }))
+      // Dismissed: the pick is dropped (onOpenChange(false)).
+      const closed = result.outMessage?._tag === "Closed"
+      return { model: { ...model, signIn: result.model, pendingSignInProvider: closed ? null : model.pendingSignInProvider }, commands }
+    },
+    ChangedStandalone: ({ matches }) => ({ model: model.isStandalone === matches ? model : { ...model, isStandalone: matches } }),
+    IgnoredKey: () => ({ model }),
+    CompletedMountWaveform: () => ({ model }),
+    CompletedMountComposer: () => ({ model }),
 
     SucceededSend: () => {
       const pending = model.pendingSubmit

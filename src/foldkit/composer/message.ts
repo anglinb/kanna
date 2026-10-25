@@ -4,6 +4,7 @@ import type { ChatAttachment, HarnessSkill } from "../../shared/types"
 import { AppAction } from "../app/action"
 import { opaque } from "../core/schema"
 import * as ChatInput from "../core/stores/chatInput"
+import { SignInDialogMessage } from "../settings/auth-cards"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
 import { AgentProviderSchema, FileSchema, PopoverName, TooltipName, UploadErrorReportSchema } from "./model"
@@ -18,9 +19,11 @@ export const Message = defineMessageUnion({
   ChangedInput: { value: Schema.String, caret: Schema.Number },
   /** The selection moved without the text changing (React's onSelect). */
   MovedCaret: { caret: Schema.Number },
-  /** A paste whose trailing newlines were trimmed: the text with the paste in it. */
-  PastedText: { value: Schema.String, caret: Schema.Number },
-  PastedFiles: { files: Schema.Array(FileSchema) },
+  /**
+   * A paste the composer handles: images to attach, and when its trailing
+   * newlines were trimmed, the text with the paste in it.
+   */
+  Pasted: { files: Schema.Array(FileSchema), text: Schema.NullOr(Schema.Struct({ value: Schema.String, caret: Schema.Number })) },
   PressedEnter: { withModifier: Schema.Boolean },
   PressedTab: {},
   PressedShiftTab: {},
@@ -28,6 +31,8 @@ export const Message = defineMessageUnion({
   RecalledPreviousPrompt: {},
   /** Escape, with a turn to stop and nothing nearer wanting the key: the hold starts. */
   PressedEscapeToStop: {},
+  /** A key the composer swallowed and does nothing with (a repeated Escape). */
+  IgnoredKey: {},
 
   // THE "/" AND "@" MENUS
   MovedSkillSelection: { towardWorse: Schema.Boolean },
@@ -50,6 +55,7 @@ export const Message = defineMessageUnion({
   FinishedRecording: { recording: Schema.NullOr(opaque<{ blob: Blob; mimeType: string }>("VoiceRecording")), error: Schema.NullOr(Schema.String) },
   TranscribedRecording: { text: Schema.String },
   FailedTranscribe: { error: Schema.String },
+  CompletedMountWaveform: {},
 
   // HOLD TO STOP
   ConfirmedHold: { version: Schema.Number },
@@ -81,6 +87,7 @@ export const Message = defineMessageUnion({
   PickedMode: { mode: ChatModeSchema },
   PickedDelegator: { chatId: Schema.NullOr(Schema.String) },
   ClickedNewDelegator: {},
+  GotSignInMessage: { message: SignInDialogMessage },
 
   // FROM THE PAGE (ChatInputHandle, the session's answer, page-wide events)
   /** The send went through: the draft taken out for it is gone for good. Forwarded from the session's `SucceededSend`. */
@@ -91,12 +98,14 @@ export const Message = defineMessageUnion({
   RequestedPrefill: { text: Schema.String },
   /** `enqueueFiles`: files dropped on the page, or attached by the viewer. */
   ReceivedFiles: { files: Schema.Array(FileSchema) },
+  ChangedStandalone: { matches: Schema.Boolean },
 
   // PLUMBING
   /** A store write stamped with the time (core/stores/chatInput's Commands). */
   GotChatInputStoreMessage: { message: ChatInput.Message },
-  /** One more AppAction from the same step: an update hands the root one at a time. */
+  /** An AppAction a Command hands back for the root. */
   RequestedAction: { action: AppAction },
+  CompletedMountComposer: {},
   CompletedSideEffect: {},
 })
 export type Message = typeof Message.Type

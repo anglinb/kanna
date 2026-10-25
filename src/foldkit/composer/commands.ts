@@ -5,7 +5,6 @@ import { copyTextToClipboard } from "../../client/lib/clipboard"
 import { buildUploadErrorReport } from "../../client/lib/uploadError"
 import { generateUUID } from "../../client/lib/utils"
 import type { ChatAttachment, ChatSkillsSnapshot } from "../../shared/types"
-import { AppAction } from "../app/action"
 import { opaque } from "../core/schema"
 import { sendCommand } from "../core/socket"
 import * as ChatInput from "../core/stores/chatInput"
@@ -341,14 +340,21 @@ export const EmptyRing = Command.define("EmptyHoldRing", {
   }),
 })
 
-// PLUMBING
+// THE MENUS
 
-/** An AppAction to hand the root after this step's (one per update). */
-export const DeliverAction = Command.define("DeliverComposerAction", {
-  args: { action: AppAction },
-  messages: [Message.RequestedAction],
-  execute: ({ action }) => Effect.succeed(Message.RequestedAction({ action })),
+/** The highlighted row into view (selectedSkillItemRef.scrollIntoView), once it is drawn. */
+export const RevealSelected = Command.define("RevealComposerMenuSelection", {
+  args: { domId: Schema.String },
+  messages: [Message.CompletedSideEffect],
+  execute: ({ domId }) => Effect.gen(function* () {
+    yield* Render.afterCommit
+    const box = textareaOf(domId)?.parentElement?.parentElement
+    box?.querySelector<HTMLElement>("[role=listbox] [aria-selected=true]")?.scrollIntoView({ block: "nearest" })
+    return Message.CompletedSideEffect()
+  }),
 })
+
+// PLUMBING
 
 const toStoreMessage = (message: ChatInput.Message) => Message.GotChatInputStoreMessage({ message })
 

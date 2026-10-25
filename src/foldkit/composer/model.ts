@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import type { UploadErrorReport } from "../../client/lib/uploadError"
 import type { ChatAttachment, HarnessSkill } from "../../shared/types"
 import { opaque } from "../core/schema"
+import { initSignInDialog, SignInDialogModel } from "../settings/auth-cards"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
 
@@ -22,7 +23,7 @@ export const FileSchema = opaque<File>("File")
 /**
  * Which composer this Model holds. React remounted ChatInput per chat
  * (`key={activeChatId ?? "new-chat"}`); here the Model is reset when the
- * page's chat changes (`reconcile`).
+ * page's chat changes (`reconcile`), and the view is keyed the same way.
  */
 export const Instance = Schema.Struct({
   chatKey: Schema.String,
@@ -86,6 +87,7 @@ export const Model = Schema.Struct({
   accountChoices: Schema.Record(Schema.String, Schema.String),
   /** A harness picked while signed out: the switch waits for sign-in. */
   pendingSignInProvider: Schema.NullOr(AgentProviderSchema),
+  signIn: SignInDialogModel,
 
   recording: Schema.Boolean,
   transcribing: Schema.Boolean,
@@ -107,9 +109,33 @@ export const Model = Schema.Struct({
   modelQuery: Schema.String,
   tooltips: Schema.Struct({ inlineMeter: Tooltip.Model, dockedMeter: Tooltip.Model }),
 
+  /** useIsStandalone: an installed web app. */
+  isStandalone: Schema.Boolean,
+
   pendingSubmit: Schema.NullOr(PendingSubmit),
 })
 export type Model = typeof Model.Type
+
+const STANDALONE_QUERY = "(display-mode: standalone)"
+
+export function isStandaloneNow() {
+  if (typeof window === "undefined") return false
+  const isIOSStandalone = (navigator as { standalone?: boolean }).standalone === true
+  return isIOSStandalone || (typeof window.matchMedia === "function" && window.matchMedia(STANDALONE_QUERY).matches)
+}
+
+export { STANDALONE_QUERY }
+
+export function popoversFor(domId: string): Model["popovers"] {
+  return Object.fromEntries(POPOVER_NAMES.map((name) => [name, Popover.init({ id: `${domId}-${name}` })])) as Model["popovers"]
+}
+
+export function tooltipsFor(domId: string): Model["tooltips"] {
+  return {
+    inlineMeter: Tooltip.init({ id: `${domId}-meter-inline`, delayDuration: 0 }),
+    dockedMeter: Tooltip.init({ id: `${domId}-meter-docked`, delayDuration: 0 }),
+  }
+}
 
 export function init(): Model {
   return {
@@ -133,25 +159,15 @@ export function init(): Model {
     projectMenuOffset: 0,
     accountChoices: {},
     pendingSignInProvider: null,
+    signIn: initSignInDialog({ id: "composer-sign-in" }),
     recording: false,
     transcribing: false,
     recorderError: null,
     hold: { phase: "idle", ringShown: false, version: 0, resume: false },
-    popovers: {
-      account: Popover.init({ id: "composer-account" }),
-      provider: Popover.init({ id: "composer-provider" }),
-      model: Popover.init({ id: "composer-model" }),
-      reasoning: Popover.init({ id: "composer-reasoning" }),
-      contextWindow: Popover.init({ id: "composer-context-window" }),
-      fastMode: Popover.init({ id: "composer-fast-mode" }),
-      mode: Popover.init({ id: "composer-mode" }),
-      delegate: Popover.init({ id: "composer-delegate" }),
-    },
+    popovers: popoversFor("composer"),
     modelQuery: "",
-    tooltips: {
-      inlineMeter: Tooltip.init({ id: "composer-meter-inline", delayDuration: 0 }),
-      dockedMeter: Tooltip.init({ id: "composer-meter-docked", delayDuration: 0 }),
-    },
+    tooltips: tooltipsFor("composer"),
+    isStandalone: isStandaloneNow(),
     pendingSubmit: null,
   }
 }
