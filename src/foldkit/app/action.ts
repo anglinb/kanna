@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { defineTaggedUnion } from "foldkit/schema"
 import type { ProjectRequest } from "../../client/app/kannaStateHelpers"
 import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
+import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import type { ClientCommand, EditorOpenSettings, OpenExternalAction, TerminalPreset } from "../../shared/protocol"
 import type { AppSettingsPatch, FaveModel, LlmProviderSnapshot } from "../../shared/types"
 import * as ChatSession from "../core/chatSession"
@@ -67,6 +68,23 @@ export const AppAction = defineTaggedUnion({
   InstallStable: {},
   SignOut: {},
 
+  /**
+   * Several actions from one gesture, run in order (Archive All, Restore).
+   * Typed `unknown` only because the union can't name itself here; build
+   * one with `batch(...)`.
+   */
+  Batch: { actions: Schema.Array(Schema.Unknown) },
+  /**
+   * Open a chat at a message (the sidebar card's clickable previews): React
+   * passed the target in the location state; here it waits in
+   * `app.actions.pendingChatJump` until the transcript spends it.
+   */
+  OpenChatAt: { chatId: Schema.String, jump: opaque<ChatJumpTarget>("ChatJumpTarget") },
+  /** The transcript scrolled to the pending jump. */
+  SpentChatJump: { requestId: Schema.Number },
+  /** React's `kanna:open-command-palette` window event, optionally on a page. */
+  OpenCommandPalette: { page: Schema.NullOr(Schema.String) },
+
   /** Any other ClientCommand whose result arrives on a snapshot. */
   SendCommand: { command: opaque<ClientCommand>("ClientCommand") },
   /** A Stores Message (app/stores.ts), e.g. a draft or a layout change. */
@@ -75,3 +93,8 @@ export const AppAction = defineTaggedUnion({
   Chat: { message: ChatSession.Message },
 })
 export type AppAction = typeof AppAction.Type
+
+/** `AppAction.Batch`, typed. */
+export function batch(...actions: AppAction[]): AppAction {
+  return AppAction.Batch({ actions })
+}

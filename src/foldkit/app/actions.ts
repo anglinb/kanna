@@ -15,6 +15,7 @@ import { resolveProjectNewChat } from "../../client/lib/new-chat-resume"
 import { flattenSidebarThreads } from "../../client/lib/thread-sections"
 import { UI_UPDATE_RESTART_STORAGE_KEY } from "../../client/lib/storageKeys"
 import { generateUUID } from "../../client/lib/utils"
+import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import type { ClientCommand, OpenExternalAction, EditorOpenSettings, TerminalPreset } from "../../shared/protocol"
 import type {
   AppSettingsPatch,
@@ -86,6 +87,9 @@ export const ActionsModel = Schema.Struct({
   dialogSeq: Schema.Number,
   /** The failure of the last project request, for the palette's inline error. */
   projectRequestError: Schema.NullOr(Schema.String),
+  /** A message to land on in a chat being opened (AppAction.OpenChatAt), until the transcript spends it. */
+  pendingChatJump: Schema.NullOr(Schema.Struct({ chatId: Schema.String, jump: opaque<ChatJumpTarget>("ChatJumpTarget"), requestId: Schema.Number })),
+  chatJumpSeq: Schema.Number,
 })
 export type ActionsModel = typeof ActionsModel.Type
 
@@ -100,6 +104,8 @@ export const initialActionsModel: ActionsModel = {
   pendingDialog: null,
   dialogSeq: 0,
   projectRequestError: null,
+  pendingChatJump: null,
+  chatJumpSeq: 0,
 }
 
 /** What actions read and write of the root Model. */
@@ -685,6 +691,20 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
           }, DialogContinuation.InstallStable()),
       SignOut: () => ({ model: host, commands: commands(SignOut()) }),
 
+      OpenChatAt: ({ chatId, jump }) => root.navigate(`/chat/${chatId}`)(withActions(host, (actions) => ({
+        ...actions,
+        chatJumpSeq: actions.chatJumpSeq + 1,
+        pendingChatJump: { chatId, jump, requestId: actions.chatJumpSeq + 1 },
+      }))) as Return<Host>,
+      SpentChatJump: ({ requestId }) => ({
+        model: withActions(host, (actions) => ({
+          ...actions,
+          pendingChatJump: actions.pendingChatJump?.requestId === requestId ? null : actions.pendingChatJump,
+        })),
+      }),
+      // The root handles these two itself (app/update.ts performAction).
+      Batch: () => ({ model: host }),
+      OpenCommandPalette: () => ({ model: host }),
       SendCommand: ({ command }) => ({ model: host, commands: commands(Send({ command })) }),
       Store: ({ message }) => stores(message)(host),
       Chat: () => ({ model: host }),
