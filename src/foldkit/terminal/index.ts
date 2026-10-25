@@ -1,28 +1,34 @@
-import { Schema } from "effect"
-import { Submodel, Subscription } from "foldkit"
-import { defineMessageUnion } from "foldkit/message"
-import type { AppModel, SliceReturn, SliceViewInputs } from "../app/slice"
+import { Subscription } from "foldkit"
 import type { KannaSocketService } from "../core/socket"
+import type { Model } from "./model"
+import type { Message } from "./message"
+import { socketBridge } from "./socketBridge"
 
-// Terminals: the /terminal page and the chat page's terminal workspace (TerminalPage, TerminalWorkspace, TerminalPane).
-// Stub until the slice is ported: see app/slice.ts for the contract.
+// Terminals: the /terminal page (src/client/app/TerminalPage.tsx) and the
+// chat page's terminal workspace (TerminalWorkspace, TerminalPane), one
+// Submodel serving both. The root embeds it as `terminalPage` and renders
+// the page; the chat page embeds it as `terminal` and renders the workspace
+// by passing `workspace` in the view inputs (see view.ts).
+//
+// The pieces:
+//   view.ts           TerminalPage and TerminalWorkspace's markup
+//   update.ts         their handlers, and TerminalPage's effects (`observe`)
+//   mounts.ts         the pane's xterm and the scroller, as Mounts
+//   pane.ts, xterm.ts TerminalPane's effects, without React
+//   resizable/        react-resizable-panels' Group/Panel/Separator and the
+//                     shadcn wrappers (the chat page can use them too)
+//
+// The chat page reads two facts off the Messages it folds in:
+// `SentPaneCommand` (onTerminalCommandSent) and `SentInitialCommand`
+// (onInitialTerminalCommandSent).
 
-export const Model = Schema.Struct({})
-export type Model = typeof Model.Type
+export { init, Model } from "./model"
+export { Message, Surface } from "./message"
+export { HOME_TERMINAL_LAYOUT_KEY, observe, update } from "./update"
+export { view, workspaceView, type ViewInputs, type WorkspaceOptions } from "./view"
+export { disposeCachedTerminal } from "./pane"
 
-export const Message = defineMessageUnion({
-  NotYetPorted: {},
-})
-export type Message = typeof Message.Type
-
-export function init(): Model {
-  return {}
-}
-
-export function update(model: Model, _message: Message, _app: AppModel): SliceReturn<Model, Message> {
-  return { model }
-}
-
-export const view = Submodel.defineView<Model, Message, SliceViewInputs>((_model, _inputs, _h) => null)
-
-export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()(() => ({}))
+/** Lends the app's socket to the panes while the app runs (see socketBridge.ts). */
+export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()(() => ({
+  socketBridge: Subscription.persistentEntry(socketBridge),
+}))

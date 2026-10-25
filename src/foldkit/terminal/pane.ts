@@ -68,6 +68,12 @@ interface CachedTerminal {
   webglAddon: WebglAddon | null
   webglRenderer: boolean
   mounted: boolean
+  /**
+   * The pane holding it. React ran every unmount cleanup of a commit before
+   * any mount effect; Foldkit's Mounts usually keep that order, but a pane
+   * that lost its terminal to a newer one must not park it from under it.
+   */
+  owner: TerminalPaneController | null
   lastUsedAt: number
   sendInput: (data: string) => void
 }
@@ -194,8 +200,15 @@ export class TerminalPaneController {
       refreshTerminal(this.terminal)
     }
     if (changed(next, previous, ["focusRequestVersion"])) this.runFocusEffect(next.focusRequestVersion)
-    if (changed(next, previous, ["clearVersion"])) this.runClearEffect(next.clearVersion)
-    if (previous === null) this.events.pathChanged(this.metadata?.cwd ?? null)
+    // TerminalWorkspace's clear counts started at 0 with each mount, and the
+    // effect skipped 0. The slice's counts outlive the panes, so the count a
+    // pane mounts with is its zero.
+    if (previous !== null && changed(next, previous, ["clearVersion"])) this.runClearEffect(next.clearVersion)
+    if (previous === null) {
+      // A fresh TerminalPane's state: no path yet, no error.
+      this.events.pathChanged(this.metadata?.cwd ?? null)
+      this.events.errorChanged(null)
+    }
     if (sessionEffect) this.sessionEffectCleanup = this.runSessionEffect(next)
   }
 
@@ -310,6 +323,7 @@ export class TerminalPaneController {
         webglAddon: null,
         webglRenderer,
         mounted: false,
+        owner: null,
         lastUsedAt: Date.now(),
         sendInput: this.sendInput,
       }
@@ -361,6 +375,7 @@ export class TerminalPaneController {
     const { terminal, serializeAddon } = live
     live.sendInput = this.sendInput
     live.mounted = true
+    live.owner = this
     live.lastUsedAt = Date.now()
     this.terminal = terminal
 
@@ -408,12 +423,14 @@ export class TerminalPaneController {
       observer.disconnect()
       resizeDisposable.dispose()
       this.replayState = serializeAddon.serialize()
+      this.terminal = null
+      if (live.owner !== this) return
       // Park, do not dispose. Input from a parked terminal has nowhere to go.
       live.sendInput = () => {}
       live.mounted = false
+      live.owner = null
       live.lastUsedAt = Date.now()
       getParkingLot().appendChild(live.host)
-      this.terminal = null
     }
   }
 
