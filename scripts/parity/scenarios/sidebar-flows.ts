@@ -97,6 +97,22 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
+    name: "sidebar-cloud-pair",
+    route: ROUTE,
+    viewports: ["desktop"],
+    regions: { sidebar: SIDEBAR, dialog: "[role=dialog]" },
+    async run({ page, capture, settle }) {
+      await hidePage(page)
+      await page.getByRole("button", { name: "Setup Kanna Cloud" }).click()
+      await settle()
+      await capture("dialog")
+      await page.keyboard.press("Escape")
+      await overlaysGone(page)
+      await settle()
+      await capture("closed")
+    },
+  }),
+  defineScenario({
     name: "sidebar-peek",
     route: ROUTE,
     viewports: ["desktop"],
