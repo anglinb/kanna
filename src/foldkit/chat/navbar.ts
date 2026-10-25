@@ -15,7 +15,8 @@ import { ArrowLeft, Check, ChevronDown, Flower, GitBranch, Loader2, MoreHorizont
 import { projectIcon } from "../ui/project-icon"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
-import { chatRowMenuEntries, renderChatRowMenuItem, type ChatRowMenuContext } from "./chatRowMenu"
+import { delegatedAttentionCount } from "../../client/lib/delegators"
+import { chatRowMenuEntries, DelegatorIcon, renderChatRowMenuItem, type ChatRowMenuContext } from "./chatRowMenu"
 import { ObserveNavbar, WatchWash } from "./effects"
 import { Message, type TooltipId, type WashId } from "./message"
 import type { Model } from "./model"
@@ -407,6 +408,55 @@ function overflowMenuView(model: Model, facts: PageFacts, showOnDesktop: boolean
       }, [MoreHorizontal({ strokeWidth: 2, class: "h-4.5 max-md:h-5.5" }, h), portal], h),
     },
     toParentMessage: (message) => Message.GotMenuMessage({ id: "overflow", message }),
+  })
+}
+
+// A DELEGATOR'S LIST
+
+/**
+ * DelegatedListButton: a delegator's way to its pane, the list of the chats
+ * under it, just left of the widgets toggle. It opens the pane and shuts it
+ * again, and counts the chats under the delegator that want the user. On a
+ * phone (`overlay`) there is no pane: the list opens over the transcript,
+ * and the button is in the brand colour, as the mark of what the page is.
+ */
+export function delegatedListButtonView(model: Model, app: AppModel, chatId: string, overlay: boolean, h: H): Html {
+  let count = 0
+  for (const group of app.stores.sidebar.data.projectGroups) count += delegatedAttentionCount(group.chats, chatId)
+  const open = Boolean(app.stores.rightSidebar.chatViewers[chatId])
+  const pressed = open && !overlay
+  const action = pressed ? "Hide delegated chats" : "Show delegated chats"
+  const label = count > 0 ? `${action}, ${count} ${count === 1 ? "wants" : "want"} you` : action
+  return h.submodel({
+    slotId: "tooltip-delegated",
+    model: model.tooltips.delegated,
+    view: Tooltip.view,
+    viewInputs: {
+      side: "bottom",
+      content: () => [action],
+      toView: ({ trigger, portal }) => button({
+        variant: "ghost",
+        size: "none",
+        class: cn(
+          // The box of the buttons beside it (see the terminal and widgets toggles).
+          "flex h-9 items-center justify-center gap-1 border border-border/0 px-1.5 hover:!border-border/0 hover:!bg-transparent max-md:h-[45px] max-md:min-w-[42px]",
+          overlay ? "text-logo hover:text-logo" : pressed && "text-foreground",
+        ),
+        attributes: [
+          h.AriaLabel(label),
+          ...(overlay ? [] : [h.AriaPressed(pressed ? "true" : "false")]),
+          h.OnClick(Message.ClickedDelegatedList({ chatId, overlay })),
+          ...trigger,
+        ],
+      }, [
+        DelegatorIcon({ strokeWidth: 2, class: "h-4 shrink-0 max-md:h-5 max-md:w-5" }, h),
+        count > 0
+          ? h.span([h.Class("flex h-[18px] min-w-[18px] items-center justify-center rounded-[5px] bg-foreground/10 px-1 text-xs font-bold leading-none text-foreground tabular-nums")], [String(count)])
+          : null,
+        portal,
+      ], h),
+    },
+    toParentMessage: (message) => Message.GotTooltipMessage({ id: "delegated", message }),
   })
 }
 

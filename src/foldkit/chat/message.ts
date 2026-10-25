@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import type { ProjectQuickAction } from "../../shared/protocol"
 import type { UsageLimitsSnapshot } from "../../shared/types"
+import type { SendOptions } from "../core/chatSession"
 import { opaque } from "../core/schema"
 import { defineMessageUnion } from "foldkit/message"
 import { AppAction } from "../app/action"
@@ -40,7 +41,7 @@ export const Watch = Schema.Struct({
 })
 export type Watch = typeof Watch.Type
 
-export const TooltipId = Schema.Literals(["openIn", "terminal", "widgets", "picker"])
+export const TooltipId = Schema.Literals(["openIn", "terminal", "widgets", "picker", "delegated"])
 export type TooltipId = typeof TooltipId.Type
 
 export const MenuId = Schema.Literals(["overflow", "title"])
@@ -94,6 +95,8 @@ export const Message = defineMessageUnion({
   ClickedToggleTerminal: {},
   ClickedToggleWidgets: {},
   ClickedShareChat: {},
+  /** A delegator's list button: on a phone it only opens the list (`overlay`). */
+  ClickedDelegatedList: { chatId: Schema.String, overlay: Schema.Boolean },
   ClickedOpenPrimary: { value: Schema.String },
   /** A button that opens a context menu was clicked: measured, then opened below it. */
   ClickedMenuButton: { id: MenuId, selector: Schema.String },
@@ -127,6 +130,11 @@ export const Message = defineMessageUnion({
   // Terminals and diffs
   MadeTerminalId: { purpose: TerminalPurpose, projectId: Schema.String, chatKey: Schema.NullOr(Schema.String), terminalId: Schema.String },
   TickedDiffRefresh: {},
+
+  // Sending to a delegator from the new chat page (newChatDelegate.ts)
+  StampedDelegatedSend: { chatId: Schema.String, content: Schema.String, options: opaque<SendOptions>("SendOptions"), sentAt: Schema.Number },
+  SucceededDelegatedSend: { chatId: Schema.String },
+  FailedDelegatedSend: { chatId: Schema.String, content: Schema.String, error: Schema.String },
 
   // What the widget column shows, loaded by the page
   SucceededReadQuickActions: { projectId: Schema.String, actions: opaque<ReadonlyArray<ProjectQuickAction>>("ProjectQuickActions") },

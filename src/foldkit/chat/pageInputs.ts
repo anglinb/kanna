@@ -3,6 +3,7 @@ import type { ProjectQuickAction } from "../../shared/protocol"
 import type { UsageLimitsSnapshot } from "../../shared/types"
 import type { ProjectTerminalLayout } from "../core/stores/terminalLayout"
 import type { SliceViewInputs } from "../app/slice"
+import type { NewChatDelegate } from "./newChatDelegate"
 
 // What the chat page hands its sub-slices (transcript/, composer/, widgets/,
 // viewer/, terminal/) on top of the root Model: the page's own state, which
@@ -24,6 +25,15 @@ export interface ChatPageContext {
   showEmptyState: boolean
   typedEmptyStateText: string
   isEmptyStateTypingComplete: boolean
+  // The composer (ChatInputDock's props)
+  /**
+   * The new chat page's delegate control and target (`ComposerDelegate`),
+   * or null where there is none. While it has a target the page takes the
+   * composer's send (`AppAction.Chat(SubmittedMessage)`) and sends it to the
+   * delegator instead; the control's pick is `Delegate.ChangedPreference`.
+   */
+  delegate: NewChatDelegate | null
+
   /** Room left at the transcript's end for the composer docked over it. */
   transcriptPaddingBottom: number
   /** Files are being dragged over the page: the transcript shows its drop overlay. */

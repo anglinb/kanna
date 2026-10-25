@@ -101,6 +101,7 @@ export const Model = Schema.Struct({
     terminal: Tooltip.Model,
     widgets: Tooltip.Model,
     picker: Tooltip.Model,
+    delegated: Tooltip.Model,
   }),
   menus: Schema.Struct({
     overflow: ContextMenu.Model,
@@ -145,6 +146,7 @@ export function init(): Model {
       terminal: Tooltip.init({ id: "chat-navbar-terminal" }),
       widgets: Tooltip.init({ id: "chat-navbar-widgets" }),
       picker: Tooltip.init({ id: "chat-empty-state-project" }),
+      delegated: Tooltip.init({ id: "chat-navbar-delegated" }),
     },
     menus: {
       overflow: ContextMenu.init({ id: "chat-navbar-overflow" }),

@@ -11,6 +11,8 @@ import * as Stores from "../app/stores"
 import * as Composer from "../composer"
 import * as Delegate from "../core/stores/delegate"
 import * as OpenDestination from "../core/stores/openDestination"
+import * as PendingSend from "../core/stores/pendingSend"
+import { delegatorIsBusy, newChatDelegate, SendToDelegator, StampDelegatedSend } from "./newChatDelegate"
 import * as RightSidebar from "../core/stores/rightSidebar"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import * as ViewerStore from "../core/stores/viewer"
@@ -74,6 +76,7 @@ const terminalLayout = (message: TerminalLayout.Message) => store(Stores.Message
 const viewerStore = (message: ViewerStore.Message) => store(Stores.Message.GotViewerMessage({ message }))
 const delegate = (message: Delegate.Message) => store(Stores.Message.GotDelegateMessage({ message }))
 const openDestination = (message: OpenDestination.Message) => store(Stores.Message.GotOpenDestinationMessage({ message }))
+const pendingSend = (message: PendingSend.Message) => store(Stores.Message.GotPendingSendMessage({ message }))
 
 // SUB-SLICES (their requests to the root pass through unchanged)
 
@@ -345,7 +348,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
   const facts = () => pageFacts(app, model.viewportWidth, model.settledShowEmptyState)
   return Message.match<Return>(message, {
     GotTranscriptMessage: ({ message: inner }) => foldTranscript(model, { message: inner, app }) as Return,
-    GotComposerMessage: ({ message: inner }) => foldComposer(model, { message: inner, app }) as Return,
+    GotComposerMessage: ({ message: inner }) => routeDelegatedSend(foldComposer(model, { message: inner, app }) as Return, app, facts()),
     GotWidgetsMessage: ({ message: inner }) => foldWidgets(model, { message: inner, app }) as Return,
     GotViewerMessage: ({ message: inner }) => foldViewer(model, { message: inner, app }) as Return,
     GotTerminalMessage: ({ message: inner }) => foldTerminal(model, { message: inner, app }) as Return,
@@ -399,6 +402,12 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       if (!current.chatId || current.isExportingStandalone) return { model }
       return withActions({ model }, [AppAction.ShareChat({ chatId: current.chatId })])
     },
+    // toggleDelegatedPane / openViewer.
+    ClickedDelegatedList: ({ chatId, overlay }) => withActions({ model }, [
+      !overlay && Boolean(app.stores.rightSidebar.chatViewers[chatId])
+        ? viewerStore(ViewerStore.Message.ShutViewer({ byKey: false }))
+        : viewerStore(ViewerStore.Message.OpenedItem({ item: { kind: "delegated", chatId }, expanded: false, byKey: false })),
+    ]),
     ClickedOpenPrimary: ({ value }) => openValue(model, facts(), value as OpenAppValue, true),
     ClickedMenuButton: ({ id, selector }) => ({ model, commands: [MeasureMenuButton({ id, selector })] }),
     MeasuredMenuButton: ({ id, x, y }) => {
@@ -462,6 +471,25 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       return current.chatId && current.showRightSidebar ? { model, commands: [RefreshDiffs({ chatId: current.chatId })] } : { model }
     },
 
+    // Holds the delegator's place in the sidebar until the server says it is
+    // running (`usePendingSendStore`).
+    StampedDelegatedSend: ({ chatId, content, options, sentAt }) => withActions(
+      { model, commands: [SendToDelegator({ chatId, content, options, queued: false })] },
+      [pendingSend(PendingSend.Message.StartedSending({ chatId, sentAt }))],
+    ),
+    SucceededDelegatedSend: ({ chatId }) => {
+      const projectId = facts().projectId
+      return withActions({ model }, [
+        ...(projectId ? [delegate(Delegate.Message.ChangedPreference({ projectId, preference: { on: true, chatId } }))] : []),
+        AppAction.Navigate({ path: `/chat/${chatId}`, replace: false }),
+      ])
+    },
+    // The page has nowhere of its own to say so: its error line is the
+    // transcript's, and this message was never in this chat's. React put up
+    // an alert ("Could not send to the delegator"); the root has no action
+    // for one yet (see the slice's report).
+    FailedDelegatedSend: ({ chatId }) => withActions({ model }, [pendingSend(PendingSend.Message.ClearedSending({ chatId }))]),
+
     SucceededReadQuickActions: ({ projectId, actions }) => ({
       model: modifyFields(model, { quickActions: (all) => ({ ...all, [projectId]: actions }), quickActionsError: () => null }),
     }),
@@ -475,6 +503,23 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ForwardedAppAction: ({ action }) => withActions({ model }, [action]),
     CompletedSideEffect: () => ({ model }),
   })
+}
+
+/**
+ * ChatPage's handleChatSubmit: from the new chat page with delegating on,
+ * the composer's message is not for this chat at all. It goes to the
+ * delegator, and the app goes with it.
+ */
+function routeDelegatedSend(result: Return, app: AppModel, facts: PageFacts): Return {
+  const out = result.outMessage
+  if (!out || out.action._tag !== "Chat" || out.action.message._tag !== "SubmittedMessage") return result
+  const target = newChatDelegate(app, facts)?.target
+  if (!target) return result
+  const { content, options } = out.action.message
+  const send = delegatorIsBusy(app, target.chatId)
+    ? SendToDelegator({ chatId: target.chatId, content, options, queued: true })
+    : StampDelegatedSend({ chatId: target.chatId, content, options })
+  return { model: result.model, commands: [...(result.commands ?? []), send] }
 }
 
 function beginTitleEdit(model: Model, facts: PageFacts): Return {

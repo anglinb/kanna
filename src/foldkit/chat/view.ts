@@ -13,12 +13,13 @@ import { card, cardContent } from "../ui/card"
 import { HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
 import { Message, type Watch } from "./message"
 import type { Model } from "./model"
-import { navbarTitleView, navbarView, washView } from "./navbar"
+import { delegatedListButtonView, navbarTitleView, navbarView, washView } from "./navbar"
 import { pageFacts, getTerminalPanelDefaultSizes, CHAT_MIN_SIZE_PERCENT, type PageFacts } from "./page"
 import type { ChatPageContext, ChatPageSliceInputs } from "./pageInputs"
 import { panel, panelGroup, separator } from "./resizable"
 import { getWidgetsColumnWidthPx, widgetsColumnView } from "./widgetsColumn"
 import { emptyStateView } from "./emptyState"
+import { newChatDelegate } from "./newChatDelegate"
 
 // ChatPage (src/client/app/ChatPage/index.tsx): the navbar over the chat,
 // the viewer's pane and the widget column, the terminal under all of them,
@@ -52,13 +53,14 @@ export function emptyStateTyping(model: Model, facts: PageFacts) {
   return { text: EMPTY_STATE_TEXT.slice(0, typing.count), complete: typing.complete }
 }
 
-export function pageContext(model: Model, facts: PageFacts): ChatPageContext {
+export function pageContext(model: Model, app: AppModel, facts: PageFacts): ChatPageContext {
   const typing = emptyStateTyping(model, facts)
   return {
     chatId: facts.chatId,
     projectId: facts.projectId,
     isMobile: facts.isMobile,
     showEmptyState: facts.showEmptyState,
+    delegate: newChatDelegate(app, facts),
     typedEmptyStateText: typing.text,
     isEmptyStateTypingComplete: typing.complete,
     transcriptPaddingBottom: getTranscriptPaddingBottom(model.dockHeight),
@@ -101,7 +103,7 @@ const emptyStateTypist = (h: H) => h.keyed("span")("chat-empty-state-typist", [h
 
 export function pageView(model: Model, app: AppModel, h: H): Html {
   const facts = pageFacts(app, model.viewportWidth, model.settledShowEmptyState)
-  const page = pageContext(model, facts)
+  const page = pageContext(model, app, facts)
   const inputs: ChatPageSliceInputs = { app, page }
   const transcriptInputs: ChatPageSliceInputs = { app, page, emptyState: () => emptyStateView(model, app, facts, page, h) }
 
@@ -181,7 +183,10 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
   const titleSlot = facts.chatId && facts.runtime?.title
     ? navbarTitleView(model, app, facts, facts.runtime.title, facts.diffs?.branchName, h)
     : null
-  const navbar = navbarView(model, app, facts, { title: titleSlot, actions: null }, h)
+  // On a phone a delegator has no pane to keep its list in, so the list is a
+  // button in the navbar instead, always there.
+  const actionsSlot = facts.isDelegator && facts.chatId ? delegatedListButtonView(model, app, facts.chatId, facts.isMobile, h) : null
+  const navbar = navbarView(model, app, facts, { title: titleSlot, actions: actionsSlot }, h)
   const panesWithNavbar = h.div([
     h.Class("relative flex h-full min-h-0 flex-1 flex-col"),
     ...(model.navbarHeight !== null ? [h.Style({ "--chat-navbar-h": `${model.navbarHeight}px` })] : []),
