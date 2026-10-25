@@ -4,7 +4,7 @@ import { cn } from "../../client/lib/utils"
 import type { ProjectQuickAction } from "../../shared/protocol"
 import { buttonClass } from "../ui/button"
 import { Check, CornerDownLeft, Play, Plus, Zap } from "../ui/icons"
-import { rowMenu, type ColumnContext, type H } from "./context"
+import { rowMenu, toParts, type ColumnContext, type H } from "./context"
 import { Message } from "./message"
 import { QuickActionRow } from "./mounts"
 import { Mount } from "foldkit"
@@ -37,7 +37,7 @@ export function quickActionsWidget(context: ColumnContext, h: H): Html {
   const actions = quickActionsList(context)
   const error = quickActionsError(context)
   const isOpen = quickActionsOpen(context)
-  return widgetPresence({ key: "quick-actions", show: true }, [
+  return widgetPresence({ toParts, key: "quick-actions", show: true }, [
     // A press inside the widget leaves the form's fate to the click it becomes.
     h.div([h.OnPointerDown(() => Option.some(Message.PressedInQuickActions()))], [
       widgetCard({

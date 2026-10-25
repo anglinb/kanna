@@ -6,7 +6,7 @@ import { formatPercent, formatUntil, planLabel, providerLabel, usageBar } from "
 import { buttonClass } from "../ui/button"
 import { LoaderCircle, RefreshCw } from "../ui/icons"
 import { PROVIDER_ICONS } from "../ui/provider-icons"
-import { tooltip, type ColumnContext, type H } from "./context"
+import { toParts, tooltip, type ColumnContext, type H } from "./context"
 import { Message } from "./message"
 import { widgetCard, widgetPresence, widgetStatic } from "./parts"
 
@@ -148,7 +148,7 @@ function usageWidget(context: ColumnContext, usage: ProviderUsage, show: boolean
     ], [refreshing ? LoaderCircle({ class: "size-3.5 animate-spin" }, h) : RefreshCw({ class: "size-3.5" }, h), portal]),
   }, h)]
 
-  return widgetPresence({ key: `usage-${provider}`, show }, [
+  return widgetPresence({ toParts, key: `usage-${provider}`, show }, [
     widgetCard({
       icon: Icon({}, h),
       title: [providerLabel(provider)],

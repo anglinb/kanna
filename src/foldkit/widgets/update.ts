@@ -19,6 +19,7 @@ import * as Popover from "../ui/popover"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
 import {
+  AwaitCardPaint,
   CheckoutBranch,
   CheckRepoAvailability,
   CommitDiffs,
@@ -267,7 +268,7 @@ function revealReviewed(model: Model, app: AppModel, facts: Facts): Return {
   if (index === -1) return { model }
   return {
     model: setGit(model, { visibleFileCount: Math.max(model.git.visibleFileCount, index + 1) }),
-    commands: [ScrollIntoView({ selector: `[data-widget-hover-list="${HOVER_LISTS.changes}"] [data-row-key="${CSS.escape(reviewed)}"]` })],
+    commands: [ScrollIntoView({ id: null, list: HOVER_LISTS.changes, rowKey: reviewed })],
   }
 }
 
@@ -330,7 +331,7 @@ function pressPickerKey(model: Model, app: AppModel, facts: Facts, key: string):
     const next = options[nextIndex]!
     return {
       model: setPicker(model, { mode: "keyboard", keyboardActiveId: next.id }),
-      commands: [ScrollIntoView({ selector: `#${CSS.escape(next.id)}` })],
+      commands: [ScrollIntoView({ id: next.id, list: null, rowKey: null })],
     }
   }
   if (key === "Enter") {
@@ -652,6 +653,8 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     },
     GotTooltipMessage: ({ id, message: child }) => tooltipStep(model, id, child),
     GotHoverMessage: ({ message: child }) => hover(model, app, facts, child),
+    // Whatever happened since: the card was up, and its effect ran.
+    ShowedCard: ({ list, key }) => (facts ? readCardDetails(model, app, facts, list, key) : { model }),
     GotPartsMessage: () => ({ model }),
     GotAppDialogMessage: ({ message: child }) => {
       const step = AppDialog.update(model.appDialog, child)
@@ -1159,7 +1162,7 @@ function hover(model: Model, app: AppModel, facts: Facts | null, message: HoverM
   if (message._tag !== "ChangedHoveredRow") return { model }
   const next = modifyFields(model, { hovered: (hovered) => applyHover(hovered, message.list, message.key) })
   if (message.key === null || !facts) return { model: next }
-  return readCardDetails(next, app, facts, message.list, message.key)
+  return { model: next, commands: [AwaitCardPaint({ list: message.list, key: message.key })] }
 }
 
 /** The list as the column shows it: what it last wrote, else the page's read (`app.chatPage`, read-only). */

@@ -187,16 +187,55 @@ export function widgetCard<M>(options: WidgetSectionOptions<M> & { class?: strin
   return widgetGroup({ class: options.class }, [widgetSection(options, h)], h)
 }
 
+const SLOT_SHOWN = ["grid-rows-[1fr]", "opacity-100", "duration-200"]
+const SLOT_ENTERING = ["grid-rows-[0fr]", "opacity-0", "duration-150"]
+/** Hosts whose first render is going on now: the slots in it were there all along. */
+const hostsInFirstRender = new WeakSet<Element>()
+const hostsSeen = new WeakSet<Element>()
+
 /**
- * One slot in the column (WidgetPresence), shown in its resting state or not
- * at all: the slot also owns the column's spacing (pt-2 inside the
+ * WidgetPresence's entrance: a slot that appears after its host's first
+ * render grows in (rows 0fr → 1fr, with opacity). The collapsed style is
+ * committed first, as React's entering phase was, then the resting one, so
+ * the transition runs between them. A slot there from the host's first
+ * render shows at once: opening the column is not a change to announce.
+ */
+export const PresenceEnter = Mount.define("WidgetPresenceEnter", {
+  messages: [PartsMessage.CompletedStopPropagation],
+  execute: ({ element }) => Effect.sync(() => {
+    const host = element.closest("[data-widgets-stack]") ?? element.parentElement
+    if (host && !hostsSeen.has(host)) {
+      hostsSeen.add(host)
+      hostsInFirstRender.add(host)
+      setTimeout(() => hostsInFirstRender.delete(host), 0)
+    }
+    if (host && !hostsInFirstRender.has(host)) {
+      element.classList.remove(...SLOT_SHOWN)
+      element.classList.add(...SLOT_ENTERING)
+      element.getBoundingClientRect()
+      element.classList.remove(...SLOT_ENTERING)
+      element.classList.add(...SLOT_SHOWN)
+    }
+    return PartsMessage.CompletedStopPropagation()
+  }),
+})
+
+/**
+ * One slot in the column (WidgetPresence): it grows in when it appears after
+ * the column's first render (`PresenceEnter`) and is gone at once when it
+ * leaves. The slot also owns the column's spacing (pt-2 inside the
  * collapsing part, 1px for the first), so a card's gap goes with it.
  */
-export function widgetPresence<M>(options: { show: boolean; spaced?: boolean; key: string }, children: ReadonlyArray<Child>, h: HtmlBuilder<M>): Html {
+export function widgetPresence<M>(
+  options: { show: boolean; spaced?: boolean; key: string; toParts: (message: PartsMessage) => M },
+  children: ReadonlyArray<Child>,
+  h: HtmlBuilder<M>,
+): Html {
   if (!options.show) return null
   const spaced = options.spaced ?? true
   return h.keyed("div")(`slot-${options.key}`, [
     h.Class("group/widget-slot grid transition-[grid-template-rows,opacity] ease-snappy motion-reduce:transition-opacity grid-rows-[1fr] opacity-100 duration-200"),
+    h.OnMount(Mount.mapMessage(PresenceEnter(), options.toParts)),
   ], [
     h.div([h.Class("min-h-0 overflow-hidden")], [
       // The top card sits right under the navbar: 1px, not a gap.

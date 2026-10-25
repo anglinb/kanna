@@ -8,7 +8,7 @@ import { snapshotOf } from "../core/chatSession"
 import * as ChatPreferences from "../core/stores/chatPreferences"
 import * as AppDialog from "../ui/app-dialog"
 import { attachmentsWidget } from "./attachments"
-import { columnContext, rowMenu, type ColumnContext, type H } from "./context"
+import { columnContext, rowMenu, toParts, type ColumnContext, type H } from "./context"
 import { gitWidgetsView } from "./git"
 import { HoverMessage } from "./hoverCard"
 import { rowMenuView } from "./menus"
@@ -98,7 +98,7 @@ function columnView(context: ColumnContext, h: H): Html {
     // No gap: each slot carries its own top spacing, so a card's gap folds away with it.
     h.div([h.DataAttribute("widgets-stack", ""), h.Class("relative isolate flex flex-col px-2 pb-2 pt-[var(--chat-navbar-h,0px)]")], [
       ...gitWidgetsView(context, h),
-      widgetPresence({ key: "tasks", show: facts.tasks.length > 0 }, [
+      widgetPresence({ toParts, key: "tasks", show: facts.tasks.length > 0 }, [
         tasksWidget({
           tasks: facts.tasks,
           toolIds: facts.toolIds,
@@ -123,7 +123,7 @@ function columnView(context: ColumnContext, h: H): Html {
           },
         }, h),
       ], h),
-      widgetPresence({ key: "workflows", show: facts.workflows.length > 0 }, [
+      widgetPresence({ toParts, key: "workflows", show: facts.workflows.length > 0 }, [
         workflowWidget(facts.workflows, {
           list: workflowList,
           hovered: model.hovered,
@@ -133,7 +133,7 @@ function columnView(context: ColumnContext, h: H): Html {
           now: model.now,
         }, h),
       ], h),
-      widgetPresence({ key: "schedules", show: facts.schedules.length > 0 }, [
+      widgetPresence({ toParts, key: "schedules", show: facts.schedules.length > 0 }, [
         schedulesWidget(facts.schedules, {
           list: SCHEDULES_LIST,
           hoveredKey: model.hovered[SCHEDULES_LIST] ?? null,
@@ -149,7 +149,7 @@ function columnView(context: ColumnContext, h: H): Html {
           }),
         }, h),
       ], h),
-      widgetPresence({ key: "attachments", show: attachments.length > 0 }, [attachmentsWidget(attachments, h)], h),
+      widgetPresence({ toParts, key: "attachments", show: attachments.length > 0 }, [attachmentsWidget(attachments, h)], h),
       portsWidget(context, h),
       quickActionsWidget(context, h),
       ...usageWidgets(context, selectedProvider(app, chatId, facts.activeProvider), h),

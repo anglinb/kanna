@@ -12,10 +12,13 @@ import * as Tooltip from "../ui/tooltip"
 import { EMPTY_DIFF_SNAPSHOT } from "./gitLogic"
 import { Message } from "./message"
 import type { MenuTarget, Model } from "./model"
-import { defaultWidgetExpanded, type WidgetRowMenu } from "./parts"
+import { defaultWidgetExpanded, type PartsMessage, type WidgetRowMenu } from "./parts"
 import { Option } from "effect"
 
 export type H = HtmlBuilder<Message>
+
+/** The parts' own Mounts (a slot's entrance, a stopped click), lifted into the column's Message. */
+export const toParts = (message: PartsMessage) => Message.GotPartsMessage({ message })
 
 /** What every widget view reads, worked out once per render of the column. */
 export interface ColumnContext {

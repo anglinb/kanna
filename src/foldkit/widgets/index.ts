@@ -25,5 +25,8 @@ import { view as columnView } from "./view"
 
 export { init, Message, Model, update }
 export { subscriptions } from "./subscriptions"
+/** The transcript's live schedule card: see scheduleCard.ts for how to embed it. */
+export * as ScheduleCard from "./scheduleCard"
+export { scheduleEditPrompt } from "./schedules"
 
 export const view = Submodel.defineView<Model, Message, ChatPageSliceInputs>((model, inputs, h) => columnView(model, inputs, h))

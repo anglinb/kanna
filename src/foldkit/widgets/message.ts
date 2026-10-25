@@ -51,6 +51,8 @@ export const Message = defineMessageUnion({
   GotCommitMenuMessage: { message: ContextMenu.Message },
   GotTooltipMessage: { id: Schema.String, message: Tooltip.Message },
   GotHoverMessage: { message: HoverMessage },
+  /** A card has been up for a frame: its details are read now (useCardDetails' effect, after paint). */
+  ShowedCard: { list: Schema.String, key: Schema.String },
   GotPartsMessage: { message: PartsMessage },
   GotAppDialogMessage: { message: AppDialog.Message },
   ClickedOpenUrl: { url: Schema.String },

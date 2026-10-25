@@ -4,7 +4,7 @@ import { cn } from "../../client/lib/utils"
 import type { LocalHttpServerInfo } from "../../shared/protocol"
 import { inputPopover, popoverMenuItem } from "../settings/preferenceControls"
 import { Folder, Globe, Layers, ListFilter, Loader2, RadioTower } from "../ui/icons"
-import { rowMenu, type ColumnContext, type H } from "./context"
+import { rowMenu, toParts, type ColumnContext, type H } from "./context"
 import { Message } from "./message"
 import { widgetCard, widgetError, widgetList, widgetPresence, widgetRow } from "./parts"
 
@@ -55,7 +55,7 @@ export function portsWidget(context: ColumnContext, h: H): Html {
   const { projectServers, visible } = visiblePortServers(context)
   const otherServerCount = ports.servers.length - projectServers.length
   const expanded = context.expanded("ports", visible.length)
-  return widgetPresence({ key: "ports", show: ports.error !== null || (ports.loaded && ports.servers.length > 0) }, [
+  return widgetPresence({ toParts, key: "ports", show: ports.error !== null || (ports.loaded && ports.servers.length > 0) }, [
     widgetCard({
       icon: RadioTower({}, h),
       title: ["Ports"],

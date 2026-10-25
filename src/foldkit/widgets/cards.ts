@@ -226,7 +226,8 @@ export function commitCardContent(options: {
     details && details.totalFileCount > 0
       ? turnCardMetaRow({ class: "-mx-1.5 -mb-2 mt-2 rounded-b-lg border-t border-border/60 bg-muted/40 px-3 py-1.5" }, [
         FileDiff({ class: "size-2.5 shrink-0", strokeWidth: 2.5 }, h),
-        h.span([], [`${details.totalFileCount} file${details.totalFileCount === 1 ? "" : "s"} changed`]),
+        // React's text nodes, as JSX split them: shaping (the "fi") follows them.
+        h.span([], [String(details.totalFileCount), " file", details.totalFileCount === 1 ? "" : "s", " changed"]),
         diffFileStat({ additions: details.additions, deletions: details.deletions, class: "ml-auto pl-2" }, h),
       ], h)
       : null,

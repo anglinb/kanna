@@ -32,7 +32,7 @@ import { input } from "../ui/input"
 import { textarea } from "../ui/textarea"
 import { pickerView } from "./branchPicker"
 import { branchCardContent, commitCardContent, diffFileCardContent, pullRequestCardContent } from "./cards"
-import { rowMenu, sameTarget, tooltip, type ColumnContext, type H } from "./context"
+import { rowMenu, sameTarget, toParts, tooltip, type ColumnContext, type H } from "./context"
 import { mergeDialogView, publishDialogView } from "./gitDialogs"
 import {
   branchDetailsKey,
@@ -644,7 +644,7 @@ export function gitWidgetsView(context: ColumnContext, h: H): ReadonlyArray<Html
   const prBlock = branchPullRequestBlock(context, h)
   const box = commitBox(context, facts, h)
   return [
-    widgetPresence({ key: "git-init", show: diffs.status === "no_repo" }, [
+    widgetPresence({ toParts, key: "git-init", show: diffs.status === "no_repo" }, [
       widgetCard({
         icon: GitBranch({}, h),
         title: ["Git"],
@@ -658,7 +658,7 @@ export function gitWidgetsView(context: ColumnContext, h: H): ReadonlyArray<Html
         body: [widgetStatic({}, [h.p([h.Class("text-sm text-muted-foreground")], ["Not a git repository."])], h)],
       }, h),
     ], h),
-    widgetPresence({ key: "git-branch", show: diffs.status === "ready" }, [
+    widgetPresence({ toParts, key: "git-branch", show: diffs.status === "ready" }, [
       widgetCard({
         icon: GitBranch({}, h),
         title: [h.span([h.Class("flex min-w-0 items-baseline gap-1.5")], [
@@ -671,9 +671,9 @@ export function gitWidgetsView(context: ColumnContext, h: H): ReadonlyArray<Html
         footer: git.branchesExpanded ? branchActions(context, facts, h) : null,
         bodyDivider: false,
         collapsedBody: [
-          widgetPresence({ key: "branch-pr", show: prBlock !== null, spaced: false }, [prBlock], h),
+          widgetPresence({ toParts, key: "branch-pr", show: prBlock !== null, spaced: false }, [prBlock], h),
           // A clean tree folds the changes away, commit box and all.
-          widgetPresence({ key: "branch-changes", show: facts.hasChanges, spaced: false }, [
+          widgetPresence({ toParts, key: "branch-changes", show: facts.hasChanges, spaced: false }, [
             h.div([h.Class("border-t border-border")], [
               ...fileList(context, facts, h),
               box ? h.div([h.Class("border-t border-border")], [box]) : null,
@@ -683,7 +683,7 @@ export function gitWidgetsView(context: ColumnContext, h: H): ReadonlyArray<Html
         body: [h.div([h.Class("border-t border-border")], pickerView(context, h))],
       }, h),
     ], h),
-    widgetPresence({ key: "git-commits", show: diffs.status === "ready" && (facts.branchHistory.length > 0 || facts.hasIncoming) }, [
+    widgetPresence({ toParts, key: "git-commits", show: diffs.status === "ready" && (facts.branchHistory.length > 0 || facts.hasIncoming) }, [
       widgetCard({
         icon: History({}, h),
         title: ["Commits"],

@@ -234,6 +234,16 @@ export const ExpireCopiedSha = Command.define("WidgetsExpireCopiedSha", {
   execute: ({ token }) => Effect.sleep(Duration.millis(1_200)).pipe(Effect.as(Message.ExpiredCopiedSha({ token }))),
 })
 
+/** A frame after a card comes up: React read a card's details in an effect, after the card painted. */
+export const AwaitCardPaint = Command.define("WidgetsAwaitCardPaint", {
+  args: { list: Schema.String, key: Schema.String },
+  messages: [Message.ShowedCard],
+  execute: ({ list, key }) => Effect.callback<typeof Message.ShowedCard.Type>((resume) => {
+    const frame = requestAnimationFrame(() => resume(Effect.succeed(Message.ShowedCard({ list, key }))))
+    return Effect.sync(() => cancelAnimationFrame(frame))
+  }),
+})
+
 // BROWSER: COPY, OPEN
 
 export const CopyText = Command.define("WidgetsCopyText", {
@@ -383,12 +393,20 @@ export const FocusComposerAtEnd = Command.define("WidgetsFocusComposerAtEnd", {
   }),
 })
 
-/** Keeps a row in sight: the keyboard cursor, the file the viewer is on. */
+/**
+ * Keeps a row in sight: the keyboard cursor (by its id), the file the
+ * viewer is on (by its key in a list).
+ */
 export const ScrollIntoView = Command.define("WidgetsScrollIntoView", {
-  args: { selector: Schema.String },
+  args: { id: Schema.NullOr(Schema.String), list: Schema.NullOr(Schema.String), rowKey: Schema.NullOr(Schema.String) },
   messages: [Message.CompletedSideEffect],
-  execute: ({ selector }) => Effect.sync(() => {
-    requestAnimationFrame(() => document.querySelector(selector)?.scrollIntoView({ block: "nearest" }))
+  execute: ({ id, list, rowKey }) => Effect.sync(() => {
+    requestAnimationFrame(() => {
+      const element = id !== null
+        ? document.getElementById(id)
+        : document.querySelector(`[data-widget-hover-list="${CSS.escape(list ?? "")}"] [data-row-key="${CSS.escape(rowKey ?? "")}"]`)
+      element?.scrollIntoView({ block: "nearest" })
+    })
     return done()
   }),
 })
