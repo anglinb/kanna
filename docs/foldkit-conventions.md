@@ -52,6 +52,32 @@ src/foldkit/
   result or error Message out). The command log is compared with React's,
   so send the same commands, with the same fields, in the same order.
 
+## Talking to the root
+
+- A slice asks the root for anything app-wide through its OutMessage:
+  `RequestedAppAction({ action })` with an `AppAction` from
+  `app/action.ts` (navigate, create/fork/archive/delete a chat, write
+  settings, open externally, a store change as `AppAction.Store`, a
+  message to the page's chat session as `AppAction.Chat`, …). The root
+  runs it (`app/actions.ts`); confirm/prompt dialogs those need are the
+  root's.
+- What a slice reads from the root comes in as view and update inputs:
+  the stores (`app/stores.ts`), the page's chat session
+  (`core/chatSession.ts`, selectors there), connection status, settings.
+
+## Event data Foldkit's attributes don't carry
+
+`h.OnClick` carries no modifier keys or button, `h.OnContextMenu` no
+position, and there is no generic `On(event)` attribute. When the React
+code read the event (Cmd/Ctrl-click for a background tab, a context menu
+at the pointer, drag data, wheel deltas), use one of:
+
+- `Mount.defineStream` on that element with `Dom.streamFromEvent` (the
+  mapper gets the real event, may `preventDefault` synchronously); or
+- for many identical elements (every chat link in a transcript), one
+  delegated `Dom.streamFromEvent` on `document` in a Subscription that
+  finds the target by a `data-*` attribute.
+
 ## Matching React
 
 - Same DOM: element types, nesting, `class` strings copied verbatim from

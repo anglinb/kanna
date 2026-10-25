@@ -57,6 +57,7 @@
         "lucide": "0.562.0",
         "lucide-react": "^0.562.0",
         "openai": "^6.34.0",
+        "parse5": "8.0.1",
         "pixelmatch": "7",
         "playwright": "1.64.1",
         "pngjs": "7",
