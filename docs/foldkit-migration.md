@@ -121,21 +121,38 @@ into this):
 | Chat page shell | `chat/` | 1 | merged (own regions pass; selfcheck 156/156) |
 | Transcript rows | `transcript/messages/` | 1 | merged (316/316 gallery) |
 | Terminal | `terminal/` | 2 | merged (workspace gallery 24/24; page matches but for home's boot command) |
-| Command palette | `palette/` | 2 | in progress |
-| Composer | `composer/` | 2 | in progress |
+| Command palette | `palette/` | 2 | merged |
+| Composer | `composer/` | 2 | merged (gallery 98/98; real-page regions pass) |
 | Transcript viewport (+ export viewer) | `transcript/` | 3 | merged (export viewer 12/12; chat captures wait on the composer) |
-| Right sidebar widgets | `widgets/` | 3 | to do |
-| Viewer / previewer | `viewer/` | 3 | to do |
+| Right sidebar widgets | `widgets/` | 3 | in progress |
+| Viewer / previewer | `viewer/` | 3 | in progress |
 | Setup wizard | `setup/` | 3 | to do |
 | Workflows gallery | `workflows/` | 3 | to do |
-| Demo entry, export viewer | `src/demo`, `src/export-viewer` | 4 | to do |
+| Demo entry, export viewer | `src/demo`, `src/export-viewer` | 4 | done (demo routes in memory: `core/navigation.ts`; `bun run demo:smoke`) |
 | Switch entries, delete React | — | 4 | to do |
 
 ## React-free check
 
 `bun run react-free` walks the Foldkit app's imports and fails on any
 path into React or a React library, printing the chain. It must stay
-clean; it is also what proves React can be deleted.
+clean; it is also what proves React can be deleted. Bare `zustand` counts
+(its `create` is a hook); `zustand/vanilla` and `zustand/middleware` don't.
+
+## End-to-end runs (real server)
+
+`bun run e2e` builds the Foldkit client (`vite.foldkit.config.ts`,
+`src/foldkit/entry`) and runs `scripts/foldkit/e2e/scenarios.ts` against a
+real Kanna server: its own data dir under `/tmp/kanna-e2e-*`, two throwaway
+git projects, real agent turns (Claude, with the machine's own sign-in).
+`--app react` runs the same scenarios against React's build: a scenario
+is only trusted once it passes there. `--no-agent` skips the turns,
+`--repeat N` runs the suite N times, names pick scenarios. Failures leave
+screenshots in `.e2e/`. The runner deletes the sessions its turns leave in
+`~/.claude/projects` and `~/.codex/sessions` (only those started under
+`/tmp/kanna-e2e-*`).
+
+React passes 23/23. Foldkit passes 21/23; the two left are the setup
+wizard (not ported yet) and the widgets' git changes (in progress).
 
 ## Integration follow-ups
 
@@ -166,7 +183,15 @@ clean; it is also what proves React can be deleted.
 - `@foldkit/vite-plugin` peers on Vite 8; we run Vite 6 (works so far).
 - `app/action.ts` imports types from React files
   (`components/messages/shared`, `lib/chat-navigation` is fine); move
-  those types before React is deleted.
+  those types before React is deleted. Also `transcript/source.ts`
+  (`ResolvedTranscriptRow` from KannaTranscript.tsx) and the pure client
+  helpers that import zustand stores' types (kannaStateHelpers,
+  viewer-split, chatBrowserNotifications): fix in the deletion sweep.
+- Production entry: `index.html` still loads React. The live dev instance
+  runs Vite from this checkout, so the switch waits until every slice is
+  in and the e2e suite passes; then `index.html` loads
+  `src/foldkit/entry/main.ts`, `vite.config.ts` takes the `foldkit()`
+  plugin, and `vite.foldkit.config.ts` goes.
 
 ## Loops
 

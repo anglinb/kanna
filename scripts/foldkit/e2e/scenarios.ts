@@ -133,6 +133,16 @@ async function newChat(page: Page, project = "alpha") {
   await visible(composer(page), "the composer")
 }
 
+async function send(page: Page, prompt: string) {
+  await composer(page).fill(prompt)
+  await composer(page).press("Enter")
+  await visible(transcript(page).getByText(prompt.slice(0, 40), { exact: false }), "the prompt in the transcript")
+}
+
+async function turnEnded(page: Page, timeout = TURN_TIMEOUT_MS) {
+  await gone(page.getByRole("button", { name: "Stop" }), "the Stop button once the turn ends", timeout)
+}
+
 // SCENARIOS
 
 export const scenarios: E2EScenario[] = [
@@ -416,6 +426,164 @@ export const scenarios: E2EScenario[] = [
       await page.getByRole("button", { name: "Back" }).first().click()
       await visible(chatRow(page, context.state.chatTitle), "back on the sidebar")
       assert(new URL(page.url()).pathname === "/", `back at / (${page.url()})`)
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    // A tool's output is not in the transcript the client is sent: it is
+    // read by offset when the row opens (transcript-payloads.ts), and again
+    // after a reload.
+    name: "tool-output-opens",
+    agent: true,
+    async run(context) {
+      const opened = await open(context, "/")
+      const { page } = opened
+      await visible(sidebar(page), "the sidebar")
+      await newChat(page)
+      await send(page, "Use your Bash tool to run exactly this command: cat README.md — then reply with only the word done.")
+      await visible(transcript(page).getByText(/^\s*done\.?\s*$/i), "the reply after the tool ran", TURN_TIMEOUT_MS)
+      await turnEnded(page)
+      const openTool = async () => {
+        // The row shows the agent's own description of the command
+        // ("Print README contents"), not the prompt that asked for it.
+        const row = transcript(page).getByText(/README/i).filter({ hasNotText: "Use your Bash tool" }).first()
+        await visible(row, "the tool row")
+        if (!(await transcript(page).getByText("A project for the end-to-end runs.").first().isVisible())) await row.click()
+        await visible(transcript(page).getByText("A project for the end-to-end runs."), "the command's output once the row opens")
+      }
+      await openTool()
+      await page.reload()
+      await openTool()
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    name: "ask-user-question",
+    agent: true,
+    async run(context) {
+      const opened = await open(context, "/")
+      const { page } = opened
+      await visible(sidebar(page), "the sidebar")
+      await newChat(page)
+      await send(page, "Use your AskUserQuestion tool to ask me exactly one question, \"Pick a color\", with exactly two options, Red and Blue. After I answer, reply with only the color I picked, in lowercase, and nothing else.")
+      await visible(transcript(page).getByText("Pick a color", { exact: false }), "the question card", TURN_TIMEOUT_MS)
+      await transcript(page).getByRole("button", { name: /Blue/ }).first().click()
+      await transcript(page).getByRole("button", { name: "Submit" }).click()
+      await visible(transcript(page).getByText(/^\s*blue\.?\s*$/i), "the reply naming the answer", TURN_TIMEOUT_MS)
+      await turnEnded(page)
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    name: "stop-a-turn",
+    agent: true,
+    async run(context) {
+      const opened = await open(context, "/")
+      const { page } = opened
+      await visible(sidebar(page), "the sidebar")
+      await newChat(page)
+      await send(page, "Use your Bash tool to run exactly: sleep 90 && echo finished-sleeping — then reply ok.")
+      await visible(transcript(page).getByText("sleep 90", { exact: false }), "the running command", TURN_TIMEOUT_MS)
+      await page.getByRole("button", { name: "Stop" }).click()
+      await turnEnded(page, 30_000)
+      await page.waitForTimeout(3_000)
+      // The composer takes a new message once stopped.
+      await composer(page).fill("still here")
+      assert((await composer(page).inputValue()) === "still here", "the composer works after a stop")
+      await composer(page).fill("")
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    name: "queue-while-running",
+    agent: true,
+    async run(context) {
+      const opened = await open(context, "/")
+      const { page } = opened
+      await visible(sidebar(page), "the sidebar")
+      await newChat(page)
+      await send(page, "Use your Bash tool to run exactly: sleep 10 — then reply with only the word first.")
+      await visible(page.getByRole("button", { name: "Stop" }), "the Stop button while the turn runs", 30_000)
+      await composer(page).fill("Now reply with only the word second.")
+      await composer(page).press("Enter")
+      await visible(transcript(page).getByText("Now reply with only the word second."), "the queued message")
+      await visible(transcript(page).getByText(/^\s*first\.?\s*$/i), "the first reply", TURN_TIMEOUT_MS)
+      await visible(transcript(page).getByText(/^\s*second\.?\s*$/i), "the queued message's reply", TURN_TIMEOUT_MS)
+      await turnEnded(page)
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    name: "attachment-staged-and-kept",
+    async run(context) {
+      const opened = await open(context, "/")
+      const { page } = opened
+      await visible(sidebar(page), "the sidebar")
+      await newChat(page)
+      await page.locator("input[type=file]").first().setInputFiles({
+        name: "notes.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Low tide at 06:12, swell 1.4 m from the WSW.\n"),
+      })
+      const chip = page.getByRole("button", { name: "Remove notes.txt" })
+      await visible(chip, "the staged attachment's Remove button")
+      await page.waitForTimeout(1_500)
+      await page.reload()
+      await visible(page.getByRole("button", { name: "Remove notes.txt" }), "the attachment still staged after a reload")
+      await page.getByRole("button", { name: "Remove notes.txt" }).click()
+      await gone(page.getByRole("button", { name: "Remove notes.txt" }), "the attachment once removed")
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    name: "sidebar-collapse-persists",
+    async run(context) {
+      const opened = await open(context, "/settings/general")
+      const { page } = opened
+      await visible(sidebar(page), "the sidebar")
+      await page.getByTitle("Collapse sidebar").filter({ visible: true }).first().click()
+      await gone(sidebar(page), "the sidebar once collapsed")
+      await page.reload()
+      await visible(page.locator("[data-settings-page]"), "settings after a reload")
+      await page.waitForTimeout(1_000)
+      assert(!(await sidebar(page).first().isVisible()), "the sidebar came back open after a reload")
+      await page.getByTitle("Expand sidebar").filter({ visible: true }).first().click()
+      await visible(sidebar(page), "the sidebar once expanded")
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    name: "home-opens-project",
+    async run(context) {
+      const opened = await open(context, "/home")
+      const { page } = opened
+      await visible(page.getByText("alpha", { exact: true }), "alpha on the projects page")
+      await page.getByText("alpha", { exact: true }).first().click()
+      await until(async () => /\/chat\/[^/]+$/.test(page.url()), "a new chat in alpha")
+      await until(async () => (await page.title()).includes(" : alpha"), "the page titled for alpha")
+      await visible(composer(page), "the composer")
+      noErrors(opened)
+      await opened.close()
+    },
+  },
+  {
+    name: "phone-send",
+    agent: true,
+    async run(context) {
+      const opened = await open(context, "/", { width: 390, height: 844 })
+      const { page } = opened
+      await visible(sidebar(page), "the sidebar on the phone")
+      await newChat(page)
+      await send(page, "Reply with exactly the word phone-ok and nothing else.")
+      await visible(transcript(page).getByText(/^\s*phone-ok\.?\s*$/i), "the reply on the phone", TURN_TIMEOUT_MS)
+      await turnEnded(page)
       noErrors(opened)
       await opened.close()
     },
