@@ -12,6 +12,7 @@ import { opaque } from "../core/schema"
 import { readStorageItem } from "../core/storage"
 import * as ChatSession from "../core/chatSession"
 import { AppRoute } from "./route"
+import { ActionsModel } from "./actions"
 import * as Stores from "./stores"
 
 // The root Model: what useKannaState and App.tsx held for the whole app.
@@ -53,6 +54,8 @@ export const Model = Schema.Struct({
   chat: Schema.NullOr(ChatSession.Model),
   /** Every client store: sidebar, app settings, drafts, layouts, preferences. */
   stores: Stores.Model,
+  /** What the root's actions keep: chats being started, the share and app dialogs. */
+  actions: ActionsModel,
 })
 export type Model = typeof Model.Type
 

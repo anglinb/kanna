@@ -11,6 +11,7 @@ import type { AppSettingsSnapshot, SidebarData } from "../../shared/types"
 import * as ChatSession from "../core/chatSession"
 import type { KannaSocketService } from "../core/socket"
 import * as PendingSend from "../core/stores/pendingSend"
+import * as Sidebar from "../core/stores/sidebar"
 import {
   ApplyTheme,
   DelayAuthRetry,
@@ -32,6 +33,8 @@ import {
 import { Message } from "./message"
 import type { Flags, Model } from "./model"
 import { routeChatId, settingsRouter, urlToAppRoute, type AppRoute } from "./route"
+import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
+import type { AppAction } from "./action"
 import * as Stores from "./stores"
 import { resolveTheme, themePreference } from "./theme"
 
@@ -72,6 +75,7 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     systemTheme: flags.systemTheme,
     chat: null,
     stores,
+    actions: initialActionsModel,
   }
   const session = syncChatSession(model, 0)
   return {
@@ -234,7 +238,9 @@ function notificationCommands(model: Model, previous: SidebarData, next: Sidebar
  * notifications go out for what changed, and running chats are followed.
  */
 function appliedSidebarSnapshot(before: Model): Step {
-  return (model) => {
+  return (afterPush) => {
+    const bounced = bounceUnknownChat(afterPush)
+    const model = bounced.model
     let next = commandError(model, null)
     if (!next.selectedProjectId) {
       const seed = getMostRecentlyActiveProjectId(sidebarData(next).projectGroups)
@@ -245,7 +251,7 @@ function appliedSidebarSnapshot(before: Model): Step {
     // every page load.
     const notifications = before.stores.sidebar.ready ? notificationCommands(next, sidebarData(before), sidebarData(next)) : []
     const background = reconcileBackgroundChats(next)
-    return { model: background.model, commands: [...notifications, ...(background.commands ?? [])] }
+    return { model: background.model, commands: [...(bounced.commands ?? []), ...notifications, ...(background.commands ?? [])] }
   }
 }
 
@@ -276,7 +282,9 @@ function syncChatSession(model: Model, at: number): UpdateReturn {
     commands.push(...Command.mapMessages(closed.commands, (message: ChatSession.Message) => Message.GotChatMessage({ message })))
   }
   if (!chatId) return { model: modifyFields(model, { chat: () => null }), commands }
-  const opened = ChatSession.init(chatId, { windowSize: transcriptWindowSize(model), starting: false })
+  // A chat started a moment ago has no cache to wait on: its subscription
+  // goes out right behind its `chat.create`.
+  const opened = ChatSession.init(chatId, { windowSize: transcriptWindowSize(model), starting: model.actions.startingChatIds.includes(chatId) })
   commands.push(...Command.mapMessages(opened.commands, (message: ChatSession.Message) => Message.GotChatMessage({ message })))
   return { model: modifyFields(model, { chat: () => opened.model }), commands }
 }
@@ -290,6 +298,51 @@ const handleChatOutMessage = ChatSession.OutMessage.match<Step>({
   FailedSend: ({ error }) => (model) => ({ model: commandError(model, error) }),
   ConfirmedExitPlanMode: () => (model) => ({ model }),
 })
+
+/**
+ * After the page's chat moved: its snapshot names the project, and the
+ * server has spoken for a chat started here, so `startedChat` and
+ * `pendingChatId` let go. An unknown chat (not in the sidebar, archived
+ * ones included, and not one being started) bounces home.
+ */
+function afterChatChanged(model: Model): UpdateReturn {
+  const snapshot = activeChatSnapshot(model)
+  let next = model
+  if (snapshot) {
+    const chatId = snapshot.runtime.chatId
+    next = modifyFields(next, {
+      selectedProjectId: () => snapshot.runtime.projectId,
+      actions: (actions) => ({
+        ...actions,
+        pendingChatId: actions.pendingChatId === chatId ? null : actions.pendingChatId,
+        startedChat: actions.startedChat?.chatId === chatId ? null : actions.startedChat,
+      }),
+    })
+  }
+  return bounceUnknownChat(next)
+}
+
+/** Archived chats are viewable in place, so they count as existing. */
+function bounceUnknownChat(model: Model): UpdateReturn {
+  const chatId = activeChatId(model)
+  if (!chatId || !model.stores.sidebar.ready || !model.chat?.chatReady) return { model }
+  if (Sidebar.chatExists(model.stores.sidebar, chatId)) {
+    return model.actions.pendingChatId === chatId
+      ? { model: modifyFields(model, { actions: (actions) => ({ ...actions, pendingChatId: null }) }) }
+      : { model }
+  }
+  if (model.actions.pendingChatId === chatId) return { model }
+  return { model, commands: [PushUrl({ url: "/" })] }
+}
+
+/**
+ * The open chat is one this client started and has not heard back about:
+ * known to be empty, so its page is the new chat page without waiting.
+ */
+export function activeChatStarted(model: Model): boolean {
+  const chatId = activeChatId(model)
+  return Boolean(chatId && model.actions.startedChat?.chatId === chatId && !activeChatSnapshot(model))
+}
 
 const foldChat = Update.foldChild({
   update: (chat: ChatSession.Model, input: { message: ChatSession.Message; sidebarStatus: string | null; windowSize: number }) =>
@@ -316,6 +369,65 @@ function changeRoute(model: Model, route: AppRoute): UpdateReturn {
   }
   const background = reconcileBackgroundChats(session.model)
   return { model: background.model, commands: [...commands, ...(background.commands ?? [])] }
+}
+
+// ACTIONS (app/actions.ts)
+
+function navigateStep(path: string, replace = false): Step {
+  return (model) => ({ model, commands: [replace ? ReplaceUrl({ url: path }) : PushUrl({ url: path })] })
+}
+
+const actions = makeActions<Model>({
+  navigate: navigateStep as never,
+  activeChatId,
+  activeRuntimeProjectId: (model) => activeChatSnapshot(model)?.runtime.projectId ?? null,
+  navbarLocalPath: (model) => navbarLocalPath(model),
+  fallbackLocalProjectPath: (model) => model.localProjects?.projects[0]?.localPath ?? null,
+  activeProjectId,
+  receivedAppSettings: ((snapshot: AppSettingsSnapshot) => (model: Model) => receiveAppSettings(model, snapshot)) as never,
+  readAppSettings: () => ReadAppSettings() as never,
+  setLlmProvider: ((snapshot: Model["llmProvider"]) => (model: Model) => ({ model: modifyFields(model, { llmProvider: () => snapshot }) })) as never,
+  llmProvider: (model) => model.llmProvider,
+  sendStores: ((message: Stores.Message) => (model: Model) => updateStores(model, message)) as never,
+  storesMessage: {
+    chatInput: (message) => Stores.Message.GotChatInputMessage({ message }),
+    chatPreferences: (message) => Stores.Message.GotChatPreferencesMessage({ message }),
+    sidebar: (message) => Stores.Message.GotSidebarMessage({ message }),
+    terminalLayout: (message) => Stores.Message.GotTerminalLayoutMessage({ message }),
+    rightSidebar: (message) => Stores.Message.GotRightSidebarMessage({ message }),
+    appSettings: (message) => Stores.Message.GotAppSettingsMessage({ message }),
+  },
+  toMessage: (message: ActionMessage) => Message.GotActionMessage({ message }),
+})
+
+/** Runs a slice's request. Sidebar collapse and the page's chat are the root's own. */
+export function performAction(model: Model, action: AppAction): UpdateReturn {
+  switch (action._tag) {
+    case "CollapseSidebar":
+      return update(model, Message.ClickedCollapseSidebar())
+    case "ExpandSidebar":
+      return update(model, Message.ClickedExpandSidebar())
+    case "Chat":
+      return update(model, Message.GotChatMessage({ message: action.message }))
+    default:
+      return withDraftProtection(model, actions.performAction(model, action) as UpdateReturn)
+  }
+}
+
+/**
+ * The open chat's project folder: the snapshot's, else the sidebar's for
+ * the chat, else the first local project's, else the first group's.
+ */
+export function navbarLocalPath(model: Model): string | null {
+  const projectId = activeProjectId(model)
+  const fromSidebar = activeChatId(model) && projectId
+    ? sidebarData(model).projectGroups.find((group) => group.groupKey === projectId)?.localPath ?? null
+    : null
+  return activeChatSnapshot(model)?.runtime.localPath
+    ?? fromSidebar
+    ?? model.localProjects?.projects[0]?.localPath
+    ?? sidebarData(model).projectGroups[0]?.localPath
+    ?? null
 }
 
 // UPDATE
@@ -432,12 +544,17 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       commands: [SaveSidebarCollapsed({ collapsed: false })],
     }),
 
-    GotChatMessage: ({ message: chatMessage }) => foldChat(model, {
-      message: chatMessage,
-      sidebarStatus: sidebarChatStatus(model, model.chat?.chatId ?? null),
-      windowSize: transcriptWindowSize(model),
-    }),
+    GotChatMessage: ({ message: chatMessage }) => Update.combine(model, [
+      (step: Model) => foldChat(step, {
+        message: chatMessage,
+        sidebarStatus: sidebarChatStatus(step, step.chat?.chatId ?? null),
+        windowSize: transcriptWindowSize(step),
+      }),
+      afterChatChanged,
+    ]),
     GotStoresMessage: ({ message: storesMessage }) => withDraftProtection(model, updateStores(model, storesMessage)),
+    RequestedAppAction: ({ action }) => performAction(model, action),
+    GotActionMessage: ({ message: actionMessage }) => withDraftProtection(model, actions.handleActionMessage(model, actionMessage) as UpdateReturn),
   })
 
 // DRAFT PROTECTION

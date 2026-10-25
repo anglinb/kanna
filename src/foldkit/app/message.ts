@@ -13,6 +13,8 @@ import type {
 import { opaque } from "../core/schema"
 import * as ChatSession from "../core/chatSession"
 import { ConnectionStatus } from "./model"
+import { AppAction } from "./action"
+import { ActionMessage } from "./actions"
 import * as Stores from "./stores"
 
 export const Message = defineMessageUnion({
@@ -68,5 +70,9 @@ export const Message = defineMessageUnion({
 
   // Every client store
   GotStoresMessage: { message: Stores.Message },
+
+  // A slice's request (app/action.ts) and what the root's actions hear back
+  RequestedAppAction: { action: AppAction },
+  GotActionMessage: { message: ActionMessage },
 })
 export type Message = typeof Message.Type
