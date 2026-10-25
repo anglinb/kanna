@@ -18,7 +18,7 @@ import * as ContextMenu from "../ui/context-menu"
 import { Ellipsis, ExternalLink, FolderOpen, Loader2, Search, Trash2, X } from "../ui/icons"
 import * as Tooltip from "../ui/tooltip"
 import { makeSectionMount } from "./activeSection"
-import { PROVIDER_ICONS } from "./icons"
+import { PROVIDER_ICONS } from "../ui/provider-icons"
 import { liftChild, sectionLabel, sectionSubtitle, type AppModel, type SectionReturn, type SectionViewInputs } from "./section"
 import { sectionContainer, SETTINGS_LIST_CARD_CLASS, settingsActionButton, settingsNotice } from "./shared"
 
@@ -52,7 +52,6 @@ const SEARCH_DEBOUNCE_MS = 250
 
 const Installed = opaque<GlobalSkillSummary[]>("GlobalSkillSummaries")
 const Results = opaque<SkillSearchResult[]>("SkillSearchResults")
-const InstalledSkill = opaque<GlobalSkillSummary>("GlobalSkillSummary")
 const ResultSkill = opaque<SkillSearchResult>("SkillSearchResult")
 
 export const Model = Schema.Struct({

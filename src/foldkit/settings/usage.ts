@@ -9,7 +9,7 @@ import { opaque } from "../core/schema"
 import { sendCommand, topicStream, type KannaSocketService } from "../core/socket"
 import * as Tooltip from "../ui/tooltip"
 import { makeSectionMount } from "./activeSection"
-import { PROVIDER_ICONS } from "./icons"
+import { PROVIDER_ICONS } from "../ui/provider-icons"
 import { liftChild, sectionLabel, sectionSubtitle, type AppModel, type SectionReturn, type SectionViewInputs } from "./section"
 import { sectionContainer } from "./shared"
 

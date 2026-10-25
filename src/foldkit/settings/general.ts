@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Command, Submodel } from "foldkit"
-import type { Html, HtmlBuilder } from "foldkit/html"
+import type { Html } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import { requestChatBrowserNotificationPermission } from "../../client/lib/chatBrowserNotifications"
 import { playChatNotificationSound } from "../../client/lib/chatSounds"

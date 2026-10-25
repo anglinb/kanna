@@ -116,9 +116,9 @@ export function update(model: Model, message: Message, _app: AppModel): Return {
 export const subscriptions = Subscription.make<Model, Message>()(() => ({
   state: Subscription.persistentEntry(
     Dom.streamFromEvent({
-      target: window,
+      target: window as Dom.TypedEventTarget<{ "kanna:mac-setup": CustomEvent<MacSetupState> }>,
       type: "kanna:mac-setup",
-      toOutput: (event: Event) => Message.ReceivedMacSetupState({ state: (event as CustomEvent<MacSetupState>).detail }),
+      mapEvent: (event) => Message.ReceivedMacSetupState({ state: event.detail }),
     }) as Stream.Stream<Message>,
   ),
   refresh: Subscription.persistentEntry(
