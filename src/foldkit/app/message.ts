@@ -21,6 +21,8 @@ import * as PaletteSlice from "../palette"
 import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
+import * as AppDialog from "../ui/app-dialog"
+import * as OpenRouterCallback from "./openRouterCallback"
 import { AppAction } from "./action"
 import { ActionMessage } from "./actions"
 import * as Stores from "./stores"
@@ -63,6 +65,11 @@ export const Message = defineMessageUnion({
   ClickedChatNotification: { chatId: Schema.String },
   CompletedSideEffect: {},
 
+  // Housekeeping (app/maintenance.ts)
+  /** A moment an idle client may re-check for updates: focus, visibility, the nightly timer. */
+  ReachedUpdateCheckPoint: { at: Schema.Number, visible: Schema.Boolean },
+  ChangedPageVisibility: { shown: Schema.Boolean },
+
   // Theme
   ChangedSystemTheme: { theme: Schema.Literals(["light", "dark"]) },
 
@@ -92,5 +99,7 @@ export const Message = defineMessageUnion({
   GotWorkflowsMessage: { message: WorkflowsSlice.Message },
   GotTerminalPageMessage: { message: TerminalPageSlice.Message },
   GotActionMessage: { message: ActionMessage },
+  GotAppDialogMessage: { message: AppDialog.Message },
+  GotOpenRouterCallbackMessage: { message: OpenRouterCallback.Message },
 })
 export type Message = typeof Message.Type

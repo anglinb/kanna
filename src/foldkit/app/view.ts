@@ -13,13 +13,15 @@ import * as PaletteSlice from "../palette"
 import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
+import * as AppDialog from "../ui/app-dialog"
+import * as OpenRouterCallback from "./openRouterCallback"
 import { AppRoute } from "./route"
 import { activeChatId, activeProjectId, sidebarData } from "./update"
 
 // App.tsx: the auth gate, then KannaLayout (sidebar beside the routed page).
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
-  title: model.auth._tag === "Ready"
+  title: model.auth._tag === "Ready" && !model.pageHidden
     ? getBrowserWindowTitle({
       appName: APP_NAME,
       sidebarData: sidebarData(model),
@@ -35,7 +37,9 @@ function bodyView(model: Model, h: HtmlBuilder<Message>): Html {
   if (auth._tag === "Checking") return checkingView(h)
   if (auth._tag === "Locked") return passwordView(auth, h)
   // Rendered outside the layout: opened as a bare OAuth popup.
-  if (model.route._tag === "OpenRouterCallback") return h.div([])
+  if (model.route._tag === "OpenRouterCallback") {
+    return h.submodel({ slotId: "openrouter-callback", model: model.openRouterCallback, view: OpenRouterCallback.view, toParentMessage: (message) => Message.GotOpenRouterCallbackMessage({ message }) })
+  }
   return layoutView(model, h)
 }
 
@@ -99,6 +103,7 @@ function layoutView(model: Model, h: HtmlBuilder<Message>): Html {
     pageView(model, h),
     h.submodel({ slotId: "setup", model: model.setup, view: SetupSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotSetupMessage({ message }) }),
     h.submodel({ slotId: "palette", model: model.palette, view: PaletteSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotPaletteMessage({ message }) }),
+    h.submodel({ slotId: "app-dialog", model: model.appDialog, view: AppDialog.view, toParentMessage: (message) => Message.GotAppDialogMessage({ message }) }),
   ])
 }
 

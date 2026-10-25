@@ -7,7 +7,9 @@ import type {
   LocalProjectsSnapshot,
   UpdateSnapshot,
 } from "../../shared/types"
+import { isNightlyVersion } from "../../shared/types"
 import { forgetAllFollowed } from "../core/backgroundChats"
+import { updateCheckInterval } from "./maintenance"
 import * as ChatSession from "../core/chatSession"
 import * as SidebarSlice from "../sidebar"
 import * as HomeSlice from "../home"
@@ -92,6 +94,35 @@ const rootSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
         Stream.map((snapshot) => Message.ReceivedProjectGit({ projectId: projectId ?? "", snapshot })),
       )),
   }),
+
+  // useUpdateRestart: while connected, focus and visibility are chances to
+  // re-check, and a nightly also re-checks on a timer.
+  updateChecks: entry({ connected: Schema.Boolean, onNightly: Schema.Boolean }, {
+    modelToDependencies: (model) => ({
+      connected: model.connectionStatus === "connected",
+      onNightly: isNightlyVersion(model.updateSnapshot?.currentVersion ?? ""),
+    }),
+    dependenciesToStream: ({ connected, onNightly }) => {
+      const point = () => Message.ReachedUpdateCheckPoint({ at: Date.now(), visible: document.visibilityState === "visible" })
+      const events = Stream.merge(
+        Dom.streamFromEvent({ target: () => window, type: "focus", mapEvent: point }),
+        Dom.streamFromEvent({ target: () => document, type: "visibilitychange", mapEvent: point }),
+      )
+      const ticks = onNightly
+        ? Stream.tick(updateCheckInterval(true)).pipe(Stream.drop(1), Stream.map(point))
+        : Stream.empty
+      return Stream.when(Stream.merge(events, ticks), Effect.sync(() => connected))
+    },
+  }),
+
+  // App.tsx: pagehide puts the bare app name in the title (for the
+  // bfcache), pageshow the chat's again.
+  pageVisibility: Subscription.persistentEntry(
+    Stream.merge(
+      Dom.streamFromEvent({ target: () => window, type: "pageshow", mapEvent: () => Message.ChangedPageVisibility({ shown: true }) }),
+      Dom.streamFromEvent({ target: () => window, type: "pagehide", mapEvent: () => Message.ChangedPageVisibility({ shown: false }) }),
+    ),
+  ),
 
   systemTheme: Subscription.persistentEntry(
     Dom.streamFromMediaQuery({
