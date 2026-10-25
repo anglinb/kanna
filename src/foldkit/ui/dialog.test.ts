@@ -69,4 +69,16 @@ describe("Dialog", () => {
       Scene.Mount.expectEnded(Dialog.DialogContent),
     )
   })
+
+  test("Scene: dismissOnEscape=false marks the content for the layer to skip Escape", () => {
+    const view = (model: Dialog.Model, h: HtmlBuilder<Dialog.Message>) =>
+      h.main([], [dialogView({ dismissOnEscape: false, initialFocus: "input" })(model, h)])
+    Scene.scene(
+      { update: Dialog.update, view },
+      Scene.given(open),
+      Scene.expect(Scene.role("dialog")).toHaveAttr("data-dismiss-on-escape", "false"),
+      Scene.Mount.expectExact(Dialog.DialogContent({ id: "pair", initialFocus: "input" })),
+      Scene.Mount.resolve(Dialog.DialogContent, Dialog.Message.CompletedMountContent()),
+    )
+  })
 })

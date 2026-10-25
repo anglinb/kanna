@@ -142,9 +142,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
  * two portals put them. Then the modal machinery.
  */
 export const DialogContent = Mount.defineStream("DialogContent", {
-  args: { id: Schema.String },
+  args: { id: Schema.String, initialFocus: Schema.String },
   messages: [Message.CompletedMountContent, Message.DismissedContent],
-  execute: ({ element }) =>
+  execute: ({ element, initialFocus }) =>
     domStream<typeof Message.CompletedMountContent.Type | typeof Message.DismissedContent.Type>((emit) => {
       const content = element as HTMLElement
       const overlay = content.parentElement
@@ -161,6 +161,8 @@ export const DialogContent = Mount.defineStream("DialogContent", {
         disableOutsidePointerEvents: true,
         shouldDismiss: ({ reason, event }) => {
           if (reason === "focus-outside") return false
+          // Read live: the view keeps this attribute current (dismissOnEscape).
+          if (reason === "escape" && content.dataset.dismissOnEscape === "false") return false
           if (reason === "pointer-down-outside" && event instanceof PointerEvent) {
             const isRightClick = event.button === 2 || (event.button === 0 && event.ctrlKey)
             if (isRightClick) return false
@@ -172,6 +174,15 @@ export const DialogContent = Mount.defineStream("DialogContent", {
       cleanups.push(installFocusScope(content, {
         trapped: true,
         loop: true,
+        // React's onOpenAutoFocus that focuses and selects one field instead.
+        onMountAutoFocus: initialFocus
+          ? () => {
+            const target = content.querySelector<HTMLElement>(initialFocus)
+            target?.focus()
+            if (target instanceof HTMLInputElement) target.select()
+            return true
+          }
+          : undefined,
         onUnmountAutoFocus: () => {
           window.dispatchEvent(new Event(RESTORE_CHAT_INPUT_FOCUS_EVENT))
           return true
@@ -212,6 +223,18 @@ export interface ViewInputs {
    * `contentAttributes: () => childAttributes([h.OnKeyDown(...)])`.
    */
   contentAttributes?: () => ReadonlyArray<ChildAttribute>
+  /**
+   * False while Escape means something else in the dialog (React's
+   * `onEscapeKeyDown` calling `preventDefault`): Escape then doesn't close
+   * it, and the parent's own keydown handles it.
+   */
+  dismissOnEscape?: boolean
+  /**
+   * A selector for what takes focus on open (React's `onOpenAutoFocus` that
+   * focuses one field); it is selected if it's an input. Read when the
+   * dialog opens. Default: the first tabbable, as Radix does.
+   */
+  initialFocus?: string
 }
 
 export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inputs, h) => {
@@ -238,8 +261,9 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inpu
         sizeClasses[inputs.size ?? "md"],
         inputs.className,
       )),
+      ...(inputs.dismissOnEscape === false ? [h.DataAttribute("dismiss-on-escape", "false")] : []),
       ...(inputs.contentAttributes?.() ?? []),
-      h.OnMount(DialogContent({ id: model.id })),
+      h.OnMount(DialogContent({ id: model.id, initialFocus: inputs.initialFocus ?? "" })),
     ], [
       ...inputs.content(parts),
       h.button([
