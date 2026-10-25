@@ -13,6 +13,7 @@
 //   bun run parity --record              capture React into .parity/baseline (no comparison)
 //   bun run parity --record --app foldkit  …or the Foldkit app, to re-baseline a deliberate change
 //   bun run parity --baseline            Foldkit against the recording instead of a live React
+//   bun run parity --save-baseline       React against Foldkit, keeping React's captures as the recording
 //   (--record and --baseline take an optional directory: --baseline path/to/dir)
 //
 // Artifacts land in .parity/runs/<stamp>/ (.parity/latest points at the last
@@ -71,12 +72,14 @@ interface Options {
   recordApp: AppName
   /** Compare the candidate with a recording instead of running React. */
   baseline: string | null
+  /** Keep the live reference's captures as a recording while comparing. */
+  saveBaseline: string | null
 }
 
 const DEFAULT_BASELINE_DIR = path.join(PARITY_DIR, "baseline")
 
 function parseArgs(argv: string[]): Options {
-  const options: Options = { names: [], selfcheck: false, injectCss: null, expectFail: false, regions: [], record: null, recordApp: "react", baseline: null }
+  const options: Options = { names: [], selfcheck: false, injectCss: null, expectFail: false, regions: [], record: null, recordApp: "react", baseline: null, saveBaseline: null }
   // A directory follows the flag when the next argument is a path, not a scenario name.
   const dirAfter = (i: number) => {
     const next = argv[i + 1]
@@ -84,12 +87,13 @@ function parseArgs(argv: string[]): Options {
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
-    if (arg === "--record" || arg === "--baseline") {
+    if (arg === "--record" || arg === "--baseline" || arg === "--save-baseline") {
       const dir = dirAfter(i)
       if (dir) i++
       const resolved = path.resolve(dir ?? DEFAULT_BASELINE_DIR)
       if (arg === "--record") options.record = resolved
-      else options.baseline = resolved
+      else if (arg === "--baseline") options.baseline = resolved
+      else options.saveBaseline = resolved
     } else if (arg === "--app") {
       const app = argv[++i]
       if (app !== "react" && app !== "foldkit") throw new Error(`--app takes react or foldkit, not ${app}`)
@@ -276,12 +280,37 @@ interface BaselineMeta {
   commit: string
 }
 
+/**
+ * Recorded captures name this origin instead of the run's own (a random
+ * port), so a scenario recorded on its own later reads like the rest.
+ */
+const BASELINE_ORIGIN = "http://parity-baseline.invalid"
+const recordedJson = (capture: Capture, origin: string) => JSON.stringify(capture, null, 2).split(origin).join(BASELINE_ORIGIN)
+
 const captureFilesOf = (dir: string) => ({ png: path.join(dir, "capture.png"), json: path.join(dir, "capture.json") })
 
 function regionWanted(label: string, regionFilter: string[]) {
   if (regionFilter.length === 0) return true
   const region = label.includes("@") ? label.slice(label.indexOf("@") + 1) : "page"
   return regionFilter.includes(region)
+}
+
+/** One scenario variant's captures, written as a recording. */
+function writeBaselineRuns(baselineDir: string, scenario: Scenario, variant: string, runs: Run[], origin: string) {
+  rmSync(path.join(baselineDir, scenario.name, variant), { recursive: true, force: true })
+  for (const run of runs) {
+    const files = captureFilesOf(path.join(baselineDir, scenario.name, variant, run.label))
+    mkdirSync(path.dirname(files.png), { recursive: true })
+    writeFileSync(files.png, run.screenshot)
+    writeFileSync(files.json, recordedJson(run.capture, origin))
+  }
+}
+
+function writeBaselineMeta(baselineDir: string, app: AppName) {
+  const commit = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd: ROOT }).stdout.toString().trim()
+  const meta: BaselineMeta = { app, origin: BASELINE_ORIGIN, recordedAt: new Date().toISOString(), commit }
+  mkdirSync(baselineDir, { recursive: true })
+  writeFileSync(path.join(baselineDir, "meta.json"), JSON.stringify(meta, null, 2))
 }
 
 /** One scenario variant's captures, as recorded. */
@@ -310,14 +339,10 @@ async function record(options: Options, selected: Scenario[]) {
       for (const viewport of scenario.viewports ?? (["desktop", "mobile"] as ViewportName[])) {
         for (const theme of scenario.themes ?? (["dark", "light"] as Theme[])) {
           const variant = `${viewport}-${theme}`
-          for (const run of await runApp(browser, app.origin, scenario, theme, viewport, null, options.regions)) {
-            const files = captureFilesOf(path.join(dir, scenario.name, variant, run.label))
-            mkdirSync(path.dirname(files.png), { recursive: true })
-            writeFileSync(files.png, run.screenshot)
-            writeFileSync(files.json, JSON.stringify(run.capture, null, 2))
-            count += 1
-            if (run.capture.errors.length > 0) withErrors.push(`${scenario.name}/${variant}/${run.label}`)
-          }
+          const runs = await runApp(browser, app.origin, scenario, theme, viewport, null, options.regions)
+          writeBaselineRuns(dir, scenario, variant, runs, app.origin)
+          count += runs.length
+          for (const run of runs) if (run.capture.errors.length > 0) withErrors.push(`${scenario.name}/${variant}/${run.label}`)
         }
       }
       console.log(`recorded ${scenario.name}`)
@@ -326,9 +351,7 @@ async function record(options: Options, selected: Scenario[]) {
     await browser.close()
     app.stop()
   }
-  const commit = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd: ROOT }).stdout.toString().trim()
-  const meta: BaselineMeta = { app: options.recordApp, origin: app.origin, recordedAt: new Date().toISOString(), commit }
-  writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2))
+  writeBaselineMeta(dir, options.recordApp)
   release()
   console.log(`\n${count} captures of ${options.recordApp} recorded in ${path.relative(ROOT, dir)}`)
   if (withErrors.length > 0) console.log(`with errors on the page: ${withErrors.join(", ")}`)
@@ -356,6 +379,7 @@ async function main() {
   const candidate = options.selfcheck && referenceDir ? serve(referenceDir) : serve(candidateDir)
   const browser = await chromium.launch()
   const outcomes: Outcome[] = []
+  if (options.saveBaseline && !baseline && !options.selfcheck) writeBaselineMeta(options.saveBaseline, "react")
 
   try {
     for (const scenario of selected) {
@@ -365,6 +389,7 @@ async function main() {
           const refRuns = baseline
             ? readBaselineRuns(baseline, scenario, variant, options.regions)
             : await runApp(browser, reference.origin, scenario, theme, viewport, null, options.regions)
+          if (options.saveBaseline && !baseline && !options.selfcheck) writeBaselineRuns(options.saveBaseline, scenario, variant, refRuns, reference.origin)
           const candRuns = await runApp(browser, candidate.origin, scenario, theme, viewport, options.injectCss, options.regions)
           const labels = [...new Set([...refRuns, ...candRuns].map((run) => run.label))]
           for (const label of labels) {
