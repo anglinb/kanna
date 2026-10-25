@@ -491,6 +491,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       const next = getNextMeasuredInputHeight(model.dockHeight, height)
       return next === model.dockHeight ? { model } : { model: modifyFields(model, { dockHeight: () => next }) }
     },
+    ChangedPageFileDrag: ({ active }) => (model.pageFileDragActive === active ? { model } : { model: modifyFields(model, { pageFileDragActive: () => active }) }),
     ChangedWashScroll: ({ wash, scrolled }) => washStep(model, wash, (state) => (state.scrolled === scrolled ? state : { ...state, scrolled })),
     StartedWash: ({ wash, token }) => washStep(model, wash, (state) => ({ ...state, settling: true, token })),
     SettledWash: ({ wash, token }) => washStep(model, wash, (state) => (state.token === token ? { ...state, settling: false } : state)),

@@ -10,7 +10,7 @@ import * as Transcript from "../transcript"
 import * as Viewer from "../viewer"
 import * as Widgets from "../widgets"
 import { card, cardContent } from "../ui/card"
-import { AnimateTerminalSplit, HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
+import { AnimateTerminalSplit, HoldArrivalFocus, KeepChatFocus, PageFileDrop, HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
 import { Message, type Watch } from "./message"
 import type { Model } from "./model"
 import { delegatedListButtonView, editableTitleView, navbarTitleView, navbarView, washView } from "./navbar"
@@ -71,7 +71,7 @@ export function pageContext(model: Model, app: AppModel, facts: PageFacts): Chat
     typedEmptyStateText: typing.text,
     isEmptyStateTypingComplete: typing.complete,
     transcriptPaddingBottom: getTranscriptPaddingBottom(model.dockHeight),
-    isPageFileDragActive: false,
+    isPageFileDragActive: model.pageFileDragActive,
     projectPath: facts.navbarLocalPath,
     widgetsActive: facts.showRightSidebar,
     isNewChat: facts.showEmptyState,
@@ -118,7 +118,7 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
 
   const chatCard = card({
     class: "bg-background h-full flex flex-col overflow-hidden border-0 rounded-none relative",
-    attributes: [h.DataAttribute("chat-card", "")],
+    attributes: [h.DataAttribute("chat-card", ""), h.OnMount(PageFileDrop({ enabled: facts.hasSelectedProject }))],
   }, [
     cardContent({ class: "flex flex-1 min-h-0 flex-col overflow-hidden p-0 relative" }, [
       washView(model, { wash: "transcript", resetKey: facts.chatId, stopAtTranscriptScrollbar: true, opaqueBar: facts.chatTabsEnabled }, h),
@@ -216,6 +216,9 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
     h.div([h.Hidden(true), h.OnMount(HoldPagePresence())], [
       h.keyed("span")(JSON.stringify(watchOf(facts)), [h.OnMount(ObservePage({ watch: watchOf(facts) }))], []),
       facts.showEmptyState ? emptyStateTypist(h) : null,
+      // useStickyChatFocus, while there is a project to type into.
+      facts.hasSelectedProject ? h.keyed("span")(`arrival-focus-${facts.chatId ?? ""}`, [h.OnMount(HoldArrivalFocus())], []) : null,
+      facts.hasSelectedProject ? h.keyed("span")("sticky-focus", [h.OnMount(KeepChatFocus({ canCancel: facts.canCancel }))], []) : null,
       facts.projectId
         ? h.keyed("span")(`shortcuts-${JSON.stringify(facts.keybindings.bindings)}`, [h.OnMount(ListenForShortcuts({ bindings: JSON.stringify(facts.keybindings.bindings) }))], [])
         : null,

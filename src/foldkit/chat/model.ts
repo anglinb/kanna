@@ -47,6 +47,9 @@ export const Model = Schema.Struct({
   /** The composer dock's height (useTranscriptPaddingBottom). */
   dockHeight: Schema.Number,
 
+  /** Files are being dragged over the chat card: the transcript shows its drop overlay. */
+  pageFileDragActive: Schema.Boolean,
+
   /** The page as last observed; null before the first look. */
   watch: Schema.NullOr(Watch),
   lastGitRefreshProjectId: Schema.NullOr(Schema.String),
@@ -184,6 +187,7 @@ export function init(): Model {
     layoutHeight: 0,
     navbarHeight: null,
     dockHeight: 148,
+    pageFileDragActive: false,
     watch: null,
     lastGitRefreshProjectId: null,
     settledShowEmptyState: false,

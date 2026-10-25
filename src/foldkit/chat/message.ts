@@ -111,6 +111,8 @@ export const Message = defineMessageUnion({
   StartedWash: { wash: WashId, token: Schema.Number },
   SettledWash: { wash: WashId, token: Schema.Number },
   TypedEmptyStateCharacter: { count: Schema.Number },
+  /** Files are being dragged over the chat card (usePageFileDrop). */
+  ChangedPageFileDrag: { active: Schema.Boolean },
 
   // The navbar
   ClickedBack: {},

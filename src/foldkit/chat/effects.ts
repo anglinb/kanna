@@ -2,6 +2,17 @@ import { Effect, Schema } from "effect"
 import { Command, Mount } from "foldkit"
 import { domStream } from "../ui/overlay/stream"
 import { interpolateLayout, prefersReducedMotion } from "../../client/app/paneAnimation"
+import {
+  attachFilesToComposer,
+  CHAT_INPUT_ATTRIBUTE,
+  hasActiveFocusOverlay,
+  hasActiveTextSelection,
+  resolveChatFocusAction,
+  RESTORE_CHAT_INPUT_FOCUS_EVENT,
+  shouldComposerClaimFocus,
+} from "../../client/app/chatFocusPolicy"
+import { hasFileDragTypes } from "../../client/app/ChatPage/utils"
+import { snapshotDroppedFiles } from "../../client/lib/snapshotDroppedFiles"
 import { DIFF_REFRESH_INTERVAL_MS, EMPTY_STATE_TEXT, EMPTY_STATE_TYPING_INTERVAL_MS } from "../../client/app/ChatPage/utils"
 import { Message, ShortcutAction, TerminalPurpose, Watch, WashId, type MenuId } from "./message"
 import { actionMatchesEvent } from "../../client/lib/keybindings"
@@ -274,6 +285,193 @@ export const AnimateTerminalSplit = Mount.defineStream("AnimateTerminalSplit", {
   }),
 })
 
+// FOCUS (useStickyChatFocus)
+
+/** The page's own composer: the chat card's, not a previewed chat's in the viewer. */
+function chatInput(): HTMLTextAreaElement | null {
+  return document.querySelector<HTMLTextAreaElement>(`[data-chat-card] [${CHAT_INPUT_ATTRIBUTE}]`)
+    ?? document.querySelector<HTMLTextAreaElement>(`[${CHAT_INPUT_ATTRIBUTE}]`)
+}
+
+/** How long an arrival holds focus in the composer: past a menu's close animation. */
+const ARRIVAL_CLAIM_MS = 1000
+/** How many times one arrival takes focus back, before something that insists wins. */
+const ARRIVAL_CLAIM_LIMIT = 4
+
+/**
+ * Arriving at a chat puts focus in its composer and holds it there until you
+ * do something or a second has passed: a right-click menu gives focus back
+ * to the row it opened on once its close animation ends, by which time the
+ * chat made from it is up. Only with a real keyboard: on a phone this would
+ * raise the on-screen keyboard over the chat you came to read. Keyed on the
+ * arrival.
+ */
+export const HoldArrivalFocus = Mount.defineStream("ChatArrivalFocus", {
+  messages: [Message.CompletedSideEffect],
+  execute: () => domStream<typeof Message.CompletedSideEffect.Type>(() => {
+    if (!window.matchMedia?.("(hover: hover) and (pointer: fine)").matches) return () => {}
+    let claimsLeft = ARRIVAL_CLAIM_LIMIT
+    const claim = (target: Element | null) => {
+      const fallback = chatInput()
+      if (claimsLeft === 0) return
+      if (!shouldComposerClaimFocus({ target, fallback, hasActiveOverlay: hasActiveFocusOverlay(document) })) return
+      claimsLeft -= 1
+      fallback?.focus({ preventScroll: true })
+    }
+    const handleFocusIn = (event: FocusEvent) => claim(event.target instanceof Element ? event.target : null)
+    // A press or a key is you deciding where focus goes next.
+    const release = () => {
+      window.clearTimeout(timeoutId)
+      document.removeEventListener("focusin", handleFocusIn)
+      window.removeEventListener("pointerdown", release, true)
+      window.removeEventListener("keydown", release, true)
+    }
+    const timeoutId = window.setTimeout(release, ARRIVAL_CLAIM_MS)
+    document.addEventListener("focusin", handleFocusIn)
+    window.addEventListener("pointerdown", release, true)
+    window.addEventListener("keydown", release, true)
+    // The composer may mount a frame after the page: claim once it's there.
+    const frame = window.requestAnimationFrame(() => claim(document.activeElement))
+    claim(document.activeElement)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      release()
+    }
+  }),
+})
+
+/**
+ * Focus goes back to the composer after a click on nothing focusable in the
+ * chat, on Escape from nowhere in particular (unless a turn can be
+ * cancelled), and when something asks for it (`RESTORE_CHAT_INPUT_FOCUS_EVENT`).
+ */
+export const KeepChatFocus = Mount.defineStream("ChatStickyFocus", {
+  args: { canCancel: Schema.Boolean },
+  messages: [Message.CompletedSideEffect],
+  execute: ({ canCancel }) => domStream<typeof Message.CompletedSideEffect.Type>(() => {
+    let rafId = 0
+    let pointerStartTarget: Element | null = null
+    const restoreFocusIfNeeded = (pointerEndTarget: EventTarget | null) => {
+      const target = pointerEndTarget instanceof Element ? pointerEndTarget : null
+      const root = document.querySelector("[data-chat-card]")
+      const fallback = chatInput()
+      if (resolveChatFocusAction({
+        trigger: "pointer",
+        activeElement: document.activeElement,
+        pointerStartTarget,
+        pointerEndTarget: target,
+        root,
+        fallback,
+        hasActiveOverlay: hasActiveFocusOverlay(document),
+        hasActiveSelection: hasActiveTextSelection(window.getSelection()),
+      }) === "restore") fallback?.focus({ preventScroll: true })
+      pointerStartTarget = null
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      cancelAnimationFrame(rafId)
+      pointerStartTarget = event.target instanceof Element ? event.target : null
+    }
+    const handlePointerUp = (event: PointerEvent) => {
+      cancelAnimationFrame(rafId)
+      rafId = window.requestAnimationFrame(() => restoreFocusIfNeeded(event.target))
+    }
+    const handleRestoreFocus = () => {
+      pointerStartTarget = null
+      const fallback = chatInput()
+      if (!fallback || fallback.disabled) return
+      fallback.focus({ preventScroll: true })
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      const fallback = chatInput()
+      if (resolveChatFocusAction({
+        trigger: "escape",
+        activeElement: document.activeElement,
+        fallback,
+        hasActiveOverlay: hasActiveFocusOverlay(document),
+        canCancel,
+        defaultPrevented: event.defaultPrevented,
+      }) !== "escape-focus") return
+      event.preventDefault()
+      fallback?.focus({ preventScroll: true })
+    }
+    window.addEventListener("pointerdown", handlePointerDown, true)
+    window.addEventListener("pointerup", handlePointerUp, true)
+    window.addEventListener("keydown", handleKeyDown, true)
+    window.addEventListener(RESTORE_CHAT_INPUT_FOCUS_EVENT, handleRestoreFocus)
+    return () => {
+      cancelAnimationFrame(rafId)
+      window.removeEventListener("pointerdown", handlePointerDown, true)
+      window.removeEventListener("pointerup", handlePointerUp, true)
+      window.removeEventListener("keydown", handleKeyDown, true)
+      window.removeEventListener(RESTORE_CHAT_INPUT_FOCUS_EVENT, handleRestoreFocus)
+    }
+  }),
+})
+
+// FILES DROPPED ON THE PAGE (usePageFileDrop)
+
+/**
+ * Files dragged over the chat card: the transcript shows its drop overlay
+ * while they're over it, and a drop hands them to the composer. The bytes
+ * are read in the drop handler, while the drop is live (see
+ * snapshotDroppedFiles for why a later read can come back empty on iOS).
+ */
+export const PageFileDrop = Mount.defineStream("ChatPageFileDrop", {
+  args: { enabled: Schema.Boolean },
+  messages: [Message.ChangedPageFileDrag],
+  execute: ({ element, enabled }) => domStream<typeof Message.ChangedPageFileDrag.Type>((emit) => {
+    if (!enabled) return () => {}
+    let depth = 0
+    let active = false
+    const set = (next: boolean) => {
+      if (active === next) return
+      active = next
+      emit(Message.ChangedPageFileDrag({ active: next }))
+    }
+    const hasFiles = (event: DragEvent) => hasFileDragTypes(event.dataTransfer?.types ?? [])
+    const enter = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      depth += 1
+      set(true)
+    }
+    const over = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"
+      set(true)
+    }
+    const leave = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) set(false)
+    }
+    const drop = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      depth = 0
+      set(false)
+      const files = [...(event.dataTransfer?.files ?? [])]
+      if (files.length === 0) return
+      void snapshotDroppedFiles(files).then((copies) => {
+        if (copies.length > 0) attachFilesToComposer(copies)
+      })
+    }
+    element.addEventListener("dragenter", enter as EventListener)
+    element.addEventListener("dragover", over as EventListener)
+    element.addEventListener("dragleave", leave as EventListener)
+    element.addEventListener("drop", drop as EventListener)
+    return () => {
+      element.removeEventListener("dragenter", enter as EventListener)
+      element.removeEventListener("dragover", over as EventListener)
+      element.removeEventListener("dragleave", leave as EventListener)
+      element.removeEventListener("drop", drop as EventListener)
+    }
+  }),
+})
+
 // COMMANDS
 
 /**
@@ -368,7 +566,7 @@ export const OpenCommandPalette = Command.define("OpenCommandPalette", {
 export const FocusChatInput = Command.define("FocusChatInput", {
   messages: [Message.CompletedSideEffect],
   execute: Effect.sync(() => {
-    document.querySelector<HTMLTextAreaElement>("[data-chat-input]")?.focus({ preventScroll: true })
+    chatInput()?.focus({ preventScroll: true })
     return Message.CompletedSideEffect()
   }),
 })
