@@ -53,6 +53,13 @@ function watch(app: AppModel, viewportWidth = 1440): Watch {
 
 const names = (result: { commands?: ReadonlyArray<{ name: string }> }) => (result.commands ?? []).map((command) => command.name)
 
+/** What a result asks the root for, in order: a batch's actions, or the one. */
+function actionsOf(result: { outMessage?: { action: AppAction } }): AppAction[] {
+  const action = result.outMessage?.action
+  if (!action) return []
+  return action._tag === "Batch" ? [...(action.actions as ReadonlyArray<AppAction>)] : [action]
+}
+
 /** The store Message a result asks the root for (`AppAction.Store`), by its inner tag. */
 function storeMessageTag(result: { outMessage?: { action: AppAction } }): string | null {
   const action = result.outMessage?.action
@@ -65,8 +72,9 @@ describe("chat page: opening", () => {
   test("a fresh page reads the project's quick actions, then refreshes its diffs, and hands the viewer the chat", () => {
     const app = boot("/chat/c1")
     const opened = update({ ...init(), viewportWidth: 1440 }, Message.ObservedPage({ watch: watch(app), fresh: true }), app)
-    expect(names(opened)).toEqual(["ReadProjectQuickActions", "RefreshChatDiffs", "DispatchChatPageAppAction"])
-    expect(opened.outMessage?.action._tag).toBe("Store")
+    expect(names(opened)).toEqual(["ReadProjectQuickActions", "RefreshChatDiffs"])
+    expect(actionsOf(opened).length).toBeGreaterThan(1)
+    expect(actionsOf(opened).every((action) => action._tag === "Store")).toBe(true)
   })
 
   test("another chat of the same project reads nothing again", () => {
@@ -250,10 +258,9 @@ describe("chat page: tabs", () => {
   test("closing the open tab goes back to the one you were on before it", () => {
     const app = withTabs(boot("/chat/c1"), ["c1", "c2", "c3"], ["c1", "c3"])
     const closed = update(init(), Message.ClickedCloseTab({ chatId: "c1" }), app)
-    expect(closed.outMessage?.action._tag).toBe("Store")
-    expect(names(closed)).toEqual(["DispatchChatPageAppAction"])
-    const queued = closed.commands?.[0] as unknown as { args: { action: AppAction } }
-    expect(queued.args.action).toEqual(AppAction.Navigate({ path: "/chat/c3", replace: false }))
+    const [first, second] = actionsOf(closed)
+    expect(first?._tag).toBe("Store")
+    expect(second).toEqual(AppAction.Navigate({ path: "/chat/c3", replace: false }))
   })
 
   test("closing another tab stays on the open chat", () => {
@@ -366,8 +373,8 @@ describe("chat page: delegating from the new chat page", () => {
   test("sent, the page follows the message to the delegator and remembers it", () => {
     const app = newChatPage()
     const sent = update(init(), Message.SucceededDelegatedSend({ chatId: "d1" }), app)
-    expect(sent.outMessage?.action._tag).toBe("Store")
-    const queued = sent.commands?.[0] as unknown as { args: { action: AppAction } }
-    expect(queued.args.action).toEqual(AppAction.Navigate({ path: "/chat/d1", replace: false }))
+    const [first, second] = actionsOf(sent)
+    expect(first?._tag).toBe("Store")
+    expect(second).toEqual(AppAction.Navigate({ path: "/chat/d1", replace: false }))
   })
 })

@@ -72,6 +72,11 @@ export const Model = Schema.Struct({
   legacySettingsMigrationStarted: Schema.Boolean,
   /** pagehide puts the bare app name in the title, for the bfcache; pageshow brings it back. */
   pageHidden: Schema.Boolean,
+  /**
+   * The draft ids as draft protection last looked (useKannaState's effect
+   * dependencies): text drafts and attachment drafts, sorted.
+   */
+  draftIdsSeen: Schema.Struct({ drafts: Schema.Array(Schema.String), attachments: Schema.Array(Schema.String) }),
   /** /oauth/openrouter/callback, outside the layout. */
   openRouterCallback: OpenRouterCallback.Model,
   /** StandaloneShareDialog: open while `actions.standaloneShareUrl` is set. */

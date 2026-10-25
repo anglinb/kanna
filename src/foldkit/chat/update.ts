@@ -6,7 +6,7 @@ import { paneDurationMs } from "../../client/app/paneAnimation"
 import { EMPTY_STATE_TEXT } from "../../client/app/ChatPage/utils"
 import { dockedViewerPaneWidthPx, resolveViewerSplitMove, viewerPaneState } from "../../client/lib/viewer-split"
 import { opensInViewer, projectRelativePath } from "../../client/components/viewer/localLinks"
-import { AppAction } from "../app/action"
+import { AppAction, batch } from "../app/action"
 import { SliceOutMessage, type AppModel, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
 import * as Composer from "../composer"
@@ -64,25 +64,18 @@ type AppCommand = NonNullable<Return["commands"]>[number]
 // ASKING THE ROOT
 
 /**
- * A slice's update hands the root one request; the rest are queued as
- * Messages of its own, each handed up in turn (`ForwardedAppAction`).
+ * A slice's update hands the root one request: several from one update go
+ * as one batch, so the root does them in one update, as React's handlers
+ * set their stores in one render (and its effects saw them once).
  */
 function withActions(result: { model: Model; commands?: ReadonlyArray<Command.Command<Message, never, unknown>> }, actions: ReadonlyArray<AppAction>): Return {
-  const [first, ...rest] = actions
-  const queued = rest.map((action) => DispatchAppAction({ action }))
+  const action = actions.length === 0 ? null : actions.length === 1 ? actions[0]! : batch(...actions)
   return {
     model: result.model,
-    commands: [...(result.commands ?? []), ...queued] as Return["commands"],
-    ...(first ? { outMessage: SliceOutMessage.RequestedAppAction({ action: first }) } : {}),
+    commands: (result.commands ?? []) as Return["commands"],
+    ...(action ? { outMessage: SliceOutMessage.RequestedAppAction({ action }) } : {}),
   }
 }
-
-/** One of several requests from one update, handed up on its own turn. */
-const DispatchAppAction = Command.define("DispatchChatPageAppAction", {
-  args: { action: AppAction },
-  messages: [Message.ForwardedAppAction],
-  execute: ({ action }) => Effect.succeed(Message.ForwardedAppAction({ action })),
-})
 
 const store = (message: Stores.Message) => AppAction.Store({ message })
 const rightSidebar = (message: RightSidebar.Message) => store(Stores.Message.GotRightSidebarMessage({ message }))

@@ -100,6 +100,7 @@ export function init(flags: Flags, frameUrl: Url): UpdateReturn {
     openRouterCallback: OpenRouterCallback.init(Option.getOrElse(url.search, () => "")),
     legacySettingsMigrationStarted: false,
     pageHidden: false,
+    draftIdsSeen: draftIdsOf(stores),
     sidebar: SidebarSlice.init(),
     home: HomeSlice.init(),
     settings: SettingsSlice.init(),
@@ -473,9 +474,15 @@ const foldAppDialog = Update.foldChild({
 
 /** Runs a slice's request. Sidebar collapse and the page's chat are the root's own. */
 export function performAction(model: Model, action: AppAction): UpdateReturn {
+  // Once per action, a batch as a whole: React's effect ran once after
+  // the render that applied it.
+  return withDraftProtection(model, performUnprotected(model, action))
+}
+
+function performUnprotected(model: Model, action: AppAction): UpdateReturn {
   switch (action._tag) {
     case "Batch":
-      return Update.combine(model, (action.actions as ReadonlyArray<AppAction>).map((each) => (step: Model) => performAction(step, each)))
+      return Update.combine(model, (action.actions as ReadonlyArray<AppAction>).map((each) => (step: Model) => performUnprotected(step, each)))
     case "OpenCommandPalette":
       return foldPaletteResult(model, PaletteSlice.requestOpen(model.palette, action.page, model))
     case "PrefillComposer":
@@ -487,7 +494,7 @@ export function performAction(model: Model, action: AppAction): UpdateReturn {
     case "Chat":
       return update(model, Message.GotChatMessage({ message: action.message }))
     default:
-      return withDraftProtection(model, actions.performAction(model, action) as UpdateReturn)
+      return actions.performAction(model, action) as UpdateReturn
   }
 }
 
@@ -792,7 +799,7 @@ export function draftProtectedChatIds(model: Model): string[] {
   return [...new Set([...Object.keys(chatInput.drafts), ...Object.keys(chatInput.attachmentDrafts)])].sort()
 }
 
-const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every((id, index) => id === b[index])
+const sameIds = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) => a.length === b.length && a.every((id, index) => id === b[index])
 
 /**
  * useKannaState re-sent `chat.setDraftProtection` whenever either list
@@ -800,14 +807,22 @@ const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every((
  * ids, each its own effect dependency. So a chat that swaps its text for
  * an attachment sends again, though the union stays the same.
  */
-function withDraftProtection(before: Model, result: UpdateReturn): UpdateReturn {
-  if (result.model.connectionStatus !== "connected") return result
-  const was = before.stores.chatInput
-  const is = result.model.stores.chatInput
-  if (was === is) return result
-  const textSame = sameIds(Object.keys(was.drafts).sort(), Object.keys(is.drafts).sort())
-  const attachmentsSame = sameIds(Object.keys(was.attachmentDrafts).sort(), Object.keys(is.attachmentDrafts).sort())
-  if (textSame && attachmentsSame) return result
-  return { ...result, commands: [...(result.commands ?? []), SendCommand({ command: { type: "chat.setDraftProtection", chatIds: draftProtectedChatIds(result.model) } })] }
+function withDraftProtection(_before: Model, result: UpdateReturn): UpdateReturn {
+  const seen = result.model.draftIdsSeen
+  const now = draftIdsOf(result.model.stores)
+  // Against what it last saw, not the step's own start: a batch, or an
+  // action that runs update again, is one change and sends once.
+  if (sameIds(seen.drafts, now.drafts) && sameIds(seen.attachments, now.attachments)) return result
+  const model = modifyFields(result.model, { draftIdsSeen: () => now })
+  // Disconnected, the effect returned early; connecting sends the list then.
+  if (model.connectionStatus !== "connected") return { ...result, model }
+  return { ...result, model, commands: [...(result.commands ?? []), SendCommand({ command: { type: "chat.setDraftProtection", chatIds: draftProtectedChatIds(model) } })] }
+}
+
+function draftIdsOf(stores: Stores.Model): Model["draftIdsSeen"] {
+  return {
+    drafts: Object.keys(stores.chatInput.drafts).sort(),
+    attachments: Object.keys(stores.chatInput.attachmentDrafts).sort(),
+  }
 }
 
