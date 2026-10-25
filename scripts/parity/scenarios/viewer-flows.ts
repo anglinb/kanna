@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { CHATS, click, composer, countUuids, parkPointer, press, quietReadAnchor, reduceMotion, REGIONS, regions, rest, typeIntoComposer } from "./_lib/helpers"
+import { CHATS, click, composer, countUuids, openPalette, parkPointer, press, quietReadAnchor, reduceMotion, REGIONS, regions, rest, typeIntoComposer } from "./_lib/helpers"
 
 // The viewer reached from a chat, without the widget column: links sent in a
 // prompt render in its bubble, so a file link opens the file viewer (and
@@ -191,6 +191,43 @@ export const scenarios: Scenario[] = [
       await click(context, viewer(context.page).getByRole("button", { name: "Open chat" }))
       await parkPointer(context)
       await quiet(context, "opened")
+    },
+  }),
+  defineScenario({
+    // A delegator's page: its list of chats is the pane's floor. A chat
+    // opened over it has a Back to the list, Escape steps back one level
+    // (to the list), and Close shuts the pane from any level.
+    name: "viewer-levels-delegator",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("viewer"),
+    covers: { commands: ["chat.create", "chat.rename", "chat.send"] },
+    async run(context) {
+      const { page } = context
+      await reduceMotion(context)
+      await openPalette(context)
+      const palette = page.getByRole("dialog", { name: "Command Palette" })
+      await palette.getByRole("combobox").pressSequentially("delegator")
+      await click(context, palette.getByRole("option", { name: /^New Delegator in tidepool/ }).first())
+      await page.getByPlaceholder("Name (optional)").fill("Release captain")
+      await click(context, page.getByRole("button", { name: "Create" }))
+      await click(context, page.locator(REGIONS.sidebar).getByText("Release captain", { exact: true }).first())
+      await parkPointer(context)
+      await quiet(context, "floor")
+      await quietReadAnchor(context)
+      await typeIntoComposer(context, LINKS)
+      await composer(page).press("Enter")
+      await rest(context)
+      await quietReadAnchor(context)
+      await click(context, bubbleLink(page, "deploy"))
+      await parkPointer(context)
+      await quiet(context, "over-floor")
+      await press(context, "Escape")
+      await parkPointer(context)
+      await quiet(context, "back-to-floor")
+      await click(context, viewer(page).getByRole("button", { name: "Close (Esc)" }))
+      await parkPointer(context)
+      await quiet(context, "shut")
     },
   }),
   defineScenario({
