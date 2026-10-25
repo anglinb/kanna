@@ -5,6 +5,7 @@ import { getNextMeasuredInputHeight } from "../../client/app/kannaStateHelpers"
 import { paneDurationMs } from "../../client/app/paneAnimation"
 import { EMPTY_STATE_TEXT } from "../../client/app/ChatPage/utils"
 import { dockedViewerPaneWidthPx } from "../../client/lib/viewer-split"
+import { opensInViewer, projectRelativePath } from "../../client/components/viewer/localLinks"
 import { AppAction } from "../app/action"
 import { SliceOutMessage, type AppModel, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
@@ -454,10 +455,10 @@ function commitColumnWidth(model: Model, app: AppModel, widthPx: number): Return
 export function update(model: Model, message: Message, app: AppModel): Return {
   const facts = () => pageFacts(app, model.viewportWidth, model.settledShowEmptyState)
   return Message.match<Return>(message, {
-    GotTranscriptMessage: ({ message: inner }) => foldTranscript(model, { message: inner, app }) as Return,
+    GotTranscriptMessage: ({ message: inner }) => routeLocalLink(foldTranscript(model, { message: inner, app }) as Return, facts()),
     GotComposerMessage: ({ message: inner }) => routeDelegatedSend(foldComposer(model, { message: inner, app }) as Return, app, facts()),
     GotWidgetsMessage: ({ message: inner }) => foldWidgets(model, { message: inner, app }) as Return,
-    GotViewerMessage: ({ message: inner }) => foldViewer(model, { message: inner, app }) as Return,
+    GotViewerMessage: ({ message: inner }) => routeLocalLink(foldViewer(model, { message: inner, app }) as Return, facts()),
     GotTerminalMessage: ({ message: inner }) => foldTerminal(model, { message: inner, app }) as Return,
 
     GotTooltipMessage: ({ id, message: inner }) => tooltipStep(model, id, inner),
@@ -658,6 +659,28 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ForwardedAppAction: ({ action }) => withActions({ model }, [action]),
     CompletedSideEffect: () => ({ model }),
   })
+}
+
+/**
+ * ChatPage's handleOpenLocalLink, for links in the transcript and the
+ * viewer: a file link that would open in the editor (or a CSV that would open
+ * in Numbers) opens in the viewer instead, when it's a file in this project
+ * (the only files the viewer can read). Anything else, and an explicit choice
+ * from a link's context menu, goes where it always did.
+ */
+export function routeLocalLink(result: Return, facts: PageFacts): Return {
+  const out = result.outMessage
+  if (!out || out.action._tag !== "OpenLocalLink" || !facts.projectId) return result
+  const { target, action, editor } = out.action
+  if (!opensInViewer(target.path, action) || editor || target.trigger === "contextmenu") return result
+  const path = projectRelativePath(facts.runtime?.localPath ?? facts.navbarLocalPath, target.path)
+  if (!path) return result
+  const item = { kind: "file" as const, projectId: facts.projectId, path, ...(target.line ? { line: target.line } : {}) }
+  return {
+    model: result.model,
+    ...(result.commands ? { commands: result.commands } : {}),
+    outMessage: SliceOutMessage.RequestedAppAction({ action: viewerStore(ViewerStore.Message.OpenedItem({ item, expanded: false, byKey: false })) }),
+  }
 }
 
 /**

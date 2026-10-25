@@ -10,7 +10,7 @@ import * as ChatSession from "../core/chatSession"
 import { memoryStorage } from "../core/stores/testing"
 import { Message, type Watch } from "./message"
 import { init } from "./model"
-import { routeDelegatedSend, update } from "./update"
+import { routeDelegatedSend, routeLocalLink, update } from "./update"
 import { pageFacts } from "./page"
 import { watchOf } from "./view"
 
@@ -158,6 +158,29 @@ describe("chat page: tabs", () => {
       .toEqual({ _tag: "ReorderedTabs", orderedChatIds: ["c2", "c3", "c1"] })
     const inPlace = update(dragging, Message.DroppedTab(), app)
     expect(inPlace.outMessage).toBeUndefined()
+  })
+})
+
+describe("chat page: file links", () => {
+  const openLink = (path: string, trigger: "click" | "contextmenu" = "click") => ({
+    model: init(),
+    outMessage: { _tag: "RequestedAppAction" as const, action: AppAction.OpenLocalLink({ target: { path, trigger }, action: "open_editor", editor: null }) },
+  })
+
+  test("a file in this project opens in the viewer instead of the editor", () => {
+    const app = boot("/chat/c1")
+    const facts = pageFacts(app, 1440, false)
+    const routed = routeLocalLink(openLink("/work/tidepool/src/units.ts") as never, facts)
+    const action = routed.outMessage?.action
+    const message = action?._tag === "Store" && action.message._tag === "GotViewerMessage" ? action.message.message : null
+    expect(message?._tag).toBe("OpenedItem")
+  })
+
+  test("a file elsewhere, or a choice from the link's menu, goes where it always did", () => {
+    const app = boot("/chat/c1")
+    const facts = pageFacts(app, 1440, false)
+    expect(routeLocalLink(openLink("/etc/hosts") as never, facts).outMessage?.action._tag).toBe("OpenLocalLink")
+    expect(routeLocalLink(openLink("/work/tidepool/a.ts", "contextmenu") as never, facts).outMessage?.action._tag).toBe("OpenLocalLink")
   })
 })
 
