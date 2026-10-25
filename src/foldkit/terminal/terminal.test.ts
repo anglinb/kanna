@@ -189,11 +189,13 @@ describe("terminal views", () => {
   // layout, each pane's fresh state.
   const mountWorkspace = (ids: string[], layoutKey = HOME_TERMINAL_LAYOUT_KEY) => [
     Scene.Mount.resolve(TerminalWorkspaceScroller, Message.MeasuredWorkspace({ width: 1200 })),
+    // The group's Mount is lifted with Mount.mapMessage, not a Submodel
+    // boundary, so it resolves with the lifted Message; its type says the raw one.
     Scene.Mount.resolve(Resizable.PanelGroup, Message.GotGroupMessage({ layoutKey, message: Resizable.Message.ChangedGroupLayout({
       groupId: `terminal-workspace-${layoutKey}`,
       layout: Object.fromEntries(ids.map((id) => [id, 100 / ids.length])),
       isUserInteraction: false,
-    }) })),
+    }) }) as unknown as Resizable.Message),
     ...ids.map((terminalId) => Scene.Mount.resolve(TerminalPane({ terminalId }), Message.ChangedPanePath({ terminalId, path: null }))),
   ]
 
