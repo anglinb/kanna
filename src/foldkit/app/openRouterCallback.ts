@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
-import { Command, Navigation, Submodel, type Update } from "foldkit"
+import { Command, Submodel, type Update } from "foldkit"
+import * as AppNavigation from "../core/navigation"
 import { defineMessageUnion } from "foldkit/message"
 import { modifyFields } from "foldkit/struct"
 import { errorMessage, sendCommand, type KannaSocketService } from "../core/socket"
@@ -63,7 +64,7 @@ const Finish = Command.define("FinishOpenRouterCallback", {
     }
     if (selfFlow) {
       yield* Effect.sleep(700)
-      yield* Navigation.pushUrl("/settings/providers")
+      yield* AppNavigation.pushUrl("/settings/providers")
     } else {
       // Opened as its own tab: close it and return the user to the app.
       yield* Effect.sleep(800)
@@ -75,7 +76,7 @@ const Finish = Command.define("FinishOpenRouterCallback", {
 
 const BackToSettings = Command.define("BackToSettings", {
   messages: [Message.CompletedSideEffect],
-  execute: Navigation.pushUrl("/settings/providers").pipe(Effect.as(Message.CompletedSideEffect())),
+  execute: AppNavigation.pushUrl("/settings/providers").pipe(Effect.as(Message.CompletedSideEffect())),
 })
 
 /** The socket is up: start the exchange (once). */

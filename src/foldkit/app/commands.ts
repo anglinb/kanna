@@ -3,6 +3,7 @@ import { Command, Navigation } from "foldkit"
 import type { ClientCommand } from "../../shared/protocol"
 import type { AppSettingsSnapshot, ChatBrowserNotificationPreference, ChatPreview, ChatSoundId, ChatSoundPreference, LlmProviderSnapshot } from "../../shared/types"
 import { followChat, unfollowChat } from "../core/backgroundChats"
+import * as AppNavigation from "../core/navigation"
 import { opaque } from "../core/schema"
 import { errorMessage, sendCommand } from "../core/socket"
 import { writeStorageItem } from "../core/storage"
@@ -25,13 +26,13 @@ export const STOPPED_CHAT_GRACE_MS = 3_000
 export const PushUrl = Command.define("PushUrl", {
   args: { url: Schema.String },
   messages: [Message.CompletedNavigation],
-  execute: ({ url }) => Navigation.pushUrl(url).pipe(Effect.as(Message.CompletedNavigation())),
+  execute: ({ url }) => AppNavigation.pushUrl(url).pipe(Effect.as(Message.CompletedNavigation())),
 })
 
 export const ReplaceUrl = Command.define("ReplaceUrl", {
   args: { url: Schema.String },
   messages: [Message.CompletedNavigation],
-  execute: ({ url }) => Navigation.replaceUrl(url).pipe(Effect.as(Message.CompletedNavigation())),
+  execute: ({ url }) => AppNavigation.replaceUrl(url).pipe(Effect.as(Message.CompletedNavigation())),
 })
 
 export const LoadExternal = Command.define("LoadExternal", {
@@ -68,7 +69,7 @@ export const SubmitPassword = Command.define("SubmitPassword", {
     const response = await fetch("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ password, next: window.location.pathname + window.location.search }),
+      body: JSON.stringify({ password, next: AppNavigation.currentPathAndSearch() }),
     })
     return response.ok ? Message.SucceededLogin() : Message.FailedLogin()
   }).pipe(Effect.catch(() => Effect.succeed(Message.FailedLogin()))),

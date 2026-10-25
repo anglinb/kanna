@@ -1,5 +1,6 @@
 import { Duration, Effect, Option, Schema } from "effect"
-import { Command, Navigation, Update } from "foldkit"
+import { Command, Update } from "foldkit"
+import * as AppNavigation from "../core/navigation"
 import { modifyFields } from "foldkit/struct"
 import { resolveDiffFilePath } from "../../client/app/ChatPage/utils"
 import { copyTextToClipboard } from "../../client/lib/clipboard"
@@ -75,7 +76,7 @@ const OpenWindow = Command.define("SidebarOpenWindow", {
 const HistoryStep = Command.define("SidebarHistoryStep", {
   args: { direction: Schema.Literals(["back", "forward"]) },
   messages: [Message.CompletedSideEffect],
-  execute: ({ direction }) => (direction === "back" ? Navigation.back() : Navigation.forward()).pipe(Effect.as(done())),
+  execute: ({ direction }) => (direction === "back" ? AppNavigation.back() : AppNavigation.forward()).pipe(Effect.as(done())),
 })
 
 /**
@@ -88,9 +89,8 @@ const LeaveProjectPage = Command.define("SidebarLeaveProjectPage", {
   execute: Effect.gen(function* () {
     // The pop animates, as the back button's does (motion.ts).
     captureOutgoingPage()
-    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
-    if (idx <= 0) return Message.FoundNoHistoryToLeave()
-    yield* Navigation.back()
+    if (AppNavigation.historyIndex() <= 0) return Message.FoundNoHistoryToLeave()
+    yield* AppNavigation.back()
     return done()
   }),
 })

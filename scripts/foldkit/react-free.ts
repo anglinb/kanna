@@ -11,7 +11,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 
 const ROOT = path.resolve(import.meta.dirname, "../..")
-const REACT_PACKAGES = /^(react|react-dom|react-router|react-router-dom|react-markdown|react-resizable-panels|recharts|cmdk|zustand\/react|lucide-react|@radix-ui\/|@dnd-kit\/|@shadcn\/react|@vitejs\/plugin-react|hast-util-to-jsx-runtime)(\/|$)/
+const REACT_PACKAGES = /^(react|react-dom|react-router|react-router-dom|react-markdown|react-resizable-panels|recharts|cmdk|zustand(?!\/(vanilla|middleware))|lucide-react|@radix-ui\/|@dnd-kit\/|@shadcn\/react|@vitejs\/plugin-react|hast-util-to-jsx-runtime)(\/|$)/
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
