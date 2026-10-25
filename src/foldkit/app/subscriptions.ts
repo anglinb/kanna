@@ -11,6 +11,7 @@ import type {
   UpdateSnapshot,
 } from "../../shared/types"
 import { forgetAllFollowed } from "../core/backgroundChats"
+import * as ChatSession from "../core/chatSession"
 import { KannaSocketResource, acquireSocket, releaseSocket, statusStream, topicStream, type KannaSocketService } from "../core/socket"
 import { Message } from "./message"
 import type { Model } from "./model"
@@ -39,7 +40,7 @@ function whileReady<A>(socketReady: boolean, stream: Stream.Stream<A, never, Kan
 const ReadyDependency = { socketReady: Schema.Boolean }
 const readyFrom = (model: Model) => ({ socketReady: model.socketReady })
 
-export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()((entry) => ({
+const rootSubscriptions = Subscription.make<Model, Message, KannaSocketService>()((entry) => ({
   connectionStatus: entry(ReadyDependency, {
     modelToDependencies: readyFrom,
     dependenciesToStream: ({ socketReady }) =>
@@ -113,3 +114,12 @@ export const subscriptions = Subscription.make<Model, Message, KannaSocketServic
     }),
   ),
 }))
+
+// The page's chat: its subscription waits for the socket too.
+const chatSubscriptions = Subscription.lift(ChatSession.subscriptions)<Model, Message>({
+  read: (model) => Option.fromNullishOr(model.chat),
+  toParentMessage: (message) => Message.GotChatMessage({ message }),
+  when: { chat: (model) => model.socketReady },
+})
+
+export const subscriptions = Subscription.aggregate(rootSubscriptions, chatSubscriptions)

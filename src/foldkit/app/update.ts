@@ -1,5 +1,5 @@
 import { Option } from "effect"
-import { Navigation, Update, type Command } from "foldkit"
+import { Command, Navigation, Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
 import { toString as urlToString, type Url } from "foldkit/url"
 import { getChatNotificationEvents, getChatSoundBurstCount } from "../../client/app/chatNotifications"
@@ -10,6 +10,7 @@ import { applySidebarPatch, type SidebarPatch } from "../../shared/sidebar-patch
 import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES } from "../../shared/transcript-window"
 import type { SidebarData } from "../../shared/types"
 import type { KannaSocketService } from "../core/socket"
+import * as ChatSession from "../core/chatSession"
 import * as Delegate from "../core/stores/delegate"
 import {
   ApplyTheme,
@@ -63,14 +64,17 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     commandError: null,
     backgroundChats: {},
     systemTheme: flags.systemTheme,
+    chat: null,
     delegate: flags.delegate,
   }
+  const session = syncChatSession(model, 0)
   return {
-    model,
+    model: session.model,
     commands: [
       FetchAuthStatus(),
       ApplyTheme({ resolved: resolveTheme(themePreference(model.appSettings), model.systemTheme) }),
       ...routeRedirect(route),
+      ...(session.commands ?? []),
     ],
   }
 }
@@ -86,10 +90,27 @@ export function activeChatId(model: Model): string | null {
   return routeChatId(model.route)
 }
 
-/** useKannaState's activeProjectId, before the chat page owns a snapshot. */
+/** The page's chat snapshot, if it is the open chat's. */
+export function activeChatSnapshot(model: Model) {
+  return model.chat && model.chat.chatId === activeChatId(model) ? ChatSession.snapshotOf(model.chat) : null
+}
+
+/** useKannaState's activeProjectId. */
 export function activeProjectId(model: Model): string | null {
   const chatId = activeChatId(model)
-  return (chatId ? getProjectIdForChat(model.sidebar.data.projectGroups, chatId) : null) ?? model.selectedProjectId
+  return activeChatSnapshot(model)?.runtime.projectId
+    ?? (chatId ? getProjectIdForChat(model.sidebar.data.projectGroups, chatId) : null)
+    ?? model.selectedProjectId
+}
+
+/** The sidebar's status for a chat, which stands in until its snapshot lands. */
+export function sidebarChatStatus(model: Model, chatId: string | null): string | null {
+  if (!chatId) return null
+  for (const group of model.sidebar.data.projectGroups) {
+    const chat = group.chats.find((row) => row.chatId === chatId)
+    if (chat) return chat.status
+  }
+  return null
 }
 
 function transcriptWindowSize(model: Model) {
@@ -215,20 +236,60 @@ function receiveSidebar(model: Model, snapshot: SidebarData | SidebarPatch): Upd
   return { model: background.model, commands: [...notifications, ...(background.commands ?? [])] }
 }
 
+// THE PAGE'S CHAT
+
+/**
+ * One session per open chat: a route to another chat closes the one held
+ * (its pending read position and cache write go out) and opens the next.
+ */
+function syncChatSession(model: Model, at: number): UpdateReturn {
+  const chatId = activeChatId(model)
+  if (model.chat?.chatId === chatId) return { model }
+  const commands: AppCommand[] = []
+  if (model.chat) {
+    const closed = ChatSession.close(model.chat, at)
+    commands.push(...Command.mapMessages(closed.commands, (message: ChatSession.Message) => Message.GotChatMessage({ message })))
+  }
+  if (!chatId) return { model: modifyFields(model, { chat: () => null }), commands }
+  const opened = ChatSession.init(chatId, { windowSize: transcriptWindowSize(model), starting: false })
+  commands.push(...Command.mapMessages(opened.commands, (message: ChatSession.Message) => Message.GotChatMessage({ message })))
+  return { model: modifyFields(model, { chat: () => opened.model }), commands }
+}
+
+const handleChatOutMessage = ChatSession.OutMessage.match<Update.Step<Model, Message, AppServices>>({
+  ChangedCommandError: ({ message }) => (model) => ({ model: commandError(model, message) }),
+  // pendingSendStore, the composer and chatPreferences arrive with their slices.
+  MarkedSending: () => (model) => ({ model }),
+  ClearedSending: () => (model) => ({ model }),
+  SucceededSend: () => (model) => ({ model }),
+  FailedSend: ({ error }) => (model) => ({ model: commandError(model, error) }),
+  ConfirmedExitPlanMode: () => (model) => ({ model }),
+})
+
+const foldChat = Update.foldChild({
+  update: (chat: ChatSession.Model, input: { message: ChatSession.Message; sidebarStatus: string | null; windowSize: number }) =>
+    ChatSession.update(chat, input.message, { windowSize: input.windowSize, sidebarStatus: input.sidebarStatus }),
+  read: (model: Model) => Option.fromNullishOr(model.chat),
+  write: (model, chat) => modifyFields(model, { chat: () => chat }),
+  toParentMessage: (message: ChatSession.Message) => Message.GotChatMessage({ message }),
+  foldOutMessage: handleChatOutMessage,
+})
+
 // ROUTES
 
 function changeRoute(model: Model, route: AppRoute): UpdateReturn {
   const previousChatId = activeChatId(model)
   const next = modifyFields(model, { route: () => route })
   const nextChatId = activeChatId(next)
-  const commands: AppCommand[] = [...routeRedirect(route)]
+  const session = syncChatSession(next, 0)
+  const commands: AppCommand[] = [...routeRedirect(route), ...(session.commands ?? [])]
   // Mark a chat read when the user navigates *away* from it, not when it
   // opens. Chats that no longer exist are skipped.
   if (previousChatId && previousChatId !== nextChatId) {
     const left = model.sidebar.data.projectGroups.flatMap((group) => group.chats).find((chat) => chat.chatId === previousChatId)
     if (left?.unread) commands.push(SendCommand({ command: { type: "chat.markRead", chatId: previousChatId } }))
   }
-  const background = reconcileBackgroundChats(next)
+  const background = reconcileBackgroundChats(session.model)
   return { model: background.model, commands: [...commands, ...(background.commands ?? [])] }
 }
 
@@ -363,5 +424,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       commands: [SaveSidebarCollapsed({ collapsed: false })],
     }),
 
+    GotChatMessage: ({ message: chatMessage }) => foldChat(model, {
+      message: chatMessage,
+      sidebarStatus: sidebarChatStatus(model, model.chat?.chatId ?? null),
+      windowSize: transcriptWindowSize(model),
+    }),
     GotDelegateMessage: ({ message: delegateMessage }) => foldDelegate(model, delegateMessage),
   })

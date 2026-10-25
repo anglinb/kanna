@@ -12,6 +12,7 @@ import type {
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../../client/lib/storageKeys"
 import { opaque } from "../core/schema"
 import { readStorageItem } from "../core/storage"
+import * as ChatSession from "../core/chatSession"
 import * as Delegate from "../core/stores/delegate"
 import { AppRoute } from "./route"
 
@@ -71,6 +72,8 @@ export const Model = Schema.Struct({
   backgroundChats: Schema.Record(Schema.String, BackgroundChatState),
   /** System theme while the preference is "system" (prefers-color-scheme). */
   systemTheme: Schema.Literals(["light", "dark"]),
+  /** The page's chat, live (useKannaState's chat half). Null off a chat route. */
+  chat: Schema.NullOr(ChatSession.Model),
   delegate: Delegate.Model,
 })
 export type Model = typeof Model.Type

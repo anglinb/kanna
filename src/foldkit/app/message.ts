@@ -14,6 +14,7 @@ import type {
   UpdateSnapshot,
 } from "../../shared/types"
 import { opaque } from "../core/schema"
+import * as ChatSession from "../core/chatSession"
 import * as Delegate from "../core/stores/delegate"
 import { ConnectionStatus } from "./model"
 
@@ -66,6 +67,9 @@ export const Message = defineMessageUnion({
   // Sidebar
   ClickedCollapseSidebar: {},
   ClickedExpandSidebar: {},
+
+  // The page's chat
+  GotChatMessage: { message: ChatSession.Message },
 
   // Stores
   GotDelegateMessage: { message: Delegate.Message },
