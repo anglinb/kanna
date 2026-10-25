@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { Command, Runtime, Submodel } from "foldkit"
+import { Command, Runtime, Submodel, Subscription } from "foldkit"
 import type { Document, Html, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import { modifyFields } from "foldkit/struct"
@@ -10,6 +10,7 @@ import type { HydratedTranscriptMessage, StandaloneTranscriptBundle } from "../.
 import { syncThemeMetadata } from "../../app/theme"
 import { opaque } from "../../core/schema"
 import { ChevronRight, Flower } from "../../ui/icons"
+import * as Viewer from "../../viewer/standalone"
 import * as Messages from "../messages"
 import { Message as TranscriptMessage } from "../message"
 import * as TranscriptModel from "../model"
@@ -39,6 +40,8 @@ export const Model = Schema.Struct({
   transcript: TranscriptModel.Model,
   /** The page's title: index.html's until the export names it. */
   title: Schema.String,
+  /** The viewer over the page, for the transcript's attachments and charts (ViewerLayer className="fixed"). */
+  viewer: Viewer.Model,
 })
 export type Model = typeof Model.Type
 
@@ -47,6 +50,7 @@ export const Message = defineMessageUnion({
   FailedLoad: { message: Schema.String },
   CompletedApplyTheme: {},
   GotTranscriptMessage: { message: TranscriptMessage },
+  GotViewerMessage: { message: Viewer.Message },
 })
 export type Message = typeof Message.Type
 
@@ -81,13 +85,13 @@ const ApplyTheme = Command.define("ApplyExportedTranscriptTheme", {
 })
 
 export function init(): [Model, ReadonlyArray<Command.Command<Message>>] {
-  return [{ state: { _tag: "Loading" }, transcript: TranscriptModel.init(), title: "Kanna Transcript" }, [LoadTranscript()]]
+  return [{ state: { _tag: "Loading" }, transcript: TranscriptModel.init(), title: "Kanna Transcript", viewer: Viewer.init(null) }, [LoadTranscript()]]
 }
 
 /** The viewer with its transcript already in hand (the parity gallery): no fetch, the page's theme kept. */
 export function initLoaded(bundle: StandaloneTranscriptBundle, title: string): Model {
   const messages = processTranscriptMessages(bundle.messages)
-  return { state: { _tag: "Ready", bundle, messages, latestToolIds: getLatestToolIds(messages) }, transcript: TranscriptModel.init(), title }
+  return { state: { _tag: "Ready", bundle, messages, latestToolIds: getLatestToolIds(messages) }, transcript: TranscriptModel.init(), title, viewer: Viewer.init(bundle.chatId) }
 }
 
 const lift = (commands: ReadonlyArray<Command.Command<TranscriptMessage, never, unknown>>) =>
@@ -97,7 +101,14 @@ function viewportKey(model: Model) {
   return `export:${model.state._tag === "Ready" ? model.state.bundle.chatId : "none"}`
 }
 
-/** The rows' asks with nobody to answer them: payloads aren't there, actions go nowhere. */
+const liftViewer = (commands: ReadonlyArray<Command.Command<Viewer.Message>>) =>
+  Command.mapMessages(commands, (message: Viewer.Message) => Message.GotViewerMessage({ message })) as unknown as ReadonlyArray<Command.Command<Message>>
+
+/**
+ * The rows' asks with nobody to answer them: payloads aren't there. What
+ * opens in the viewer (an attachment, a chart, a visualization) goes to the
+ * page's own viewer; any other action goes nowhere.
+ */
 function rowsStep(model: Model, message: Messages.Message): { model: Model; commands: ReadonlyArray<Command.Command<Message>> } {
   const result = Messages.update(model.transcript.messages, message)
   let rows = result.model
@@ -107,7 +118,10 @@ function rowsStep(model: Model, message: Messages.Message): { model: Model; comm
     if (out._tag === "RequestedDebugRaw") rows = Messages.receivedDebugRaw(rows, out.entryId, Option.some(null))
   }
   const commands = Command.mapMessages(result.commands, (inner: Messages.Message) => TranscriptMessage.GotMessagesMessage({ message: inner }))
-  return { model: modifyFields(model, { transcript: (transcript) => ({ ...transcript, messages: rows }) }), commands: lift(commands as never) }
+  const next = modifyFields(model, { transcript: (transcript) => ({ ...transcript, messages: rows }) })
+  if (out?._tag !== "RequestedAppAction") return { model: next, commands: lift(commands as never) }
+  const applied = Viewer.apply(next.viewer, out.action)
+  return { model: { ...next, viewer: applied.model }, commands: [...lift(commands as never), ...liftViewer(applied.commands)] }
 }
 
 export function update(model: Model, message: Message): [Model, ReadonlyArray<Command.Command<Message>>] {
@@ -115,12 +129,16 @@ export function update(model: Model, message: Message): [Model, ReadonlyArray<Co
     SucceededLoad: ({ bundle }) => {
       const messages = processTranscriptMessages(bundle.messages)
       return [
-        { ...model, state: { _tag: "Ready", bundle, messages, latestToolIds: getLatestToolIds(messages) }, title: `${bundle.title} | Kanna` },
+        { ...model, state: { _tag: "Ready", bundle, messages, latestToolIds: getLatestToolIds(messages) }, title: `${bundle.title} | Kanna`, viewer: Viewer.init(bundle.chatId) },
         [ApplyTheme({ theme: bundle.theme })],
       ]
     },
     FailedLoad: ({ message: text }) => [{ ...model, state: { _tag: "Failed", message: text } }, []],
     CompletedApplyTheme: () => [model, []],
+    GotViewerMessage: ({ message: inner }) => {
+      const result = Viewer.update(model.viewer, inner)
+      return [{ ...model, viewer: result.model }, liftViewer(result.commands)]
+    },
     GotTranscriptMessage: ({ message: inner }) => {
       if (inner._tag === "GotMessagesMessage") {
         const result = rowsStep(model, inner.message)
@@ -181,6 +199,15 @@ const transcriptSlot = Submodel.defineView<TranscriptModel.Model, TranscriptMess
 
 function readyView(model: Model, bundle: StandaloneTranscriptBundle, messages: HydratedTranscriptMessage[], latestToolIds: Record<string, string | null>, h: H): Html {
   return h.div([h.Class("relative h-full bg-background")], [
+    // The same viewer the app has, for the attachments and charts in the
+    // transcript, over the whole page since there's no chat column here.
+    h.submodel({
+      slotId: "export-viewer-layer",
+      model: model.viewer,
+      view: Viewer.view,
+      viewInputs: {},
+      toParentMessage: (message: Viewer.Message) => Message.GotViewerMessage({ message }),
+    }),
     h.div([h.Class("flex h-full min-h-0 flex-col overflow-hidden")], [
       h.header([h.Class("flex-shrink-0 border-b border-border px-4")], [
         h.div([h.Class("mx-auto flex h-16 w-full items-center gap-2 min-w-0")], [
@@ -235,9 +262,20 @@ export function view(model: Model, h: H): Document {
   return { title: model.title, body }
 }
 
+/**
+ * The viewer's own: reduced motion, the layer's keys. Its chat preview's
+ * subscriptions are typed on the socket, which this page has none of; they
+ * only run while a chat is previewed, and nothing here previews one.
+ */
+export const subscriptions = Subscription.lift(Viewer.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.viewer),
+  toParentMessage: (message: Viewer.Message) => Message.GotViewerMessage({ message }),
+}) as never
+
 /** The program, for `Runtime.makeApplication` (or a gallery page) with its own init. */
 export const program = {
   Model,
+  subscriptions,
   update: (model: Model, message: Message) => {
     const [next, commands] = update(model, message)
     return { model: next, commands }

@@ -149,4 +149,22 @@ export const scenarios: Scenario[] = [
       await context.capture("at-end")
     },
   }),
+  defineScenario({
+    // The export viewer's own viewer, over the whole page: a chart in the
+    // export opens full size, and Escape closes it.
+    name: "transcript-export-viewer-chart",
+    route: "/__gallery/transcript-export-viewer?bundle=chart",
+    regions: regions("viewer"),
+    async run(context) {
+      await reduceMotion(context)
+      await click(context, context.page.getByTitle("Expand chart").first())
+      await context.page.locator(REGIONS.viewer).first().waitFor()
+      await parkPointer(context)
+      await context.capture("chart-open")
+      await context.page.keyboard.press("Escape")
+      await context.page.locator(REGIONS.viewer).first().waitFor({ state: "hidden" })
+      await parkPointer(context)
+      await context.capture("closed")
+    },
+  }),
 ]

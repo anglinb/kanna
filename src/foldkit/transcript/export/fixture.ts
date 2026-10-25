@@ -3,7 +3,8 @@ import type { StandaloneTranscriptBundle, TranscriptEntry } from "../../../share
 // A standalone export for the export viewer's parity pages
 // (src/parity/{react,foldkit}/gallery/transcript-export-viewer): two turns,
 // long enough to scroll, with what an export draws as text (a local file
-// link, a link to another chat) and a run of tool calls.
+// link, a link to another chat) and a run of tool calls. With `chart`, the
+// last turn also shows a chart, for the viewer over the page to open.
 
 /** An hour before the runner's frozen clock (2026-06-01T12:00Z), a second apart. */
 const BASE_TIME = Date.UTC(2026, 5, 1, 11, 0, 0)
@@ -71,7 +72,38 @@ const DRAFTS: Draft[] = [
   { _id: "x-res2", kind: "result", subtype: "success", isError: false, durationMs: 42_000, result: "" } as unknown as Draft,
 ]
 
-export function exportFixtureBundle(): StandaloneTranscriptBundle {
+/** A chart the agent showed (show_chart): its data travels in the export. */
+const CHART_DRAFTS: Draft[] = [
+  {
+    _id: "x-chart",
+    kind: "tool_call",
+    tool: {
+      kind: "tool",
+      toolKind: "display",
+      toolName: "show_chart",
+      toolId: "t-x-chart",
+      input: {
+        payload: {
+          title: "Wave height by hour",
+          description: "Meters, this morning",
+          type: "line",
+          data: [
+            { hour: "06:00", height: 1.1 },
+            { hour: "07:00", height: 1.3 },
+            { hour: "08:00", height: 1.4 },
+            { hour: "09:00", height: 1.2 },
+          ],
+          xKey: "hour",
+          yKeys: ["height"],
+        },
+      },
+    },
+  } as unknown as Draft,
+  { _id: "x-chart-r", kind: "tool_result", toolId: "t-x-chart", content: [{ type: "text", text: "Chart shown." }] } as unknown as Draft,
+]
+
+export function exportFixtureBundle(options: { chart?: boolean } = {}): StandaloneTranscriptBundle {
+  const drafts = options.chart ? [...DRAFTS.slice(0, -1), ...CHART_DRAFTS, ...DRAFTS.slice(-1)] : DRAFTS
   return {
     sourceOrigin: SOURCE_ORIGIN,
     version: 1,
@@ -82,6 +114,6 @@ export function exportFixtureBundle(): StandaloneTranscriptBundle {
     viewerVersion: "0.0.0",
     theme: "dark",
     attachmentMode: "metadata",
-    messages: DRAFTS.map((draft, index) => ({ ...draft, createdAt: BASE_TIME + (index + 1) * 1000 }) as TranscriptEntry),
+    messages: drafts.map((draft, index) => ({ ...draft, createdAt: BASE_TIME + (index + 1) * 1000 }) as TranscriptEntry),
   }
 }

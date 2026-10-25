@@ -794,7 +794,17 @@ export function settledResume(model: Model, key: string): Model {
  * Forget everything held for a chat, as React dropped its components and
  * its payload store on a chat switch (`useMemo` on the chat id).
  */
-export function reset(): Model {
-  return init()
+/**
+ * The rows' state for a new showing. What the rows measured of the page
+ * stays (a chart's size, whether a prompt overflows its clamp): the DOM it
+ * describes is the same, and a measure that lands before the viewport's
+ * own mount is only reported again when the size changes.
+ */
+export function reset(previous?: Model): Model {
+  const fresh = init()
+  if (!previous) return fresh
+  const charts = Object.fromEntries(Object.entries(previous.charts).flatMap(([key, chart]) =>
+    chart.size ? [[key, { ...EMPTY_CHART, size: chart.size, tableViewport: chart.tableViewport }]] : []))
+  return { ...fresh, charts, overflows: previous.overflows }
 }
 

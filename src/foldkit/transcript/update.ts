@@ -115,7 +115,7 @@ export function step(model: Model, message: Message, env: { key: string }): Step
       // last showing go.
       return done(modifyFields(model, {
         chatId: () => message.chatId,
-        messages: () => Messages.reset(),
+        messages: (rows) => Messages.reset(rows),
         flash: () => null,
         lastJump: () => null,
         unloadedJump: () => null,

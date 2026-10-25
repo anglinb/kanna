@@ -4,6 +4,8 @@ import { Scene } from "foldkit/test"
 import { Message as TranscriptMessage } from "../message"
 import { MeasureMinimap } from "../minimap"
 import { ControlViewport } from "../viewport"
+import { Message as ViewerMessage } from "../../viewer/message"
+import { ReportPane } from "../../viewer/view"
 import { init, initLoaded, Message, update, view, type Model } from "./app"
 import { exportFixtureBundle } from "./fixture"
 
@@ -39,6 +41,8 @@ describe("export viewer", () => {
       Scene.given(initLoaded(exportFixtureBundle(), "Kanna")),
       Scene.Mount.resolve(ControlViewport, TranscriptMessage.MountedViewport({ chatId: "chat-export-units" })),
       Scene.Mount.resolve(MeasureMinimap, TranscriptMessage.MeasuredMinimap({ height: 600 })),
+      // The viewer over the page, closed.
+      Scene.Mount.resolve(ReportPane, ViewerMessage.RenderedPane({ state: "closed", shownKey: null, chatKey: "chat-export-units", viewer: null })),
       ...["x-p1", "x-p2"].map((id) => Scene.Mount.resolve({ name: "ClampMeasure" } as never, { _tag: "MeasuredClamp", key: `clamp:${id}:0`, overflows: false } as never)),
       Scene.expect(Scene.text("Add a feet/meters toggle")).toExist(),
       Scene.expect(Scene.role("region", { name: "Messages" })).toExist(),

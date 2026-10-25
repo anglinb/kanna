@@ -16,7 +16,8 @@ import { processTranscriptMessages } from "../../../client/lib/parseTranscript"
 import { exportFixtureBundle } from "../../../foldkit/transcript/export/fixture"
 import { APP_NAME } from "../../../shared/branding"
 
-const BUNDLE = exportFixtureBundle()
+// ?bundle=chart: the last turn shows a chart, for the viewer over the page.
+const BUNDLE = exportFixtureBundle({ chart: new URLSearchParams(location.search).get("bundle") === "chart" })
 
 export default function TranscriptExportViewerGallery() {
   const [isAtEnd, setIsAtEnd] = useState(true)

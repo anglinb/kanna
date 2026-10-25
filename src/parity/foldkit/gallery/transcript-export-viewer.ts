@@ -7,5 +7,6 @@ import { galleryPage } from "../gallery-page"
 
 export default galleryPage<ExportViewer.Model, ExportViewer.Message>({
   ...ExportViewer.program,
-  init: () => ({ model: ExportViewer.initLoaded(exportFixtureBundle(), "Kanna") }),
+  // ?bundle=chart: the last turn shows a chart, for the viewer over the page.
+  init: () => ({ model: ExportViewer.initLoaded(exportFixtureBundle({ chart: new URLSearchParams(location.search).get("bundle") === "chart" }), "Kanna") }),
 })
