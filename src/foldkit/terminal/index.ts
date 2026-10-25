@@ -2,7 +2,6 @@ import { Subscription } from "foldkit"
 import type { KannaSocketService } from "../core/socket"
 import type { Model } from "./model"
 import type { Message } from "./message"
-import { socketBridge } from "./socketBridge"
 
 // Terminals: the /terminal page (src/client/app/TerminalPage.tsx) and the
 // chat page's terminal workspace (TerminalWorkspace, TerminalPane), one
@@ -29,7 +28,9 @@ export { HOME_TERMINAL_LAYOUT_KEY, observe, update } from "./update"
 export { chatWorkspaceOptions, view, workspaceView, type ChatTerminalContext, type ViewInputs, type WorkspaceOptions } from "./view"
 export { disposeCachedTerminal } from "./pane"
 
-/** Lends the app's socket to the panes while the app runs (see socketBridge.ts). */
-export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()(() => ({
-  socketBridge: Subscription.persistentEntry(socketBridge),
-}))
+/**
+ * None: the root and the chat page both lift these, and a keyed entry would
+ * collide across the two lifts. The panes get the socket by a Command
+ * (socketBridge.ts) and their streams through their Mounts.
+ */
+export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()(() => ({}))

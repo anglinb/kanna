@@ -12,6 +12,7 @@ import * as TerminalLayout from "../core/stores/terminalLayout"
 import { CloseTerminal, DisposeCachedTerminal } from "./commands"
 import { TerminalPane, TerminalWorkspaceScroller } from "./mounts"
 import * as Resizable from "./resizable"
+import { LendSocket } from "./socketBridge"
 import { chatWorkspaceOptions, HOME_TERMINAL_LAYOUT_KEY, init, Message, type Model, observe, update, view, type WorkspaceOptions } from "./index"
 
 class MemoryStorage {
@@ -109,6 +110,16 @@ describe("terminal workspace: panes", () => {
       Story.message(Message.ClickedAddTerminal({ layoutKey: HOME_TERMINAL_LAYOUT_KEY, afterTerminalId: "t-1" })),
       Story.Command.resolve(TerminalLayout.AddTerminal, TerminalLayout.Message.AddedTerminal({ projectId: HOME_TERMINAL_LAYOUT_KEY, terminalId: "t-3", afterTerminalId: "t-1", chatKey: null })),
       Story.expectOutMessage(layoutAction(TerminalLayout.Message.AddedTerminal({ projectId: HOME_TERMINAL_LAYOUT_KEY, terminalId: "t-3", afterTerminalId: "t-1", chatKey: null }))),
+    )
+  })
+
+  test("a mounted pane gets the app's socket lent", () => {
+    Story.story(
+      updateWith(app),
+      Story.given(init()),
+      Story.message(Message.NeededSocket()),
+      Story.Command.expectExact(LendSocket()),
+      Story.Command.resolve(LendSocket, Message.CompletedSideEffect()),
     )
   })
 

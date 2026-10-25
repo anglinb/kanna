@@ -7,6 +7,7 @@ import * as Tooltip from "../ui/tooltip"
 import { CloseTerminal, DisposeCachedTerminal, makeTerminalId } from "./commands"
 import { Message } from "./message"
 import { type Model, splitTooltipId } from "./model"
+import { LendSocket } from "./socketBridge"
 
 type Return = SliceReturn<Model, Message>
 
@@ -94,6 +95,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     },
     SentPaneCommand: () => ({ model }),
     SentInitialCommand: () => ({ model }),
+    NeededSocket: () => ({ model, commands: [LendSocket()] }),
     MeasuredWorkspace: ({ width }) => ({ model: width === model.viewportWidth ? model : { ...model, viewportWidth: width } }),
     CompletedSideEffect: () => ({ model }),
   })

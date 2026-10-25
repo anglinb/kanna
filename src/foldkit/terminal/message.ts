@@ -44,6 +44,8 @@ export const Message = defineMessageUnion({
   /** `onInitialCommandSent`: the pane ran the command it was opened with (chat page). */
   SentInitialCommand: { terminalId: Schema.String },
 
+  /** A pane mounted: it needs the app's socket (see socketBridge.ts). */
+  NeededSocket: {},
   MeasuredWorkspace: { width: Schema.Number },
   CompletedSideEffect: {},
 })

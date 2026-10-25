@@ -16,6 +16,7 @@ import { TerminalPaneController, type PaneInputs } from "./pane"
  * that depended on it without remounting the pane, as in React.
  */
 type PaneMessage =
+  | ReturnType<typeof Message.NeededSocket>
   | ReturnType<typeof Message.ChangedPanePath>
   | ReturnType<typeof Message.ChangedPaneError>
   | ReturnType<typeof Message.SentPaneCommand>
@@ -23,9 +24,11 @@ type PaneMessage =
 
 export const TerminalPane = Mount.defineStream("TerminalPane", {
   args: { terminalId: Schema.String },
-  messages: [Message.ChangedPanePath, Message.ChangedPaneError, Message.SentPaneCommand, Message.SentInitialCommand],
+  messages: [Message.NeededSocket, Message.ChangedPanePath, Message.ChangedPaneError, Message.SentPaneCommand, Message.SentInitialCommand],
   execute: ({ element, terminalId }) =>
     domStream<PaneMessage>((emit) => {
+      // Every mount asks, so a socket the app replaced since is replaced here too.
+      emit(Message.NeededSocket())
       const controller = new TerminalPaneController(element as HTMLElement, terminalId, {
         pathChanged: (path) => emit(Message.ChangedPanePath({ terminalId, path })),
         errorChanged: (error) => emit(Message.ChangedPaneError({ terminalId, error })),
