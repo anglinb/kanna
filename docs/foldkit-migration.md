@@ -120,7 +120,7 @@ into this):
 | Settings page | `settings/` | 1 | in progress |
 | Chat page shell | `chat/` | 1 | in progress |
 | Transcript rows | `transcript/messages/` | 1 | merged (316/316 gallery) |
-| Terminal | `terminal/` | 2 | in progress |
+| Terminal | `terminal/` | 2 | merged (workspace gallery 24/24; page matches but for home's boot command) |
 | Command palette | `palette/` | 2 | in progress |
 | Composer | `composer/` | 2 | in progress |
 | Transcript viewport | `transcript/` | 3 | to do |
@@ -141,6 +141,9 @@ into this):
 - Create chat from the projects page: the demo backend returns its own
   chat id instead of the client's, so React ends up back at `/`; decide
   whether the fixture should honor the client id (the real server does).
+- `scripts/parity/scenarios/terminal.ts`: React sometimes sends
+  `terminal.create` twice (a race with the demo's "no shell yet" reply);
+  handle it as `terminal-page.ts` does, so the scenarios are deterministic.
 - `@foldkit/vite-plugin` peers on Vite 8; we run Vite 6 (works so far).
 - `app/action.ts` imports types from React files
   (`components/messages/shared`, `lib/chat-navigation` is fine); move

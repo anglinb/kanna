@@ -31,7 +31,7 @@ export const scenarios: Scenario[] = [
     covers: { routes: ["/"] },
   }),
   defineScenario({
-    name: "home-search",
+    name: "home-page-search",
     route: "/home",
     regions: { main: MAIN, list: LIST },
     async run({ page, capture }) {
@@ -68,7 +68,7 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    name: "home-project-menu",
+    name: "home-page-project-menu",
     route: "/home",
     viewports: ["desktop"],
     regions: { main: MAIN, list: LIST, menu: "[role=menu]", dialog: DIALOG },
@@ -85,7 +85,7 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    name: "home-open-project",
+    name: "home-page-open-project",
     route: "/home",
     regions: { main: MAIN, list: LIST },
     covers: { commands: ["project.open"] },
