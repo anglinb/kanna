@@ -53,6 +53,7 @@ import { shouldCloseTerminalPane } from "../../client/app/terminalLayoutResize"
 import { shownTitle, titleMenuContext } from "./navbar"
 import { openAppValueOfMenuValue, openAppValueRequest, type OpenAppValue } from "./openExternal"
 import { getTerminalPanelDefaultSizes, pageFacts, type PageFacts } from "./page"
+import { pageContext } from "./view"
 import { CHAT_MIN_WORKSPACE_SIZE_PERCENT, getWidgetsColumnWidthPx, widthForHandleKey } from "./widgetsColumn"
 import { DEFAULT_RIGHT_SIDEBAR_SIZE } from "../core/stores/rightSidebar"
 
@@ -110,7 +111,21 @@ function child<ChildModel, ChildMessage, Key extends keyof Model>(
 }
 
 const foldTranscript = child("transcript", Transcript.update, (message) => Message.GotTranscriptMessage({ message }))
-const foldComposer = child("composer", Composer.update, (message) => Message.GotComposerMessage({ message }))
+// The composer reads the page's own inputs (what the dock hands it, as
+// ChatInput took them as props), so its fold carries the page model too.
+const foldComposer = Update.foldChild({
+  update: (composer: Composer.Model, input: { message: Composer.Message; app: AppModel; page: Model }) => Composer.updateWith(
+    composer,
+    input.message,
+    Composer.contextFromApp(input.app, Composer.pageComposerInputs(
+      pageContext(input.page, input.app, pageFacts(input.app, input.page.viewportWidth, input.page.settledShowEmptyState)),
+    )),
+  ),
+  read: (model: Model) => Option.some(model.composer),
+  write: (model: Model, next: Composer.Model) => modifyFields(model, { composer: () => next }),
+  toParentMessage: (message: Composer.Message) => Message.GotComposerMessage({ message }),
+  toParentOutMessage: passOutMessage,
+})
 const foldWidgets = child("widgets", Widgets.update, (message) => Message.GotWidgetsMessage({ message }))
 const foldViewer = child("viewer", Viewer.update, (message) => Message.GotViewerMessage({ message }))
 const foldTerminal = child("terminal", Terminal.update, (message) => Message.GotTerminalMessage({ message }))
@@ -513,13 +528,23 @@ function tabCardStep(model: Model, message: Message, app: AppModel): Return {
   return withActions({ model: step.model, commands: step.commands }, step.action ? [step.action] : [])
 }
 
+/**
+ * The slice contract's `observe`: the composer's store effects (a switch
+ * waiting on sign-in, a draft cleared from the sidebar), run through the
+ * page's own fold so the composer has its page inputs.
+ */
+export function observe(model: Model, previousApp: AppModel, app: AppModel): Return {
+  if (!Composer.observes(model.composer, previousApp, app)) return { model }
+  return update(model, Message.GotComposerMessage({ message: Composer.Message.ObservedApp() }), app)
+}
+
 // UPDATE
 
 export function update(model: Model, message: Message, app: AppModel): Return {
   const facts = () => pageFacts(app, model.viewportWidth, model.settledShowEmptyState)
   return Message.match<Return>(message, {
     GotTranscriptMessage: ({ message: inner }) => routeLocalLink(foldTranscript(model, { message: inner, app }) as Return, facts()),
-    GotComposerMessage: ({ message: inner }) => routeDelegatedSend(foldComposer(model, { message: inner, app }) as Return, app, facts()),
+    GotComposerMessage: ({ message: inner }) => routeDelegatedSend(foldComposer(model, { message: inner, app, page: model }) as Return, app, facts()),
     GotWidgetsMessage: ({ message: inner }) => foldWidgets(model, { message: inner, app }) as Return,
     GotViewerMessage: ({ message: inner }) => routeLocalLink(foldViewer(model, { message: inner, app }) as Return, facts()),
     GotTerminalMessage: ({ message: inner }) => {
