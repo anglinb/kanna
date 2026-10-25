@@ -6,7 +6,9 @@ import { shouldOpenLocalFileLinkInEditor } from "../../client/lib/pathUtils"
 import type { TranscriptEntry } from "../../shared/types"
 import { AppAction, batch } from "../app/action"
 import { requestAction, type AppModel, type SliceReturn } from "../app/slice"
-import { chooseChatOpenMenuItem, openChatActions, sidebarThread } from "../chat/chatReference"
+import { chatSchedules, chooseChatOpenMenuItem, openChatActions, sidebarThread } from "../chat/chatReference"
+import * as ScheduleCard from "../widgets/scheduleCard"
+import { scheduleEditPrompt } from "../widgets/schedules"
 import { chooseChatRowMenuItem } from "../chat/chatRowMenu"
 import { cardMenuContext, cardMenuOf } from "./chatCard"
 import * as ChatSession from "../core/chatSession"
@@ -118,6 +120,7 @@ export function step(model: Model, message: Message, env: { key: string }): Step
         minimap: (minimap) => ({ ...minimap, pointerY: null, heldTurnId: null }),
         linkMenuTarget: () => null,
         cardMenus: () => ({}),
+        scheduleCards: () => ({}),
       }))
 
     case "ChangedAtEnd": {
@@ -323,6 +326,8 @@ export function update(model: Model, message: Message, app: AppModel): SliceRetu
       return toReturn(done(model, [], openChatActions(app, message.chatId)))
     case "GotCardMenuMessage":
       return toReturn(cardMenuStep(model, message.chatId, message.message, app))
+    case "GotScheduleCardMessage":
+      return toReturn(scheduleCardStep(model, message.scheduleId, message.message, app))
     default:
       return { model }
   }
@@ -336,6 +341,21 @@ const OpenUrl = Command.define("OpenTranscriptChatCardUrl", {
     return Message.CompletedOpenUrl()
   }),
 })
+
+/**
+ * A live schedule card: Edit starts the sentence that changes it in the
+ * composer (the chat page's handleEditSchedule), a run's chat opens.
+ */
+function scheduleCardStep(model: Model, scheduleId: string, message: ScheduleCard.Message, app: AppModel): Step {
+  const result = ScheduleCard.update(model.scheduleCards[scheduleId] ?? ScheduleCard.init(scheduleId), message)
+  const next = modifyFields(model, { scheduleCards: (cards) => ({ ...cards, [scheduleId]: result.model }) })
+  const commands = Command.mapMessages(result.commands ?? [], (inner: ScheduleCard.Message) => Message.GotScheduleCardMessage({ scheduleId, message: inner })) as unknown as ReadonlyArray<AnyCommand>
+  const out = result.outMessage
+  if (!out) return done(next, commands)
+  if (out._tag === "RequestedOpenChat") return done(next, commands, openChatActions(app, out.chatId))
+  const schedule = chatSchedules(app).schedules.find((candidate) => candidate.id === out.scheduleId)
+  return done(next, commands, schedule ? [AppAction.PrefillComposer({ text: scheduleEditPrompt(schedule) })] : [])
+}
 
 /** A live chat card's menu: the open-in items, then the chat's (ThreadRowMenu). */
 function cardMenuStep(model: Model, chatId: string, message: ContextMenu.Message, app: AppModel): Step {

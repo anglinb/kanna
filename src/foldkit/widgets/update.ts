@@ -29,7 +29,6 @@ import {
   ExpireRanQuickAction,
   ExposePort,
   FocusById,
-  PrefillComposer,
   GenerateCommitMessage,
   GetPublishInfo,
   InitGit,
@@ -497,7 +496,7 @@ function jumpToToolCall(model: Model, facts: Facts, toolId: string): Return {
 function editSchedule(model: Model, app: AppModel, facts: Facts, scheduleId: string): Return {
   const schedule = chatFacts(app, facts.chatId).schedules.find((candidate) => candidate.id === scheduleId)
   if (!schedule || !facts.chatId) return { model }
-  return { model, commands: [PrefillComposer({ text: scheduleEditPrompt(schedule) })] }
+  return withActions({ model }, [AppAction.PrefillComposer({ text: scheduleEditPrompt(schedule) })])
 }
 
 // PORTS

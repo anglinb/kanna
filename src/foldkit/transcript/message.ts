@@ -5,6 +5,7 @@ import type { TranscriptEntry } from "../../shared/types"
 import { opaque } from "../core/schema"
 import * as ContextMenu from "../ui/context-menu"
 import * as Messages from "./messages/model"
+import * as ScheduleCard from "../widgets/scheduleCard"
 
 // The transcript viewport's Messages. In their own module: the viewport's
 // Mounts (viewport.ts, minimap.ts) report with them, and the Model and
@@ -61,6 +62,7 @@ export const Message = defineMessageUnion({
   // A live chat card (chatCard.ts)
   ClickedChatCard: { chatId: Schema.String },
   GotCardMenuMessage: { chatId: Schema.String, message: ContextMenu.Message },
+  GotScheduleCardMessage: { scheduleId: Schema.String, message: ScheduleCard.Message },
   CompletedOpenUrl: {},
 })
 export type Message = typeof Message.Type

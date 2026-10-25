@@ -709,6 +709,7 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       // The root handles these two itself (app/update.ts performAction).
       Batch: () => ({ model: host }),
       OpenCommandPalette: () => ({ model: host }),
+      PrefillComposer: () => ({ model: host }),
       SendCommand: ({ command }) => ({ model: host, commands: commands(Send({ command })) }),
       Store: ({ message }) => stores(message)(host),
       Chat: () => ({ model: host }),

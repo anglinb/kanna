@@ -1,3 +1,4 @@
+import type { ProjectQuickAction } from "../../shared/protocol"
 import { childAttributes, type Html, type HtmlBuilder } from "foldkit/html"
 import { getTranscriptPaddingBottom } from "../../client/app/kannaStateHelpers"
 import { paneDurationMs } from "../../client/app/paneAnimation"
@@ -121,6 +122,13 @@ function fixedTerminalHeight(model: Model, facts: PageFacts) {
 /** Present while the empty state is: types its line out, once per appearance. */
 const emptyStateTypist = (h: H) => h.keyed("span")("chat-empty-state-typist", [h.Hidden(true), h.OnMount(TypeEmptyState())], [])
 
+/** The project's quick actions as the widgets show them: what they last wrote, else what was read. */
+function currentQuickActions(model: Model, projectId: string | null, read: ReadonlyArray<ProjectQuickAction> | null): ReadonlyArray<ProjectQuickAction> {
+  const written = model.widgets.quickActions.written
+  if (written && written.projectId === projectId) return written.actions
+  return read ?? []
+}
+
 export function pageView(model: Model, app: AppModel, h: H): Html {
   const facts = pageFacts(app, model.viewportWidth, model.settledShowEmptyState)
   const page = pageContext(model, app, facts)
@@ -128,7 +136,7 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
   // wherever a sub-slice spreads them.
   const requests: ChatPageRequests = {
     editModels: childAttributes([h.OnClick(Message.ClickedEditModels())]),
-    runQuickAction: Object.fromEntries((page.widgetsData.quickActions ?? []).map((action) => [
+    runQuickAction: Object.fromEntries(currentQuickActions(model, facts.projectId, page.widgetsData.quickActions).map((action) => [
       action.id,
       childAttributes([h.OnClick(Message.RanQuickAction({ command: action.command }))]),
     ])),

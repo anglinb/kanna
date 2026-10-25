@@ -466,6 +466,8 @@ export function performAction(model: Model, action: AppAction): UpdateReturn {
       return Update.combine(model, (action.actions as ReadonlyArray<AppAction>).map((each) => (step: Model) => performAction(step, each)))
     case "OpenCommandPalette":
       return foldPaletteResult(model, PaletteSlice.requestOpen(model.palette, action.page, model))
+    case "PrefillComposer":
+      return foldChatPage(model, toComposer(Composer.Message.RequestedPrefill({ text: action.text })))
     case "CollapseSidebar":
       return update(model, Message.ClickedCollapseSidebar())
     case "ExpandSidebar":
