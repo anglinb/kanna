@@ -51,6 +51,14 @@ function watch(app: AppModel, viewportWidth = 1440): Watch {
 
 const names = (result: { commands?: ReadonlyArray<{ name: string }> }) => (result.commands ?? []).map((command) => command.name)
 
+/** The store Message a result asks the root for (`AppAction.Store`), by its inner tag. */
+function storeMessageTag(result: { outMessage?: { action: AppAction } }): string | null {
+  const action = result.outMessage?.action
+  if (action?._tag !== "Store") return null
+  const inner = (action.message as { message?: { _tag: string } }).message
+  return inner?._tag ?? null
+}
+
 describe("chat page: opening", () => {
   test("a fresh page reads the project's quick actions, then refreshes its diffs, and hands the viewer the chat", () => {
     const app = boot("/chat/c1")
@@ -75,6 +83,33 @@ describe("chat page: opening", () => {
     // A late leave from an earlier showing changes nothing.
     expect(update(entered, Message.LeftPage({ token: 2 }), app).model.presence).toBe(3)
     expect(update(entered, Message.LeftPage({ token: 3 }), app).model.presence).toBeNull()
+  })
+})
+
+describe("chat page: the new chat page", () => {
+  function withSnapshot(app: AppModel, title: string, messages: unknown[]): AppModel {
+    const session = ChatSession.init("c1", { windowSize: 50, starting: false }).model
+    const snapshot = { runtime: { chatId: "c1", projectId: "p1", title, status: "idle", localPath: "/work/tidepool" }, messages, queuedMessages: [] }
+    return { ...app, chat: { ...session, snapshot: snapshot as never } }
+  }
+
+  test("a chat with no message under its first name is the new chat page; any other is not", () => {
+    const app = boot("/chat/c1")
+    expect(pageFacts(withSnapshot(app, "New Chat", []), 1440, false).showEmptyState).toBe(true)
+    expect(pageFacts(withSnapshot(app, "Fix the tide chart", []), 1440, false).showEmptyState).toBe(false)
+  })
+
+  test("while the snapshot loads, a chat the sidebar lists is judged by its row", () => {
+    const listedOld = boot("/chat/c1")
+    expect(pageFacts(listedOld, 1440, true).showEmptyState).toBe(false)
+    const listedNew = boot("/chat/c1", [row("c1", "New Chat", { lastMessageAt: undefined })])
+    expect(pageFacts(listedNew, 1440, false).showEmptyState).toBe(true)
+  })
+
+  test("a chat neither listed nor known holds the empty state as it last was", () => {
+    const unlisted = boot("/chat/c9")
+    expect(pageFacts(unlisted, 1440, true).showEmptyState).toBe(true)
+    expect(pageFacts(unlisted, 1440, false).showEmptyState).toBe(false)
   })
 })
 
@@ -122,6 +157,33 @@ describe("chat page: navbar", () => {
     // The first wait ends after a newer command: nothing yet.
     expect(names(update(second.model, Message.ElapsedTerminalDiffRefresh({ token: 1 }), app))).toEqual([])
     expect(names(update(second.model, Message.ElapsedTerminalDiffRefresh({ token: 2 }), app))).toEqual(["RefreshChatDiffs"])
+  })
+
+  test("the terminal toggle makes the project's first terminal, then shows and hides the pane", () => {
+    const app = boot("/chat/c1")
+    const toggled = update(init(), Message.ClickedToggleTerminal(), app)
+    expect(names(toggled)).toEqual(["MakeChatTerminalId"])
+    const made = update(toggled.model, Message.MadeTerminalId({ purpose: { _tag: "Toggle" }, projectId: "p1", chatKey: "c1", terminalId: "terminal-1" }), app)
+    expect(storeMessageTag(made)).toBe("AddedTerminal")
+    // With a terminal there, the toggle and its shortcut flip the pane instead.
+    const withTerminal: AppModel = {
+      ...app,
+      stores: {
+        ...app.stores,
+        terminalLayout: {
+          ...app.stores.terminalLayout,
+          projects: { p1: { isVisible: true, mainSizes: [68, 32], terminals: [{ id: "terminal-1", title: "", size: 100 }], nextTerminalIndex: 1 } },
+        } as never,
+      },
+    }
+    expect(storeMessageTag(update(init(), Message.ClickedToggleTerminal(), withTerminal))).toBe("ToggledVisibility")
+    expect(storeMessageTag(update(init(), Message.PressedShortcut({ action: "toggleEmbeddedTerminal" }), withTerminal))).toBe("ToggledVisibility")
+  })
+
+  test("on a phone the sheet's backdrop and Escape hide the widget column", () => {
+    const app = boot("/chat/c1")
+    expect(storeMessageTag(update(init(), Message.ClickedCloseWidgets(), app))).toBe("HidWidgets")
+    expect(storeMessageTag(update(init(), Message.PressedEscapeOnSheet(), app))).toBe("HidWidgets")
   })
 
   test("a delegator's list button opens its pane, and shuts it when open", () => {
