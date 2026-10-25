@@ -34,6 +34,7 @@ import {
   type MenuTarget,
   type Model,
 } from "./model"
+import { CaptureOutgoingPage, captureOutgoingPage } from "./motion"
 import { arrayMove } from "./projects"
 import { SIDEBAR_WIDTH_STORAGE_KEY } from "../../client/lib/storageKeys"
 import { writeStorageItem } from "../core/storage"
@@ -85,6 +86,8 @@ const HistoryStep = Command.define("SidebarHistoryStep", {
 const LeaveProjectPage = Command.define("SidebarLeaveProjectPage", {
   messages: [Message.CompletedSideEffect, Message.FoundNoHistoryToLeave],
   execute: Effect.gen(function* () {
+    // The pop animates, as the back button's does (motion.ts).
+    captureOutgoingPage()
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
     if (idx <= 0) return Message.FoundNoHistoryToLeave()
     yield* Navigation.back()
@@ -284,7 +287,8 @@ function selectChat(model: Model, app: AppModel, chatId: string, background: boo
 /** Leaving the focused page (KannaSidebar's `exitFocusMode`). */
 function exitFocusMode(model: Model, app: AppModel): Return {
   if (routeProjectId(app) === null) {
-    return requestAction(model, store(Stores.Message.GotFocusModeMessage({ message: FocusMode.Message.ChangedFocusMode({ enabled: false }) })))
+    const off = store(Stores.Message.GotFocusModeMessage({ message: FocusMode.Message.ChangedFocusMode({ enabled: false }) }))
+    return { model, commands: [CaptureOutgoingPage({ then: [off] })] }
   }
   return { model, commands: [LeaveProjectPage()] }
 }
@@ -470,7 +474,10 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     // A click on a channel goes to its delegator or its new chat page; on
     // touch, where there is no card, it opens the channel as a page.
     ClickedChannel: ({ projectId }) => {
-      if (!model.hasFinePointer || model.isPhoneLayout) return requestAction(model, navigate(`/project/${encodeURIComponent(projectId)}`))
+      // As a page, pushed onto the history; the push animates as focus mode's does.
+      if (!model.hasFinePointer || model.isPhoneLayout) {
+        return { model, commands: [CaptureOutgoingPage({ then: [navigate(`/project/${encodeURIComponent(projectId)}`)] })] }
+      }
       const unpinned = unpinChannel(model)
       return withCommands(requestAction(unpinned.model, AppAction.OpenProjectNewChat({ projectId })), unpinned.commands)
     },

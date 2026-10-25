@@ -58,6 +58,7 @@ import { Message } from "./message"
 import type { Model } from "./model"
 import { localProjectsSection } from "./projects"
 import { archivedSection, threadSections } from "./sections"
+import { FocusMotion, SIDEBAR_PAGE_ATTRIBUTE } from "./motion"
 import { SidebarCard } from "./mounts"
 
 type H = HtmlBuilder<Message>
@@ -437,7 +438,11 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
     h.OnMount(SidebarCard()),
   ], [
     h.div([h.Class("relative flex min-h-0 flex-1 flex-col overflow-hidden md:rounded-t-[15px] mac-app:md:rounded-t-[calc(var(--mac-window-radius)-9px)]")], [
-      h.div([h.Class("relative flex min-h-0 flex-1 flex-col")], [header, scroller]),
+      h.div([
+        h.Attribute(SIDEBAR_PAGE_ATTRIBUTE, focused ? "focused" : "all"),
+        h.OnMount(FocusMotion()),
+        h.Class("relative flex min-h-0 flex-1 flex-col"),
+      ], [header, scroller]),
     ]),
     chatHoverCard({ list: "chats" }, app, model, h),
     machineSwitcher(app, model, h),

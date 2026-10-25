@@ -16,6 +16,7 @@ import { memoryStorage } from "../core/stores/testing"
 import * as ContextMenu from "../ui/context-menu"
 import { Message } from "./message"
 import { init, type Model } from "./model"
+import { CaptureOutgoingPage } from "./motion"
 import { LoadTouchedFiles, SaveSidebarWidth, update } from "./update"
 
 function row(chatId: string, overrides: Partial<SidebarChatRow> = {}): SidebarChatRow {
@@ -152,6 +153,8 @@ describe("sidebar: header and navigation", () => {
       updateFor(appAt("/chat/c1")),
       Story.given(sidebar),
       Story.message(Message.ClickedExitFocus()),
+      // A copy of the page first, for the pop's motion; then the change.
+      Story.Command.resolve(CaptureOutgoingPage, Message.ContinuedActions({ actions: [AppAction.Store({ message: Stores.Message.GotFocusModeMessage({ message: FocusMode.Message.ChangedFocusMode({ enabled: false }) }) })] })),
       Story.expectOutMessage(store(Stores.Message.GotFocusModeMessage({ message: FocusMode.Message.ChangedFocusMode({ enabled: false }) }))),
     )
     const onProject = update(sidebar, Message.ClickedExitFocus(), appAt("/project/p1"))
@@ -287,7 +290,9 @@ describe("sidebar: hover cards", () => {
     const app = appAt("/home")
     expect(update({ ...sidebar, hasFinePointer: true }, Message.ClickedChannel({ projectId: "p1" }), app).outMessage)
       .toEqual(asks(AppAction.OpenProjectNewChat({ projectId: "p1" })))
-    expect(update({ ...sidebar, hasFinePointer: false }, Message.ClickedChannel({ projectId: "p1" }), app).outMessage)
+    const touch = update({ ...sidebar, hasFinePointer: false }, Message.ClickedChannel({ projectId: "p1" }), app)
+    expect(touch.commands?.map((command) => command.name)).toEqual(["SidebarCaptureOutgoingPage"])
+    expect(update(sidebar, Message.ContinuedActions({ actions: [AppAction.Navigate({ path: "/project/p1", replace: false })] }), app).outMessage)
       .toEqual(asks(AppAction.Navigate({ path: "/project/p1", replace: false })))
   })
 

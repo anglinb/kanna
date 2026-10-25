@@ -12,6 +12,7 @@ import { memoryStorage } from "../core/stores/testing"
 import { ListHoverTracker } from "./hoverCard"
 import { Message } from "./message"
 import { init, type Model } from "./model"
+import { FocusMotion } from "./motion"
 import { SidebarCard } from "./mounts"
 import { update } from "./update"
 import { view } from "./view"
@@ -48,6 +49,7 @@ function appAt(path: string): AppModel {
 // The card's own Mounts report nothing until something happens; settled here.
 const mounted = [
   Scene.Mount.resolve(SidebarCard, Message.ChangedPeek({ peeking: false })),
+  Scene.Mount.resolve(FocusMotion, Message.CompletedSideEffect()),
   Scene.Mount.resolve(ListHoverTracker, Message.ChangedHoveredRow({ list: "chats", key: null })),
 ]
 
