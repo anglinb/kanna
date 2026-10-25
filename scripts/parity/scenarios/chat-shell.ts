@@ -131,12 +131,20 @@ export const scenarios: Scenario[] = [
       // The first terminal loads xterm, sizes itself once its pane has
       // opened, then creates its session: wait for that command, so the
       // capture has it (an app that never sends it just waits the timeout).
+      // A terminal may create its session again once it has fitted its pane,
+      // so wait until no create has come for a second.
       await page.waitForFunction(
         () => (window as unknown as { __parity: { commands(): { type: string }[] } }).__parity.commands().some((command) => command.type === "terminal.create"),
         undefined,
         { timeout: 8000 },
       ).catch(() => {})
-      await page.waitForTimeout(300)
+      await page.waitForFunction(() => {
+        const probe = window as unknown as { __parity: { commands(): { type: string }[] }; __creates?: { count: number; since: number } }
+        const count = probe.__parity.commands().filter((command) => command.type === "terminal.create").length
+        const now = performance.now()
+        if (!probe.__creates || probe.__creates.count !== count) probe.__creates = { count, since: now }
+        return now - probe.__creates.since > 1000
+      }, undefined, { timeout: 8000, polling: 100 }).catch(() => {})
       await capture("terminal-open")
       await toggleTerminal()
       await page.waitForTimeout(800)
