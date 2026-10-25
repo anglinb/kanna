@@ -50,6 +50,7 @@
     "typecheck": "flock /tmp/kanna-tsc.lock tsc --noEmit",
     "test:cloud": "bun test ./src/server/cloud/wire.e2e.ts",
     "parity": "bun run ./scripts/parity/run.ts",
+    "parity:coverage": "bun run ./scripts/parity/coverage.ts",
     "parity:selfcheck": "bun run ./scripts/parity/run.ts --selfcheck && bun run ./scripts/parity/run.ts --selfcheck --inject-css '.text-muted-foreground{letter-spacing:.02em}' --expect-fail",
     "prepublishOnly": "bun run build",
     "smoke:package": "bun run ./scripts/smoke-package.ts"

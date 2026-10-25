@@ -29,6 +29,9 @@ export interface DemoStep {
   question?: {
     toolId: string
     preview: string
+    /** What the sidebar says the chat waits on. Default: a question. */
+    kind?: "ask_user_question" | "exit_plan_mode"
+    /** A question's first answer; a plan's is "approved" or "rejected". */
     continueWith: (answer: string) => DemoStep[]
   }
 }
@@ -180,6 +183,20 @@ export class TurnScript {
         tool: { kind: "tool", toolKind: "ask_user_question", toolName: "AskUserQuestion", toolId, input: { questions: [question] } },
       }],
       question: { toolId, preview: question.question, continueWith },
+    })
+    return this
+  }
+
+  /** Proposes a plan and stops until it is approved or sent back. */
+  proposePlan(plan: string, continueWith: (answer: string) => DemoStep[]) {
+    const toolId = nextToolId()
+    this.steps.push({
+      delayMs: 900,
+      entries: [{
+        kind: "tool_call",
+        tool: { kind: "tool", toolKind: "exit_plan_mode", toolName: "ExitPlanMode", toolId, input: { plan } },
+      }],
+      question: { toolId, preview: plan.split("\n")[0]!.replace(/^#+\s*/, ""), kind: "exit_plan_mode", continueWith },
     })
     return this
   }
