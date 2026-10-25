@@ -4,7 +4,6 @@ import { defineMessageUnion } from "foldkit/message"
 import { modifyFields } from "foldkit/struct"
 import { copyTextToClipboard } from "../../../client/lib/clipboard"
 import type { AskUserQuestionAnswerMap, AskUserQuestionItem, TranscriptEntry } from "../../../shared/types"
-import { rememberedVisualizationHeights } from "../../../client/lib/visualization-heights"
 import type { ChartToolPayload } from "../../../shared/display-tools"
 import type { VisualizationArtifact } from "../../../shared/visualization"
 import { AppAction } from "../../app/action"
@@ -12,6 +11,7 @@ import * as Stores from "../../app/stores"
 import * as Viewer from "../../core/stores/viewer"
 import { opaque } from "../../core/schema"
 import { CodeCopy, LocalLinkTarget } from "../../markdown"
+import * as Tooltip from "../../ui/tooltip"
 
 /**
  * The state a transcript's rows hold of their own, for every row at once,
@@ -130,6 +130,8 @@ export const Model = Schema.Struct({
   /** Attachment previews that failed to load, by `${key}|${url}`. */
   broken: Flags,
   frames: Schema.Record(Schema.String, FrameState),
+  /** Tooltips rows own (a visualization's Expand), by row key. Absent is closed. */
+  tooltips: Schema.Record(Schema.String, Tooltip.Model),
   /** A queued message's or a resume's press, while its command is out. */
   busy: Flags,
 })
@@ -151,6 +153,7 @@ export function init(): Model {
     strips: {},
     broken: {},
     frames: {},
+    tooltips: {},
     busy: {},
   }
 }
@@ -224,11 +227,12 @@ export const Message = defineMessageUnion({
   GotFrameDocument: { key: Schema.String, document: Schema.String },
   FailedFrameDocument: { key: Schema.String },
   MeasuredFrameWidth: { key: Schema.String, width: Schema.Number },
-  GotFrameHeights: { key: Schema.String, heights: Heights },
+  /** What is known of a document's heights by width: remembered, from the server, or just recorded. */
+  KnewFrameHeights: { key: Schema.String, heights: Heights },
   ResizedFrame: { key: Schema.String, height: Schema.Number },
-  RecordedFrameHeights: { key: Schema.String, heights: Heights },
   LoadedFrame: { key: Schema.String },
   ClickedExpandVisualization: { artifact: opaque<VisualizationArtifact>("VisualizationArtifact") },
+  GotTooltipMessage: { key: Schema.String, message: Tooltip.Message },
 
   // Queue and resume
   ClickedQueued: { messageId: Schema.String, action: Schema.Literals(["remove", "send-now"]) },
@@ -454,13 +458,12 @@ function withChart(model: Model, key: string, next: ChartState): Model {
   return { ...model, charts: { ...model.charts, [key]: next } }
 }
 
-export function frameOf(model: Model, key: string, url: string): FrameState {
-  return model.frames[key] ?? { document: null, failed: false, width: null, measured: null, known: rememberedHeights(url), loaded: false }
+export function frameOf(model: Model, key: string): FrameState {
+  return model.frames[key] ?? emptyFrame()
 }
 
-// Visualization heights remembered in this browser (lib/visualization-heights).
-function rememberedHeights(url: string) {
-  return rememberedVisualizationHeights(url) as ReadonlyArray<readonly [number, number]>
+export function tooltipOf(model: Model, key: string): Tooltip.Model {
+  return model.tooltips[key] ?? Tooltip.init({ id: `transcript-tooltip-${key.replace(/[^\w-]/g, "_")}`, delayDuration: 0 })
 }
 
 /** The effective answers to one question: a typed one or the picked ones. Copied from AskUserQuestionMessage. */
@@ -641,23 +644,23 @@ export const update = (model: Model, message: Message): Return =>
       const frame = model.frames[key] ?? emptyFrame()
       return frame.width === width ? { model } : { model: { ...model, frames: { ...model.frames, [key]: { ...frame, width } } } }
     },
-    GotFrameHeights: ({ key, heights }) => {
+    KnewFrameHeights: ({ key, heights }) => {
       const frame = model.frames[key] ?? emptyFrame()
-      // What this browser measured itself stands; the server fills in the other widths.
-      const own = new Set(frame.known.map(([width]) => width))
-      const merged = [...frame.known, ...heights.filter(([width]) => !own.has(width))].sort((left, right) => left[0] - right[0])
-      return { model: { ...model, frames: { ...model.frames, [key]: { ...frame, known: merged } } } }
+      return { model: { ...model, frames: { ...model.frames, [key]: { ...frame, known: heights } } } }
     },
     ResizedFrame: ({ key, height }) => {
       const frame = model.frames[key] ?? emptyFrame()
       return frame.measured === height ? { model } : { model: { ...model, frames: { ...model.frames, [key]: { ...frame, measured: height } } } }
     },
-    RecordedFrameHeights: ({ key, heights }) => {
-      const frame = model.frames[key] ?? emptyFrame()
-      return { model: { ...model, frames: { ...model.frames, [key]: { ...frame, known: heights } } } }
-    },
     LoadedFrame: ({ key }) => ({ model: { ...model, frames: { ...model.frames, [key]: { ...(model.frames[key] ?? emptyFrame()), loaded: true } } } }),
     ClickedExpandVisualization: ({ artifact }) => ({ model, outMessage: viewerAction({ kind: "visualization", artifact }, true) }),
+    GotTooltipMessage: ({ key, message: child }) => {
+      const next = Tooltip.update(tooltipOf(model, key), child)
+      return {
+        model: { ...model, tooltips: { ...model.tooltips, [key]: next.model } },
+        commands: Command.mapMessages(next.commands, (message: Tooltip.Message) => Message.GotTooltipMessage({ key, message })),
+      }
+    },
 
     ClickedQueued: ({ messageId, action }) => (
       model.busy[`queued:${messageId}`]

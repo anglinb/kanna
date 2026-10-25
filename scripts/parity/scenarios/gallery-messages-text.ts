@@ -28,8 +28,12 @@ export function scrollGallery(page: Page, top: number) {
   }, top)
 }
 
-/** Brings a locator's element into the middle of the gallery's scroller. */
+/**
+ * Brings an element into the middle of the gallery's scroller, once what a
+ * press just changed has been drawn (two frames: an app may draw on the next).
+ */
 export async function centerInGallery(page: Page, selector: string) {
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   await page.evaluate((target) => {
     const element = document.querySelector(target)
     const scroller = document.querySelector("[data-gallery-scroll]")!
