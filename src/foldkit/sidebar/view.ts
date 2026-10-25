@@ -43,7 +43,6 @@ import {
   isSettingsActive,
   newSidebarEnabled,
   resolvedKeybindings,
-  routeProjectId,
   sidebarData,
   threads,
   visibleChats,
