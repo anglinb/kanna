@@ -25,6 +25,24 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
+    // The chip under the hero names the project (its path in a tooltip) and
+    // opens the palette's New Chat in… page.
+    name: "new-chat-project-picker",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("tooltip", "dialog"),
+    covers: { commands: ["chat.create"] },
+    async run(context) {
+      await newChat(context)
+      const picker = context.page.getByRole("button", { name: /^Switch project/ })
+      await hover(context, picker)
+      await context.capture("tooltip")
+      await click(context, picker)
+      await parkPointer(context)
+      await context.capture("palette")
+    },
+  }),
+  defineScenario({
     // Two turns: the minimap marks both; its marker's card jumps to the first prompt.
     name: "transcript-minimap",
     route: CHATS.units,

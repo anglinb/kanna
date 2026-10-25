@@ -1,8 +1,24 @@
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, click, contextClick, parkPointer, press, REGIONS, regions, rest, sidebarChatRow, switchSidebarView } from "./_lib/helpers"
+import {
+  CHATS,
+  click,
+  contextClick,
+  countUuids,
+  openPalette,
+  openWidgets,
+  parkPointer,
+  press,
+  quickClick,
+  REGIONS,
+  regions,
+  rest,
+  sidebarChatRow,
+  switchSidebarView,
+} from "./_lib/helpers"
 
 // Dialogs not opened in their area's file: Kanna Cloud setup, the archived
-// chats dialog from the Projects view, and the ways out of a dialog
+// chats dialog from the Projects view, Push to GitHub for a project with no
+// remote, and the ways out of a dialog
 // (Escape, Close, clicking outside). Rename / delete chat are in
 // sidebar.ts, rename project in home.ts, settings dialogs in settings-*.ts.
 
@@ -92,6 +108,31 @@ export const scenarios: Scenario[] = [
       await parkPointer(context)
       await rest(context)
       await context.capture("renamed")
+    },
+  }),
+  defineScenario({
+    // A project made from the palette has no GitHub remote: the Changes
+    // card offers Push to GitHub, whose dialog asks for gh to be signed in.
+    name: "dialog-push-to-github",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("dialog", "widgets"),
+    covers: { commands: ["project.create", "chat.getGitHubPublishInfo"] },
+    async run(context) {
+      const { page } = context
+      const palette = page.getByRole("dialog", { name: "Command Palette" })
+      await countUuids(context)
+      await openPalette(context)
+      await click(context, palette.getByRole("option", { name: /^Add Project…/ }).first())
+      await click(context, palette.getByRole("option", { name: "Create New…" }).first())
+      await palette.getByRole("combobox").pressSequentially("surf-log")
+      await rest(context)
+      await press(context, "Enter")
+      await parkPointer(context)
+      await openWidgets(context)
+      await context.capture("no-remote")
+      await quickClick(context, page.locator(REGIONS.widgets).getByRole("button", { name: "Push to GitHub" }))
+      await context.capture("open")
     },
   }),
 ]

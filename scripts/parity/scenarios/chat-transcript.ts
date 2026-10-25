@@ -196,4 +196,17 @@ export const scenarios: Scenario[] = [
       await context.capture("loaded-older")
     },
   }),
+  defineScenario({
+    // A local file link in a reply opens in the editor, which needs the real machine.
+    name: "transcript-file-link-click",
+    route: CHATS.rateLimit,
+    ...desktop,
+    regions: regions("transcript"),
+    covers: { commands: ["system.openExternal"] },
+    async run(context) {
+      await click(context, transcript(context).getByRole("link", { name: "src/middleware/rateLimit.ts" }))
+      await parkPointer(context)
+      await context.capture("needs-machine")
+    },
+  }),
 ]

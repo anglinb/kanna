@@ -3,7 +3,8 @@ import { defineScenario, type Scenario } from "../scenario"
 import { CHATS, openWidgets, quickClick, REGIONS, regions } from "./_lib/helpers"
 
 // The widget column beside a chat: Changes (files, staging, commit, the
-// branch picker, fetch, merge), Commits, Quick Actions, Usage. Every
+// branch picker, fetch, merge), Commits, Quick Actions, Tasks, Schedules,
+// Usage. Every
 // scenario here opens the column, does one or two things and captures
 // within its first poll interval (see quickClick in _lib/helpers.ts).
 
@@ -262,6 +263,25 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
+    // The Usage card's refresh button: its tooltip, then a refresh.
+    name: "widgets-usage-refresh",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("widgets", "tooltip"),
+    covers: { commands: ["usage.refresh"] },
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      const refresh = column(page).getByRole("button", { name: "Refresh usage" }).first()
+      await refresh.hover()
+      await page.waitForTimeout(300)
+      await context.settle()
+      await context.capture("tooltip")
+      await quickClick(context, refresh)
+      await context.capture("refreshed")
+    },
+  }),
+  defineScenario({
     // ledger-api's docs branch is a commit behind main: the merge previews, then runs.
     name: "widgets-merge-branch",
     route: CHATS.readme,
@@ -335,6 +355,85 @@ export const scenarios: Scenario[] = [
       await context.page.waitForTimeout(800)
       await context.settle()
       await context.capture("card")
+    },
+  }),
+  defineScenario({
+    // The rate-limit chat's agent set up a check every six hours: the Schedules card.
+    name: "widgets-schedules",
+    route: CHATS.rateLimit,
+    ...desktop,
+    regions: regions("widgets"),
+    async run(context) {
+      await openWidgets(context)
+      await context.capture("open")
+    },
+  }),
+  defineScenario({
+    // A schedule's card: its message, where it goes, its runs, and Edit.
+    name: "widgets-schedule-hover-card",
+    route: CHATS.rateLimit,
+    ...desktop,
+    regions: regions("popover"),
+    async run(context) {
+      await openWidgets(context)
+      await column(context.page).getByText("Watch the charge limiter", { exact: true }).hover()
+      await context.page.waitForTimeout(800)
+      await context.settle()
+      await context.capture("card")
+    },
+  }),
+  defineScenario({
+    // Edit Schedule… starts the sentence that changes it in the composer.
+    name: "widgets-schedule-edit",
+    route: CHATS.rateLimit,
+    ...desktop,
+    regions: regions("menu", "composer"),
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      await quickClick(context, column(page).getByRole("button", { name: "Schedule actions" }))
+      await context.capture("menu")
+      await quickClick(context, page.getByRole("menuitem", { name: "Edit Schedule…" }))
+      await context.capture("prefilled")
+    },
+  }),
+  defineScenario({
+    // A saved quick action runs in the terminal under the chat.
+    name: "widgets-run-quick-action",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("widgets", "terminal"),
+    covers: { commands: ["project.writeQuickActions", "terminal.create", "terminal.input"] },
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      await quickClick(context, column(page).getByRole("button", { name: "Add quick action" }))
+      await column(page).getByRole("textbox", { name: "Command" }).fill("bun test")
+      await quickClick(context, column(page).getByRole("button", { name: "Save quick action" }))
+      await column(page).getByRole("button", { name: /^bun test/ }).first().click()
+      // The row's check mark stands for a second after a run; capture once it's back to ▶.
+      await page.waitForTimeout(1200)
+      await context.settle()
+      await context.capture("ran")
+    },
+  }),
+  defineScenario({
+    // A quick action's menu deletes it.
+    name: "widgets-delete-quick-action",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("widgets", "menu"),
+    covers: { commands: ["project.writeQuickActions"] },
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      await quickClick(context, column(page).getByRole("button", { name: "Add quick action" }))
+      await column(page).getByRole("textbox", { name: "Command" }).fill("bun run lint")
+      await quickClick(context, column(page).getByRole("button", { name: "Save quick action" }))
+      await quickClick(context, column(page).getByRole("button", { name: "Quick action options" }))
+      await context.capture("menu")
+      await quickClick(context, page.getByRole("menuitem", { name: "Delete" }))
+      await context.capture("deleted")
     },
   }),
   defineScenario({

@@ -19,6 +19,8 @@ export interface DemoProjectSeed {
   entryFile: string
   /** The committed tree. Chats edit a copy of it. */
   files: Record<string, string>
+  /** A folder made in Kanna: a git repo with no GitHub remote yet. */
+  localOnly?: boolean
 }
 
 export interface DemoChatSeed {
@@ -38,6 +40,18 @@ export interface DemoChatSeed {
   liveFromStep?: number
   /** Work running on the chat's behalf, for its Tasks widget. */
   tasks?: DemoTaskSeed[]
+  /** Schedules the chat's agent set up, for its Schedules widget. */
+  schedules?: DemoScheduleSeed[]
+}
+
+/** A schedule that sends the chat a message on a repeat. */
+export interface DemoScheduleSeed {
+  id: string
+  name: string
+  content: string
+  everyMinutes: number
+  /** When the chat's agent created it, relative to page load. */
+  createdMinutesAgo: number
 }
 
 /** A background task: a subagent, shell or monitor the agent started. */
@@ -730,7 +744,7 @@ function rateLimitTurn(): DemoTurn {
   const summary = [
     "`POST /v1/charges` now allows 20 requests a minute per API key and answers `429` with a `Retry-After` header past that.",
     "",
-    "The limiter lives in `src/middleware/rateLimit.ts` and keeps its counts in memory, so each instance limits on its own. That's fine on one server; behind a load balancer it would need a shared store.",
+    `The limiter lives in [\`src/middleware/rateLimit.ts\`](${LEDGER}/src/middleware/rateLimit.ts) and keeps its counts in memory, so each instance limits on its own. That's fine on one server; behind a load balancer it would need a shared store.`,
   ].join("\n")
   script.say(summary, 1200).finish(summary, { usedTokens: 19_774, maxTokens: 400_000 })
   return { prompt, provider: "codex", model: "gpt-5.6-sol", steps: script.steps }
@@ -802,6 +816,15 @@ export function createDemoChats(): DemoChatSeed[] {
       turns: [rateLimitTurn()],
       minutesAgo: 190,
       commitAfter: true,
+      schedules: [
+        {
+          id: "schedule-demo-429s",
+          name: "Watch the charge limiter",
+          content: "Check the last six hours of 429s on POST /v1/charges and flag any API key that hit the limit more than 50 times.",
+          everyMinutes: 360,
+          createdMinutesAgo: 185,
+        },
+      ],
     },
     {
       id: "demo-chat-readme",

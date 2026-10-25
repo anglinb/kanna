@@ -181,6 +181,26 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
+    // A delegator's navbar gains the delegated-chats button: its tooltip,
+    // then the pane it opens (empty: no chat reports to it yet).
+    name: "navbar-delegated-list",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("navbar", "tooltip", "widgets"),
+    covers: { commands: ["chat.setDelegator"] },
+    async run(context) {
+      await click(context, navbar(context).getByRole("button", { name: "Chat actions" }))
+      await click(context, context.page.getByRole("menuitem", { name: "Make Delegator" }))
+      await parkPointer(context)
+      const button = navbar(context).getByRole("button", { name: /^Show delegated chats/ })
+      await hover(context, button)
+      await context.capture("tooltip")
+      await click(context, button)
+      await parkPointer(context)
+      await context.capture("pane")
+    },
+  }),
+  defineScenario({
     name: "navbar-widgets-tooltip",
     route: CHATS.units,
     ...desktop,

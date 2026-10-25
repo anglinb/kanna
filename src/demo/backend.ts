@@ -39,11 +39,14 @@ import {
   type ChatDiffSnapshot,
   type ChatMergePreviewResult,
   type ChatPreview,
+  type ChatSchedule,
   type ChatSkillsSnapshot,
   type ChatSnapshot,
   type ChatTouchedFilesResult,
   type FsListResult,
+  type GitHubPublishInfo,
   type GitHubRecentReposResult,
+  type GitHubRepoAvailabilityResult,
   type GlobalSkillSummary,
   type HarnessSkill,
   type KannaStatus,
@@ -150,6 +153,8 @@ interface ChatState {
   planMode: boolean
   /** Background work for the Tasks widget (runtime.subagents). */
   tasks: SubagentActivity[]
+  /** What the chat's agent set to run later, for the Schedules widget (runtime.schedules). */
+  schedules: ChatSchedule[]
   entries: TranscriptEntry[]
   queued: QueuedChatMessage[]
   turn: ActiveTurn | null
@@ -257,7 +262,7 @@ export class DemoBackend {
       authorName: "You",
       authoredAt: new Date(at).toISOString(),
       tags: [],
-      githubUrl: `https://github.com/${project.seed.repoOwner}/${project.seed.title}/commit/${sha}`,
+      ...(project.seed.localOnly ? {} : { githubUrl: `https://github.com/${project.seed.repoOwner}/${project.seed.title}/commit/${sha}` }),
       files: files.length > 0 ? files : paths.map((path) => ({ path, additions: (project.files.get(path) ?? "").split("\n").length - 1, deletions: 0 })),
     })
   }
@@ -345,6 +350,22 @@ export class DemoBackend {
         ...(task.usage ? { usage: task.usage } : {}),
         ...(task.status === "running" ? { stoppable: true } : {}),
       })),
+      schedules: (seed.schedules ?? []).map((schedule): ChatSchedule => {
+        const createdAt = this.clock.now() - schedule.createdMinutesAgo * 60_000
+        return {
+          id: schedule.id,
+          name: schedule.name,
+          content: schedule.content,
+          target: { kind: "chat", chatId: seed.id },
+          trigger: { kind: "interval", everyMs: schedule.everyMinutes * 60_000 },
+          enabled: true,
+          createdAt,
+          updatedAt: createdAt,
+          createdByChatId: seed.id,
+          nextRunAt: createdAt + schedule.everyMinutes * 60_000,
+          runCount: 0,
+        }
+      }),
     }
     this.chats.set(chat.id, chat)
 
@@ -523,6 +544,7 @@ export class DemoBackend {
       touchedPaths: new Set(),
       planMode: false,
       tasks: [],
+      schedules: [],
     }
     this.chats.set(chat.id, chat)
     return chat
@@ -685,6 +707,19 @@ export class DemoBackend {
       case "chat.setDraftProtection":
       case "chat.refreshDiffs":
         return null
+      // A project made in the demo has no GitHub remote; GitHub's CLI isn't
+      // signed in (see createProviderAuth), so publishing stops at sign-in.
+      case "chat.getGitHubPublishInfo": {
+        const project = this.requireProject(this.requireChat(command.chatId).projectId)
+        return {
+          ghInstalled: true,
+          authenticated: false,
+          owners: [],
+          suggestedRepoName: project.seed.localPath.split("/").filter(Boolean).at(-1) ?? "my-repo",
+        } satisfies GitHubPublishInfo
+      }
+      case "chat.checkGitHubRepoAvailability":
+        return { available: false, message: "GitHub CLI is not authenticated." } satisfies GitHubRepoAvailabilityResult
       case "chat.listSkills":
         return { provider: command.provider, skills: demoSkills(command.provider, this.globalSkills), origin: "filesystem" } satisfies ChatSkillsSnapshot
       case "chat.getEntryDebugRaw":
@@ -759,6 +794,7 @@ export class DemoBackend {
           branchName: "main",
           entryFile: "README.md",
           files: { "README.md": `# ${command.title ?? name}\n` },
+          localOnly: true,
         })
         return { projectId: project.seed.id }
       }
@@ -1267,9 +1303,9 @@ export class DemoBackend {
       status: "ready",
       branchName: project.branchName,
       defaultBranchName: "main",
-      hasOriginRemote: true,
-      originRepoSlug: `${project.seed.repoOwner}/${project.seed.title}`,
-      hasUpstream: true,
+      hasOriginRemote: !project.seed.localOnly,
+      ...(project.seed.localOnly ? {} : { originRepoSlug: `${project.seed.repoOwner}/${project.seed.title}` }),
+      hasUpstream: !project.seed.localOnly,
       aheadCount: 0,
       behindCount: 0,
       files,
@@ -1466,6 +1502,7 @@ export class DemoBackend {
         sessionToken: chat.turnCount > 0 || chat.turn ? `demo-session-${chat.id}` : null,
         ...(chat.delegator ? { delegator: true as const } : {}),
         ...(chat.tasks.length > 0 ? { subagents: chat.tasks.map((task) => ({ ...task })) } : {}),
+        ...(chat.schedules.length > 0 ? { schedules: chat.schedules.map((schedule) => ({ ...schedule })) } : {}),
       },
       queuedMessages: chat.queued,
       // Header form, as the real router sends it: tool bodies stay here

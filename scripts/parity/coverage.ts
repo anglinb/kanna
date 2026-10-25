@@ -49,10 +49,9 @@ const UNCOVERABLE: Record<string, string> = {
   "browser.exposeLocalHttpServer": "needs a local HTTP server (see browser.killLocalHttpServer) and cloudflared",
   "browser.unexposeLocalHttpServer": "needs an exposed local HTTP server (see browser.exposeLocalHttpServer)",
   "chat.usageLimitResume": "needs a chat waiting on its usage limit (runtime.usageLimitResume); no demo chat is",
-  "chat.initGit": "needs a project without a git repo; every demo project has one",
-  "chat.getGitHubPublishInfo": "needs a repo without an origin remote; every demo project has one",
-  "chat.checkGitHubRepoAvailability": "follows chat.getGitHubPublishInfo (see there)",
-  "chat.publishToGitHub": "follows chat.getGitHubPublishInfo (see there)",
+  "chat.initGit": "needs a project folder with no git repo; every demo project has one, and project.create makes one (as the real server does for an empty folder)",
+  "chat.checkGitHubRepoAvailability": "sent only once gh is signed in; the demo's gh is signed out, so the Push to GitHub dialog stops at sign-in (dialog-push-to-github)",
+  "chat.publishToGitHub": "needs gh signed in (see chat.checkGitHubRepoAvailability)",
   "chat.stopDraining": "needs a chat draining its queue after a stop (runtime.isDraining); the demo never drains",
 }
 
