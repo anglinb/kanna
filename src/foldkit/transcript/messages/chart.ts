@@ -1045,7 +1045,7 @@ export function chartFigure(key: string, payload: ChartToolPayload, className: s
         const hidden = chart.hidden.includes(series)
         return h.button([
           h.Type("button"),
-          h.AriaPressed(!hidden),
+          h.AriaPressed(String(!hidden)),
           h.Class(hidden ? "muted" : ""),
           h.OnClick(Message.ToggledChartSeries({ key, series })),
           h.OnMouseEnter(Message.HoveredChartSeries({ key, series })),
