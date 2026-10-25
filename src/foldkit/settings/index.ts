@@ -199,6 +199,17 @@ export function update(model: Model, message: Message, app: AppModel): Return {
   })
 }
 
+// OBSERVE: a Model Registry write's answer landing on the root.
+
+export function observe(model: Model, previousApp: AppModel, app: AppModel): Return {
+  const result = Providers.observe(model.providers, previousApp, app)
+  if (result.model === model.providers) return { model }
+  return {
+    model: { ...model, providers: result.model },
+    commands: Command.mapMessages(result.commands ?? [], (message) => Message.GotProvidersMessage({ message })) as Return["commands"],
+  }
+}
+
 // SUBSCRIPTIONS: a section's run while its content is on screen.
 
 const gate = (id: SettingsSectionId) => (model: Model) => model.activeSection === id

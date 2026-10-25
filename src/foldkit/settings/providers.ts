@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Command, Submodel } from "foldkit"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
@@ -114,6 +114,12 @@ export const Model = Schema.Struct({
   llmProviderError: Schema.NullOr(Schema.String),
   /** The last check of the credentials, for the draft values it checked. */
   llmValidation: Schema.Struct({ status: ValidationStatus, errorText: Schema.String, hasError: Schema.Boolean, values: Schema.String }),
+  /**
+   * Model Registry writes the root has sent and not yet answered, oldest
+   * first: each one's credentials check goes out when its answer lands
+   * (`observe`), as React awaited the write before validating.
+   */
+  pendingValidations: Schema.Array(Schema.Struct({ value: opaque<LlmProviderValue>("LlmProviderValue"), values: Schema.String })),
   validationDialog: Dialog.Model,
   defaultModels: DefaultModelsDialog.Model,
   /** One per auth card row, by AuthCard.cardId. */
@@ -145,6 +151,7 @@ export function init(): Model {
     llmDraft: null,
     llmProviderError: null,
     llmValidation: { status: "idle", errorText: "", hasError: false, values: "" },
+    pendingValidations: [],
     validationDialog: Dialog.init({ id: "settings-llm-validation" }),
     defaultModels: DefaultModelsDialog.init({ id: "settings-default-models" }),
     authCards: {},
@@ -220,20 +227,19 @@ type Return = SectionReturn<Model, Message>
 
 /**
  * The credentials check after a Model Registry write. The write is the
- * root's (it holds the snapshot); this runs after it, as React awaited the
- * write before validating, by letting the root's command go out first.
+ * root's (it holds the snapshot); this goes out once the write's answer has
+ * landed (`observe`).
  */
-const ValidateLlmProvider = Command.define("ValidateLlmProvider", {
+export const ValidateLlmProvider = Command.define("ValidateLlmProvider", {
   args: { value: opaque<LlmProviderValue>("LlmProviderValue"), values: Schema.String },
   messages: [Message.ReceivedLlmValidation, Message.FailedLlmCommit],
-  execute: ({ value, values }) => Effect.sleep(Duration.zero).pipe(
-    Effect.andThen(sendCommand<LlmProviderValidationResult>({
-      type: "settings.validateLlmProvider",
-      provider: value.provider,
-      apiKey: value.apiKey,
-      model: value.model,
-      baseUrl: value.baseUrl,
-    })),
+  execute: ({ value, values }) => sendCommand<LlmProviderValidationResult>({
+    type: "settings.validateLlmProvider",
+    provider: value.provider,
+    apiKey: value.apiKey,
+    model: value.model,
+    baseUrl: value.baseUrl,
+  }).pipe(
     Effect.map((validation) => Message.ReceivedLlmValidation({
       values,
       ok: validation.ok,
@@ -295,10 +301,38 @@ function withDraft(model: Model, app: AppModel, draft: LlmDraft): Model {
 function commitLlmProvider(model: Model, app: AppModel, draft: LlmDraft): Return {
   const value = { provider: draft.provider, apiKey: draft.apiKey, model: draft.model, baseUrl: draft.baseUrl }
   return requestActions(
-    { ...withDraft(model, app, draft), llmProviderError: null },
+    {
+      ...withDraft(model, app, draft),
+      llmProviderError: null,
+      pendingValidations: [...model.pendingValidations, { value, values: draftSignature(draft) }],
+    },
     [AppAction.WriteLlmProvider({ value })],
-    [ValidateLlmProvider({ value, values: draftSignature(draft) })],
   )
+}
+
+/**
+ * The oldest pending Model Registry write has been answered: the snapshot
+ * landed (then check the credentials) or the root reported the write failed
+ * (then the commit failed with that error, as React's catch did).
+ */
+export function observe(model: Model, previousApp: AppModel, app: AppModel): Return {
+  const [oldest, ...rest] = model.pendingValidations
+  if (!oldest) return { model }
+  if (app.llmProvider !== previousApp.llmProvider) {
+    return { model: { ...model, pendingValidations: rest }, commands: [ValidateLlmProvider(oldest)] }
+  }
+  if (app.commandError !== null && app.commandError !== previousApp.commandError) {
+    const failure = app.commandError
+    return {
+      model: {
+        ...model,
+        pendingValidations: rest,
+        llmProviderError: failure,
+        llmValidation: { status: "invalid", errorText: JSON.stringify({ name: "Error", message: failure }, null, 2), hasError: true, values: oldest.values },
+      },
+    }
+  }
+  return { model }
 }
 
 /** The value a select shows (as the view passes it). */
@@ -435,7 +469,9 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     // The section only mounts while its tab is selected and the socket is
     // connected, so a mount matches the old page-gated read.
     MountedSection: () => requestActions(model, [AppAction.SendCommand({ command: { type: "settings.readLlmProvider" } })]),
-    UnmountedSection: () => ({ model: init() }),
+    // React's commit carried on after the section left: writes in flight
+    // still get their credentials check.
+    UnmountedSection: () => ({ model: { ...init(), pendingValidations: model.pendingValidations } }),
     GotSelectMessage: ({ id, message: child }) => foldSelect(model, id, child, app),
     GotPopoverMessage: ({ provider, picker, message: child }) => foldPopover(model, provider, picker, Popover.update(model.popovers[provider][picker], child)),
     ChangedModelQuery: ({ provider, query }) => ({ model: { ...model, modelQueries: { ...model.modelQueries, [provider]: query } } }),

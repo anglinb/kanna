@@ -15,6 +15,7 @@ import * as CloudPair from "./cloud-pair"
 import * as General from "./general"
 import { ContinueAppActions, FetchAuthStatus, init, Message, PageMount, update, view } from "./index"
 import * as Keybindings from "./keybindings"
+import * as Providers from "./providers"
 import { BlurActiveElement } from "./shared"
 import * as Skills from "./skills"
 import * as Usage from "./usage"
@@ -182,6 +183,32 @@ describe("settings › general", () => {
   test("leaving the section forgets its drafts", () => {
     const typed = run(General.init(), General.Message.ChangedField({ id: "scrollback", text: "9", base: "1000" })).model
     expect(run(typed, General.Message.UnmountedSection()).model).toEqual(General.init())
+  })
+})
+
+describe("settings › providers: Model Registry", () => {
+  const snapshot = (apiKey: string) => ({ provider: "custom" as const, apiKey, model: "m", baseUrl: "", faveModels: [], resolvedApiKey: apiKey }) as unknown as NonNullable<AppModel["llmProvider"]>
+
+  test("each write's credentials check goes out when that write's answer lands, in order", () => {
+    const before = connectedApp("/settings/providers", { llmProvider: snapshot("") })
+    const typed = Providers.update(Providers.init(), Providers.Message.ChangedLlmField({ field: "apiKey", value: "sk-1" }), before).model
+    const entered = Providers.update(typed, Providers.Message.PressedLlmFieldKey({ key: "Enter" }), before)
+    expect(entered.outMessage?.actions[0]?._tag).toBe("WriteLlmProvider")
+    expect(entered.commands?.map((command) => command.name)).not.toContain(Providers.ValidateLlmProvider.name)
+    // The blur that follows Enter commits again.
+    const blurred = Providers.update(entered.model, Providers.Message.BlurredLlmField(), before)
+    expect(blurred.model.pendingValidations).toHaveLength(2)
+
+    const first = { ...before, llmProvider: snapshot("sk-1") }
+    const answered = Providers.observe(blurred.model, before, first)
+    expect(answered.commands?.map((command) => command.name)).toEqual([Providers.ValidateLlmProvider.name])
+    expect(answered.model.pendingValidations).toHaveLength(1)
+    // Nothing on the root changed that a write answers: nothing goes out.
+    expect(Providers.observe(answered.model, first, first).commands ?? []).toHaveLength(0)
+    // The second write fails: its commit fails with the root's error.
+    const failed = Providers.observe(answered.model, first, { ...first, commandError: "disk full" })
+    expect(failed.model.pendingValidations).toHaveLength(0)
+    expect(failed.model.llmProviderError).toBe("disk full")
   })
 })
 

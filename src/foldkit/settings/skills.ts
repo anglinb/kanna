@@ -211,7 +211,9 @@ const MeasureSkillActions = Command.define("MeasureSkillActions", {
   execute: ({ name }) => Effect.sync(() => {
     const button = document.querySelector(`button[aria-label="${CSS.escape(`Open actions for ${name}`)}"]`)
     const rect = button?.getBoundingClientRect()
-    return Message.MeasuredSkillActions({ name, x: rect ? rect.left + rect.width / 2 : 0, y: rect ? rect.bottom : 0 })
+    // React dispatched a synthetic contextmenu at this point, and Chromium
+    // floors a MouseEvent's client coordinates to whole pixels.
+    return Message.MeasuredSkillActions({ name, x: rect ? Math.floor(rect.left + rect.width / 2) : 0, y: rect ? Math.floor(rect.bottom) : 0 })
   }),
 })
 
