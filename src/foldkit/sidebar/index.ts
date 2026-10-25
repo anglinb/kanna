@@ -23,6 +23,6 @@ export function update(model: Model, _message: Message, _app: AppModel): SliceRe
   return { model }
 }
 
-export const view = Submodel.defineView<Model, Message, SliceViewInputs>((_model, _inputs, _h) => null)
+export const view = Submodel.defineView<Model, Message, SliceViewInputs>((_model, _inputs, h) => h.div([h.Class("hidden md:block w-[283px] shrink-0")], [])) // TEMP-SETTINGS-VERIFY
 
 export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()(() => ({}))

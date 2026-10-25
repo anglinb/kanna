@@ -91,8 +91,6 @@ export const Message = defineMessageUnion({
   GotChangelogMessage: { message: Changelog.Message },
   MountedPage: {},
   UnmountedPage: {},
-  /** The content arrived for this route's section id (as typed in the URL). */
-  MountedContent: { sectionId: Schema.String },
   ReceivedAuthStatus: { enabled: Schema.Boolean },
   ClickedSection: { id: SectionIdSchema },
   ClickedBack: {},
@@ -149,6 +147,7 @@ type SectionKey = "general" | "mac" | "providers" | "mcp" | "skills" | "keybindi
 /** Runs a section's update into the page: its Model back, its Commands lifted, its actions asked for. */
 function foldSection<ChildMessage extends { _tag: string }, ChildModel>(
   model: Model,
+  app: AppModel,
   key: SectionKey,
   result: SectionReturn<ChildModel, ChildMessage>,
   wrap: (message: ChildMessage) => Message,
@@ -165,31 +164,32 @@ function foldSection<ChildMessage extends { _tag: string }, ChildModel>(
     next = { ...next, activeSection: null }
   }
   const commands = Command.mapMessages(result.commands ?? [], wrap) as Return["commands"]
-  const outMessage = result.outMessage as SectionOutMessage | undefined
-  return outMessage ? runActions(next, outMessage.actions, commands) : { model: next, commands }
+  const actions = [...((result.outMessage as SectionOutMessage | undefined)?.actions ?? [])]
+  // An unknown section shows General and puts /settings/general in the
+  // address bar, replacing the bad one (SettingsPage's redirect effect). It
+  // waits for the section's content, which waits for the connection.
+  if (childMessage._tag === "MountedSection" && app.route._tag === "Settings" && !resolveSettingsSectionId(app.route.sectionId)) {
+    actions.push(AppAction.Navigate({ path: "/settings/general", replace: true }))
+  }
+  return runActions(next, actions, commands)
 }
 
 export function update(model: Model, message: Message, app: AppModel): Return {
   return Message.match<Return>(message, {
-    GotGeneralMessage: ({ message: child }) => foldSection(model, "general", General.update(model.general, child, app), (m) => Message.GotGeneralMessage({ message: m }), child),
-    GotMacMessage: ({ message: child }) => foldSection(model, "mac", Mac.update(model.mac, child, app), (m) => Message.GotMacMessage({ message: m }), child),
-    GotProvidersMessage: ({ message: child }) => foldSection(model, "providers", Providers.update(model.providers, child, app), (m) => Message.GotProvidersMessage({ message: m }), child),
-    GotMcpMessage: ({ message: child }) => foldSection(model, "mcp", Mcp.update(model.mcp, child, app), (m) => Message.GotMcpMessage({ message: m }), child),
-    GotSkillsMessage: ({ message: child }) => foldSection(model, "skills", Skills.update(model.skills, child, app), (m) => Message.GotSkillsMessage({ message: m }), child),
-    GotKeybindingsMessage: ({ message: child }) => foldSection(model, "keybindings", Keybindings.update(model.keybindings, child, app), (m) => Message.GotKeybindingsMessage({ message: m }), child),
-    GotUsageMessage: ({ message: child }) => foldSection(model, "usage", Usage.update(model.usage, child, app), (m) => Message.GotUsageMessage({ message: m }), child),
-    GotLabsMessage: ({ message: child }) => foldSection(model, "labs", Labs.update(model.labs, child, app), (m) => Message.GotLabsMessage({ message: m }), child),
-    GotChangelogMessage: ({ message: child }) => foldSection(model, "changelog", Changelog.update(model.changelog, child, app), (m) => Message.GotChangelogMessage({ message: m }), child),
+    GotGeneralMessage: ({ message: child }) => foldSection(model, app, "general", General.update(model.general, child, app), (m) => Message.GotGeneralMessage({ message: m }), child),
+    GotMacMessage: ({ message: child }) => foldSection(model, app, "mac", Mac.update(model.mac, child, app), (m) => Message.GotMacMessage({ message: m }), child),
+    GotProvidersMessage: ({ message: child }) => foldSection(model, app, "providers", Providers.update(model.providers, child, app), (m) => Message.GotProvidersMessage({ message: m }), child),
+    GotMcpMessage: ({ message: child }) => foldSection(model, app, "mcp", Mcp.update(model.mcp, child, app), (m) => Message.GotMcpMessage({ message: m }), child),
+    GotSkillsMessage: ({ message: child }) => foldSection(model, app, "skills", Skills.update(model.skills, child, app), (m) => Message.GotSkillsMessage({ message: m }), child),
+    GotKeybindingsMessage: ({ message: child }) => foldSection(model, app, "keybindings", Keybindings.update(model.keybindings, child, app), (m) => Message.GotKeybindingsMessage({ message: m }), child),
+    GotUsageMessage: ({ message: child }) => foldSection(model, app, "usage", Usage.update(model.usage, child, app), (m) => Message.GotUsageMessage({ message: m }), child),
+    GotLabsMessage: ({ message: child }) => foldSection(model, app, "labs", Labs.update(model.labs, child, app), (m) => Message.GotLabsMessage({ message: m }), child),
+    GotChangelogMessage: ({ message: child }) => foldSection(model, app, "changelog", Changelog.update(model.changelog, child, app), (m) => Message.GotChangelogMessage({ message: m }), child),
     MountedPage: () => ({
       model: { ...model, openedOn: selectedSection(app), switched: false },
       commands: [FetchAuthStatus()],
     }),
     UnmountedPage: () => ({ model: { ...model, openedOn: null, switched: false, signingOut: false } }),
-    // An unknown section shows General and puts /settings/general in the
-    // address bar, replacing the bad one.
-    MountedContent: ({ sectionId }) => resolveSettingsSectionId(sectionId)
-      ? { model }
-      : runActions(model, [AppAction.Navigate({ path: "/settings/general", replace: true })]),
     ReceivedAuthStatus: ({ enabled }) => ({ model: { ...model, authEnabled: enabled } }),
     ClickedSection: ({ id }) => runActions(model, [AppAction.Navigate({ path: `/settings/${id}`, replace: false })]),
     ClickedBack: () => runActions(model, [AppAction.OpenSidebar()]),
@@ -226,12 +226,6 @@ export const subscriptions = Subscription.aggregate(
 const PageMount = Mount.define("SettingsPage", {
   messages: [Message.MountedPage],
   execute: () => Effect.succeed(Message.MountedPage()),
-})
-
-const ContentMount = Mount.define("SettingsPageContent", {
-  args: { sectionId: Schema.String },
-  messages: [Message.MountedContent],
-  execute: ({ sectionId }) => Effect.succeed(Message.MountedContent({ sectionId })),
 })
 
 /** SDK_CLIENT_APP's version. */
@@ -380,11 +374,8 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
         ]),
 
         // Keyed by the section id as the URL has it, so arriving at an
-        // unknown one mounts it afresh and its redirect runs.
-        h.keyed("div")(rawSectionId, [
-          h.Class("w-full px-4 pb-32 pt-8 md:px-6 md:pt-16"),
-          h.OnMount(ContentMount({ sectionId: rawSectionId })),
-        ], [
+        // unknown one mounts General afresh and its redirect runs.
+        h.keyed("div")(rawSectionId, [h.Class("w-full px-4 pb-32 pt-8 md:px-6 md:pt-16")], [
           isConnecting
             ? settingsPlaceholder({ loading: true, class: "mx-auto max-w-4xl" }, ["Loading machine settings…"], h)
             : sectionView(model, selectedPage, { app, appVersion: APP_VERSION, switched }, h),

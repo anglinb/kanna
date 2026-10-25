@@ -134,8 +134,16 @@ type Return = SectionReturn<Model, Message>
 const ListInstalled = Command.define("ListGlobalSkills", {
   messages: [Message.SucceededListInstalled, Message.FailedListInstalled],
   execute: sendCommand<GlobalSkillsSnapshot>({ type: "skills.listGlobal" }).pipe(
-    Effect.map((snapshot) => Message.SucceededListInstalled({ skills: snapshot.skills })),
-    Effect.catch((error) => Effect.succeed(Message.FailedListInstalled({ error: errorMessage(error) || "Unable to read installed skills." }))),
+    // React read `snapshot.skills.map(...)` inside its try: a reply without
+    // `skills` fails the read with that TypeError's message.
+    Effect.flatMap((snapshot) => Effect.try({
+      try: () => {
+        snapshot.skills.map((skill) => skill.name)
+        return Message.SucceededListInstalled({ skills: snapshot.skills })
+      },
+      catch: (error) => error,
+    })),
+    Effect.catch((error) => Effect.succeed(Message.FailedListInstalled({ error: error instanceof Error ? error.message : "Unable to read installed skills." }))),
   ),
 })
 
