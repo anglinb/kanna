@@ -14,6 +14,7 @@ import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
 import * as AppDialog from "../ui/app-dialog"
+import * as OpenRouterCallback from "./openRouterCallback"
 import { AppRoute } from "./route"
 import { activeChatId, activeProjectId, sidebarData } from "./update"
 
@@ -36,7 +37,9 @@ function bodyView(model: Model, h: HtmlBuilder<Message>): Html {
   if (auth._tag === "Checking") return checkingView(h)
   if (auth._tag === "Locked") return passwordView(auth, h)
   // Rendered outside the layout: opened as a bare OAuth popup.
-  if (model.route._tag === "OpenRouterCallback") return h.div([])
+  if (model.route._tag === "OpenRouterCallback") {
+    return h.submodel({ slotId: "openrouter-callback", model: model.openRouterCallback, view: OpenRouterCallback.view, toParentMessage: (message) => Message.GotOpenRouterCallbackMessage({ message }) })
+  }
   return layoutView(model, h)
 }
 

@@ -43,6 +43,7 @@ import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
 import * as AppDialog from "../ui/app-dialog"
 import { isNightlyVersion } from "../../shared/types"
+import * as OpenRouterCallback from "./openRouterCallback"
 import { FollowRestart, HandleReloadRequest, MigrateChannelPins, MigrateLegacyBrowserSettings, MigrateLegacySetupFlags, updateCheckInterval } from "./maintenance"
 import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
 import { SliceOutMessage, type AppModel, type SliceReturn } from "./slice"
@@ -89,6 +90,7 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     stores,
     actions: initialActionsModel,
     appDialog: AppDialog.init(),
+    openRouterCallback: OpenRouterCallback.init(Option.getOrElse(url.search, () => "")),
     legacySettingsMigrationStarted: false,
     pageHidden: false,
     sidebar: SidebarSlice.init(),
@@ -546,7 +548,15 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
 
-    AcquiredSocket: () => ({ model: modifyFields(model, { socketReady: () => true }) }),
+    AcquiredSocket: () => {
+      const next = modifyFields(model, { socketReady: () => true })
+      if (next.route._tag !== "OpenRouterCallback") return { model: next }
+      const started = OpenRouterCallback.start(next.openRouterCallback)
+      return {
+        model: modifyFields(next, { openRouterCallback: () => started.model }),
+        commands: Command.mapMessages(started.commands, (message: OpenRouterCallback.Message) => Message.GotOpenRouterCallbackMessage({ message })),
+      }
+    },
     ReleasedSocket: () => ({ model: modifyFields(model, { socketReady: () => false, backgroundChats: () => ({}) }) }),
     FailedAcquireSocket: ({ error }) => ({ model: commandError(model, error) }),
     ChangedConnectionStatus: ({ status }) => {
@@ -652,6 +662,13 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     GotWorkflowsMessage: ({ message: child }) => foldWorkflows(model, child),
     GotTerminalPageMessage: ({ message: child }) => foldTerminalPage(model, child),
     GotAppDialogMessage: ({ message: dialogMessage }) => foldAppDialog(model, dialogMessage),
+    GotOpenRouterCallbackMessage: ({ message: callbackMessage }) => {
+      const result = OpenRouterCallback.update(model.openRouterCallback, callbackMessage)
+      return {
+        model: modifyFields(model, { openRouterCallback: () => result.model }),
+        commands: Command.mapMessages(result.commands, (message: OpenRouterCallback.Message) => Message.GotOpenRouterCallbackMessage({ message })),
+      }
+    },
     GotActionMessage: ({ message: actionMessage }) => withDraftProtection(model, actions.handleActionMessage(model, actionMessage) as UpdateReturn),
   })
 

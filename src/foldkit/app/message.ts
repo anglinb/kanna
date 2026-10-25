@@ -22,6 +22,7 @@ import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
 import * as AppDialog from "../ui/app-dialog"
+import * as OpenRouterCallback from "./openRouterCallback"
 import { AppAction } from "./action"
 import { ActionMessage } from "./actions"
 import * as Stores from "./stores"
@@ -99,5 +100,6 @@ export const Message = defineMessageUnion({
   GotTerminalPageMessage: { message: TerminalPageSlice.Message },
   GotActionMessage: { message: ActionMessage },
   GotAppDialogMessage: { message: AppDialog.Message },
+  GotOpenRouterCallbackMessage: { message: OpenRouterCallback.Message },
 })
 export type Message = typeof Message.Type
