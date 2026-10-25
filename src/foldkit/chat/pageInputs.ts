@@ -1,4 +1,4 @@
-import type { Html } from "foldkit/html"
+import type { ChildAttribute, Html } from "foldkit/html"
 import type { ContextWindowSnapshot } from "../../client/lib/contextWindow"
 import type { ProjectQuickAction } from "../../shared/protocol"
 import type { UsageLimitsSnapshot } from "../../shared/types"
@@ -94,9 +94,23 @@ export interface ChatPageContext {
   }
 }
 
+/**
+ * What a sub-slice can ask of the page itself (ChatPage's own handlers,
+ * which it handed down as props): attribute bundles made in the page's
+ * boundary, so the handlers in them are the page's. Spread one on the
+ * element that does the thing (`h.button([...requests.editModels, …])`).
+ */
+export interface ChatPageRequests {
+  /** The model picker's "Add models…" (`onEditModels`): opens the Default Models dialog. */
+  editModels: ReadonlyArray<ChildAttribute>
+  /** A quick action's row, by its id (`onRunQuickAction`): runs its command in a new terminal. */
+  runQuickAction: Readonly<Record<string, ReadonlyArray<ChildAttribute>>>
+}
+
 /** The view inputs the chat page gives each sub-slice. */
 export interface ChatPageSliceInputs extends SliceViewInputs {
   page: ChatPageContext
+  requests: ChatPageRequests
   /**
    * The transcript only: the new chat page's empty state (the hero line, the
    * project picker, the project's chats), rendered by the chat page. Call it

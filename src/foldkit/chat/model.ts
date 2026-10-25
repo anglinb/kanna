@@ -10,6 +10,7 @@ import * as Widgets from "../widgets"
 import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
+import * as DefaultModelsDialog from "./defaultModelsDialog"
 import { TabDrag, Watch } from "./message"
 
 // The chat page's Model: the sub-slices, and what ChatPage kept in state and
@@ -169,6 +170,9 @@ export const Model = Schema.Struct({
     tooltips: Schema.Record(Schema.String, Tooltip.Model),
   }),
 
+  /** The Default Models dialog the composer's model picker opens ("Add models…"). */
+  defaultModels: DefaultModelsDialog.Model,
+
   /** Commands for terminals made by a quick action, sent once each opens. */
   pendingTerminalCommands: Schema.Record(Schema.String, Schema.String),
 
@@ -245,6 +249,7 @@ export function init(): Model {
     usageLimits: null,
     usageRefreshing: false,
     usageCards: { expanded: {}, tooltips: {} },
+    defaultModels: DefaultModelsDialog.init("chat-default-models"),
     pendingTerminalCommands: {},
     tooltips: {
       openIn: Tooltip.init({ id: "chat-navbar-open-in" }),

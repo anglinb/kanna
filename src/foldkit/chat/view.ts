@@ -1,4 +1,4 @@
-import type { Html, HtmlBuilder } from "foldkit/html"
+import { childAttributes, type Html, type HtmlBuilder } from "foldkit/html"
 import { getTranscriptPaddingBottom } from "../../client/app/kannaStateHelpers"
 import { paneDurationMs } from "../../client/app/paneAnimation"
 import { EMPTY_STATE_TEXT } from "../../client/app/ChatPage/utils"
@@ -18,7 +18,8 @@ import type { Model } from "./model"
 import { delegatedListButtonView, editableTitleView, navbarTitleView, navbarView, washView } from "./navbar"
 import { chatTabsView } from "./chatTabs"
 import { pageFacts, getTerminalPanelDefaultSizes, CHAT_MIN_SIZE_PERCENT, type PageFacts } from "./page"
-import type { ChatPageContext, ChatPageSliceInputs } from "./pageInputs"
+import type { ChatPageContext, ChatPageRequests, ChatPageSliceInputs } from "./pageInputs"
+import * as DefaultModelsDialog from "./defaultModelsDialog"
 import { panel, panelGroup, separator } from "./resizable"
 import { CHAT_MIN_WORKSPACE_SIZE_PERCENT, getWidgetsColumnWidthPx, widgetsColumnView, widgetsPeeking } from "./widgetsColumn"
 import { emptyStateView } from "./emptyState"
@@ -123,8 +124,17 @@ const emptyStateTypist = (h: H) => h.keyed("span")("chat-empty-state-typist", [h
 export function pageView(model: Model, app: AppModel, h: H): Html {
   const facts = pageFacts(app, model.viewportWidth, model.settledShowEmptyState)
   const page = pageContext(model, app, facts)
-  const inputs: ChatPageSliceInputs = { app, page }
-  const transcriptInputs: ChatPageSliceInputs = { app, page, emptyState: () => emptyStateView(model, app, facts, page, h) }
+  // Made here, in the page's boundary, so their handlers are the page's
+  // wherever a sub-slice spreads them.
+  const requests: ChatPageRequests = {
+    editModels: childAttributes([h.OnClick(Message.ClickedEditModels())]),
+    runQuickAction: Object.fromEntries((page.widgetsData.quickActions ?? []).map((action) => [
+      action.id,
+      childAttributes([h.OnClick(Message.RanQuickAction({ command: action.command }))]),
+    ])),
+  }
+  const inputs: ChatPageSliceInputs = { app, page, requests }
+  const transcriptInputs: ChatPageSliceInputs = { app, page, requests, emptyState: () => emptyStateView(model, app, facts, page, h) }
 
   // CHAT CARD
 
@@ -148,6 +158,7 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
         ]),
       ]),
     ]),
+    h.submodel({ slotId: "default-models", model: model.defaultModels, view: DefaultModelsDialog.view, viewInputs: {}, toParentMessage: (message) => Message.GotDefaultModelsMessage({ message }) }),
   ], h)
 
   // The chat, with the viewer beside it or over it. Over it, the chat stays

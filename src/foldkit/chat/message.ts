@@ -13,6 +13,7 @@ import * as Widgets from "../widgets"
 import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
+import * as DefaultModelsDialog from "./defaultModelsDialog"
 
 // The chat page's Messages (app/slice.ts). Kept apart from index.ts so the
 // Mounts (effects.ts) can name them without importing the slice.
@@ -176,6 +177,11 @@ export const Message = defineMessageUnion({
   ElapsedColumnSlide: { token: Schema.Number },
   /** The peek: the closed column shown over the chat while the mouse is at the window's right edge. */
   ChangedWidgetsPeek: { peeking: Schema.Boolean },
+
+  // What sub-slices ask of the page (`requests`)
+  ClickedEditModels: {},
+  GotDefaultModelsMessage: { message: DefaultModelsDialog.Message },
+  RanQuickAction: { command: Schema.String },
 
   // Terminals and diffs
   MadeTerminalId: { purpose: TerminalPurpose, projectId: Schema.String, chatKey: Schema.NullOr(Schema.String), terminalId: Schema.String },

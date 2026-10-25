@@ -19,6 +19,7 @@ import * as PendingSend from "../core/stores/pendingSend"
 import * as ProviderAuth from "../core/stores/providerAuth"
 import { delegatorIsBusy, newChatDelegate, SendToDelegator, StampDelegatedSend } from "./newChatDelegate"
 import { usageCardKey, usageTooltip } from "./usageCards"
+import * as DefaultModelsDialog from "./defaultModelsDialog"
 import * as RightSidebar from "../core/stores/rightSidebar"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import * as ViewerStore from "../core/stores/viewer"
@@ -666,6 +667,24 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       ? { model: modifyFields(model, { widgetsColumn: (column) => ({ ...column, sliding: false }) }) }
       : { model },
 
+    // The model picker's "Add models…": the Default Models dialog, on a copy of the saved list.
+    ClickedEditModels: () => {
+      const result = DefaultModelsDialog.open(model.defaultModels, app.llmProvider?.faveModels ?? [])
+      return {
+        model: modifyFields(model, { defaultModels: () => result.model }),
+        commands: Command.mapMessages(result.commands, (m: DefaultModelsDialog.Message) => Message.GotDefaultModelsMessage({ message: m })) as Return["commands"],
+      }
+    },
+    GotDefaultModelsMessage: ({ message: inner }) => {
+      const result = DefaultModelsDialog.update(model.defaultModels, inner)
+      const next = modifyFields(model, { defaultModels: () => result.model })
+      const commands = Command.mapMessages(result.commands, (m: DefaultModelsDialog.Message) => Message.GotDefaultModelsMessage({ message: m })) as Return["commands"]
+      return result.outMessage
+        ? withActions({ model: next, commands: commands as never }, [AppAction.WriteFaveModels({ faveModels: [...result.outMessage.faveModels] })])
+        : { model: next, commands }
+    },
+    // handleRunQuickAction: a terminal of its own, typed into once it opens.
+    RanQuickAction: ({ command }) => addTerminal(model, facts(), { _tag: "QuickAction", command }),
     MadeTerminalId: ({ purpose, projectId, chatKey, terminalId }) => {
       const next = purpose._tag === "QuickAction"
         ? modifyFields(model, { pendingTerminalCommands: (pending) => ({ ...pending, [terminalId]: purpose.command }) })
