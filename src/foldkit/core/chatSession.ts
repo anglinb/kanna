@@ -357,12 +357,25 @@ const DelayReadAnchorWrite = Command.define("DelayReadAnchorWrite", {
  * close even though the envelope may still be delivered, so a failure is
  * never surfaced.
  */
+/** The next animation frame, where there is one (none in tests: it goes on at once). */
+const nextFrame = Effect.callback<void>((resume) => {
+  if (typeof requestAnimationFrame === "undefined") {
+    resume(Effect.void)
+    return
+  }
+  const frame = requestAnimationFrame(() => resume(Effect.void))
+  return Effect.sync(() => cancelAnimationFrame(frame))
+})
+
 const WriteReadAnchor = Command.define("WriteReadAnchor", {
   args: { chatId: Schema.String, messageId: Schema.String, atEnd: Schema.Boolean, layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })) },
   messages: [Message.CompletedSideEffect],
   execute: ({ chatId, messageId, atEnd, layout: sampled }) => Effect.gen(function* () {
     // Measured now, as the hook measured at write time; the sample is what
-    // the transcript left as it was taken down.
+    // the transcript left as it was taken down. A frame first: the hook's
+    // timer ran after React's synchronous render, and Foldkit renders on the
+    // next frame.
+    yield* nextFrame
     const layout = measureReadAnchor(chatId, messageId) ?? sampled
     rememberReadAnchor(chatId, { messageId, atEnd, ...(layout ?? {}) })
     yield* sendCommand({ type: "chat.setReadAnchor", chatId, messageId, atEnd, ...(layout ?? {}) }).pipe(Effect.ignore)
