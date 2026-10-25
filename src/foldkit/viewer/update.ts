@@ -146,7 +146,9 @@ function mountedCard(model: Model, app: AppModel, key: string, cardEnters: boole
     panes: () => ({}),
     texts: () => ({}),
     tables: () => ({}),
-    rows: () => fresh.rows,
+    // What the rows measured of the page stays (Messages.reset): a chart's
+    // size can land before the card's own mount is reported.
+    rows: (rows) => Messages.reset(rows),
     visualizationDialog: () => null,
     markup: () => null,
     dialog: () => fresh.dialog,

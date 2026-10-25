@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { registerReadAnchorMeasure } from "../core/readAnchorMeasure"
 import { Command, Mount } from "foldkit"
 import { isOptimisticMessageId, shouldPinForNewPrompt, type LatestUserPrompt, type TranscriptScrollTarget } from "../../client/app/ChatPage/transcriptScrollAnchors"
 import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
@@ -206,6 +207,19 @@ export class ViewportController {
     this.pageAtEnd = this.feed.atEnd
     this.scroller = new MessageScroller({ root, viewport, content, spacer }, { autoScroll: true, scrollEdgeThreshold: AT_END_THRESHOLD_PX })
     controllers.set(viewport, this)
+    // The session's write measures the reader's position through this, at
+    // write time (useChatReadAnchor's deferred measure).
+    this.cleanups.push(() => this.unregisterMeasure())
+    this.registerMeasure()
+  }
+
+  private unregisterMeasure: () => void = () => {}
+
+  private registerMeasure() {
+    this.unregisterMeasure()
+    const chatId = this.feed.chatId
+    if (!chatId) return
+    this.unregisterMeasure = registerReadAnchorMeasure(chatId, (messageId) => measureReadAnchorLayout(this.viewport, messageId, this.feed.header))
   }
 
   /**
@@ -285,6 +299,7 @@ export class ViewportController {
       const rowsChanged = records.some((record) => record.type === "childList")
       const previous = this.feed
       this.feed = readFeed(viewport) ?? this.feed
+      if (this.feed.chatId !== previous.chatId) this.registerMeasure()
       // The page moved its own isAtEnd (the scroll-to-bottom button): take it.
       // Otherwise the last one reported here stands, the feed being a render behind.
       if (this.feed.atEnd !== previous.atEnd) this.pageAtEnd = this.feed.atEnd

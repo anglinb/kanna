@@ -1,4 +1,5 @@
 import { Effect, Equivalence, Option, Schema, Stream } from "effect"
+import { measureReadAnchor } from "./readAnchorMeasure"
 import { Command, Dom, Subscription, type Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { modifyFields } from "foldkit/struct"
@@ -359,7 +360,10 @@ const DelayReadAnchorWrite = Command.define("DelayReadAnchorWrite", {
 const WriteReadAnchor = Command.define("WriteReadAnchor", {
   args: { chatId: Schema.String, messageId: Schema.String, atEnd: Schema.Boolean, layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })) },
   messages: [Message.CompletedSideEffect],
-  execute: ({ chatId, messageId, atEnd, layout }) => Effect.gen(function* () {
+  execute: ({ chatId, messageId, atEnd, layout: sampled }) => Effect.gen(function* () {
+    // Measured now, as the hook measured at write time; the sample is what
+    // the transcript left as it was taken down.
+    const layout = measureReadAnchor(chatId, messageId) ?? sampled
     rememberReadAnchor(chatId, { messageId, atEnd, ...(layout ?? {}) })
     yield* sendCommand({ type: "chat.setReadAnchor", chatId, messageId, atEnd, ...(layout ?? {}) }).pipe(Effect.ignore)
     return Message.CompletedSideEffect()
