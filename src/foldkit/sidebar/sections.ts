@@ -137,7 +137,7 @@ export function threadSections(options: ThreadSectionsOptions, app: AppModel, mo
       rows ? h.div([h.Class("space-y-[2px] mb-3")], rows) : null,
     ])
 
-  return h.div([], [
+  return h.keyed("div")("thread-sections", [], [
     ...pinnedGroups.map((group) => {
       const isExpanded = !group.collapsible || (expandOverrides[group.key] ?? true)
       return section(
@@ -200,7 +200,7 @@ export function threadSections(options: ThreadSectionsOptions, app: AppModel, mo
 export function archivedSection(threads: SidebarThread[], activeChatId: string | null, nowMs: number, app: AppModel, model: Model, h: H): Html {
   const archived = getArchivedThreads(threads)
   const normalizedActiveChatId = activeChatId ? normalizeChatId(activeChatId) : null
-  return h.div([], [
+  return h.keyed("div")("archived-section", [], [
     sectionHeader({ key: "archived-view", label: "Archived" }, model, h),
     archived.length === 0
       ? h.p([h.Class("p-2 mt-4 text-center text-sm text-slate-400")], ["No archived chats"])

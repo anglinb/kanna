@@ -259,7 +259,7 @@ export function localProjectsSection(options: LocalProjectsOptions, app: AppMode
   }
 
   // DndContext renders no element of its own; its screen-reader nodes go to <body>.
-  return h.div([h.Class("contents")], [
+  return h.keyed("div")("local-projects", [h.Class("contents")], [
     ...options.projectGroups.map(group),
     ...dndAccessibility(h),
   ])

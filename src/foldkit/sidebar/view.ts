@@ -126,14 +126,15 @@ function versionBadge(updateSnapshot: UpdateSnapshot | null, h: H): Html | null 
 }
 
 /** `<Button variant="ghost" size="icon">`. */
-function ghostIconButton(options: { class: string; title?: string; ariaLabel?: string; onClick: Message; disabled?: boolean }, children: ReadonlyArray<Html>, h: H): Html {
-  return h.button([
+function ghostIconButton(options: { key?: string; class: string; title?: string; ariaLabel?: string; onClick: Message; disabled?: boolean }, children: ReadonlyArray<Html>, h: H): Html {
+  const attributes = [
     h.Class(buttonClass({ variant: "ghost", size: "icon", class: options.class })),
     ...(options.disabled ? [h.Disabled(true)] : []),
     h.OnClick(options.onClick),
     ...(options.title !== undefined ? [h.Title(options.title)] : []),
     ...(options.ariaLabel !== undefined ? [h.AriaLabel(options.ariaLabel)] : []),
-  ], children)
+  ]
+  return options.key ? h.keyed("button")(options.key, attributes, children) : h.button(attributes, children)
 }
 
 /** FocusModePill: the focused project in the logo's place, with a back chevron. */
@@ -191,7 +192,7 @@ function viewSwitcher(model: Model, view: SidebarView.SidebarView, h: H): Html {
 }
 
 function skeleton(h: H): Html {
-  return h.div([h.Class("space-y-5 px-1 pt-3")], [0, 1, 2].map((section) =>
+  return h.keyed("div")("skeleton", [h.Class("space-y-5 px-1 pt-3")], [0, 1, 2].map((section) =>
     h.keyed("div")(String(section), [h.Class("space-y-2 animate-pulse")], [
       h.div([h.Class("h-4 w-28 rounded bg-muted")]),
       h.div([h.Class("space-y-1")], [0, 1, 2].map((row) =>
@@ -327,7 +328,7 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
 
   const list = h.div([], [
     !hasVisibleChats && connecting ? skeleton(h) : null,
-    showEmpty ? h.p([h.Class("text-sm text-slate-400 p-2 mt-6 text-center")], ["No conversations yet"]) : null,
+    showEmpty ? h.keyed("p")("empty", [h.Class("text-sm text-slate-400 p-2 mt-6 text-center")], ["No conversations yet"]) : null,
     newSidebar && (sidebarView === "recents" || (sidebarView === "channels" && focused))
       ? threadSections({
         expandScope: sidebarView === "channels" && focused ? `channel:${focused.groupKey}` : undefined,
@@ -403,7 +404,7 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
     ]),
   ])
 
-  const card = h.div([
+  const card = h.keyed("div")("sidebar-card", [
     h.Id("kanna-sidebar"),
     h.DataAttribute("sidebar", "open"),
     // Read by the sidebar's subscriptions (keyboard, peek) when an event comes.
@@ -490,10 +491,10 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
 
   return h.div([h.Class("contents")], [
     showMobileBackButton
-      ? ghostIconButton({ class: "fixed top-3 left-3 z-50 md:hidden", onClick: Message.ClickedLink({ path: "/" }), title: "Back" }, [ArrowLeft({ class: "h-5 w-5" }, h)], h)
+      ? ghostIconButton({ key: "sidebar-mobile-back", class: "fixed top-3 left-3 z-50 md:hidden", onClick: Message.ClickedLink({ path: "/" }), title: "Back" }, [ArrowLeft({ class: "h-5 w-5" }, h)], h)
       : null,
     collapsed && utilityPageActive
-      ? h.div([h.Class("hidden md:flex fixed left-0 top-0 h-full z-40 items-start pt-4 pl-5 border-l border-border/0 mac-app:!hidden transition-opacity duration-200 ease-out starting:opacity-0")], [
+      ? h.keyed("div")("sidebar-expand", [h.Class("hidden md:flex fixed left-0 top-0 h-full z-40 items-start pt-4 pl-5 border-l border-border/0 mac-app:!hidden transition-opacity duration-200 ease-out starting:opacity-0")], [
         h.div([h.Class("flex items-center gap-1")], [
           Flower({ class: "size-6 text-logo" }, h),
           ghostIconButton({ class: "hover:!border-border/0 hover:!bg-transparent", onClick: Message.ClickedExpandSidebar(), title: "Expand sidebar" }, [PanelLeft({ class: "h-5 w-5" }, h)], h),
@@ -501,7 +502,7 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
       ])
       : null,
     card,
-    h.div([h.Class("hidden mac-app:md:flex fixed z-50 items-center left-[var(--mac-traffic-lights-inset)] top-[calc(var(--mac-traffic-lights-center)-14px)]")], [
+    h.keyed("div")("sidebar-mac-buttons", [h.Class("hidden mac-app:md:flex fixed z-50 items-center left-[var(--mac-traffic-lights-inset)] top-[calc(var(--mac-traffic-lights-center)-14px)]")], [
       ghostIconButton({
         class: "size-7 rounded-lg text-muted-foreground hover:!border-border/0 hover:!bg-transparent",
         onClick: collapsed ? Message.ClickedExpandSidebar() : Message.ClickedCollapseSidebar(),

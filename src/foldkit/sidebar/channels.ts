@@ -158,7 +158,7 @@ export function channelList(options: ChannelListOptions, app: AppModel, model: M
     : null
   const activeChat = options.activeChatId ? normalizeChatId(options.activeChatId) : null
 
-  return h.div([
+  return h.keyed("div")("channel-list", [
     h.Attribute(LIST_HOVER_ATTRIBUTE, "channels"),
     h.DataAttribute("hover-pinned", model.pinnedChannelId ?? ""),
     h.OnMount(ListHoverTracker({ list: "channels" })),
