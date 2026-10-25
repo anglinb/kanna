@@ -3,7 +3,7 @@ import { Option } from "effect"
 import { Story } from "foldkit/test"
 import { fromString } from "foldkit/url"
 import type { AppSettingsSnapshot, SidebarChatRow, SidebarData, SidebarProjectGroup } from "../../shared/types"
-import { AppAction } from "../app/action"
+import { AppAction, batch } from "../app/action"
 import type { Flags, Model as AppModel } from "../app/model"
 import { SliceOutMessage } from "../app/slice"
 import * as Stores from "../app/stores"
@@ -17,6 +17,7 @@ import * as ContextMenu from "../ui/context-menu"
 import { Message } from "./message"
 import { init, type Model } from "./model"
 import { CaptureOutgoingPage } from "./motion"
+import { SyncHoverTracker } from "./hoverCard"
 import { LoadTouchedFiles, SaveSidebarWidth, update } from "./update"
 
 function row(chatId: string, overrides: Partial<SidebarChatRow> = {}): SidebarChatRow {
@@ -110,14 +111,17 @@ describe("sidebar: chats", () => {
     )
   })
 
-  test("restoring leaves the Archived view first, then restores", () => {
-    const app = appAt("/home")
-    const first = update(sidebar, Message.ClickedRestoreChat({ chatId: "c1" }), app)
-    expect(first.outMessage).toEqual(store(Stores.Message.GotSidebarViewMessage({ message: SidebarView.Message.LeftArchived() })))
-    expect(first.commands?.map((command) => command.name)).toEqual(["SidebarContinueActions"])
-    const second = update(first.model, Message.ContinuedActions({ actions: [AppAction.RestoreChat({ chatId: "c1" })] }), app)
-    expect(second.outMessage).toEqual(asks(AppAction.RestoreChat({ chatId: "c1" })))
-    expect(second.commands ?? []).toEqual([])
+  test("restoring leaves the Archived view first, then restores, in one request", () => {
+    Story.story(
+      updateFor(appAt("/home")),
+      Story.given(sidebar),
+      Story.message(Message.ClickedRestoreChat({ chatId: "c1" })),
+      Story.Command.expectNone(),
+      Story.expectOutMessage(asks(batch(
+        AppAction.Store({ message: Stores.Message.GotSidebarViewMessage({ message: SidebarView.Message.LeftArchived() }) }),
+        AppAction.RestoreChat({ chatId: "c1" }),
+      ))),
+    )
   })
 
   test("a section's toggle flips it against its current state", () => {
@@ -173,6 +177,19 @@ describe("sidebar: header and navigation", () => {
     expect(update(sidebar, Message.PressedCreateChatShortcut(), appAt("/settings/general")).outMessage).toBeUndefined()
     expect(update(sidebar, Message.PressedCreateChatShortcut(), appAt("/chat/c3")).outMessage)
       .toEqual(asks(AppAction.CreateChat({ projectId: "p2" })))
+  })
+
+  test("Search and Add Project open the palette through the root", () => {
+    const app = appAt("/home")
+    for (const [message, page] of [
+      [Message.ClickedSearch(), null],
+      [Message.ClickedAddProject(), "add-project"],
+      [Message.PressedAddProjectShortcut(), "add-project"],
+    ] as const) {
+      const result = update(sidebar, message, app)
+      expect(result.outMessage).toEqual(asks(AppAction.OpenCommandPalette({ page })))
+      expect(result.commands ?? []).toEqual([])
+    }
   })
 })
 
@@ -259,17 +276,31 @@ describe("sidebar: the right-click menu", () => {
     expect(chosen.archivedDialog.phase).toBe("Open")
   })
 
-  test("Archive All archives each chat in turn", () => {
+  test("Archive All archives each chat in turn, in one request", () => {
     const app = appAt("/home")
     const open = openOn({ _tag: "Section", chatIds: ["c1", "c2"] }, app)
-    const first = choose(open, "archive-all", app)
-    expect(first.outMessage).toEqual(asks(AppAction.ArchiveChat({ chatId: "c1" })))
-    const second = update(first.model, Message.ContinuedActions({ actions: [AppAction.ArchiveChat({ chatId: "c2" })] }), app)
-    expect(second.outMessage).toEqual(asks(AppAction.ArchiveChat({ chatId: "c2" })))
+    const chosen = choose(open, "archive-all", app)
+    expect(chosen.outMessage).toEqual(asks(batch(AppAction.ArchiveChat({ chatId: "c1" }), AppAction.ArchiveChat({ chatId: "c2" }))))
+    expect(chosen.commands?.some((command) => command.name === "SidebarContinueActions")).toBe(false)
+    // One chat is a plain request.
+    const single = choose(openOn({ _tag: "Section", chatIds: ["c1"] }, app), "archive-all", app)
+    expect(single.outMessage).toEqual(asks(AppAction.ArchiveChat({ chatId: "c1" })))
   })
 })
 
 describe("sidebar: hover cards", () => {
+  test("a card's prompt or reply opens the chat at that message, closing the card", () => {
+    const hovered = { ...sidebar, hovered: { ...sidebar.hovered, chats: "c1" } }
+    Story.story(
+      updateFor(appAt("/chat/c2")),
+      Story.given(hovered),
+      Story.message(Message.ClickedCardMessage({ list: "chats", chatId: "c1", role: "reply" })),
+      Story.expectOutMessage(asks(AppAction.OpenChatAt({ chatId: "c1", jump: "reply" }))),
+      Story.model((model) => expect(model.hovered.chats).toBeNull()),
+      Story.Command.resolve(SyncHoverTracker, Message.CompletedSideEffect()),
+    )
+  })
+
   test("a card asks for what the cache lacks, and keeps the answer", () => {
     Story.story(
       updateFor(appAt("/home")),

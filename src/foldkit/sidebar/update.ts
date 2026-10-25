@@ -6,7 +6,7 @@ import { copyTextToClipboard } from "../../client/lib/clipboard"
 import { getPathBasename } from "../../client/lib/formatters"
 import { fetchPairSession, startPairSession } from "../../client/lib/pairSession"
 import type { ChatPreview, ChatTouchedFilesResult } from "../../shared/types"
-import { AppAction } from "../app/action"
+import { AppAction, batch } from "../app/action"
 import { requestAction, type AppModel, type SliceOutMessage, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
 import { sendCommand } from "../core/socket"
@@ -46,16 +46,6 @@ type Cmd = Command.Command<Message, never, never>
 
 const done = () => Message.CompletedSideEffect()
 
-/** The palette's own window event (CommandPalette.tsx's `openCommandPalette`). */
-const OpenCommandPalette = Command.define("SidebarOpenCommandPalette", {
-  args: { page: Schema.NullOr(Schema.String) },
-  messages: [Message.CompletedSideEffect],
-  execute: ({ page }) => Effect.sync(() => {
-    window.dispatchEvent(new CustomEvent("kanna:open-command-palette", { detail: page ? { page } : undefined }))
-    return done()
-  }),
-})
-
 export const SaveSidebarWidth = Command.define("SaveSidebarWidth", {
   args: { width: Schema.Number },
   messages: [Message.CompletedSideEffect],
@@ -93,12 +83,6 @@ const LeaveProjectPage = Command.define("SidebarLeaveProjectPage", {
     yield* Navigation.back()
     return done()
   }),
-})
-
-const ContinueActions = Command.define("SidebarContinueActions", {
-  args: { actions: Schema.Array(AppAction) },
-  messages: [Message.ContinuedActions],
-  execute: ({ actions }) => Effect.succeed(Message.ContinuedActions({ actions })),
 })
 
 const MeasureMoreButton = Command.define("SidebarMeasureMoreButton", {
@@ -190,15 +174,15 @@ const LoadConnection = Command.mapMessage(Connection.LoadConnection(), (message)
 
 // HELPERS
 
-/** Asks the root for several things in order: the first now, the rest a tick later each. */
+/** Asks the root for several things, run in order in one update (React's loop of calls). */
 function requestActions(model: Model, actions: ReadonlyArray<AppAction>, commands: ReadonlyArray<Cmd> = []): Return {
   const [first, ...rest] = actions
   if (!first) return { model, commands: [...commands] }
-  return {
-    ...requestAction(model, first),
-    commands: [...commands, ...(rest.length > 0 ? [ContinueActions({ actions: rest })] : [])],
-  }
+  return { ...requestAction(model, rest.length === 0 ? first : batch(first, ...rest)), commands: [...commands] }
 }
+
+/** CommandPalette.tsx's `openCommandPalette(page)`. */
+const openPalette = (model: Model, page: string | null): Return => requestAction(model, AppAction.OpenCommandPalette({ page }))
 
 function withCommands(result: Return, commands: ReadonlyArray<Cmd>): Return {
   return { ...result, commands: [...(result.commands ?? []), ...commands] }
@@ -400,8 +384,8 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ClickedCollapseSidebar: () => requestAction(model, AppAction.CollapseSidebar()),
     ClickedExpandSidebar: () => requestAction(model, AppAction.ExpandSidebar()),
     ClickedLink: ({ path }) => requestAction(model, navigate(path)),
-    ClickedSearch: () => ({ model, commands: [OpenCommandPalette({ page: null })] }),
-    ClickedAddProject: () => ({ model, commands: [OpenCommandPalette({ page: "add-project" })] }),
+    ClickedSearch: () => openPalette(model, null),
+    ClickedAddProject: () => openPalette(model, "add-project"),
     // On a project's page, a chat in that project; else the current one's.
     ClickedNewChat: () => {
       const projectId = routeProjectId(app)
@@ -576,11 +560,10 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       }),
     }),
     FailedLoadCard: () => ({ model }),
-    ClickedCardMessage: ({ list, chatId }) => {
+    ClickedCardMessage: ({ list, chatId, role }) => {
       const dismissed = dismissCard(model, list)
-      // TODO(root): React navigated with a jump target in the location state
-      // (`buildChatJumpLocationState(role)`); AppAction.Navigate carries none.
-      return withCommands(requestAction(dismissed.model, navigate(`/chat/${chatId}`)), dismissed.commands)
+      // React navigated with the jump in the location state (`buildChatJumpLocationState(role)`).
+      return withCommands(requestAction(dismissed.model, AppAction.OpenChatAt({ chatId, jump: role })), dismissed.commands)
     },
     ClickedCardChat: ({ list, chatId, archived }) => {
       const dismissed = dismissCard(model, list)
@@ -626,7 +609,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       const projectId = currentProjectId(app)
       return projectId ? requestAction(model, AppAction.CreateChat({ projectId })) : { model }
     },
-    PressedAddProjectShortcut: () => ({ model, commands: [OpenCommandPalette({ page: "add-project" })] }),
+    PressedAddProjectShortcut: () => openPalette(model, "add-project"),
     PressedToggleFocusShortcut: () => requestAction(
       // No copy of the page is taken: a shortcut lands at once (motion.ts).
       model,
