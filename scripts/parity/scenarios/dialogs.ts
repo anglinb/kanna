@@ -28,6 +28,8 @@ export const scenarios: Scenario[] = [
   defineScenario({
     name: "dialog-kanna-cloud",
     route: CHATS.units,
+    // The sidebar's Setup Kanna Cloud: not on a phone's chat page.
+    viewports: ["desktop"],
     regions: regions("dialog"),
     async run(context) {
       await click(context, context.page.getByRole("button", { name: "Setup Kanna Cloud" }))

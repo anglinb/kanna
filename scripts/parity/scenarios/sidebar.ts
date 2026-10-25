@@ -383,6 +383,8 @@ export const scenarios: Scenario[] = [
     // New Chat starts an empty chat in the open chat's project.
     name: "sidebar-new-chat",
     route: CHATS.units,
+    // On a phone the chat fills the screen: the sidebar's New Chat isn't there.
+    viewports: ["desktop"],
     regions: regions("sidebar", "composer"),
     covers: { commands: ["chat.create"] },
     async run(context) {
