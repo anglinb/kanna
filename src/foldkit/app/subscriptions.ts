@@ -1,17 +1,15 @@
 import { Effect, Option, Schema, Stream } from "effect"
 import { Dom, ManagedResource, Subscription } from "foldkit"
-import type { SidebarPatch } from "../../shared/sidebar-patch"
 import type {
   AppSettingsSnapshot,
   ChatDiffSnapshot,
   KeybindingsSnapshot,
   LocalProjectsSnapshot,
-  ProviderAuthSnapshot,
-  SidebarData,
   UpdateSnapshot,
 } from "../../shared/types"
 import { forgetAllFollowed } from "../core/backgroundChats"
 import * as ChatSession from "../core/chatSession"
+import * as Stores from "./stores"
 import { KannaSocketResource, acquireSocket, releaseSocket, statusStream, topicStream, type KannaSocketService } from "../core/socket"
 import { Message } from "./message"
 import type { Model } from "./model"
@@ -47,16 +45,6 @@ const rootSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
       whileReady(socketReady, statusStream.pipe(Stream.map((status) => Message.ChangedConnectionStatus({ status })))),
   }),
 
-  // Patches rather than full snapshots (see shared/sidebar-patch.ts); a
-  // patch that doesn't meet what is held moves `epoch`, which resubscribes.
-  sidebar: entry({ socketReady: Schema.Boolean, epoch: Schema.Number }, {
-    modelToDependencies: (model) => ({ socketReady: model.socketReady, epoch: model.sidebar.epoch }),
-    dependenciesToStream: ({ socketReady }) =>
-      whileReady(socketReady, topicStream<SidebarData | SidebarPatch>({ type: "sidebar", patches: true }).pipe(
-        Stream.map((snapshot) => Message.ReceivedSidebar({ snapshot })),
-      )),
-  }),
-
   localProjects: entry(ReadyDependency, {
     modelToDependencies: readyFrom,
     dependenciesToStream: ({ socketReady }) =>
@@ -89,16 +77,6 @@ const rootSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
       )),
   }),
 
-  // Feeds sign-in state for the app's lifetime: the settings/new-chat auth
-  // cards, the harness picker's "Sign In" pills, the blocked-switch dialog.
-  providerAuth: entry(ReadyDependency, {
-    modelToDependencies: readyFrom,
-    dependenciesToStream: ({ socketReady }) =>
-      whileReady(socketReady, topicStream<ProviderAuthSnapshot>({ type: "provider-auth" }).pipe(
-        Stream.map((snapshot) => Message.ReceivedProviderAuth({ snapshot })),
-      )),
-  }),
-
   projectGit: entry({ socketReady: Schema.Boolean, projectId: Schema.NullOr(Schema.String) }, {
     modelToDependencies: (model) => ({ socketReady: model.socketReady, projectId: activeProjectId(model) }),
     dependenciesToStream: ({ socketReady, projectId }) =>
@@ -122,4 +100,16 @@ const chatSubscriptions = Subscription.lift(ChatSession.subscriptions)<Model, Me
   when: { chat: (model) => model.socketReady },
 })
 
-export const subscriptions = Subscription.aggregate(rootSubscriptions, chatSubscriptions)
+// The stores': the sidebar and provider-auth topics wait for the socket,
+// the Mac app's fleet listener doesn't.
+const storeSocketSubscriptions = Subscription.lift(Stores.socketSubscriptions)<Model, Message>({
+  read: (model) => Option.some(model.stores),
+  toParentMessage: (message) => Message.GotStoresMessage({ message }),
+  when: (model) => model.socketReady,
+})
+const storeBrowserSubscriptions = Subscription.lift(Stores.browserSubscriptions)<Model, Message>({
+  read: (model) => Option.some(model.stores),
+  toParentMessage: (message) => Message.GotStoresMessage({ message }),
+})
+
+export const subscriptions = Subscription.aggregate(rootSubscriptions, chatSubscriptions, storeSocketSubscriptions, storeBrowserSubscriptions)

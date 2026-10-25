@@ -6,12 +6,11 @@ import { getChatNotificationEvents, getChatSoundBurstCount } from "../../client/
 import { isProcessingStatus } from "../../client/app/derived"
 import { getMostRecentlyActiveProjectId, getProjectIdForChat } from "../../client/app/kannaStateHelpers"
 import { sameDiffs, shouldPreserveExistingProjectDiffs } from "../../client/app/snapshotEquality"
-import { applySidebarPatch, type SidebarPatch } from "../../shared/sidebar-patch"
 import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES } from "../../shared/transcript-window"
-import type { SidebarData } from "../../shared/types"
-import type { KannaSocketService } from "../core/socket"
+import type { AppSettingsSnapshot, SidebarData } from "../../shared/types"
 import * as ChatSession from "../core/chatSession"
-import * as Delegate from "../core/stores/delegate"
+import type { KannaSocketService } from "../core/socket"
+import * as PendingSend from "../core/stores/pendingSend"
 import {
   ApplyTheme,
   DelayAuthRetry,
@@ -31,8 +30,9 @@ import {
   UnfollowBackgroundChat,
 } from "./commands"
 import { Message } from "./message"
-import { EMPTY_SIDEBAR_DATA, type Flags, type Model } from "./model"
-import { AppRoute, routeChatId, settingsRouter, urlToAppRoute } from "./route"
+import type { Flags, Model } from "./model"
+import { routeChatId, settingsRouter, urlToAppRoute, type AppRoute } from "./route"
+import * as Stores from "./stores"
 import { resolveTheme, themePreference } from "./theme"
 
 /** What the root's Commands may need: the socket. */
@@ -40,24 +40,30 @@ export type AppServices = KannaSocketService
 type UpdateReturn = Update.Return<Model, Message, AppServices>
 type AppCommand = Command.Command<Message, never, AppServices>
 type Commands = ReadonlyArray<AppCommand>
+type Step = Update.Step<Model, Message, AppServices>
+
+const liftStores = (commands: Update.Return<Stores.Model, Stores.Message, AppServices>["commands"]) =>
+  Command.mapMessages(commands, (message: Stores.Message) => Message.GotStoresMessage({ message }))
 
 // INIT
 
 export function init(flags: Flags, url: Url): UpdateReturn {
   const route = urlToAppRoute(url)
+  // The demo and the parity fixture seed settings before the first render,
+  // as their React entries seed the store.
+  const stores: Stores.Model = flags.initialAppSettings
+    ? { ...flags.stores, appSettings: { settings: flags.initialAppSettings } }
+    : flags.stores
   const model: Model = {
     route,
     auth: { _tag: "Checking" },
     socketReady: false,
     connectionStatus: "connecting",
-    sidebar: { ready: false, data: EMPTY_SIDEBAR_DATA, heldRevision: null, epoch: 0, optimisticProjectOrder: null },
     localProjects: null,
     localProjectsReady: false,
     updateSnapshot: null,
     keybindings: null,
-    appSettings: flags.initialAppSettings,
     llmProvider: null,
-    providerAuth: null,
     projectDiffs: {},
     selectedProjectId: null,
     sidebarCollapsed: flags.sidebarCollapsed,
@@ -65,15 +71,16 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     backgroundChats: {},
     systemTheme: flags.systemTheme,
     chat: null,
-    delegate: flags.delegate,
+    stores,
   }
   const session = syncChatSession(model, 0)
   return {
     model: session.model,
     commands: [
       FetchAuthStatus(),
-      ApplyTheme({ resolved: resolveTheme(themePreference(model.appSettings), model.systemTheme) }),
+      ApplyTheme({ resolved: resolveTheme(themePreference(appSettings(model)), model.systemTheme) }),
       ...routeRedirect(route),
+      ...liftStores(Stores.initCommands),
       ...(session.commands ?? []),
     ],
   }
@@ -85,6 +92,14 @@ function routeRedirect(route: AppRoute): Commands {
 }
 
 // DERIVED
+
+export function appSettings(model: Model): AppSettingsSnapshot | null {
+  return model.stores.appSettings.settings
+}
+
+export function sidebarData(model: Model): SidebarData {
+  return model.stores.sidebar.data
+}
 
 export function activeChatId(model: Model): string | null {
   return routeChatId(model.route)
@@ -99,14 +114,14 @@ export function activeChatSnapshot(model: Model) {
 export function activeProjectId(model: Model): string | null {
   const chatId = activeChatId(model)
   return activeChatSnapshot(model)?.runtime.projectId
-    ?? (chatId ? getProjectIdForChat(model.sidebar.data.projectGroups, chatId) : null)
+    ?? (chatId ? getProjectIdForChat(sidebarData(model).projectGroups, chatId) : null)
     ?? model.selectedProjectId
 }
 
 /** The sidebar's status for a chat, which stands in until its snapshot lands. */
 export function sidebarChatStatus(model: Model, chatId: string | null): string | null {
   if (!chatId) return null
-  for (const group of model.sidebar.data.projectGroups) {
+  for (const group of sidebarData(model).projectGroups) {
     const chat = group.chats.find((row) => row.chatId === chatId)
     if (chat) return chat.status
   }
@@ -114,11 +129,21 @@ export function sidebarChatStatus(model: Model, chatId: string | null): string |
 }
 
 function transcriptWindowSize(model: Model) {
-  return model.appSettings?.transcript?.windowAssistantMessages ?? DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES
+  return appSettings(model)?.transcript?.windowAssistantMessages ?? DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES
 }
 
 function commandError(model: Model, message: string | null): Model {
   return model.commandError === message ? model : modifyFields(model, { commandError: () => message })
+}
+
+// STORES
+
+/** A Step on the stores, run from the root. */
+function onStores(step: Update.StepWithOutMessage<Stores.Model, Stores.Message, Stores.OutMessage, AppServices>): Step {
+  return (model) => {
+    const result = step(model.stores)
+    return { model: modifyFields(model, { stores: () => result.model }), commands: liftStores(result.commands) }
+  }
 }
 
 // BACKGROUND CHATS (useBackgroundChatSubscriptions)
@@ -142,7 +167,7 @@ function runningChatIds(data: SidebarData): string[] {
 function reconcileBackgroundChats(model: Model): UpdateReturn {
   if (!model.socketReady) return { model }
   const openChatId = activeChatId(model)
-  const wanted = new Set(runningChatIds(model.sidebar.data))
+  const wanted = new Set(runningChatIds(sidebarData(model)))
   if (openChatId) wanted.delete(openChatId)
 
   const next: Record<string, "following" | "dropping"> = { ...model.backgroundChats }
@@ -174,16 +199,23 @@ function reconcileBackgroundChats(model: Model): UpdateReturn {
 // SNAPSHOTS
 
 function themeCommands(before: Model, after: Model): Commands {
-  const previous = resolveTheme(themePreference(before.appSettings), before.systemTheme)
-  const next = resolveTheme(themePreference(after.appSettings), after.systemTheme)
-  return previous === next && themePreference(before.appSettings) === themePreference(after.appSettings)
+  const previous = resolveTheme(themePreference(appSettings(before)), before.systemTheme)
+  const next = resolveTheme(themePreference(appSettings(after)), after.systemTheme)
+  return previous === next && themePreference(appSettings(before)) === themePreference(appSettings(after))
     ? []
     : [ApplyTheme({ resolved: next })]
 }
 
+/** useAppSettingsSync: the snapshot fans out to the stores; the theme follows. */
+function receiveAppSettings(model: Model, snapshot: AppSettingsSnapshot): UpdateReturn {
+  const fanned = onStores(Stores.receivedAppSettings(snapshot))(model)
+  const next = commandError(fanned.model, null)
+  return { model: next, commands: [...(fanned.commands ?? []), ...themeCommands(model, next)] }
+}
+
 /** App.tsx's sidebar store subscription: chime and notify on what changed. */
 function notificationCommands(model: Model, previous: SidebarData, next: SidebarData): Commands {
-  const settings = model.appSettings
+  const settings = appSettings(model)
   if (!settings) return []
   const commands: AppCommand[] = []
   const burstCount = getChatSoundBurstCount(previous, next)
@@ -196,44 +228,37 @@ function notificationCommands(model: Model, previous: SidebarData, next: Sidebar
   return commands
 }
 
-function receiveSidebar(model: Model, snapshot: SidebarData | SidebarPatch): UpdateReturn {
-  let data: SidebarData
-  let heldRevision: number | null
-  if ("projectGroups" in snapshot) {
-    data = snapshot
-    heldRevision = null
-  } else {
-    const held = model.sidebar.ready ? model.sidebar.data : null
-    // A patch that doesn't start from what is held means the two fell out
-    // of step; a fresh subscription starts over with a reset.
-    if (snapshot.from !== null && snapshot.from !== model.sidebar.heldRevision) {
-      return { model: modifyFields(model, { sidebar: (sidebar) => ({ ...sidebar, epoch: sidebar.epoch + 1 }) }) }
+/**
+ * After a sidebar push: the command error clears, the selected project is
+ * seeded from the most recently active one the first time, chimes and
+ * notifications go out for what changed, and running chats are followed.
+ */
+function appliedSidebarSnapshot(before: Model): Step {
+  return (model) => {
+    let next = commandError(model, null)
+    if (!next.selectedProjectId) {
+      const seed = getMostRecentlyActiveProjectId(sidebarData(next).projectGroups)
+      if (seed) next = modifyFields(next, { selectedProjectId: () => seed })
     }
-    try {
-      data = applySidebarPatch(held, snapshot)
-    } catch (error) {
-      console.warn("[sidebar] patch did not apply, resubscribing:", error)
-      return { model: modifyFields(model, { sidebar: (sidebar) => ({ ...sidebar, epoch: sidebar.epoch + 1 }) }) }
-    }
-    heldRevision = snapshot.to
+    // The first snapshot has nothing to compare against, and treating the
+    // empty starting state as "previous" would chime once per unread chat on
+    // every page load.
+    const notifications = before.stores.sidebar.ready ? notificationCommands(next, sidebarData(before), sidebarData(next)) : []
+    const background = reconcileBackgroundChats(next)
+    return { model: background.model, commands: [...notifications, ...(background.commands ?? [])] }
   }
-  const wasReady = model.sidebar.ready
-  const previous = model.sidebar.data
-  let next = modifyFields(model, {
-    sidebar: (sidebar) => ({ ...sidebar, ready: true, data, heldRevision }),
-    commandError: () => null,
-  })
-  // Seeded once the snapshot lands: the most recently active project.
-  if (!next.selectedProjectId) {
-    const seed = getMostRecentlyActiveProjectId(data.projectGroups)
-    if (seed) next = modifyFields(next, { selectedProjectId: () => seed })
-  }
-  // The first snapshot has nothing to compare against, and treating the
-  // empty starting state as "previous" would chime once per unread chat on
-  // every page load.
-  const notifications = wasReady ? notificationCommands(next, previous, data) : []
-  const background = reconcileBackgroundChats(next)
-  return { model: background.model, commands: [...notifications, ...(background.commands ?? [])] }
+}
+
+function updateStores(model: Model, message: Stores.Message): UpdateReturn {
+  return Update.foldChild({
+    update: Stores.update,
+    read: (parent: Model) => Option.some(parent.stores),
+    write: (parent, stores) => modifyFields(parent, { stores: () => stores }),
+    toParentMessage: (child: Stores.Message) => Message.GotStoresMessage({ message: child }),
+    foldOutMessage: Stores.OutMessage.match<Step>({
+      AppliedSidebarSnapshot: () => appliedSidebarSnapshot(model),
+    }),
+  })(model, message)
 }
 
 // THE PAGE'S CHAT
@@ -256,11 +281,11 @@ function syncChatSession(model: Model, at: number): UpdateReturn {
   return { model: modifyFields(model, { chat: () => opened.model }), commands }
 }
 
-const handleChatOutMessage = ChatSession.OutMessage.match<Update.Step<Model, Message, AppServices>>({
+const handleChatOutMessage = ChatSession.OutMessage.match<Step>({
   ChangedCommandError: ({ message }) => (model) => ({ model: commandError(model, message) }),
-  // pendingSendStore, the composer and chatPreferences arrive with their slices.
-  MarkedSending: () => (model) => ({ model }),
-  ClearedSending: () => (model) => ({ model }),
+  MarkedSending: ({ chatId, sentAt }) => (model) => updateStores(model, Stores.Message.GotPendingSendMessage({ message: PendingSend.Message.StartedSending({ chatId, sentAt }) })),
+  ClearedSending: ({ chatId }) => (model) => updateStores(model, Stores.Message.GotPendingSendMessage({ message: PendingSend.Message.ClearedSending({ chatId }) })),
+  // The composer and chatPreferences hear of these with their slices.
   SucceededSend: () => (model) => ({ model }),
   FailedSend: ({ error }) => (model) => ({ model: commandError(model, error) }),
   ConfirmedExitPlanMode: () => (model) => ({ model }),
@@ -286,21 +311,12 @@ function changeRoute(model: Model, route: AppRoute): UpdateReturn {
   // Mark a chat read when the user navigates *away* from it, not when it
   // opens. Chats that no longer exist are skipped.
   if (previousChatId && previousChatId !== nextChatId) {
-    const left = model.sidebar.data.projectGroups.flatMap((group) => group.chats).find((chat) => chat.chatId === previousChatId)
+    const left = sidebarData(model).projectGroups.flatMap((group) => group.chats).find((chat) => chat.chatId === previousChatId)
     if (left?.unread) commands.push(SendCommand({ command: { type: "chat.markRead", chatId: previousChatId } }))
   }
   const background = reconcileBackgroundChats(session.model)
   return { model: background.model, commands: [...commands, ...(background.commands ?? [])] }
 }
-
-// STORES
-
-const foldDelegate = Update.foldChild({
-  update: Delegate.update,
-  read: (model: Model) => Option.some(model.delegate),
-  write: (model, delegate) => modifyFields(model, { delegate: () => delegate }),
-  toParentMessage: (message: Delegate.Message) => Message.GotDelegateMessage({ message }),
-})
 
 // UPDATE
 
@@ -354,7 +370,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       return {
         model: next,
         commands: [
-          SendCommand({ command: { type: "chat.setDraftProtection", chatIds: [] } }),
+          SendCommand({ command: { type: "chat.setDraftProtection", chatIds: draftProtectedChatIds(next) } }),
           SendCommand({ command: { type: "update.check", force: true } }),
           ReadAppSettings(),
           ReadLlmProvider(),
@@ -362,22 +378,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }
     },
 
-    ReceivedSidebar: ({ snapshot }) => receiveSidebar(model, snapshot),
     ReceivedLocalProjects: ({ snapshot }) => ({
       model: modifyFields(model, { localProjects: () => snapshot, localProjectsReady: () => true, commandError: () => null }),
     }),
     ReceivedUpdate: ({ snapshot }) => ({ model: modifyFields(model, { updateSnapshot: () => snapshot, commandError: () => null }) }),
     ReceivedKeybindings: ({ snapshot }) => ({ model: modifyFields(model, { keybindings: () => snapshot, commandError: () => null }) }),
-    ReceivedAppSettings: ({ snapshot }) => {
-      const next = modifyFields(model, { appSettings: () => snapshot, commandError: () => null })
-      return { model: next, commands: themeCommands(model, next) }
-    },
-    SucceededReadAppSettings: ({ snapshot }) => {
-      const next = modifyFields(model, { appSettings: () => snapshot, commandError: () => null })
-      return { model: next, commands: themeCommands(model, next) }
-    },
+    ReceivedAppSettings: ({ snapshot }) => receiveAppSettings(model, snapshot),
+    SucceededReadAppSettings: ({ snapshot }) => receiveAppSettings(model, snapshot),
     SucceededReadLlmProvider: ({ snapshot }) => ({ model: modifyFields(model, { llmProvider: () => snapshot, commandError: () => null }) }),
-    ReceivedProviderAuth: ({ snapshot }) => ({ model: modifyFields(model, { providerAuth: () => snapshot }) }),
     ReceivedProjectGit: ({ projectId, snapshot }) => {
       const current = model.projectDiffs[projectId] ?? null
       if (shouldPreserveExistingProjectDiffs(current, snapshot) || sameDiffs(current, snapshot)) {
@@ -429,5 +437,23 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       sidebarStatus: sidebarChatStatus(model, model.chat?.chatId ?? null),
       windowSize: transcriptWindowSize(model),
     }),
-    GotDelegateMessage: ({ message: delegateMessage }) => foldDelegate(model, delegateMessage),
+    GotStoresMessage: ({ message: storesMessage }) => withDraftProtection(model, updateStores(model, storesMessage)),
   })
+
+// DRAFT PROTECTION
+
+/** Chats with a draft (text or attachments): the server must not prune them. */
+export function draftProtectedChatIds(model: Model): string[] {
+  const chatInput = model.stores.chatInput
+  return [...new Set([...Object.keys(chatInput.drafts), ...Object.keys(chatInput.attachmentDrafts)])].sort()
+}
+
+/** useKannaState re-sent `chat.setDraftProtection` whenever that list changed while connected. */
+function withDraftProtection(before: Model, result: UpdateReturn): UpdateReturn {
+  if (result.model.connectionStatus !== "connected") return result
+  const previous = draftProtectedChatIds(before)
+  const next = draftProtectedChatIds(result.model)
+  if (previous.length === next.length && previous.every((id, index) => id === next[index])) return result
+  return { ...result, commands: [...(result.commands ?? []), SendCommand({ command: { type: "chat.setDraftProtection", chatIds: next } })] }
+}
+

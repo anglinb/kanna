@@ -2,21 +2,18 @@ import { Schema } from "effect"
 import { Navigation } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { Url } from "foldkit/url"
-import type { SidebarPatch } from "../../shared/sidebar-patch"
 import type {
   AppSettingsSnapshot,
   ChatDiffSnapshot,
   KeybindingsSnapshot,
   LlmProviderSnapshot,
   LocalProjectsSnapshot,
-  ProviderAuthSnapshot,
-  SidebarData,
   UpdateSnapshot,
 } from "../../shared/types"
 import { opaque } from "../core/schema"
 import * as ChatSession from "../core/chatSession"
-import * as Delegate from "../core/stores/delegate"
 import { ConnectionStatus } from "./model"
+import * as Stores from "./stores"
 
 export const Message = defineMessageUnion({
   // Routing
@@ -40,12 +37,10 @@ export const Message = defineMessageUnion({
   ChangedConnectionStatus: { status: ConnectionStatus },
 
   // Snapshots
-  ReceivedSidebar: { snapshot: opaque<SidebarData | SidebarPatch>("SidebarSnapshot") },
   ReceivedLocalProjects: { snapshot: opaque<LocalProjectsSnapshot>("LocalProjectsSnapshot") },
   ReceivedUpdate: { snapshot: opaque<UpdateSnapshot>("UpdateSnapshot") },
   ReceivedKeybindings: { snapshot: opaque<KeybindingsSnapshot>("KeybindingsSnapshot") },
   ReceivedAppSettings: { snapshot: opaque<AppSettingsSnapshot>("AppSettingsSnapshot") },
-  ReceivedProviderAuth: { snapshot: opaque<ProviderAuthSnapshot>("ProviderAuthSnapshot") },
   ReceivedProjectGit: { projectId: Schema.String, snapshot: Schema.NullOr(opaque<ChatDiffSnapshot>("ChatDiffSnapshot")) },
 
   // Command results
@@ -71,7 +66,7 @@ export const Message = defineMessageUnion({
   // The page's chat
   GotChatMessage: { message: ChatSession.Message },
 
-  // Stores
-  GotDelegateMessage: { message: Delegate.Message },
+  // Every client store
+  GotStoresMessage: { message: Stores.Message },
 })
 export type Message = typeof Message.Type

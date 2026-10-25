@@ -6,7 +6,7 @@ import { Flower } from "../ui/icons"
 import { Message } from "./message"
 import type { Model } from "./model"
 import { AppRoute } from "./route"
-import { activeChatId, activeProjectId } from "./update"
+import { activeChatId, activeProjectId, sidebarData } from "./update"
 
 // App.tsx: the auth gate, then KannaLayout (sidebar beside the routed page).
 
@@ -14,7 +14,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
   title: model.auth._tag === "Ready"
     ? getBrowserWindowTitle({
       appName: APP_NAME,
-      sidebarData: model.sidebar.data,
+      sidebarData: sidebarData(model),
       activeProjectId: activeProjectId(model),
       activeChatId: activeChatId(model),
     })
