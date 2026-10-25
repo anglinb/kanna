@@ -285,7 +285,11 @@ const HideProject = Command.define("HideProject", {
     type: "project.remove",
     ...(typeof target === "string" ? { projectId: target } : target),
   } as ClientCommand).pipe(
-    Effect.map((result) => ActionMessage.SucceededHideProject({ projectId: result.projectId })),
+    // React destructured the reply inside its try, so a null reply (the
+    // demo's) became a command error with Chromium's TypeError text.
+    Effect.flatMap((result) => result
+      ? Effect.succeed(ActionMessage.SucceededHideProject({ projectId: result.projectId }))
+      : Effect.fail(new Error("Cannot destructure property 'projectId' of '(intermediate value)' as it is null."))),
     Effect.catch((error) => Effect.succeed(fail(error))),
   ),
 })

@@ -1,7 +1,7 @@
 import { Duration, Effect, Schema } from "effect"
 import { Command } from "foldkit"
 import { REQUEST_ATTACH_FILES_EVENT } from "../../client/app/chatFocusPolicy"
-import { resolveChatBrowserNotificationPreferenceAfterPermission } from "../../client/app/settings/shared"
+import { resolveChatBrowserNotificationPreferenceAfterPermission } from "../settings/shared"
 import { requestChatBrowserNotificationPermission } from "../../client/lib/chatBrowserNotifications"
 import { playChatNotificationSound } from "../../client/lib/chatSounds"
 import { macSetupAvailable, postToMacApp } from "../../client/lib/macApp"
