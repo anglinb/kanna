@@ -252,6 +252,21 @@ export function textSections(origin: string): GallerySection[] {
   ]
 }
 
+/** The render options of an export with attachments left out (`metadata`): read-only, links as text. */
+export const EXPORT_OPTIONS = { readonly: true, attachmentMode: "metadata", localLinkMode: "text", sourceOrigin: "http://kanna.example:5174" } as const
+
+/** The same kinds of row as an export draws them: placeholders for images, links as text. */
+export function exportSections(origin: string): GallerySection[] {
+  restart()
+  const withoutFiles = chatAttachments(origin).map((attachment) => ({ ...attachment, contentUrl: "" }))
+  const m = hydrate([
+    prompt("exp-user", "Here are the screenshot and my notes.", { attachments: withoutFiles }),
+    said("exp-text", "Changed [app.ts](/Users/demo/code/kanna/src/app.ts:12) and told [the other chat](http://kanna.example:5174/chat/chat-a)."),
+    prompt("exp-agent", "Please look at the flaky test.", { source: { kind: "agent", chatId: "chat-parent" } }),
+  ])
+  return [{ label: "Export", rows: [single(m.get("exp-user")), single(m.get("exp-text")), single(m.get("exp-agent"))] }]
+}
+
 /** Queued messages under the transcript. */
 export function queuedMessages(origin: string): QueuedChatMessage[] {
   return [

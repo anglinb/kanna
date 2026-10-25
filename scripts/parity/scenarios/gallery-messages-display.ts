@@ -12,7 +12,8 @@ async function pointAt(page: Page, chart: number, x: number, y: number) {
 // src/foldkit/transcript/messages against the React rows on display tools:
 // attachments (one image, a strip that scrolls, files that wrap, a preview
 // that fails, waiting, failed), and charts (bar, stacked bar, line, area,
-// pie, empty): every scroll step, then a strip's hover and scroll, each
+// pie, empty), and visualizations that can't load: every scroll step, then
+// a strip's hover and scroll, a click on an attachment (the page stays), each
 // chart's tooltip, a legend's hover (the others mute) and toggle (the series
 // goes and the axis rescales).
 export const scenarios: Scenario[] = [
@@ -29,6 +30,10 @@ export const scenarios: Scenario[] = [
       await page.locator("[data-transcript-row-id='att-many'] .attachments-scroller").evaluate((element) => { element.scrollLeft = 200 })
       await settle()
       await capture("strip-scrolled")
+      // A plain click opens the viewer (none on a gallery page), not the link.
+      await page.locator("[data-transcript-row-id='att-one'] a").first().click()
+      await settle()
+      await capture("attachment-clicked")
 
       const charts = [
         { id: "chart-0", x: 0.2, y: 0.4 },

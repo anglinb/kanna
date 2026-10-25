@@ -6,11 +6,13 @@ import { DrainingIndicator } from "../../../client/components/messages/DrainingI
 import { ProcessingMessage } from "../../../client/components/messages/ProcessingMessage"
 import { QueuedUserMessage } from "../../../client/components/messages/QueuedUserMessage"
 import { UsageLimitResumeRow } from "../../../client/components/messages/UsageLimitResumeRow"
-import { queuedMessages, textSections, USAGE_LIMIT_RESUME } from "../../../foldkit/transcript/messages/fixture"
+import { TranscriptRenderOptionsProvider } from "../../../client/components/messages/render-context"
+import { EXPORT_OPTIONS, exportSections, queuedMessages, textSections, USAGE_LIMIT_RESUME } from "../../../foldkit/transcript/messages/fixture"
 import { describeQueued, describeResume, STOPPED } from "../../../foldkit/transcript/messages/fixture-status"
 import { GalleryShell, RowSections, useGalleryStatus } from "./support/messages-host"
 
 const SECTIONS = textSections(window.location.origin)
+const EXPORT = exportSections(window.location.origin)
 const QUEUED = queuedMessages(window.location.origin)
 
 export default function MessagesTextGallery() {
@@ -18,6 +20,9 @@ export default function MessagesTextGallery() {
   return (
     <GalleryShell status={status}>
       <RowSections sections={SECTIONS} onAnswer={onAnswer} onPlan={onPlan} onStatus={setStatus} />
+      <TranscriptRenderOptionsProvider value={EXPORT_OPTIONS}>
+        <RowSections sections={EXPORT} onAnswer={onAnswer} onPlan={onPlan} onStatus={setStatus} />
+      </TranscriptRenderOptionsProvider>
       <section aria-label="Footer" className="mb-6">
         {/* As ChatTranscriptViewport's list footer. */}
         <div className="mx-auto w-full max-w-[816px] px-2">

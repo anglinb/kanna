@@ -1,14 +1,16 @@
 // src/foldkit/transcript/messages on the prompt, answer, session and turn
 // rows of src/foldkit/transcript/messages/fixture.ts, against the React rows
 // (gallery/messages-text.tsx on the React side).
-import { queuedMessages, textSections, USAGE_LIMIT_RESUME } from "../../../foldkit/transcript/messages/fixture"
+import { EXPORT_OPTIONS, exportSections, queuedMessages, textSections, USAGE_LIMIT_RESUME } from "../../../foldkit/transcript/messages/fixture"
 import { item, messagesPage, RESUME_KEY, rowSections } from "./support/messages-host"
 
 const SECTIONS = textSections(window.location.origin)
+const EXPORT = exportSections(window.location.origin)
 const QUEUED = queuedMessages(window.location.origin)
 
 export default messagesPage((model, h) => [
   ...rowSections(model, SECTIONS, {}, h),
+  ...rowSections(model, EXPORT, EXPORT_OPTIONS, h),
   h.section([h.AriaLabel("Footer"), h.Class("mb-6")], [
     // As ChatTranscriptViewport's list footer.
     h.div([h.Class("mx-auto w-full max-w-[816px] px-2")], [
