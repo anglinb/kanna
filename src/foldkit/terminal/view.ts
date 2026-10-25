@@ -158,7 +158,7 @@ export function workspaceView(model: Model, app: AppModel, options: WorkspaceOpt
   return h.div([h.Class("flex h-full min-h-0 flex-col")], [
     h.div([
       h.Class("min-h-0 flex-1 overflow-x-auto overflow-y-hidden"),
-      mountInputs({ terminalIds }, h),
+      mountInputs({ terminalIds, minTerminalWidth }, h),
       h.OnMount(TerminalWorkspaceScroller()),
     ], [
       h.div([h.Class("h-full min-h-0"), h.Style({ width: innerWidth ? `${innerWidth}px` : "100%" })], [

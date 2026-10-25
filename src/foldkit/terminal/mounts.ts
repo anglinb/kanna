@@ -47,6 +47,14 @@ export const TerminalPane = Mount.defineStream("TerminalPane", {
 /** What the workspace Mount watches: the panes in order. */
 export interface WorkspaceInputs {
   terminalIds: string[]
+  /** The panes' minimum width (getMinimumTerminalWidth), before the scroller clamps it. */
+  minTerminalWidth: number
+}
+
+/** TerminalWorkspace's inner width for a scroller `width` wide: past the panes' minimums, it scrolls. */
+export function workspaceInnerWidth(width: number, paneCount: number, minTerminalWidth: number) {
+  const effectiveMinTerminalWidth = width > 0 ? Math.min(minTerminalWidth, width) : minTerminalWidth
+  return Math.max(width, Math.max(1, paneCount) * effectiveMinTerminalWidth)
 }
 
 /**
@@ -63,11 +71,19 @@ export const TerminalWorkspaceScroller = Mount.defineStream("TerminalWorkspaceSc
         const width = element.getBoundingClientRect().width
         if (width === reported) return
         reported = width
+        // React measured in a layout effect and re-rendered before the
+        // browser painted, so the panes never saw the unmeasured width (one
+        // pane's minimum). Foldkit renders the Message's result a frame on,
+        // which can be after a pane has sized its shell by it; so the inner
+        // width the next render writes is written now, the same value.
+        const { terminalIds, minTerminalWidth } = inputs.current()
+        const inner = element.firstElementChild as HTMLElement | null
+        if (inner) {
+          const innerWidth = workspaceInnerWidth(width, terminalIds.length, minTerminalWidth)
+          inner.style.width = innerWidth ? `${innerWidth}px` : "100%"
+        }
         emit(Message.MeasuredWorkspace({ width }))
       }
-      const observer = new ResizeObserver(updateWidth)
-      observer.observe(element)
-      updateWidth()
 
       const inputs = watchMountInputs<WorkspaceInputs>(element, (next, previous) => {
         const addedTerminalId = next.terminalIds.find((id) => !previous.terminalIds.includes(id))
@@ -76,6 +92,10 @@ export const TerminalWorkspaceScroller = Mount.defineStream("TerminalWorkspaceSc
         const pane = document.getElementById(addedTerminalId)?.firstElementChild?.firstElementChild
         pane?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
       })
+
+      const observer = new ResizeObserver(updateWidth)
+      observer.observe(element)
+      updateWidth()
 
       return () => {
         inputs.stop()
