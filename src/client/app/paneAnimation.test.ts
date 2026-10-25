@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { easePane, interpolateLayout, paneDurationMs, PANE_CLOSE_MS, PANE_OPEN_MS } from "./paneAnimation"
-import { resolveTerminalAnimationState, shouldRequestTerminalFocus } from "./useTerminalToggleAnimation"
+import { resolveTerminalAnimationState, shouldRequestTerminalFocus } from "../../foldkit/chat/terminalPane"
 
 describe("paneAnimation", () => {
   test("clamps easing at the ends", () => {
