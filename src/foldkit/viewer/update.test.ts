@@ -184,6 +184,17 @@ describe("viewer: the chat previewer", () => {
     expect(opener?._tag === "OpenedItem" ? opener.item : null).toEqual({ kind: "chat", chatId: "c3", back: ["c2"] })
   })
 
+  test("Open chat lets the live hold go before it closes the viewer and moves the page", () => {
+    const opened = update({ ...init(), card: { key: "chat", cardEnters: true, bodyEnters: false } }, Message.MountedPreviewSession({ chatId: "c2", fadesIn: true }), app).model
+    const result = update(opened, Message.ClickedOpenPreviewInTab({ chatId: "c2" }), app)
+    expect(result.model.preview).toBeNull()
+    expect(names(result)).toContain("FlushTranscriptCacheWrite")
+    const action = result.outMessage?.action
+    const actions = action?._tag === "Batch" ? (action.actions as AppAction[]).flatMap((inner) => inner._tag === "Batch" ? inner.actions as AppAction[] : [inner]) : []
+    expect(actions.map((inner) => inner._tag === "Store" && inner.message._tag === "GotViewerMessage" ? inner.message.message._tag : inner._tag))
+      .toEqual(["ReleasedLiveChat", "ClosedViewer", "Navigate"])
+  })
+
   test("a session's message for a chat it has moved on from is dropped", () => {
     const opened = update({ ...init(), card: { key: "chat", cardEnters: true, bodyEnters: false } }, Message.MountedPreviewSession({ chatId: "c2", fadesIn: true }), app).model
     const stale = update(opened, Message.ResizedPreviewDock({ chatId: "c9", height: 80 }), app)

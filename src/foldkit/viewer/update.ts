@@ -621,8 +621,14 @@ function step(model: Model, message: Message, app: AppModel): Step {
     }
     case "LostPreviewedChat":
       return done(model, [], [viewerStore(ViewerStore.Message.ClosedAllViewer())])
-    case "ClickedOpenPreviewInTab":
-      return done(model, [], openChatActions(app, message.chatId, { target: "tab" }))
+    case "ClickedOpenPreviewInTab": {
+      // The previewer closes on it, and its session goes before the page
+      // moves to the chat (React's preview unmounts with the viewer, ahead
+      // of the route's transition): the background follower sees the live
+      // hold let go first.
+      const left = model.preview?.chatId === message.chatId ? leavePreview(done(model)) : done(model)
+      return { ...left, actions: [...left.actions, ...openChatActions(app, message.chatId, { target: "tab" })] }
+    }
     case "ResizedPreviewDock": {
       const preview = model.preview
       if (!preview || preview.chatId !== message.chatId || preview.dockHeight === message.height) return done(model)
