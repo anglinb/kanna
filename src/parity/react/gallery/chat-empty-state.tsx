@@ -2,15 +2,20 @@
 // EmptyStateProject.tsx): the picker under the hero, and the project's chats
 // below it, laid out as ChatTranscriptViewport lays them out in its empty
 // state's scroller (gallery/chat-empty-state.ts on the Foldkit side).
-import type { CSSProperties } from "react"
+import { useState, type CSSProperties } from "react"
 import { EmptyStateProjectChats, EmptyStateProjectPicker } from "../../../client/app/ChatPage/EmptyStateProject"
 import { TooltipProvider } from "../../../client/components/ui/tooltip"
 import { useSidebarStore } from "../../../client/stores/sidebarStore"
 import { EMPTY_STATE_PROJECT_ID, EMPTY_STATE_PROJECT_PATH, EMPTY_STATE_SIDEBAR } from "./support/empty-state-sidebar"
 
-useSidebarStore.setState({ data: EMPTY_STATE_SIDEBAR, ready: true })
-
 export default function ChatEmptyStateGallery() {
+  // Once, as the page opens, before the list below reads the store. Not at
+  // import: every gallery module is imported by the app's entry, and the
+  // app's own sidebar would start out as this one.
+  useState(() => {
+    useSidebarStore.setState({ data: EMPTY_STATE_SIDEBAR, ready: true })
+    return null
+  })
   return (
     <TooltipProvider>
       <div className="relative h-dvh bg-background text-foreground">
