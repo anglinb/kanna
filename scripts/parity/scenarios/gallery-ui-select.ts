@@ -29,6 +29,10 @@ export const scenarios: Scenario[] = [
       await capture("open-by-keyboard")
       await page.keyboard.press("Escape")
       await capture("escape")
+      await page.getByRole("combobox", { name: "Connection type" }).click()
+      await capture("open-in-form")
+      await page.getByRole("option", { name: "sse" }).click()
+      await capture("chose-in-form")
     },
   }),
 ]

@@ -8,15 +8,17 @@ import * as Select from "../../../foldkit/ui/select"
 import { SELECT_MODES } from "../../react/gallery/support/select-options"
 import { galleryPage } from "../gallery-page"
 
-const NAMES = ["visibility", "mode", "transport"] as const
+const NAMES = ["visibility", "mode", "transport", "connection"] as const
 type Name = (typeof NAMES)[number]
 
 const Model = Schema.Struct({
   visibility: Select.Model,
   mode: Select.Model,
   transport: Select.Model,
+  connection: Select.Model,
   chosenVisibility: Schema.Option(Schema.String),
   chosenMode: Schema.String,
+  chosenConnection: Schema.String,
 })
 type Model = typeof Model.Type
 
@@ -34,7 +36,9 @@ const foldSelect = Update.foldChildAt({
     Selected: ({ value }) => (model) => ({
       model: name === "visibility"
         ? { ...model, chosenVisibility: Option.some(value) }
-        : name === "mode" ? { ...model, chosenMode: value } : model,
+        : name === "mode"
+          ? { ...model, chosenMode: value }
+          : name === "connection" ? { ...model, chosenConnection: value } : model,
     }),
   }),
 })
@@ -46,8 +50,10 @@ export default galleryPage<Model, Message>({
       visibility: Select.init({ id: "visibility" }),
       mode: Select.init({ id: "mode" }),
       transport: Select.init({ id: "transport" }),
+      connection: Select.init({ id: "connection" }),
       chosenVisibility: Option.none(),
       chosenMode: "queue",
+      chosenConnection: "stdio",
     },
   }),
   update: (model, message) =>
@@ -101,6 +107,20 @@ export default galleryPage<Model, Message>({
               Select.selectTrigger({ attributes: [...trigger, h.AriaLabel("Transport")] }, [value], portal, h),
           }),
         ]),
+        // Inside a form, as McpSection's: the hidden native select follows the trigger.
+        embed("connection", {
+          value: model.chosenConnection,
+          align: "end",
+          grouped: true,
+          inForm: true,
+          items: [{ value: "stdio" }, { value: "sse" }, { value: "http", disabled: true }],
+          renderItem: (value) => [value],
+          toView: ({ trigger, value, portal, nativeSelect }) =>
+            h.form([h.Class("w-40")], [
+              Select.selectTrigger({ attributes: [...trigger, h.AriaLabel("Connection type")] }, [value], portal, h),
+              nativeSelect,
+            ]),
+        }),
       ]),
     }
   },

@@ -9,6 +9,7 @@ import { SELECT_MODES } from "./support/select-options"
 export default function SelectGallery() {
   const [visibility, setVisibility] = useState<string | undefined>(undefined)
   const [mode, setMode] = useState("queue")
+  const [connection, setConnection] = useState("stdio")
   return (
     <div className="flex min-h-dvh items-start gap-8 bg-background p-8 text-foreground">
       <div className="w-56">
@@ -56,6 +57,21 @@ export default function SelectGallery() {
           </SelectContent>
         </Select>
       </div>
+      {/* Inside a form, as McpSection's: Radix adds a hidden native select. */}
+      <form className="w-40" onSubmit={(event) => event.preventDefault()}>
+        <Select value={connection} onValueChange={setConnection}>
+          <SelectTrigger aria-label="Connection type">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="end">
+            <SelectGroup>
+              <SelectItem value="stdio">stdio</SelectItem>
+              <SelectItem value="sse">sse</SelectItem>
+              <SelectItem value="http" disabled>http</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </form>
     </div>
   )
 }

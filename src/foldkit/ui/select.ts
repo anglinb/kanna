@@ -14,6 +14,7 @@ import { portalToBody } from "./overlay/portal"
 import { waitForExitAnimation } from "./overlay/presence"
 import { domStream } from "./overlay/stream"
 import { createTypeahead, findNextMatch } from "./overlay/typeahead"
+import { VISUALLY_HIDDEN_STYLE } from "./overlay/visually-hidden"
 
 /**
  * `<Select>` with `<SelectTrigger>`, `<SelectValue>`, `<SelectContent>`
@@ -423,6 +424,11 @@ export interface SelectItemConfig {
   value: string
   disabled?: boolean
   className?: string
+  /**
+   * The item's text, for the hidden native <option> (Radix's `textValue`).
+   * Default: the strings `renderItem` returns, joined.
+   */
+  textValue?: string
 }
 
 export interface RenderInfo {
@@ -432,6 +438,12 @@ export interface RenderInfo {
   value: Html
   /** The listbox, or nothing while closed. Render it anywhere in the markup. */
   portal: Html
+  /**
+   * With `inForm`: the hidden native <select> Radix adds for form
+   * submission. Render it right after the trigger, where React's sits.
+   * Nothing otherwise.
+   */
+  nativeSelect: Html
   isOpen: boolean
 }
 
@@ -456,6 +468,14 @@ export interface ViewInputs {
   alignOffset?: number
   /** `<SelectContent className>`. */
   className?: string
+  /**
+   * The select sits inside a <form>: Radix then renders a hidden native
+   * <select> beside the trigger (it finds the form from the DOM; a view
+   * can't, so the caller says). See `RenderInfo.nativeSelect`.
+   */
+  inForm?: boolean
+  /** The native <select>'s name, with `inForm`. */
+  name?: string
 }
 
 export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inputs, h) => {
@@ -523,6 +543,23 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inpu
 
   const items = inputs.items.map(item)
 
+  const optionText = (config: SelectItemConfig) =>
+    config.textValue ?? inputs.renderItem(config.value).filter((child): child is string => typeof child === "string").join("")
+  const nativeSelect = inputs.inForm
+    ? h.select([
+      h.AriaHidden(true),
+      h.Tabindex(-1),
+      ...(inputs.name !== undefined ? [h.Name(inputs.name)] : []),
+      ...(disabled ? [h.Disabled(true)] : []),
+      h.Style(VISUALLY_HIDDEN_STYLE),
+      h.Value(inputs.value ?? ""),
+    ], [
+      ...(inputs.value === undefined ? [h.option([h.Value("")])] : []),
+      ...inputs.items.map((config) =>
+        h.keyed("option")(config.value, [h.Value(config.value), ...(config.disabled ? [h.Disabled(true)] : [])], [optionText(config)])),
+    ])
+    : null
+
   const scrollButton = (direction: "up" | "down") =>
     h.div([
       h.AriaHidden(true),
@@ -584,7 +621,7 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inpu
     ])
     : null
 
-  return inputs.toView({ trigger, value, portal, isOpen: open })
+  return inputs.toView({ trigger, value, portal, nativeSelect, isOpen: open })
 })
 
 /**

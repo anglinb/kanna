@@ -12,6 +12,7 @@ import { placePopper, POPPER_WRAPPER_INITIAL_STYLE, type Align, type Side } from
 import { portalToBody } from "./overlay/portal"
 import { waitForExitAnimation } from "./overlay/presence"
 import { domStream } from "./overlay/stream"
+import { VISUALLY_HIDDEN_STYLE } from "./overlay/visually-hidden"
 
 /**
  * `<Tooltip>` / `<TooltipTrigger asChild>` / `<TooltipContent>` and the
@@ -381,19 +382,6 @@ export const TooltipContent = Mount.defineStream("TooltipContent", {
 })
 
 // VIEW
-
-const VISUALLY_HIDDEN_STYLE: Record<string, string> = {
-  position: "absolute",
-  border: "0px",
-  width: "1px",
-  height: "1px",
-  padding: "0px",
-  margin: "-1px",
-  overflow: "hidden",
-  clip: "rect(0px, 0px, 0px, 0px)",
-  "white-space": "nowrap",
-  "word-wrap": "normal",
-}
 
 export interface RenderInfo {
   /** Spread onto the trigger element (Radix's TooltipTrigger asChild). */
