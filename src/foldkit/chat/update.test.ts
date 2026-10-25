@@ -9,6 +9,7 @@ import { init as initApp } from "../app/update"
 import * as ChatSession from "../core/chatSession"
 import { memoryStorage } from "../core/stores/testing"
 import { Message as SidebarMessage } from "../sidebar/message"
+import * as Terminal from "../terminal"
 import { Message, type Watch } from "./message"
 import { init } from "./model"
 import { routeDelegatedSend, routeLocalLink, update } from "./update"
@@ -152,9 +153,10 @@ describe("chat page: navbar", () => {
   test("a terminal command refreshes the open column's diffs a second after the last one", () => {
     const base = boot("/chat/c1")
     const app: AppModel = { ...base, stores: { ...base.stores, rightSidebar: { ...base.stores.rightSidebar, projects: { p1: { widgetsOpen: true, chats: { c1: true } } } as never } } }
-    const first = update(init(), Message.SentTerminalCommand(), app)
+    const sent = Message.GotTerminalMessage({ message: Terminal.Message.SentPaneCommand({ terminalId: "terminal-1" }) })
+    const first = update(init(), sent, app)
     expect(names(first)).toEqual(["ElapseTerminalDiffRefresh"])
-    const second = update(first.model, Message.SentTerminalCommand(), app)
+    const second = update(first.model, sent, app)
     // The first wait ends after a newer command: nothing yet.
     expect(names(update(second.model, Message.ElapsedTerminalDiffRefresh({ token: 1 }), app))).toEqual([])
     expect(names(update(second.model, Message.ElapsedTerminalDiffRefresh({ token: 2 }), app))).toEqual(["RefreshChatDiffs"])

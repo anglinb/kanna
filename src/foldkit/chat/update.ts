@@ -493,6 +493,19 @@ function commitColumnWidth(model: Model, app: AppModel, widthPx: number): Return
   return withActions({ model }, [rightSidebar(RightSidebar.Message.ChangedSize({ size: Math.round(getWidgetsColumnWidthPx(widthPx, model.layoutWidth)) }))])
 }
 
+/**
+ * scheduleTerminalDiffRefresh: a command sent in a terminal may have changed
+ * files; the open column's diffs refresh a second after the last one.
+ */
+function scheduleTerminalDiffRefresh(model: Model, facts: PageFacts): Return {
+  if (!facts.chatId || !facts.showRightSidebar) return { model }
+  const token = model.terminalDiffRefreshToken + 1
+  return {
+    model: modifyFields(model, { terminalDiffRefreshToken: () => token }),
+    commands: [ElapseTerminalDiffRefresh({ token })],
+  }
+}
+
 /** The tab bar's hover card (tabHoverCard.ts). */
 function tabCardStep(model: Model, message: Message, app: AppModel): Return {
   const step = updateTabCard(model, message, app)
@@ -509,7 +522,25 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     GotComposerMessage: ({ message: inner }) => routeDelegatedSend(foldComposer(model, { message: inner, app }) as Return, app, facts()),
     GotWidgetsMessage: ({ message: inner }) => foldWidgets(model, { message: inner, app }) as Return,
     GotViewerMessage: ({ message: inner }) => routeLocalLink(foldViewer(model, { message: inner, app }) as Return, facts()),
-    GotTerminalMessage: ({ message: inner }) => foldTerminal(model, { message: inner, app }) as Return,
+    GotTerminalMessage: ({ message: inner }) => {
+      const folded = foldTerminal(model, { message: inner, app }) as Return
+      // onTerminalCommandSent: scheduleTerminalDiffRefresh.
+      if (inner._tag === "SentPaneCommand") return then(folded, (next) => scheduleTerminalDiffRefresh(next, facts()))
+      // onInitialTerminalCommandSent: a quick action's command is typed once.
+      if (inner._tag === "SentInitialCommand") {
+        return {
+          ...folded,
+          model: modifyFields(folded.model, {
+            pendingTerminalCommands: (pending) => {
+              if (!(inner.terminalId in pending)) return pending
+              const { [inner.terminalId]: _sent, ...rest } = pending
+              return rest
+            },
+          }),
+        }
+      }
+      return folded
+    },
 
     GotTooltipMessage: ({ id, message: inner }) => tooltipStep(model, id, inner),
     GotMenuMessage: ({ id, message: inner }) => {
@@ -696,17 +727,6 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       return result.outMessage
         ? withActions({ model: next, commands: commands as never }, [AppAction.WriteFaveModels({ faveModels: [...result.outMessage.faveModels] })])
         : { model: next, commands }
-    },
-    // scheduleTerminalDiffRefresh: a command sent in a terminal may have
-    // changed files; the open column's diffs refresh a second after the last.
-    SentTerminalCommand: () => {
-      const current = facts()
-      if (!current.chatId || !current.showRightSidebar) return { model }
-      const token = model.terminalDiffRefreshToken + 1
-      return {
-        model: modifyFields(model, { terminalDiffRefreshToken: () => token }),
-        commands: [ElapseTerminalDiffRefresh({ token })],
-      }
     },
     ElapsedTerminalDiffRefresh: ({ token }) => {
       const current = facts()

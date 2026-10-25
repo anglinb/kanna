@@ -208,7 +208,6 @@ export const Message = defineMessageUnion({
   ClickedEditModels: {},
   GotDefaultModelsMessage: { message: DefaultModelsDialog.Message },
   RanQuickAction: { command: Schema.String },
-  SentTerminalCommand: {},
   ElapsedTerminalDiffRefresh: { token: Schema.Number },
 
   // Terminals and diffs

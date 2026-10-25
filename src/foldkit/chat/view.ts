@@ -322,13 +322,8 @@ function terminalWorkspaceView(model: Model, facts: PageFacts, content: Html, pa
           ], [])
           : null,
         facts.shouldRenderTerminalLayout
-          // TerminalWorkspaceShell. Enter in a terminal is a command sent
-          // (`onTerminalCommandSent`): it bubbles here from xterm's textarea,
-          // and the open column's diffs refresh a second after the last one.
-          ? h.div([
-            ...(page.terminal.fixedHeight > 0 ? [h.Style({ height: `${page.terminal.fixedHeight}px` })] : []),
-            h.OnKeyDown((key) => (key === "Enter" ? Message.SentTerminalCommand() : Message.CompletedSideEffect())),
-          ], [
+          // TerminalWorkspaceShell
+          ? h.div(page.terminal.fixedHeight > 0 ? [h.Style({ height: `${page.terminal.fixedHeight}px` })] : [], [
             h.submodel({ slotId: "terminal", model: model.terminal, view: Terminal.view, viewInputs: inputs, toParentMessage: (message) => Message.GotTerminalMessage({ message }) }),
           ])
           : null,
