@@ -11,6 +11,7 @@ import { init as initApp } from "../app/update"
 import * as TerminalPreferences from "../core/stores/terminalPreferences"
 import * as Select from "../ui/select"
 import * as Changelog from "./changelog"
+import * as CloudPair from "./cloud-pair"
 import * as General from "./general"
 import { ContinueAppActions, FetchAuthStatus, init, Message, PageMount, update, view } from "./index"
 import * as Keybindings from "./keybindings"
@@ -314,6 +315,69 @@ describe("settings page (Scene)", () => {
       Scene.Command.resolve(FetchAuthStatus, Message.ReceivedAuthStatus({ enabled: false })),
       Scene.expect(Scene.text("Loading machine settings…")).toExist(),
       Scene.expect(Scene.text("Projects Indexed")).toBeAbsent(),
+    )
+  })
+})
+
+describe("cloud pairing panel", () => {
+  const waiting = { status: "waiting" as const, claimUrl: "https://kanna.sh/machine?pair=ABC" }
+  const paired = { status: "paired" as const, appOrigin: "https://you.kanna.sh" }
+
+  test("the first fetch loads it; Retry starts a session and the view swaps from the link to the result", () => {
+    Story.story(
+      CloudPair.update,
+      Story.given(CloudPair.init()),
+      Story.message(CloudPair.Message.ReceivedSession({ session: { status: "expired" }, visible: true })),
+      Story.model((model) => {
+        expect(model.loaded).toBe(true)
+        expect(CloudPair.viewFor(model.shown)).toBe("retry")
+        expect(model.swapped).toBe(true)
+      }),
+      Story.message(CloudPair.Message.EndedLeavingView()),
+      Story.message(CloudPair.Message.ClickedRetry()),
+      Story.model((model) => expect(model.starting).toBe(true)),
+      Story.Command.resolve(CloudPair.StartPairSession, CloudPair.Message.StartedSession({ session: waiting, visible: true })),
+      Story.model((model) => {
+        expect(model.starting).toBe(false)
+        expect(CloudPair.isWaiting(model)).toBe(true)
+        expect(model.leaving?.key).toBe("retry")
+      }),
+    )
+  })
+
+  test("a change while the page is hidden waits for it to come back, then a beat", () => {
+    const shown = { ...CloudPair.init(), session: waiting, shown: waiting, loaded: true }
+    Story.story(
+      CloudPair.update,
+      Story.given(shown),
+      Story.message(CloudPair.Message.ReceivedSession({ session: paired, visible: false })),
+      Story.model((model) => expect(model.shown).toEqual(waiting)),
+      Story.message(CloudPair.Message.ReturnedToView()),
+      Story.Command.resolve(CloudPair.WaitReturnBeat, CloudPair.Message.ElapsedReturnBeat({ version: 1 })),
+      Story.model((model) => expect(CloudPair.viewFor(model.shown)).toBe("paired")),
+    )
+  })
+
+  test("the panel shows the link with its copy button, and the manual steps where pairing isn't supported", () => {
+    const sceneView = (showOpenButton: boolean) => Scene.withViewInputs(CloudPair.view, { showOpenButton })()
+    Scene.scene(
+      { update: CloudPair.update, view: sceneView(true) },
+      Scene.given({ ...CloudPair.init(), session: waiting, shown: waiting, loaded: true }),
+      Scene.Mount.resolve(CloudPair.StageMount, CloudPair.Message.MeasuredStage({ height: 120 })),
+      Scene.expect(Scene.role("link", { name: "kanna.sh/machine?pair=ABC" })).toHaveAttr("href", waiting.claimUrl),
+      Scene.expect(Scene.role("link", { name: "Open link & sign in" })).toExist(),
+      Scene.click(Scene.role("button", { name: "Copy link" })),
+      Scene.Command.resolve(CloudPair.CopyLink, CloudPair.Message.CopiedLink({ ok: true })),
+      Scene.expect(Scene.role("button", { name: "Copied" })).toExist(),
+      Scene.Command.resolve(CloudPair.WaitCopied, CloudPair.Message.ElapsedCopied({ version: 1 })),
+      Scene.expect(Scene.role("button", { name: "Copy link" })).toExist(),
+    )
+    Scene.scene(
+      { update: CloudPair.update, view: sceneView(false) },
+      Scene.given({ ...CloudPair.init(), session: { status: "unsupported" }, shown: { status: "unsupported" }, loaded: true }),
+      Scene.Mount.resolve(CloudPair.StageMount, CloudPair.Message.MeasuredStage({ height: 80 })),
+      Scene.expect(Scene.role("link", { name: "kanna.sh/fleet" })).toExist(),
+      Scene.expect(Scene.role("link", { name: "Open link & sign in" })).toBeAbsent(),
     )
   })
 })
