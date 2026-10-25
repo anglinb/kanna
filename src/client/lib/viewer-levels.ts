@@ -1,4 +1,4 @@
-import type { ViewerItem } from "../stores/viewerStore"
+import type { ViewerItem } from "../../foldkit/core/stores/viewer"
 
 /**
  * What is under what in the viewer's pane, and so where Back goes.

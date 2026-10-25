@@ -1,7 +1,7 @@
 import type { AgentProvider, ChatAttachment, ChatSnapshot, ModelOptions, SidebarData, TranscriptEntry, UserPromptEntry } from "../../shared/types"
 import { isSubChat } from "../../shared/sub-chat"
 import { stripSystemMessages } from "../../shared/message-preview"
-import type { ComposerState } from "../stores/chatPreferencesStore"
+import type { ComposerState } from "../../foldkit/core/stores/chatPreferences"
 import { processTranscriptMessages } from "../lib/parseTranscript"
 
 // Pure helpers backing useKannaState. Everything here is stateless and unit

@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
+import type { OpenLocalLinkTarget } from "../core/localLink"
 import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import { opaque } from "../core/schema"
 import * as ChatCard from "../ui/chat-hover-card"

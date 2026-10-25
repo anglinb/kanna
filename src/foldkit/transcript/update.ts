@@ -1,7 +1,7 @@
 import { Effect, Option, Schema } from "effect"
 import { Command } from "foldkit"
 import { modifyFields } from "foldkit/struct"
-import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
+import type { OpenLocalLinkTarget } from "../core/localLink"
 import { shouldOpenLocalFileLinkInEditor } from "../../client/lib/pathUtils"
 import type { TranscriptEntry } from "../../shared/types"
 import { AppAction, batch } from "../app/action"

@@ -1,6 +1,6 @@
 import { getUserPromptSignature, TRANSCRIPT_PADDING_BOTTOM_OFFSET } from "../../client/app/kannaStateHelpers"
 import { CHAT_NAVBAR_OFFSET_PX } from "../../client/app/ChatPage/utils"
-import type { ResolvedTranscriptRow } from "../../client/app/KannaTranscript"
+import type { ResolvedTranscriptRow } from "../../client/app/transcriptRowTypes"
 import {
   buildRowIndexByMessageId,
   findLatestAssistantTextRowIndex,

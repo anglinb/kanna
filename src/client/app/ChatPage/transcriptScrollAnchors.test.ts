@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { ResolvedTranscriptRow } from "../KannaTranscript"
+import type { ResolvedTranscriptRow } from "../transcriptRowTypes"
 import {
   buildRowIndexByMessageId,
   findLatestUserPromptRowIndex,

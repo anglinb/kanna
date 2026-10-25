@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { defineTaggedUnion } from "foldkit/schema"
 import type { ProjectRequest } from "../../client/app/kannaStateHelpers"
-import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
+import type { OpenLocalLinkTarget } from "../core/localLink"
 import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import type { ClientCommand, EditorOpenSettings, OpenExternalAction, TerminalPreset } from "../../shared/protocol"
 import type { AppSettingsPatch, FaveModel, LlmProviderSnapshot } from "../../shared/types"
