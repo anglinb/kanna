@@ -117,13 +117,13 @@ into this):
 |---|---|---|---|
 | Sidebar | `sidebar/` | 1 | merged (route regions pass; page-owned commands pending) |
 | Projects page | `home/` | 1 | merged (154/160 with sidebar) |
-| Settings page | `settings/` | 1 | in progress |
-| Chat page shell | `chat/` | 1 | in progress |
+| Settings page | `settings/` | 1 | merged (612/620) |
+| Chat page shell | `chat/` | 1 | merged (own regions pass; selfcheck 156/156) |
 | Transcript rows | `transcript/messages/` | 1 | merged (316/316 gallery) |
 | Terminal | `terminal/` | 2 | merged (workspace gallery 24/24; page matches but for home's boot command) |
 | Command palette | `palette/` | 2 | in progress |
 | Composer | `composer/` | 2 | in progress |
-| Transcript viewport | `transcript/` | 3 | to do |
+| Transcript viewport (+ export viewer) | `transcript/` | 3 | in progress |
 | Right sidebar widgets | `widgets/` | 3 | to do |
 | Viewer / previewer | `viewer/` | 3 | to do |
 | Setup wizard | `setup/` | 3 | to do |
@@ -144,6 +144,14 @@ into this):
 - `scripts/parity/scenarios/terminal.ts`: React sometimes sends
   `terminal.create` twice (a race with the demo's "no shell yet" reply);
   handle it as `terminal-page.ts` does, so the scenarios are deterministic.
+- `ui/`: opening a modal Select shouldn't close a tooltip already up
+  (Radix registers the new layer before its outside-click check).
+- Sidebar and chat tabs share the chat hover card; move it to one module
+  (the tab card imports the sidebar's `chatCardBody`).
+- `ui/context-menu`: a plain label entry, so `settings/menu.ts` (a local
+  copy for the skills menu heading) can go.
+- `ui/select`: report a choice only for a new value, as Radix does;
+  `settings/shared.ts` `updateSettingsSelect` filters it meanwhile.
 - `@foldkit/vite-plugin` peers on Vite 8; we run Vite 6 (works so far).
 - `app/action.ts` imports types from React files
   (`components/messages/shared`, `lib/chat-navigation` is fine); move
