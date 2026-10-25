@@ -1,21 +1,26 @@
 import { defineScenario, type Scenario } from "../scenario"
+import { click, parkPointer } from "./_lib/helpers"
 
 // The usage cards on a phone's new chat page (src/foldkit/chat/usageCards.ts
-// against Settings' collapsible ProviderCard): collapsed with the first
-// window's meter in the header, its tooltip, then each card opened.
+// against Settings' collapsible ProviderCard), on a gallery page: collapsed
+// with the first window's meter in the header, then each card opened.
 export const scenarios: Scenario[] = [
   defineScenario({
     name: "chat-usage-cards",
     route: "/__gallery/chat-usage-cards",
     viewports: ["desktop", "mobile"],
-    async run({ page, capture }) {
-      await capture("collapsed")
-      await page.getByRole("button", { name: /Claude/ }).click()
-      await capture("claude-open")
-      await page.getByRole("button", { name: /Codex/ }).click()
-      await capture("both-open")
-      await page.getByRole("button", { name: /Codex/ }).click()
-      await capture("codex-closed")
+    async run(context) {
+      const { page } = context
+      await context.capture("collapsed")
+      await click(context, page.getByRole("button", { name: /Claude/ }))
+      await parkPointer(context)
+      await context.capture("claude-open")
+      await click(context, page.getByRole("button", { name: /Codex/ }))
+      await parkPointer(context)
+      await context.capture("both-open")
+      await click(context, page.getByRole("button", { name: /Codex/ }))
+      await parkPointer(context)
+      await context.capture("codex-closed")
     },
   }),
 ]

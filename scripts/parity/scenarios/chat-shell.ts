@@ -1,154 +1,103 @@
+import type { Page } from "playwright"
 import { defineScenario, type Scenario } from "../scenario"
+import { CHATS, click, contextClick, hover, parkPointer, press, quickClick, REGIONS, regions } from "./_lib/helpers"
 
-// The chat page's own parts (src/foldkit/chat/), apart from what its
-// sub-slices draw inside them: the navbar over the chat, its menus, the
-// split "Open in…" button, and the pane toggles. The navbar is the one
-// `group/navbar` element on a chat page.
+// The chat page's own parts (src/foldkit/chat/) that chat-navbar.ts,
+// keybindings.ts, mobile.ts and terminal.ts don't already reach: the
+// title's right-click menu, the menus by keyboard, the "Open in…" button's
+// tooltip, the widget column's Ctrl binding and a phone's backdrop. (The
+// terminal's toggles are terminal.ts's: how many terminal.create a first
+// terminal sends races its fit, React against React.)
 
-const NAVBAR = '[class*="group/navbar"]'
-const MENU = '[role="menu"]'
-const LISTBOX = '[role="listbox"]'
+const desktop = { viewports: ["desktop" as const] }
+const mobile = { viewports: ["mobile" as const] }
+
+function navbar(page: Page) {
+  return page.locator(REGIONS.navbar)
+}
 
 export const scenarios: Scenario[] = [
   defineScenario({
-    name: "chat-navbar",
-    route: "/chat/demo-chat-units",
-    viewports: ["desktop", "mobile"],
-    regions: { navbar: NAVBAR },
-    covers: { routes: ["/chat/:chatId"] },
-  }),
-  // Its button shows on a desktop only beside the open widget column; on a
-  // phone it is always there and carries the "Open in…" destinations too.
-  defineScenario({
-    name: "chat-navbar-overflow-menu",
-    route: "/chat/demo-chat-units",
-    viewports: ["mobile"],
-    regions: { navbar: NAVBAR, menu: MENU },
-    async run({ page, capture }) {
-      await page.getByRole("button", { name: "More actions" }).click()
-      await capture("open")
-      await page.keyboard.press("ArrowDown")
-      await capture("highlighted")
-      await page.keyboard.press("Escape")
-      await capture("closed")
+    // A right click on the title opens the chat's sidebar-row menu, as the
+    // Chat actions button does; Escape shuts it.
+    name: "chat-navbar-title-context-menu",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("navbar", "menu"),
+    async run(context) {
+      await contextClick(context, navbar(context.page).getByRole("button", { name: "Add a feet/meters toggle" }))
+      await context.capture("menu")
+      await press(context, "Escape")
+      await parkPointer(context)
+      await context.capture("closed")
     },
   }),
   defineScenario({
-    name: "chat-navbar-title-menu",
-    route: "/chat/demo-chat-units",
-    viewports: ["desktop"],
-    regions: { navbar: NAVBAR, menu: MENU },
-    async run({ page, capture }) {
-      await page.getByRole("button", { name: "Chat actions" }).click()
-      await capture("from-button")
-      await page.keyboard.press("Escape")
-      await page.getByTitle("Rename").click({ button: "right" })
-      await capture("from-right-click")
-      await page.keyboard.press("Escape")
-      await capture("closed")
+    // On a phone the More actions menu carries the "Open in…" destinations
+    // too. Arrows move through it; Escape shuts it.
+    name: "chat-navbar-overflow-keys",
+    route: CHATS.units,
+    ...mobile,
+    regions: regions("navbar", "menu"),
+    async run(context) {
+      await click(context, navbar(context.page).getByRole("button", { name: "More actions" }))
+      await press(context, "ArrowDown")
+      await press(context, "ArrowDown")
+      await context.capture("highlighted")
+      await press(context, "Escape")
+      await parkPointer(context)
+      await context.capture("closed")
     },
   }),
   defineScenario({
-    name: "chat-navbar-title-rename",
-    route: "/chat/demo-chat-units",
-    viewports: ["desktop"],
-    regions: { navbar: NAVBAR },
-    covers: { commands: ["chat.rename"] },
-    async run({ page, capture }) {
-      await page.getByTitle("Rename").click()
-      await capture("editing")
-      await page.getByRole("textbox", { name: "Chat title" }).fill("Feet and meters")
-      await page.keyboard.press("Enter")
-      await capture("renamed")
-      await page.getByTitle("Rename").click()
-      // The field, once it is there (it takes focus as it appears).
-      await page.getByRole("textbox", { name: "Chat title" }).waitFor()
-      await page.keyboard.press("Escape")
-      await capture("escaped")
+    // The split button's main half names its app in a tooltip; the list
+    // opens on its other half and moves by arrows.
+    name: "chat-open-external-keys",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("navbar", "listbox", "tooltip"),
+    async run(context) {
+      await hover(context, navbar(context.page).getByRole("button", { name: "Open in Cursor" }))
+      await context.capture("tooltip")
+      await click(context, navbar(context.page).getByRole("combobox", { name: "Choose open destination" }))
+      await press(context, "ArrowDown")
+      await context.capture("highlighted")
+      await press(context, "Escape")
+      await parkPointer(context)
+      await context.capture("closed")
     },
   }),
   defineScenario({
-    name: "chat-open-external-menu",
-    route: "/chat/demo-chat-units",
-    viewports: ["desktop"],
-    regions: { navbar: NAVBAR, listbox: LISTBOX },
-    // Choosing one sends `system.openExternal`, which the demo backend
-    // doesn't answer: the list itself, then.
-    async run({ page, capture }) {
-      // Past the provider's open delay, so the tooltip is all the way in.
-      await page.getByRole("button", { name: "Open in Cursor" }).hover()
-      await page.waitForTimeout(900)
-      await capture("primary-tooltip")
-      await page.mouse.move(700, 600)
-      await page.waitForTimeout(100)
-      await page.mouse.move(720, 620)
-      await page.getByRole("combobox", { name: "Choose open destination" }).click()
-      await capture("open")
-      await page.keyboard.press("ArrowDown")
-      await capture("highlighted")
-      await page.keyboard.press("Escape")
-      await capture("closed")
-    },
-  }),
-  defineScenario({
-    name: "chat-pane-toggles",
-    route: "/chat/demo-chat-units",
-    viewports: ["desktop", "mobile"],
-    regions: { navbar: NAVBAR },
+    // The widget column's Ctrl binding beside its ⌘ one
+    // (DEFAULT_KEYBINDINGS). Quick: the open column polls (see quickClick).
+    name: "chat-widgets-ctrl-b",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("navbar"),
     covers: { keybindings: ["toggleRightSidebar"] },
-    async run({ page, viewport, capture }) {
-      await page.getByRole("button", { name: "Show widgets" }).click()
-      await capture("widgets-open")
-      // On a phone the column is a sheet over the chat, navbar and all: its
-      // backdrop, left of the sheet, closes it.
-      if (viewport === "mobile") await page.getByRole("button", { name: "Close widgets" }).click({ position: { x: 12, y: 400 } })
-      else await page.getByRole("button", { name: "Hide widgets" }).click()
-      await capture("widgets-closed")
+    async run(context) {
+      const { page } = context
       await page.keyboard.press("Control+b")
-      await capture("widgets-by-key")
+      await context.settle()
+      await context.capture("open")
       await page.keyboard.press("Control+b")
-      await capture("widgets-closed-by-key")
+      await context.settle()
+      await context.capture("closed")
     },
   }),
   defineScenario({
-    name: "chat-terminal-toggle",
-    route: "/chat/demo-chat-units",
-    viewports: ["desktop", "mobile"],
-    regions: { navbar: NAVBAR },
-    covers: { keybindings: ["toggleEmbeddedTerminal"], commands: ["terminal.create"] },
-    async run({ page, viewport, capture }) {
-      // The terminal's toggle has no name of its own (its tooltip is a
-      // hotkey), so by its shortcut, and on a phone from the overflow menu.
-      const toggleTerminal = async () => {
-        if (viewport === "mobile") {
-          await page.getByRole("button", { name: "More actions" }).click()
-          await page.getByRole("menuitem", { name: "Toggle Terminal" }).click()
-        } else {
-          await page.keyboard.press("Control+Backquote")
-        }
-      }
-      await toggleTerminal()
-      // The first terminal loads xterm, sizes itself once its pane has
-      // opened, then creates its session: wait for that command, so the
-      // capture has it (an app that never sends it just waits the timeout).
-      // A terminal may create its session again once it has fitted its pane,
-      // so wait until no create has come for a second.
-      await page.waitForFunction(
-        () => (window as unknown as { __parity: { commands(): { type: string }[] } }).__parity.commands().some((command) => command.type === "terminal.create"),
-        undefined,
-        { timeout: 8000 },
-      ).catch(() => {})
-      await page.waitForFunction(() => {
-        const probe = window as unknown as { __parity: { commands(): { type: string }[] }; __creates?: { count: number; since: number } }
-        const count = probe.__parity.commands().filter((command) => command.type === "terminal.create").length
-        const now = performance.now()
-        if (!probe.__creates || probe.__creates.count !== count) probe.__creates = { count, since: now }
-        return now - probe.__creates.since > 1000
-      }, undefined, { timeout: 8000, polling: 100 }).catch(() => {})
-      await capture("terminal-open")
-      await toggleTerminal()
-      await page.waitForTimeout(800)
-      await capture("terminal-closed")
+    // On a phone the widget column is a sheet over the chat, navbar and all:
+    // its backdrop, left of the sheet, closes it.
+    name: "chat-widgets-sheet-backdrop",
+    route: CHATS.units,
+    ...mobile,
+    regions: regions("navbar"),
+    async run(context) {
+      const { page } = context
+      await quickClick(context, navbar(page).getByRole("button", { name: "Show widgets" }))
+      await page.getByRole("button", { name: "Close widgets" }).click({ position: { x: 12, y: 400 } })
+      await context.settle()
+      await context.capture("closed")
     },
   }),
 ]
