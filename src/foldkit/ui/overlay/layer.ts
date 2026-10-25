@@ -92,6 +92,10 @@ export function registerLayer(element: HTMLElement, options: LayerOptions): () =
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return
     if (layers[layers.length - 1] !== layer) return
+    // As Radix: an Escape something earlier already handled (a window
+    // listener in the capture phase, such as the chat page's composer focus)
+    // doesn't dismiss.
+    if (event.defaultPrevented) return
     if (dismiss(layer, { reason: "escape", event })) event.preventDefault()
   }
 
