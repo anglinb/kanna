@@ -3,6 +3,8 @@ import { getTranscriptPaddingBottom } from "../../client/app/kannaStateHelpers"
 import { paneDurationMs } from "../../client/app/paneAnimation"
 import { EMPTY_STATE_TEXT } from "../../client/app/ChatPage/utils"
 import { cn } from "../../client/lib/utils"
+import { deriveLatestContextWindowSnapshot } from "../../client/lib/contextWindow"
+import * as Sidebar from "../core/stores/sidebar"
 import type { AppModel } from "../app/slice"
 import * as Composer from "../composer"
 import * as Terminal from "../terminal"
@@ -68,6 +70,13 @@ export function pageContext(model: Model, app: AppModel, facts: PageFacts): Chat
     isMobile: facts.isMobile,
     showEmptyState: facts.showEmptyState,
     delegate: newChatDelegate(app, facts),
+    composer: {
+      hasSelectedProject: facts.hasSelectedProject,
+      canCancel: facts.canCancel,
+      projectPath: facts.navbarLocalPath,
+      projectRepoLabel: Sidebar.navbarRepoLabel(app.stores.sidebar, facts.projectId, facts.navbarLocalPath ?? undefined),
+      contextWindowSnapshot: deriveLatestContextWindowSnapshot(facts.snapshot?.messages ?? []),
+    },
     typedEmptyStateText: typing.text,
     isEmptyStateTypingComplete: typing.complete,
     transcriptPaddingBottom: getTranscriptPaddingBottom(model.dockHeight),

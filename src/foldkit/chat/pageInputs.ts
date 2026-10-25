@@ -1,4 +1,5 @@
 import type { Html } from "foldkit/html"
+import type { ContextWindowSnapshot } from "../../client/lib/contextWindow"
 import type { ProjectQuickAction } from "../../shared/protocol"
 import type { UsageLimitsSnapshot } from "../../shared/types"
 import type { ProjectTerminalLayout } from "../core/stores/terminalLayout"
@@ -26,6 +27,16 @@ export interface ChatPageContext {
   typedEmptyStateText: string
   isEmptyStateTypingComplete: boolean
   // The composer (ChatInputDock's props)
+  composer: {
+    /** Something to type into: a project is picked (`hasSelectedProject`); else the composer is disabled. */
+    hasSelectedProject: boolean
+    canCancel: boolean
+    /** The navbar's path and its repo label (`navbarLocalPath`, `navbarRepoLabel`). */
+    projectPath: string | null
+    projectRepoLabel: string | null
+    /** How full the chat's context window is (`deriveLatestContextWindowSnapshot`), for the meter (contextWindowMeter.ts). */
+    contextWindowSnapshot: ContextWindowSnapshot | null
+  }
   /**
    * The new chat page's delegate control and target (`ComposerDelegate`),
    * or null where there is none. While it has a target the page takes the
