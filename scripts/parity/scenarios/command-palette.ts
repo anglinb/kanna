@@ -1,6 +1,6 @@
 import type { Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { CHATS, openPalette, parkPointer, press, regions, rest } from "./_lib/helpers"
+import { CHATS, click, openPalette, parkPointer, press, regions, rest } from "./_lib/helpers"
 
 // The command palette (⌘K): its root list, search, every sub-page, and the
 // actions that run from it. Driven by the keyboard, as it is used.
@@ -428,18 +428,36 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    name: "palette-delegator",
+    name: "palette-make-delegator",
     route: CHATS.units,
     ...desktop,
-    regions: regions("sidebar", "navbar"),
+    regions: regions("dialog", "sidebar"),
     covers: { commands: ["chat.setDelegator"] },
     async run(context) {
       await openPalette(context)
       await search(context, "delegator")
       await context.capture("results")
-      await press(context, "Enter")
+      await choose(context, /^Make Delegator/)
       await parkPointer(context)
-      await context.capture("ran")
+      await context.capture("made")
+    },
+  }),
+  defineScenario({
+    // A new delegator asks for its name first.
+    name: "palette-new-delegator",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("dialog", "sidebar"),
+    covers: { commands: ["chat.create", "chat.rename"] },
+    async run(context) {
+      await openPalette(context)
+      await search(context, "delegator")
+      await choose(context, /^New Delegator in tidepool/)
+      await context.capture("name-prompt")
+      await context.page.getByPlaceholder("Name (optional)").fill("Release captain")
+      await click(context, context.page.getByRole("button", { name: "Create" }))
+      await parkPointer(context)
+      await context.capture("created")
     },
   }),
 ]

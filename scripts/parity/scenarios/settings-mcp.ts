@@ -61,7 +61,7 @@ export const scenarios: Scenario[] = [
     covers: { routes: [route], commands: ["mcp.connect", "mcp.read", "mcp.disconnect", "mcp.save", "mcp.remove"] },
     async run(context) {
       const { page } = context
-      await click(context, page.getByRole("button", { name: "Test connection" }))
+      await click(context, page.getByRole("button", { name: "Test connection" }).first())
       await parkPointer(context)
       await context.capture("tested")
       await click(context, page.getByRole("switch", { name: "Use github in Cursor" }))

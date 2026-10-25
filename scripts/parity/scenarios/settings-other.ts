@@ -97,6 +97,8 @@ export const scenarios: Scenario[] = [
     covers: { routes: ["/settings/labs"], commands: ["update.installNightly"] },
     async run(context) {
       await click(context, context.page.getByRole("button", { name: "Build latest" }))
+      await context.capture("confirm")
+      await click(context, context.page.getByRole("button", { name: "Build nightly" }))
       await parkPointer(context)
       await context.capture("needs-machine")
     },

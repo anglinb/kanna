@@ -68,7 +68,7 @@ export const scenarios: Scenario[] = [
     covers: { routes: [route], commands: ["skills.uninstall"] },
     async run(context) {
       const { page } = context
-      await click(context, page.getByRole("button", { name: "Open actions for release-notes" }))
+      await click(context, page.getByRole("button", { name: "Open actions for frontend-design" }))
       await context.capture("menu")
       await click(context, page.getByRole("menuitem", { name: "Uninstall" }))
       await parkPointer(context)
