@@ -293,15 +293,16 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    name: "palette-theme-light",
+    // The palette offers the two themes not in use: this picks the opposite one.
+    name: "palette-theme-toggle",
     route: CHATS.units,
     ...desktop,
     covers: { commands: ["settings.writeAppSettingsPatch"] },
     async run(context) {
       await openPalette(context)
-      await choose(context, "Theme: Light")
+      await choose(context, /^Theme: (Light|Dark)$/)
       await parkPointer(context)
-      await context.capture("light")
+      await context.capture("switched")
     },
   }),
   defineScenario({
