@@ -172,7 +172,7 @@ export function step(model: Model, message: Message, env: { key: string }): Step
         const seq = model.unloadedSeq + 1
         return done(
           modifyFields(dismissed, { unloadedSeq: () => seq, unloadedJump: () => ({ messageId: message.turnId, seq }) }),
-          [DriveViewport({ key: env.key, action: "mark-user-scrolled" })],
+          [DriveViewport({ key: env.key, action: "jump-to-unloaded" })],
           [chat(ChatSession.Message.ClickedLoadOlder({ untilMessageId: message.turnId, all: false }))],
         )
       }
@@ -191,7 +191,7 @@ export function step(model: Model, message: Message, env: { key: string }): Step
       return done(model, [], [chat(ChatSession.Message.ClickedLoadOlder({ untilMessageId: null, all: false }))])
     case "ClickedLoadMore":
       // Where the first row sits is taken before the older rows can land.
-      return done(model, [DriveViewport({ key: env.key, action: "capture-first-row" })], [chat(ChatSession.Message.ClickedLoadOlder({ untilMessageId: null, all: false }))])
+      return done(model, [DriveViewport({ key: env.key, action: "load-more" })], [chat(ChatSession.Message.ClickedLoadOlder({ untilMessageId: null, all: false }))])
 
     case "CompletedViewportCommand":
     case "CompletedOpenLinkMenu":

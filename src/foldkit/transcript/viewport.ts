@@ -173,6 +173,13 @@ export class ViewportController {
   private prependAnchor: { rowId: string; top: number } | null = null
   /** The first row when the last automatic load was asked for. */
   private autoLoadFirstRowId: string | null = null
+  /**
+   * A load was asked for here and the feed does not say so yet. React set
+   * its loading flag in the render that followed the press, before the next
+   * scroll event; the feed is a frame later, and a scroll event in between
+   * (a press scrolling its button into view) would ask for the page again.
+   */
+  private loadPending: { firstRowId: string | null } | null = null
 
   /** The page's `isAtEndRef`, as last told or as last reported. */
   private pageAtEnd: boolean
@@ -281,8 +288,12 @@ export class ViewportController {
       // The page moved its own isAtEnd (the scroll-to-bottom button): take it.
       // Otherwise the last one reported here stands, the feed being a render behind.
       if (this.feed.atEnd !== previous.atEnd) this.pageAtEnd = this.feed.atEnd
+      // A load asked for here is the feed's to report from now on.
+      if (this.loadPending && this.feed.loadingOlder) this.loadPending = null
       this.layoutEffects()
       if (rowsChanged) scroller.handleContentChange()
+      // Or it landed before the feed ever said so: the rows start elsewhere.
+      if (this.loadPending && this.firstRowId() !== this.loadPending.firstRowId) this.loadPending = null
       const count = rowItems(content).length
       if (count !== this.rowCount || this.feed.minimap !== previous.minimap) {
         this.rowCount = count
@@ -316,13 +327,20 @@ export class ViewportController {
     this.applyScrollTarget(this.prepareJumpToRow(rowId))
   }
 
-  /** A minimap jump to a turn still to load: the reader chose a position. */
-  markUserScrolled() {
+  /** A minimap jump to a turn still to load: the reader chose a position, and a load is out. */
+  jumpToUnloaded() {
     this.hasUserScrolled = true
+    this.loadPending = { firstRowId: this.firstRowId() }
   }
 
-  /** Load More: remember where the first row sits, to keep it there once older rows land. */
-  captureFirstRow() {
+  /** Load More: where the first row sits is kept for when older rows land, and a load is out. */
+  loadMore() {
+    this.captureFirstRow()
+    this.loadPending = { firstRowId: this.firstRowId() }
+  }
+
+  /** Remember where the first row sits, to keep it there once older rows land. */
+  private captureFirstRow() {
     const first = rowItems(this.content)[0]
     const rowId = first?.dataset.messageId
     if (!first || !rowId) return
@@ -600,12 +618,13 @@ export class ViewportController {
    */
   private maybeLoadOlderOnScroll() {
     if (!this.hasUserScrolled) return
-    if (!this.feed.hasOlder || this.feed.loadingOlder) return
+    if (!this.feed.hasOlder || this.feed.loadingOlder || this.loadPending !== null) return
     if (this.viewport.scrollTop > this.viewport.clientHeight / 2) return
     const firstRowId = this.firstRowId()
     if (!firstRowId || this.autoLoadFirstRowId === firstRowId) return
     this.autoLoadFirstRowId = firstRowId
     this.captureFirstRow()
+    this.loadPending = { firstRowId }
     this.emit(Message.RequestedLoadOlder())
   }
 
@@ -735,14 +754,14 @@ export const ControlViewport = Mount.defineStream("ControlTranscriptViewport", {
 
 /** What the slice asks of the viewport keyed `key` outside a render, from a Command. */
 export const DriveViewport = Command.define("DriveTranscriptViewport", {
-  args: { key: Schema.String, action: Schema.Literals(["scroll-to-bottom", "mark-user-scrolled", "capture-first-row"]) },
+  args: { key: Schema.String, action: Schema.Literals(["scroll-to-bottom", "jump-to-unloaded", "load-more"]) },
   messages: [Message.CompletedViewportCommand],
   execute: ({ key, action }) => Effect.sync(() => {
     const controller = controllerFor(key)
     if (controller) {
       if (action === "scroll-to-bottom") controller.scrollToBottom()
-      else if (action === "mark-user-scrolled") controller.markUserScrolled()
-      else controller.captureFirstRow()
+      else if (action === "jump-to-unloaded") controller.jumpToUnloaded()
+      else controller.loadMore()
     }
     return Message.CompletedViewportCommand()
   }),

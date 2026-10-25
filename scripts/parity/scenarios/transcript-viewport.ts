@@ -83,9 +83,12 @@ export const scenarios: Scenario[] = [
       })
       await quietReadAnchor(context)
       await context.capture("scrolled")
-      await click(context, sidebarChatRow(page, "demo-chat-deploy"))
+      // Away and back through the sidebar, the pointer leaving each row at
+      // once: a row's hover card is the sidebar's to compare, not this.
+      await sidebarChatRow(page, "demo-chat-deploy").click()
+      await parkPointer(context)
       await quietReadAnchor(context)
-      await click(context, sidebarChatRow(page, "demo-chat-units"))
+      await sidebarChatRow(page, "demo-chat-units").click()
       await parkPointer(context)
       await quietReadAnchor(context)
       await context.capture("restored")

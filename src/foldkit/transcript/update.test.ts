@@ -106,7 +106,7 @@ describe("transcript viewport: jumps", () => {
     const selected = run(init(), Message.SelectedTurn({ turnId: "p0", rowId: null, loaded: false }))
     expect(selected.model.unloadedJump).toEqual({ messageId: "p0", seq: 1 })
     expect(chatMessageTag(selected)).toBe("ClickedLoadOlder")
-    expect(calls(selected)).toEqual([call(DriveViewport({ key: "page:c1", action: "mark-user-scrolled" }))])
+    expect(calls(selected)).toEqual([call(DriveViewport({ key: "page:c1", action: "jump-to-unloaded" }))])
     expect(run(selected.model, Message.AppliedUnloadedJump({ seq: 1 })).model.unloadedJump).toBeNull()
   })
 })
@@ -114,7 +114,7 @@ describe("transcript viewport: jumps", () => {
 describe("transcript viewport: what goes to the page's chat", () => {
   test("Load More takes the first row's place before asking for older messages", () => {
     const pressed = run(init(), Message.ClickedLoadMore())
-    expect(calls(pressed)).toEqual([call(DriveViewport({ key: "page:c1", action: "capture-first-row" }))])
+    expect(calls(pressed)).toEqual([call(DriveViewport({ key: "page:c1", action: "load-more" }))])
     expect(chatMessageTag(pressed)).toBe("ClickedLoadOlder")
   })
 
