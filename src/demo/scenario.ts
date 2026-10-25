@@ -19,6 +19,8 @@ export interface DemoProjectSeed {
   entryFile: string
   /** The committed tree. Chats edit a copy of it. */
   files: Record<string, string>
+  /** A folder made in Kanna: a git repo with no GitHub remote yet. */
+  localOnly?: boolean
 }
 
 export interface DemoChatSeed {
@@ -36,6 +38,33 @@ export interface DemoChatSeed {
    * index are already in the transcript, the rest play live.
    */
   liveFromStep?: number
+  /** Work running on the chat's behalf, for its Tasks widget. */
+  tasks?: DemoTaskSeed[]
+  /** Schedules the chat's agent set up, for its Schedules widget. */
+  schedules?: DemoScheduleSeed[]
+}
+
+/** A schedule that sends the chat a message on a repeat. */
+export interface DemoScheduleSeed {
+  id: string
+  name: string
+  content: string
+  everyMinutes: number
+  /** When the chat's agent created it, relative to page load. */
+  createdMinutesAgo: number
+}
+
+/** A background task: a subagent, shell or monitor the agent started. */
+export interface DemoTaskSeed {
+  id: string
+  type: "subagent" | "shell" | "monitor"
+  label: string
+  description?: string
+  status: "running" | "completed"
+  /** When it started, and (completed) ended, relative to page load. */
+  startedMinutesAgo: number
+  endedMinutesAgo?: number
+  usage?: { totalTokens: number; toolUses: number }
 }
 
 function projectPath(name: string) {
@@ -715,7 +744,7 @@ function rateLimitTurn(): DemoTurn {
   const summary = [
     "`POST /v1/charges` now allows 20 requests a minute per API key and answers `429` with a `Retry-After` header past that.",
     "",
-    "The limiter lives in `src/middleware/rateLimit.ts` and keeps its counts in memory, so each instance limits on its own. That's fine on one server; behind a load balancer it would need a shared store.",
+    `The limiter lives in [\`src/middleware/rateLimit.ts\`](${LEDGER}/src/middleware/rateLimit.ts) and keeps its counts in memory, so each instance limits on its own. That's fine on one server; behind a load balancer it would need a shared store.`,
   ].join("\n")
   script.say(summary, 1200).finish(summary, { usedTokens: 19_774, maxTokens: 400_000 })
   return { prompt, provider: "codex", model: "gpt-5.6-sol", steps: script.steps }
@@ -787,6 +816,15 @@ export function createDemoChats(): DemoChatSeed[] {
       turns: [rateLimitTurn()],
       minutesAgo: 190,
       commitAfter: true,
+      schedules: [
+        {
+          id: "schedule-demo-429s",
+          name: "Watch the charge limiter",
+          content: "Check the last six hours of 429s on POST /v1/charges and flag any API key that hit the limit more than 50 times.",
+          everyMinutes: 360,
+          createdMinutesAgo: 185,
+        },
+      ],
     },
     {
       id: "demo-chat-readme",
@@ -795,6 +833,26 @@ export function createDemoChats(): DemoChatSeed[] {
       turns: [readmeTurn()],
       minutesAgo: 1,
       liveFromStep: 5,
+      tasks: [
+        {
+          id: "task-demo-routes",
+          type: "subagent",
+          label: "Explore",
+          description: "List every route and the middleware in front of it",
+          status: "completed",
+          startedMinutesAgo: 4,
+          endedMinutesAgo: 3,
+          usage: { totalTokens: 18_240, toolUses: 9 },
+        },
+        {
+          id: "task-demo-dev-server",
+          type: "monitor",
+          label: "Watch the dev server for errors",
+          description: "bun run dev",
+          status: "running",
+          startedMinutesAgo: 3,
+        },
+      ],
     },
     {
       id: "demo-chat-hero",
@@ -846,7 +904,7 @@ export function titleFromPrompt(prompt: string) {
   const firstLine = prompt.trim().split("\n")[0] ?? ""
   const words = firstLine.replace(/[.?!]+$/, "").split(/\s+/).slice(0, 7).join(" ")
   const title = words.length > 48 ? `${words.slice(0, 47).trimEnd()}…` : words
-  return title ? title[0]!.toUpperCase() + title.slice(1) : "New chat"
+  return title ? title[0]!.toUpperCase() + title.slice(1) : "New Chat"
 }
 
 export interface ScriptedReplyContext {
@@ -858,6 +916,8 @@ export interface ScriptedReplyContext {
   /** `git status --short` as it will read once PLAN.md is written. */
   gitStatusAfterPlan: string
   firstTurn: boolean
+  /** Plan mode: propose the plan and wait for it to be approved before writing anything. */
+  planMode?: boolean
 }
 
 /**
@@ -885,12 +945,7 @@ export function composeScriptedReply(context: ScriptedReplyContext): DemoTurn {
   script.read(readPath, files.get(readPath) ?? "", `${project.localPath}/${readPath}`)
 
   const planTitle = prompt.trim().split("\n")[0]!.slice(0, 80)
-  script.todos([
-    todo("Find the code this touches", "Finding the code this touches", "completed"),
-    todo("Write up a plan", "Writing up a plan", "in_progress"),
-    todo("Check the working tree", "Checking the working tree", "pending"),
-  ])
-  script.write("PLAN.md", `${project.localPath}/PLAN.md`, [
+  const plan = [
     `# Plan: ${planTitle}`,
     "",
     `1. Start in \`${readPath}\`${hits.length > 0 ? `, where "${keyword}" shows up` : ""}.`,
@@ -898,23 +953,48 @@ export function composeScriptedReply(context: ScriptedReplyContext): DemoTurn {
     "3. Add or update tests that cover it.",
     "4. Run the tests and read the diff before committing.",
     "",
-  ].join("\n"))
-  script.bash("git status --short", "Show the working tree", context.gitStatusAfterPlan, 500)
-  script.todos([
-    todo("Find the code this touches", "Finding the code this touches", "completed"),
-    todo("Write up a plan", "Writing up a plan", "completed"),
-    todo("Check the working tree", "Checking the working tree", "completed"),
-  ])
-
-  const summary = [
-    "I wrote a plan to `PLAN.md`. You can see it in the diff panel on the right.",
-    "",
-    `This chat is part of Kanna's in-browser demo, so a script is answering instead of ${PROVIDER_LABELS[provider]}. With Kanna installed, the agent works on your real code: it reads and edits files, runs commands, and asks you when it needs a decision.`,
-    "",
-    "```sh",
-    "bun install -g kanna-code",
-    "```",
   ].join("\n")
-  script.say(summary, 1200).finish(summary, { usedTokens: 9_000 + prompt.length * 4, maxTokens: 1_000_000 })
+
+  // The work after the plan: write it down, check the tree, sum up.
+  const work = (next: TurnScript) => {
+    next.todos([
+      todo("Find the code this touches", "Finding the code this touches", "completed"),
+      todo("Write up a plan", "Writing up a plan", "in_progress"),
+      todo("Check the working tree", "Checking the working tree", "pending"),
+    ])
+    next.write("PLAN.md", `${project.localPath}/PLAN.md`, plan)
+    next.bash("git status --short", "Show the working tree", context.gitStatusAfterPlan, 500)
+    next.todos([
+      todo("Find the code this touches", "Finding the code this touches", "completed"),
+      todo("Write up a plan", "Writing up a plan", "completed"),
+      todo("Check the working tree", "Checking the working tree", "completed"),
+    ])
+
+    const summary = [
+      "I wrote a plan to `PLAN.md`. You can see it in the diff panel on the right.",
+      "",
+      `This chat is part of Kanna's in-browser demo, so a script is answering instead of ${PROVIDER_LABELS[provider]}. With Kanna installed, the agent works on your real code: it reads and edits files, runs commands, and asks you when it needs a decision.`,
+      "",
+      "```sh",
+      "bun install -g kanna-code",
+      "```",
+    ].join("\n")
+    next.say(summary, 1200).finish(summary, { usedTokens: 9_000 + prompt.length * 4, maxTokens: 1_000_000 })
+    return next
+  }
+
+  if (context.planMode) {
+    // Plan mode: nothing is written until the plan is approved.
+    script.proposePlan(plan, (answer) => {
+      if (answer === "approved") return work(new TurnScript(provider, model)).steps
+      const reply = "Okay, I'll hold off. Tell me what to change in the plan and I'll write it up again."
+      return new TurnScript(provider, model)
+        .say(reply, 800)
+        .finish(reply, { usedTokens: 6_000 + prompt.length * 4, maxTokens: 1_000_000 })
+        .steps
+    })
+  } else {
+    work(script)
+  }
   return { prompt, provider, model, steps: script.steps }
 }

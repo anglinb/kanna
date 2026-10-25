@@ -15,6 +15,10 @@ import type { Model as AppModel } from "./model"
 //   export const view = Submodel.defineView<Model, Message, SliceViewInputs>(
 //     (model, { app }, h) => …)
 //   export const subscriptions (optional)    Subscription.make<Model, Message, KannaSocketService>
+//   export function observe(model, previousApp, app) (optional)
+//       Runs after any root update that changed the root Model. For a
+//       slice that must act on a change it didn't cause (an effect on
+//       `[snapshot]` in React): return { model } when nothing changes.
 //
 // `app` is the root Model, read-only: stores, the page's chat session,
 // snapshots, settings. A slice changes anything outside its own Model by
@@ -37,3 +41,6 @@ export interface SliceViewInputs {
 export function requestAction<Model>(model: Model, action: AppAction) {
   return { model, outMessage: SliceOutMessage.RequestedAppAction({ action }) }
 }
+
+/** A slice's optional `observe` (see the contract above). */
+export type SliceObserve<Model, Message> = (model: Model, previousApp: AppModel, app: AppModel) => SliceReturn<Model, Message>

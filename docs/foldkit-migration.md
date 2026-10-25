@@ -42,6 +42,9 @@ bun run parity                       # every scenario, React vs Foldkit
 bun run parity chat-featured         # one scenario
 bun run parity:selfcheck             # React vs React must pass, and a
                                      # one-rule CSS change must be caught
+bun run parity:coverage              # what no scenario covers, and why
+bun run parity:coverage --verify     # also: each scenario sent what its
+                                     # `covers` names (.parity/latest)
 ```
 
 - `src/parity/fixture.ts` puts the demo's in-browser backend (`src/demo`)
@@ -112,11 +115,11 @@ into this):
 
 | Slice | Folder | Wave | Status |
 |---|---|---|---|
-| Sidebar | `sidebar/` | 1 | in progress |
-| Projects page | `home/` | 1 | in progress |
+| Sidebar | `sidebar/` | 1 | merged (route regions pass; page-owned commands pending) |
+| Projects page | `home/` | 1 | merged (154/160 with sidebar) |
 | Settings page | `settings/` | 1 | in progress |
 | Chat page shell | `chat/` | 1 | in progress |
-| Transcript rows | `transcript/messages/` | 1 | in progress |
+| Transcript rows | `transcript/messages/` | 1 | merged (316/316 gallery) |
 | Terminal | `terminal/` | 2 | in progress |
 | Command palette | `palette/` | 2 | in progress |
 | Composer | `composer/` | 2 | in progress |
@@ -127,6 +130,21 @@ into this):
 | Workflows gallery | `workflows/` | 3 | to do |
 | Demo entry, export viewer | `src/demo`, `src/export-viewer` | 4 | to do |
 | Switch entries, delete React | — | 4 | to do |
+
+## Integration follow-ups
+
+- Sidebar: use `AppAction.Batch` (Archive All, Restore), `OpenChatAt`
+  (hover card jumps), `OpenCommandPalette` instead of the window event.
+- Projects page: refetch GitHub repos on a sign-in change via `observe`
+  (React sends `github.listRecentRepos` twice at boot); use
+  `OpenCommandPalette` instead of the window event.
+- Create chat from the projects page: the demo backend returns its own
+  chat id instead of the client's, so React ends up back at `/`; decide
+  whether the fixture should honor the client id (the real server does).
+- `@foldkit/vite-plugin` peers on Vite 8; we run Vite 6 (works so far).
+- `app/action.ts` imports types from React files
+  (`components/messages/shared`, `lib/chat-navigation` is fine); move
+  those types before React is deleted.
 
 ## Loops
 

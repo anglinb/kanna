@@ -3,14 +3,22 @@ import { getDefaultEditorCommandTemplate } from "../shared/editor-presets"
 import type {
   ClientCommand,
   ClientEnvelope,
+  ProjectQuickAction,
   ServerEnvelope,
   ServerSnapshot,
   SubscriptionTopic,
   TerminalTailResult,
 } from "../shared/protocol"
 import { mergeAppSettingsPatch } from "../client/stores/appSettingsStore"
+import { cloneTranscriptEntriesForClient } from "../server/events"
+import { existingAccountId, type AccountInput, type ProviderAccount } from "../shared/accounts"
+import type { McpServerInput, McpServerSummary, McpSnapshot } from "../shared/mcp"
 import { createDefaultProviderDefaults } from "../shared/provider-preferences"
-import { buildTranscriptOutline, DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES } from "../shared/transcript-window"
+import {
+  buildTranscriptOutline,
+  DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
+  findTranscriptWindowStart,
+} from "../shared/transcript-window"
 import {
   AUTH_SERVICE_LABELS,
   AUTH_SERVICE_ORDER,
@@ -22,14 +30,27 @@ import {
   type AppSettingsSnapshot,
   type AppThemePreference,
   type ChatAttachment,
+  type ChatBranchDetails,
+  type ChatBranchHistoryEntry,
+  type ChatBranchListEntry,
   type ChatBranchListResult,
+  type ChatCommitDetails,
   type ChatDiffFile,
   type ChatDiffSnapshot,
+  type ChatMergePreviewResult,
   type ChatPreview,
+  type ChatSchedule,
+  type ChatSkillsSnapshot,
   type ChatSnapshot,
   type ChatTouchedFilesResult,
+  type FsListResult,
+  type GitHubPublishInfo,
   type GitHubRecentReposResult,
+  type GitHubRepoAvailabilityResult,
+  type GlobalSkillSummary,
+  type HarnessSkill,
   type KannaStatus,
+  type KeybindingAction,
   type KeybindingsSnapshot,
   type LlmProviderSnapshot,
   type LocalProjectsSnapshot,
@@ -37,8 +58,12 @@ import {
   type QueuedChatMessage,
   type SidebarChatRow,
   type SidebarData,
+  type SkillSearchResult,
+  type StandaloneTranscriptExportFailureResult,
+  type SubagentActivity,
   type TranscriptEntry,
   type UpdateSnapshot,
+  type UsageLimitsSnapshot,
 } from "../shared/types"
 import { createUnifiedPatch } from "./patch"
 import {
@@ -55,6 +80,14 @@ import { DemoShell } from "./terminal"
 
 export const DEMO_UNAVAILABLE_MESSAGE = "That isn't part of the demo. Install Kanna to use it: bun install -g kanna-code"
 
+/**
+ * Commands the demo answers on purpose with "needs your machine": opening an
+ * app, signing in a CLI. Unlike DEMO_UNAVAILABLE_MESSAGE, which marks a
+ * command the demo has no answer for at all, these are handled, and the
+ * client shows the reason.
+ */
+export const DEMO_NEEDS_MACHINE_MESSAGE = "This needs Kanna running on your own machine. Install it with: bun install -g kanna-code"
+
 export interface DemoClock {
   now(): number
   setTimeout(callback: () => void, ms: number): unknown
@@ -69,12 +102,26 @@ export const browserClock: DemoClock = {
 
 interface ProjectState {
   seed: DemoProjectSeed
+  /** The sidebar's name for it; `project.rename` changes it. */
+  title: string
   /** Pinned in the Channels view, and when. */
   pinnedAt?: number
+  /** Hidden from the sidebar (`project.remove`); `project.open` brings it back. */
+  hidden?: boolean
   /** The working tree. */
   files: Map<string, string>
   /** The last commit. The diff panel shows `files` against this. */
   head: Map<string, string>
+  /** Checked out now, and every local branch. */
+  branchName: string
+  branches: string[]
+  /** Commits on the checked-out branch, newest first. */
+  history: DemoCommit[]
+  quickActions: ProjectQuickAction[]
+}
+
+interface DemoCommit extends ChatBranchHistoryEntry {
+  files: { path: string; additions: number; deletions: number }[]
 }
 
 interface ActiveTurn {
@@ -100,6 +147,14 @@ interface ChatState {
   doneAt?: number
   pinnedAt?: number
   archivedAt?: number
+  /** Hands work to the chats under it (`chat.setDelegator`). */
+  delegator?: boolean
+  /** The last send asked for a plan first. */
+  planMode: boolean
+  /** Background work for the Tasks widget (runtime.subagents). */
+  tasks: SubagentActivity[]
+  /** What the chat's agent set to run later, for the Schedules widget (runtime.schedules). */
+  schedules: ChatSchedule[]
   entries: TranscriptEntry[]
   queued: QueuedChatMessage[]
   turn: ActiveTurn | null
@@ -112,6 +167,7 @@ interface OutgoingMessage {
   attachments: ChatAttachment[]
   provider?: AgentProvider
   model?: string
+  planMode?: boolean
 }
 
 function statusLetter(project: ProjectState, path: string) {
@@ -147,7 +203,16 @@ export class DemoBackend {
   private readonly subscriptions = new Map<string, SubscriptionTopic>()
   private readonly lastSent = new Map<string, string>()
   private readonly shells = new Map<string, DemoShell>()
+  /** Where each chat subscription's transcript window starts (see shared/transcript-window.ts). */
+  private readonly windowStarts = new Map<string, number>()
   private appSettings: AppSettingsSnapshot
+  private keybindings: KeybindingsSnapshot = createKeybindings()
+  private llmProvider: LlmProviderSnapshot = createLlmProvider()
+  private mcpServers: McpServerSummary[] = createMcpServers()
+  private mcpRevision = 1
+  private globalSkills: GlobalSkillSummary[] = createGlobalSkills()
+  private accounts: ProviderAccount[] = createAccounts()
+  private defaultAccountIds: Partial<Record<AgentProvider, string>> = { claude: existingAccountId("claude"), codex: existingAccountId("codex") }
   private idCounter = 0
   private started = false
 
@@ -157,11 +222,50 @@ export class DemoBackend {
     options: { theme?: AppThemePreference } = {},
   ) {
     this.appSettings = createDemoAppSettings(options.theme ?? "dark")
-    for (const seed of DEMO_PROJECTS) {
-      const files = new Map(Object.entries(seed.files))
-      this.projects.set(seed.id, { seed, files, head: new Map(files) })
-    }
+    for (const seed of DEMO_PROJECTS) this.addProject(seed)
     for (const seed of createDemoChats()) this.seedChat(seed)
+  }
+
+  private addProject(seed: DemoProjectSeed) {
+    const files = new Map(Object.entries(seed.files))
+    const project: ProjectState = {
+      seed,
+      title: seed.title,
+      files,
+      head: new Map(files),
+      branchName: seed.branchName,
+      branches: [...new Set([seed.branchName, "main"])],
+      history: [],
+      quickActions: [],
+    }
+    // A project made in the demo was just made; the seeded ones go back a while.
+    this.commit(project, "Initial commit", [...files.keys()], this.clock.now() - (seed.localOnly ? 0 : 9 * 24 * 60 * 60_000))
+    this.projects.set(seed.id, project)
+    return project
+  }
+
+  /** Records the working tree's `paths` as a commit on the checked-out branch. */
+  private commit(project: ProjectState, summary: string, paths: string[], at: number, description = "") {
+    const files = paths.flatMap((path) => {
+      const patch = this.patchFor(project, path)
+      return patch ? [{ path, additions: patch.additions, deletions: patch.deletions }] : []
+    })
+    for (const path of paths) {
+      const content = project.files.get(path)
+      if (content === undefined) project.head.delete(path)
+      else project.head.set(path, content)
+    }
+    const sha = hashString(`${project.seed.id}:${project.history.length}:${summary}`).padStart(8, "0").repeat(5)
+    project.history.unshift({
+      sha,
+      summary,
+      description,
+      authorName: "You",
+      authoredAt: new Date(at).toISOString(),
+      tags: [],
+      ...(project.seed.localOnly ? {} : { githubUrl: `https://github.com/${project.seed.repoOwner}/${project.seed.title}/commit/${sha}` }),
+      files: files.length > 0 ? files : paths.map((path) => ({ path, additions: (project.files.get(path) ?? "").split("\n").length - 1, deletions: 0 })),
+    })
   }
 
   /** Starts the turns that were mid-stream when the demo "opened". */
@@ -179,10 +283,16 @@ export class DemoBackend {
     }
   }
 
+  /** Where a project lives, for the upload route in environment.ts. Null for an unknown id. */
+  projectLocalPath(projectId: string) {
+    return this.projects.get(projectId)?.seed.localPath ?? null
+  }
+
   receive(envelope: ClientEnvelope) {
     if (envelope.type === "subscribe") {
       this.subscriptions.set(envelope.id, envelope.topic)
       this.lastSent.delete(envelope.id)
+      this.windowStarts.delete(envelope.id)
       if (envelope.topic.type === "terminal") {
         this.sendTerminalSnapshot(envelope.id, envelope.topic.terminalId)
       } else {
@@ -193,6 +303,7 @@ export class DemoBackend {
     if (envelope.type === "unsubscribe") {
       this.subscriptions.delete(envelope.id)
       this.lastSent.delete(envelope.id)
+      this.windowStarts.delete(envelope.id)
       return
     }
     try {
@@ -233,6 +344,34 @@ export class DemoBackend {
       queued: [],
       turn: null,
       touchedPaths: new Set(),
+      planMode: false,
+      tasks: (seed.tasks ?? []).map((task): SubagentActivity => ({
+        id: task.id,
+        type: task.type,
+        label: task.label,
+        status: task.status,
+        startedAt: this.clock.now() - task.startedMinutesAgo * 60_000,
+        ...(task.endedMinutesAgo !== undefined ? { endedAt: this.clock.now() - task.endedMinutesAgo * 60_000 } : {}),
+        ...(task.description ? { description: task.description } : {}),
+        ...(task.usage ? { usage: task.usage } : {}),
+        ...(task.status === "running" ? { stoppable: true } : {}),
+      })),
+      schedules: (seed.schedules ?? []).map((schedule): ChatSchedule => {
+        const createdAt = this.clock.now() - schedule.createdMinutesAgo * 60_000
+        return {
+          id: schedule.id,
+          name: schedule.name,
+          content: schedule.content,
+          target: { kind: "chat", chatId: seed.id },
+          trigger: { kind: "interval", everyMs: schedule.everyMinutes * 60_000 },
+          enabled: true,
+          createdAt,
+          updatedAt: createdAt,
+          createdByChatId: seed.id,
+          nextRunAt: createdAt + schedule.everyMinutes * 60_000,
+          runCount: 0,
+        }
+      }),
     }
     this.chats.set(chat.id, chat)
 
@@ -258,7 +397,7 @@ export class DemoBackend {
       chat.lastTurnEndedAt = at
     })
     chat.unread = seed.unread ?? false
-    if (seed.commitAfter) project.head = new Map(project.files)
+    if (seed.commitAfter) this.commit(project, seed.title, this.changedPaths(project), at)
   }
 
   // -------------------------------------------------------------------------
@@ -301,6 +440,7 @@ export class DemoBackend {
     chat.model = model
     chat.lastTurnStartedAt = now
     chat.doneAt = undefined
+    chat.planMode = message.planMode ?? false
 
     const turn = composeScriptedReply({
       prompt: message.content,
@@ -310,6 +450,7 @@ export class DemoBackend {
       files: project.files,
       gitStatusAfterPlan: this.gitStatusShort(project, "PLAN.md"),
       firstTurn: !chat.entries.some((entry) => entry.kind === "system_init"),
+      planMode: chat.planMode,
     })
     chat.turn = { steps: turn.steps, index: 0, timer: null, question: null }
     this.scheduleNextStep(chat)
@@ -360,12 +501,24 @@ export class DemoBackend {
     const turn = chat.turn
     const question = turn?.question
     if (!turn || !question || question.toolId !== toolUseId) throw new Error("No pending tool request")
-    const answers = (result as { answers?: Record<string, string[]> } | null)?.answers ?? {}
-    const answer = Object.values(answers).flat()[0] ?? ""
+    let answer: string
+    let content: string
+    if (question.kind === "exit_plan_mode") {
+      const response = (result ?? {}) as { confirmed?: boolean; message?: string }
+      answer = response.confirmed ? "approved" : "rejected"
+      content = response.confirmed
+        ? "User approved the plan."
+        : response.message ? `User sent the plan back: ${response.message}` : "User sent the plan back."
+      if (response.confirmed) chat.planMode = false
+    } else {
+      const answers = (result as { answers?: Record<string, string[]> } | null)?.answers ?? {}
+      answer = Object.values(answers).flat()[0] ?? ""
+      content = answer ? `User answered: ${answer}` : "User answered."
+    }
     this.appendEntry(chat, {
       kind: "tool_result",
       toolId: toolUseId,
-      content: answer ? `User answered: ${answer}` : "User answered.",
+      content,
       structuredResult: result,
     }, this.clock.now())
     turn.question = null
@@ -378,12 +531,16 @@ export class DemoBackend {
     return chat.turn.question ? "waiting_for_user" : "running"
   }
 
-  private createChat(projectId: string) {
+  /** `chatId`: the client names a chat it creates, and opens it before the ack. */
+  private createChat(projectId: string, chatId?: string) {
     if (!this.projects.has(projectId)) throw new Error("Unknown project")
+    if (chatId && this.chats.has(chatId)) throw new Error("Chat already exists")
     const chat: ChatState = {
-      id: this.nextId("demo-chat"),
+      id: chatId ?? this.nextId("demo-chat"),
       projectId,
-      title: "New chat",
+      // The server's own placeholder, word for word: the client shows a
+      // fresh chat's empty state only while its title is still "New Chat".
+      title: "New Chat",
       provider: null,
       model: null,
       createdAt: this.clock.now(),
@@ -393,6 +550,9 @@ export class DemoBackend {
       queued: [],
       turn: null,
       touchedPaths: new Set(),
+      planMode: false,
+      tasks: [],
+      schedules: [],
     }
     this.chats.set(chat.id, chat)
     return chat
@@ -420,18 +580,26 @@ export class DemoBackend {
           chat = this.createChat(command.projectId)
         }
         if (chat.entries.length === 0) chat.title = titleFromPrompt(command.content)
+        if (command.delegator && !command.chatId) chat.delegator = true
         const message: OutgoingMessage = {
           content: command.content,
           attachments: command.attachments ?? [],
           provider: command.provider,
           model: command.model,
+          planMode: command.planMode,
         }
         if (chat.turn) chat.queued.push(this.toQueued(message))
         else this.startTurn(chat, message)
         return { chatId: chat.id }
       }
-      case "chat.create":
-        return { chatId: this.createChat(command.projectId).id }
+      case "chat.create": {
+        const chat = this.createChat(command.projectId, command.chatId)
+        if (command.delegator) chat.delegator = true
+        return { chatId: chat.id }
+      }
+      case "chat.setDelegator":
+        this.requireChat(command.chatId).delegator = command.delegator || undefined
+        return null
       case "message.enqueue": {
         const chat = this.requireChat(command.chatId)
         const message: OutgoingMessage = {
@@ -439,6 +607,7 @@ export class DemoBackend {
           attachments: command.attachments ?? [],
           provider: command.provider,
           model: command.model,
+          planMode: command.planMode,
         }
         if (!chat.turn) {
           this.startTurn(chat, message)
@@ -465,6 +634,16 @@ export class DemoBackend {
         chat.queued = chat.queued.filter((message) => message !== queued)
         this.cancelTurn(chat)
         this.startTurn(chat, queued)
+        return null
+      }
+      case "chat.stopTask": {
+        const task = this.requireChat(command.chatId).tasks.find((entry) => entry.id === command.taskId)
+        if (!task) throw new Error("Task not found")
+        if (task.status === "running") {
+          task.status = "stopped"
+          task.endedAt = this.clock.now()
+          delete task.stoppable
+        }
         return null
       }
       case "chat.cancel":
@@ -529,17 +708,32 @@ export class DemoBackend {
         return chat.entries.filter((entry) => wanted.has(entry._id))
       }
       case "chat.loadOlder":
-        return { startIndex: 0 }
+        return this.loadOlder(this.requireChat(command.chatId), command)
       case "chat.getReadAnchor":
         return null
       case "chat.setReadAnchor":
       case "chat.setDraftProtection":
       case "chat.refreshDiffs":
         return null
+      // A project made in the demo has no GitHub remote; GitHub's CLI isn't
+      // signed in (see createProviderAuth), so publishing stops at sign-in.
+      case "chat.getGitHubPublishInfo": {
+        const project = this.requireProject(this.requireChat(command.chatId).projectId)
+        return {
+          ghInstalled: true,
+          authenticated: false,
+          owners: [],
+          suggestedRepoName: project.seed.localPath.split("/").filter(Boolean).at(-1) ?? "my-repo",
+        } satisfies GitHubPublishInfo
+      }
+      case "chat.checkGitHubRepoAvailability":
+        return { available: false, message: "GitHub CLI is not authenticated." } satisfies GitHubRepoAvailabilityResult
       case "chat.listSkills":
-        return { provider: command.provider, skills: [], origin: "filesystem" }
+        return { provider: command.provider, skills: demoSkills(command.provider, this.globalSkills), origin: "filesystem" } satisfies ChatSkillsSnapshot
       case "chat.getEntryDebugRaw":
         return null
+      case "chat.exportStandalone":
+        return this.exportStandalone(this.requireChat(command.chatId))
 
       case "project.readDiffPatch": {
         const project = this.requireProject(command.projectId)
@@ -552,13 +746,69 @@ export class DemoBackend {
         }
       case "project.commitDiffs": {
         const project = this.requireProject(command.projectId)
-        for (const path of command.paths) {
-          const content = project.files.get(path)
-          if (content === undefined) project.head.delete(path)
-          else project.head.set(path, content)
-        }
+        this.commit(project, command.summary, command.paths, this.clock.now(), command.description ?? "")
         return { ok: true, mode: command.mode, pushed: command.mode === "commit_and_push", snapshotChanged: true }
       }
+      case "project.readCommit": {
+        const project = this.requireProject(command.projectId)
+        const commit = project.history.find((entry) => entry.sha === command.sha)
+        if (!commit) throw new Error("Commit not found")
+        return {
+          sha: commit.sha,
+          authorEmail: "you@example.com",
+          committedAt: commit.authoredAt,
+          parentCount: commit === project.history.at(-1) ? 0 : 1,
+          files: commit.files,
+          totalFileCount: commit.files.length,
+          additions: commit.files.reduce((sum, file) => sum + file.additions, 0),
+          deletions: commit.files.reduce((sum, file) => sum + file.deletions, 0),
+        } satisfies ChatCommitDetails
+      }
+      case "project.readBranch": {
+        const project = this.requireProject(command.projectId)
+        const tip = project.history[0]
+        return {
+          ...(tip ? { lastCommit: { sha: tip.sha, summary: tip.summary, authorName: tip.authorName, authoredAt: tip.authoredAt } } : {}),
+          ...(command.branch.name === "main" ? {} : { base: { name: "main", ahead: 0, behind: 0 } }),
+          ...(command.branch.kind === "local" ? { upstream: { name: `origin/${command.branch.name}`, ahead: 0, behind: 0, gone: false } } : {}),
+        } satisfies ChatBranchDetails
+      }
+      case "project.rename": {
+        const project = "projectId" in command
+          ? this.requireProject(command.projectId)
+          : this.projectAt(command.localPath)
+        project.title = command.title
+        return null
+      }
+      case "project.remove": {
+        const project = "projectId" in command
+          ? this.requireProject(command.projectId)
+          : this.projectAt(command.localPath)
+        project.hidden = true
+        return null
+      }
+      case "project.create": {
+        const existing = [...this.projects.values()].find((candidate) => candidate.seed.localPath === command.localPath)
+        if (existing) {
+          existing.hidden = false
+          return { projectId: existing.seed.id }
+        }
+        const name = command.localPath.split("/").filter(Boolean).at(-1) ?? "project"
+        const project = this.addProject({
+          id: this.nextId("demo-project"),
+          title: command.title ?? name,
+          localPath: command.localPath,
+          repoOwner: "you",
+          branchName: "main",
+          entryFile: "README.md",
+          files: { "README.md": `# ${command.title ?? name}\n` },
+          localOnly: true,
+        })
+        return { projectId: project.seed.id }
+      }
+      case "project.writeQuickActions":
+        this.requireProject(command.projectId).quickActions = command.quickActions
+        return command.quickActions
       case "project.setPinned": {
         const project = this.projects.get(command.projectId)
         if (!project) throw new Error("Project not found")
@@ -568,6 +818,7 @@ export class DemoBackend {
       case "project.open": {
         const project = [...this.projects.values()].find((candidate) => candidate.seed.localPath === command.localPath)
         if (!project) throw new Error(DEMO_UNAVAILABLE_MESSAGE)
+        project.hidden = false
         return { projectId: project.seed.id }
       }
       case "chat.discardDiffFile": {
@@ -579,10 +830,9 @@ export class DemoBackend {
       }
       case "chat.listBranches": {
         const project = this.requireProject(this.requireChat(command.chatId).projectId)
-        const names = [...new Set([project.seed.branchName, "main"])]
-        const local = names.map((name) => ({ id: `local:${name}`, kind: "local" as const, name, displayName: name }))
+        const local = project.branches.map((name): ChatBranchListEntry => ({ id: `local:${name}`, kind: "local", name, displayName: name }))
         return {
-          currentBranchName: project.seed.branchName,
+          currentBranchName: project.branchName,
           defaultBranchName: "main",
           recent: local,
           local,
@@ -591,8 +841,55 @@ export class DemoBackend {
           pullRequestsStatus: "unavailable",
         } satisfies ChatBranchListResult
       }
+      case "chat.checkoutBranch": {
+        const project = this.requireProject(this.requireChat(command.chatId).projectId)
+        if (!project.branches.includes(command.branch.name)) {
+          return { ok: false, title: "Checkout failed", message: `There is no branch named ${command.branch.name}.` }
+        }
+        project.branchName = command.branch.name
+        return { ok: true, branchName: project.branchName, snapshotChanged: true }
+      }
+      case "chat.createBranch": {
+        const project = this.requireProject(this.requireChat(command.chatId).projectId)
+        const name = command.name.trim()
+        if (project.branches.includes(name)) {
+          return { ok: false, title: "Create branch failed", message: `A branch named ${name} already exists.` }
+        }
+        project.branches.push(name)
+        project.branchName = name
+        return { ok: true, branchName: name, snapshotChanged: true }
+      }
+      case "chat.syncBranch":
+        this.requireChat(command.chatId)
+        return { ok: true, action: command.action, aheadCount: 0, behindCount: 0, snapshotChanged: false }
+      case "chat.previewMergeBranch": {
+        const project = this.requireProject(this.requireChat(command.chatId).projectId)
+        // Branches in the demo share their history; another one is a commit ahead.
+        const behind = command.branch.name !== project.branchName
+        return {
+          currentBranchName: project.branchName,
+          targetBranchName: command.branch.name,
+          targetDisplayName: command.branch.name,
+          status: behind ? "mergeable" : "up_to_date",
+          commitCount: behind ? 1 : 0,
+          hasConflicts: false,
+          message: behind
+            ? `1 commit from ${command.branch.name} merges cleanly into ${project.branchName}.`
+            : `${project.branchName} already has everything in ${command.branch.name}.`,
+        } satisfies ChatMergePreviewResult
+      }
+      case "chat.mergeBranch":
+        this.requireChat(command.chatId)
+        return { ok: true, branchName: command.branch.name, snapshotChanged: true }
+      case "chat.ignoreDiffFile": {
+        const project = this.requireProject(this.requireChat(command.chatId).projectId)
+        const gitignore = project.files.get(".gitignore") ?? ""
+        project.files.set(".gitignore", `${gitignore}${command.path}\n`)
+        project.files.delete(command.path)
+        return { ok: true, snapshotChanged: true }
+      }
       case "project.readQuickActions":
-        return []
+        return this.requireProject(command.projectId).quickActions
       // The home page and the command palette list these; the demo has no gh.
       case "github.listRecentRepos":
         return { available: false, repos: [] } satisfies GitHubRecentReposResult
@@ -605,21 +902,124 @@ export class DemoBackend {
         this.appSettings = mergeAppSettingsPatch(this.appSettings, command.patch)
         return this.appSettings
       case "settings.readKeybindings":
-        return createKeybindings()
+        return this.keybindings
+      case "settings.writeKeybindings":
+        this.keybindings = { ...this.keybindings, bindings: { ...this.keybindings.bindings, ...command.bindings } as Record<KeybindingAction, string[]> }
+        return this.keybindings
       case "settings.readLlmProvider":
-        return createLlmProvider()
+        return this.llmProvider
+      case "settings.writeLlmProvider":
+        this.llmProvider = {
+          ...this.llmProvider,
+          provider: command.provider,
+          apiKey: command.apiKey,
+          model: command.model,
+          baseUrl: command.baseUrl,
+          ...(command.faveModels ? { faveModels: command.faveModels } : {}),
+          enabled: command.apiKey.trim().length > 0,
+        }
+        return this.llmProvider
+      case "settings.validateLlmProvider":
+        return command.apiKey.trim()
+          ? { ok: true, error: null }
+          : { ok: false, error: "Add an API key first." }
       case "usage.refresh":
-        return { providers: [] }
+        return createUsageLimits(this.clock.now())
       case "auth.refresh":
-        return createProviderAuth()
+        return this.providerAuth()
+
+      case "accounts.create":
+        return { accountId: this.createAccount(command.account).id }
+      case "accounts.setDefault":
+        this.requireAccount(command.accountId)
+        this.defaultAccountIds = { ...this.defaultAccountIds, [command.provider]: command.accountId }
+        return null
+      case "accounts.updateKey":
+        this.requireAccount(command.accountId)
+        return null
+      case "accounts.rename":
+        this.requireAccount(command.accountId).label = command.label
+        return null
+      case "accounts.remove": {
+        const account = this.requireAccount(command.accountId)
+        this.accounts = this.accounts.filter((entry) => entry !== account)
+        if (this.defaultAccountIds[account.provider] === account.id) {
+          this.defaultAccountIds = { ...this.defaultAccountIds, [account.provider]: existingAccountId(account.provider) }
+        }
+        return null
+      }
+      // A browser can't run a provider's CLI or open an app on the visitor's
+      // computer: these say so, on purpose.
+      case "accounts.login":
+      case "auth.login.start":
+      case "auth.install":
+      case "system.openExternal":
+      case "update.install":
+      case "update.installNightly":
+      case "update.installStable":
+        throw new Error(DEMO_NEEDS_MACHINE_MESSAGE)
+
+      case "mcp.read":
+        return this.mcpSnapshot()
+      case "mcp.save":
+        this.saveMcpServer(command.server)
+        return this.mcpSnapshot()
+      case "mcp.remove":
+        this.mcpServers = this.mcpServers.filter((server) => server.id !== command.id)
+        this.mcpRevision += 1
+        return this.mcpSnapshot()
+      case "mcp.connect": {
+        const server = this.requireMcpServer(command.id)
+        server.status = "connected"
+        server.toolCount = server.toolCount ?? 12
+        this.mcpRevision += 1
+        return { status: server.status }
+      }
+      case "mcp.disconnect": {
+        const server = this.requireMcpServer(command.id)
+        server.status = "unconnected"
+        delete server.toolCount
+        this.mcpRevision += 1
+        return this.mcpSnapshot()
+      }
+      case "mcp.importProvider":
+      case "mcp.importConfig":
+        this.saveMcpServer({ name: "linear", transport: "http", url: "https://mcp.linear.app/mcp", providers: ["claude", "codex", "cursor", "pi"] })
+        return this.mcpSnapshot()
+
+      case "skills.search": {
+        const query = command.query.trim().toLowerCase()
+        const skills = SKILL_CATALOG.filter((skill) => skill.name.includes(query) || skill.source.includes(query)).slice(0, command.limit ?? 20)
+        return { query: command.query, searchType: "fuzzy", skills, count: skills.length, duration_ms: 42 }
+      }
+      case "skills.install": {
+        const found = SKILL_CATALOG.find((skill) => skill.skillId === command.skillId)
+        if (found && !this.globalSkills.some((skill) => skill.name === found.name)) {
+          this.globalSkills = [...this.globalSkills, {
+            name: found.name,
+            description: `Installed from ${found.source}.`,
+            providers: ["claude", "codex", "cursor", "grok", "pi"],
+            paths: [`${DEMO_HOME}/.agents/skills/${found.name}/SKILL.md`],
+            source: found.source,
+          }]
+        }
+        return { source: command.source, skillId: command.skillId, command: ["npx", "skills", "add", command.source], cwd: DEMO_HOME, stdout: "", stderr: "" }
+      }
+      case "skills.uninstall":
+        this.globalSkills = this.globalSkills.filter((skill) => skill.name !== command.skillId)
+        return { skillId: command.skillId, command: ["npx", "skills", "remove", command.skillId], cwd: DEMO_HOME, stdout: "", stderr: "" }
+
+      case "fs.list":
+        return this.listDirectory(command.path, command.nearest ?? false)
       case "update.check":
         return createUpdate(this.clock.now())
 
       case "browser.listLocalHttpServers":
         return []
       case "skills.listInstalled":
+        return { lockFilePath: `${DEMO_HOME}/.agents/.skill-lock.json`, skills: [] }
       case "skills.listGlobal":
-        return []
+        return { skills: this.globalSkills }
 
       case "terminal.create":
         return this.createShell(command.terminalId, command.projectId, command.cols, command.rows)
@@ -682,6 +1082,152 @@ export class DemoBackend {
       ...(lastAgent?.kind === "assistant_text"
         ? { lastAgentMessagePreview: lastAgent.text.slice(0, 280), lastAgentMessagePreviewAt: lastAgent.createdAt }
         : {}),
+    }
+  }
+
+  private projectAt(localPath: string) {
+    const project = [...this.projects.values()].find((candidate) => candidate.seed.localPath === localPath)
+    if (!project) throw new Error("Project not found")
+    return project
+  }
+
+  /**
+   * Sharing uploads a page to kanna.sh, which the demo can't do; it fails the
+   * way a real share does, with the transcript offered as a download.
+   */
+  private exportStandalone(chat: ChatState): StandaloneTranscriptExportFailureResult {
+    const slug = chat.id
+    return {
+      ok: false,
+      error: "Sharing needs Kanna running on your own machine. You can still download this chat's transcript.",
+      outputDir: "",
+      transcriptJsonPath: "",
+      transcriptFileName: `${slug}.json`,
+      transcriptJson: JSON.stringify({ title: chat.title, messages: chat.entries }, null, 2),
+      shareSlug: slug,
+      shareUrl: "",
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Accounts, MCP servers, files
+  // -------------------------------------------------------------------------
+
+  private providerAuth(): ProviderAuthSnapshot {
+    return { ...createProviderAuth(), accounts: this.accounts, defaultAccountIds: this.defaultAccountIds }
+  }
+
+  private createAccount(input: AccountInput) {
+    const keyed = input.provider === "cursor" || input.provider === "pi"
+    const account: ProviderAccount = {
+      id: this.nextId("account"),
+      provider: input.provider,
+      label: input.label.trim() || "Account",
+      mode: keyed ? "apiKey" : "native",
+      identity: null,
+      authStatus: keyed ? "signed_in" : "signed_out",
+      login: { phase: "idle" },
+      statusDetail: null,
+    }
+    this.accounts = [...this.accounts, account]
+    return account
+  }
+
+  private requireAccount(accountId: string) {
+    const account = this.accounts.find((entry) => entry.id === accountId)
+    if (!account) throw new Error("Account not found")
+    return account
+  }
+
+  private mcpSnapshot(): McpSnapshot {
+    return { servers: this.mcpServers.map((server) => ({ ...server })), filePath: "~/.kanna/mcp.json", revision: this.mcpRevision }
+  }
+
+  private requireMcpServer(id: string) {
+    const server = this.mcpServers.find((entry) => entry.id === id)
+    if (!server) throw new Error("MCP server not found")
+    return server
+  }
+
+  private saveMcpServer(input: McpServerInput) {
+    const existing = input.id ? this.mcpServers.find((server) => server.id === input.id) : undefined
+    const summary: McpServerSummary = {
+      id: existing?.id ?? this.nextId("mcp"),
+      name: input.name,
+      transport: input.transport,
+      ...(input.command ? { command: input.command } : {}),
+      ...(input.url ? { url: input.url } : {}),
+      providers: input.providers,
+      ...(input.projectPath ? { projectPath: input.projectPath } : {}),
+      argumentCount: input.args?.length ?? existing?.argumentCount ?? 0,
+      environmentKeys: input.env ? Object.keys(input.env) : existing?.environmentKeys ?? [],
+      headerKeys: input.headers ? Object.keys(input.headers) : existing?.headerKeys ?? [],
+      hasClientSecret: Boolean(input.clientSecret) || (existing?.hasClientSecret ?? false),
+      status: existing?.status ?? "unconnected",
+      ...(existing?.toolCount !== undefined ? { toolCount: existing.toolCount } : {}),
+    }
+    this.mcpServers = existing
+      ? this.mcpServers.map((server) => (server === existing ? summary : server))
+      : [...this.mcpServers, summary]
+    this.mcpRevision += 1
+  }
+
+  /**
+   * The visitor's home as the folder browser sees it: ~/Projects holds the
+   * demo projects and their files, ~/Kanna is where new projects go.
+   */
+  private listDirectory(requested: string | undefined, nearest: boolean): FsListResult {
+    const home = DEMO_HOME
+    const expand = (path: string) => (path === "~" ? home : path.startsWith("~/") ? `${home}${path.slice(1)}` : path)
+    const normalize = (path: string) => (path.length > 1 ? path.replace(/\/+$/, "") : path)
+    const dirs = new Map<string, Map<string, "dir" | "file">>()
+    const add = (path: string, kind: "dir" | "file") => {
+      const parts = path.split("/").filter(Boolean)
+      for (let index = 0; index < parts.length; index += 1) {
+        const parent = `/${parts.slice(0, index).join("/")}`
+        const entries = dirs.get(parent) ?? new Map<string, "dir" | "file">()
+        dirs.set(parent, entries)
+        const isLast = index === parts.length - 1
+        if (!entries.has(parts[index]!) || !isLast || kind === "dir") entries.set(parts[index]!, isLast ? kind : "dir")
+      }
+      if (kind === "dir" && !dirs.has(path)) dirs.set(path, new Map())
+    }
+    for (const name of ["Desktop", "Documents", "Downloads", "Kanna", "Projects"]) add(`${home}/${name}`, "dir")
+    for (const project of this.projects.values()) {
+      add(project.seed.localPath, "dir")
+      add(`${project.seed.localPath}/.git`, "dir")
+      for (const path of project.files.keys()) add(`${project.seed.localPath}/${path}`, "file")
+    }
+
+    let path = normalize(expand(requested?.trim() || home))
+    let missingSuffix: string | undefined
+    if (!dirs.has(path)) {
+      if (!nearest) throw new Error(`No such folder: ${requested}`)
+      const parts = path.split("/").filter(Boolean)
+      let found = "/"
+      for (let index = parts.length; index >= 0; index -= 1) {
+        const candidate = `/${parts.slice(0, index).join("/")}`
+        if (dirs.has(candidate)) {
+          found = candidate
+          missingSuffix = parts.slice(index).join("/")
+          break
+        }
+      }
+      path = found
+    }
+    const entries = [...(dirs.get(path) ?? new Map()).entries()]
+      .filter(([name]) => name !== ".git")
+      .map(([name, kind]) => ({ name, kind }))
+      .sort((left, right) => (left.kind === right.kind ? left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) : left.kind === "dir" ? -1 : 1))
+    const parts = path.split("/").filter(Boolean)
+    return {
+      path,
+      parentPath: parts.length === 0 ? null : `/${parts.slice(0, -1).join("/")}`,
+      homePath: home,
+      isGitRepo: dirs.get(path)?.has(".git") ?? false,
+      entries,
+      truncated: false,
+      ...(missingSuffix ? { missingSuffix } : {}),
     }
   }
 
@@ -763,14 +1309,15 @@ export class DemoBackend {
     })
     return {
       status: "ready",
-      branchName: project.seed.branchName,
+      branchName: project.branchName,
       defaultBranchName: "main",
-      hasOriginRemote: true,
-      originRepoSlug: `${project.seed.repoOwner}/${project.seed.title}`,
-      hasUpstream: true,
+      hasOriginRemote: !project.seed.localOnly,
+      ...(project.seed.localOnly ? {} : { originRepoSlug: `${project.seed.repoOwner}/${project.seed.title}` }),
+      hasUpstream: !project.seed.localOnly,
       aheadCount: 0,
       behindCount: 0,
       files,
+      branchHistory: { entries: project.history.map(({ files: _files, ...entry }) => entry) },
     }
   }
 
@@ -784,35 +1331,48 @@ export class DemoBackend {
     }
   }
 
-  private publishTo(subscriptionId: string, topic: SubscriptionTopic) {
-    const snapshot = this.snapshotFor(topic)
+  private publishTo(subscriptionId: string, topic: SubscriptionTopic, older?: { before: number }) {
+    const snapshot = this.snapshotFor(topic, subscriptionId)
     if (!snapshot) return
     const serialized = JSON.stringify(snapshot)
     if (this.lastSent.get(subscriptionId) === serialized) return
     this.lastSent.set(subscriptionId, serialized)
+    // A window widened by `chat.loadOlder` goes out as the older slice alone,
+    // which the client lands in front of what it holds, as the real router
+    // sends it (toSocketChatSnapshot in ws-router.ts).
+    if (older && snapshot.type === "chat" && snapshot.data) {
+      const data = snapshot.data
+      this.send({
+        v: 1,
+        type: "snapshot",
+        id: subscriptionId,
+        snapshot: { type: "chat", data: { ...data, messages: data.messages.slice(0, older.before - data.startIndex), incremental: true } },
+      })
+      return
+    }
     this.send({ v: 1, type: "snapshot", id: subscriptionId, snapshot })
   }
 
-  private snapshotFor(topic: SubscriptionTopic): ServerSnapshot | null {
+  private snapshotFor(topic: SubscriptionTopic, subscriptionId: string): ServerSnapshot | null {
     switch (topic.type) {
       case "sidebar":
         return { type: "sidebar", data: this.sidebarSnapshot() }
       case "local-projects":
         return { type: "local-projects", data: this.localProjectsSnapshot() }
       case "chat":
-        return { type: "chat", data: this.chatSnapshot(topic.chatId) }
+        return { type: "chat", data: this.chatSnapshot(topic.chatId, subscriptionId) }
       case "project-git":
         return { type: "project-git", data: this.projectGitSnapshot(topic.projectId) }
       case "app-settings":
         return { type: "app-settings", data: this.appSettings }
       case "keybindings":
-        return { type: "keybindings", data: createKeybindings() }
+        return { type: "keybindings", data: this.keybindings }
       case "update":
         return { type: "update", data: createUpdate(this.clock.now()) }
       case "provider-auth":
-        return { type: "provider-auth", data: createProviderAuth() }
+        return { type: "provider-auth", data: this.providerAuth() }
       case "usage-limits":
-        return { type: "usage-limits", data: { providers: [] } }
+        return { type: "usage-limits", data: createUsageLimits(this.clock.now()) }
       case "terminal":
         return null
     }
@@ -837,10 +1397,11 @@ export class DemoBackend {
       ...(chat.lastTurnEndedAt != null ? { lastTurnEndedAt: chat.lastTurnEndedAt } : {}),
       ...(chat.turnCount ? { turnCount: chat.turnCount } : {}),
       ...(chat.lastAgentMessageAt != null ? { lastAgentMessageAt: chat.lastAgentMessageAt } : {}),
-      ...(question ? { pendingToolKind: "ask_user_question", pendingUserInputPreview: question.preview } : {}),
+      ...(question ? { pendingToolKind: question.kind ?? "ask_user_question", pendingUserInputPreview: question.preview } : {}),
       ...(this.uncommittedTouchedPaths(chat).length > 0 ? { uncommittedWork: true } : {}),
       ...(chat.archivedAt ? { archivedAt: chat.archivedAt } : {}),
       ...(chat.pinnedAt ? { pinnedAt: chat.pinnedAt } : {}),
+      ...(chat.delegator ? { delegator: true as const } : {}),
       hasAutomation: false,
       canFork: chat.turnCount > 0 || undefined,
     }
@@ -849,7 +1410,7 @@ export class DemoBackend {
   private sidebarSnapshot(): SidebarData {
     const recency = (chat: ChatState) => Math.max(chat.lastAgentMessageAt ?? 0, chat.lastMessageAt ?? chat.createdAt)
     return {
-      projectGroups: [...this.projects.values()].map((project) => {
+      projectGroups: [...this.projects.values()].filter((project) => !project.hidden).map((project) => {
         const projectChats = [...this.chats.values()]
           .filter((chat) => chat.projectId === project.seed.id)
           .sort((left, right) => recency(right) - recency(left))
@@ -857,12 +1418,12 @@ export class DemoBackend {
         const archivedChats = projectChats.filter((chat) => chat.archivedAt).map((chat) => this.sidebarRow(chat, project))
         return {
           groupKey: project.seed.id,
-          title: project.seed.title,
+          title: project.title,
           realTitle: project.seed.title,
           ...(project.pinnedAt ? { pinnedAt: project.pinnedAt } : {}),
           repoName: project.seed.title,
           hasGitRepo: true,
-          branchName: project.seed.branchName,
+          branchName: project.branchName,
           repoOwner: project.seed.repoOwner,
           localPath: project.seed.localPath,
           chats,
@@ -878,11 +1439,11 @@ export class DemoBackend {
   private localProjectsSnapshot(): LocalProjectsSnapshot {
     return {
       machine: { id: "local", displayName: "Your Mac", platform: "darwin" },
-      projects: [...this.projects.values()].map((project) => {
+      projects: [...this.projects.values()].filter((project) => !project.hidden).map((project) => {
         const projectChats = [...this.chats.values()].filter((chat) => chat.projectId === project.seed.id)
         return {
           localPath: project.seed.localPath,
-          title: project.seed.title,
+          title: project.title,
           source: "saved" as const,
           lastOpenedAt: Math.max(...projectChats.map((chat) => chat.lastMessageAt ?? chat.createdAt), 0),
           chatCount: projectChats.length,
@@ -891,10 +1452,50 @@ export class DemoBackend {
     }
   }
 
-  private chatSnapshot(chatId: string): ChatSnapshot | null {
+  /**
+   * Where a subscription's window starts: on subscribe, the last N assistant
+   * messages (the Transcript Window setting), as the real router opens a chat.
+   */
+  private windowStart(chat: ChatState, subscriptionId: string) {
+    let start = this.windowStarts.get(subscriptionId)
+    if (start === undefined) {
+      start = findTranscriptWindowStart(chat.entries, {
+        endExclusive: chat.entries.length,
+        assistantMessages: this.appSettings.transcript.windowAssistantMessages,
+      })
+      this.windowStarts.set(subscriptionId, start)
+    }
+    return start
+  }
+
+  private loadOlder(chat: ChatState, command: Extract<ClientCommand, { type: "chat.loadOlder" }>) {
+    let startIndex = 0
+    for (const [subscriptionId, topic] of this.subscriptions) {
+      if (topic.type !== "chat" || topic.chatId !== chat.id || topic.background) continue
+      const current = this.windowStart(chat, subscriptionId)
+      const until = command.untilMessageId === undefined
+        ? -1
+        : chat.entries.findIndex((entry) => entry._id === command.untilMessageId)
+      const next = command.all
+        ? 0
+        : Math.min(current, findTranscriptWindowStart(chat.entries, {
+          endExclusive: current,
+          assistantMessages: this.appSettings.transcript.windowAssistantMessages,
+          ...(until >= 0 ? { mustIncludeIndex: until } : {}),
+        }))
+      startIndex = next
+      if (next === current) continue
+      this.windowStarts.set(subscriptionId, next)
+      this.publishTo(subscriptionId, topic, { before: current })
+    }
+    return { startIndex }
+  }
+
+  private chatSnapshot(chatId: string, subscriptionId: string): ChatSnapshot | null {
     const chat = this.chats.get(chatId)
     if (!chat) return null
     const project = this.projects.get(chat.projectId)!
+    const start = this.windowStart(chat, subscriptionId)
     return {
       runtime: {
         chatId: chat.id,
@@ -904,13 +1505,20 @@ export class DemoBackend {
         status: this.chatStatus(chat),
         isDraining: false,
         provider: chat.provider,
-        planMode: false,
+        planMode: chat.planMode,
         autoPlan: false,
         sessionToken: chat.turnCount > 0 || chat.turn ? `demo-session-${chat.id}` : null,
+        ...(chat.delegator ? { delegator: true as const } : {}),
+        ...(chat.tasks.length > 0 ? { subagents: chat.tasks.map((task) => ({ ...task })) } : {}),
+        ...(chat.schedules.length > 0 ? { schedules: chat.schedules.map((schedule) => ({ ...schedule })) } : {}),
       },
       queuedMessages: chat.queued,
-      messages: chat.entries,
-      startIndex: 0,
+      // Header form, as the real router sends it: tool bodies stay here
+      // until a row is opened (`chat.getToolEntries`).
+      messages: cloneTranscriptEntriesForClient(chat.entries.slice(start), (toolId) => (
+        chat.entries.find((entry) => entry.kind === "tool_call" && entry.tool.toolId === toolId) as Extract<TranscriptEntry, { kind: "tool_call" }> | undefined
+      )?.tool.toolKind),
+      startIndex: start,
       availableProviders: PROVIDERS,
       readAnchor: null,
       outline: buildTranscriptOutline(chat.entries),
@@ -969,16 +1577,18 @@ function createUpdate(now: number): UpdateSnapshot {
   }
 }
 
+// Every harness is signed in except Grok Build, which isn't installed, and
+// GitHub's CLI isn't signed in (so the home page lists no GitHub repos).
 function createProviderAuth(): ProviderAuthSnapshot {
   return {
     services: AUTH_SERVICE_ORDER.map((service) => ({
       service,
       label: AUTH_SERVICE_LABELS[service],
-      installed: true,
+      installed: service !== "grok",
       version: null,
       latestVersion: null,
       updateAvailable: false,
-      authStatus: "signed_in",
+      authStatus: service === "grok" ? "not_installed" : service === "gh" ? "signed_out" : "signed_in",
       account: null,
       statusDetail: null,
       login: { phase: "idle" },
@@ -1002,3 +1612,151 @@ function createLlmProvider(): LlmProviderSnapshot {
     filePathDisplay: "~/.kanna/llm-provider.json",
   }
 }
+
+function createUsageLimits(now: number): UsageLimitsSnapshot {
+  const at = (hours: number) => new Date(now + hours * 60 * 60_000).toISOString()
+  const recordedAt = new Date(now - 2 * 60_000).toISOString()
+  return {
+    providers: [
+      {
+        provider: "claude",
+        status: "ok",
+        plan: "max",
+        windows: [
+          { id: "five_hour", label: "5-hour session", usedPercent: 42, resetsAt: at(2.5), recordedAt, source: "cache" },
+          { id: "seven_day", label: "Weekly", usedPercent: 18, resetsAt: at(80), recordedAt, source: "cache" },
+          { id: "seven_day_opus", label: "Weekly · Opus", usedPercent: 27, resetsAt: at(80), recordedAt, source: "cache" },
+        ],
+        credits: null,
+        detail: null,
+        updatedAt: recordedAt,
+      },
+      {
+        provider: "codex",
+        status: "ok",
+        plan: "pro",
+        windows: [
+          { id: "codex:primary", label: "5-hour session", usedPercent: 9, resetsAt: at(4), recordedAt, source: "cache" },
+          { id: "codex:secondary", label: "Weekly", usedPercent: 31, resetsAt: at(120), recordedAt, source: "cache" },
+        ],
+        credits: null,
+        detail: null,
+        updatedAt: recordedAt,
+      },
+      {
+        provider: "cursor",
+        status: "unavailable",
+        plan: null,
+        windows: [],
+        credits: null,
+        detail: "Cursor doesn't report usage limits for API keys.",
+        updatedAt: null,
+      },
+    ],
+  }
+}
+
+function createAccounts(): ProviderAccount[] {
+  const existing = (provider: AgentProvider, identity: string): ProviderAccount => ({
+    id: existingAccountId(provider),
+    provider,
+    label: "Current",
+    mode: "existing",
+    identity,
+    authStatus: "signed_in",
+    login: { phase: "idle" },
+    statusDetail: null,
+  })
+  return [
+    existing("claude", "you@example.com"),
+    existing("codex", "you@example.com"),
+    {
+      id: "account-cursor-work",
+      provider: "cursor",
+      label: "Work",
+      mode: "apiKey",
+      identity: null,
+      authStatus: "signed_in",
+      login: { phase: "idle" },
+      statusDetail: null,
+    },
+  ]
+}
+
+function createMcpServers(): McpServerSummary[] {
+  return [
+    {
+      id: "mcp-github",
+      name: "github",
+      transport: "http",
+      url: "https://api.githubcopilot.com/mcp/",
+      providers: ["claude", "codex", "cursor", "pi"],
+      argumentCount: 0,
+      environmentKeys: [],
+      headerKeys: [],
+      hasClientSecret: false,
+      status: "connected",
+      toolCount: 41,
+    },
+    {
+      id: "mcp-playwright",
+      name: "playwright",
+      transport: "stdio",
+      command: "npx",
+      providers: ["claude", "codex"],
+      argumentCount: 2,
+      environmentKeys: [],
+      headerKeys: [],
+      hasClientSecret: false,
+      status: "unconnected",
+    },
+  ]
+}
+
+function createGlobalSkills(): GlobalSkillSummary[] {
+  return [
+    {
+      name: "frontend-design",
+      description: "Build distinctive, production-grade interfaces instead of generic ones.",
+      providers: ["claude", "codex", "cursor", "grok", "pi"],
+      paths: [`${DEMO_HOME}/.agents/skills/frontend-design/SKILL.md`],
+      source: "anthropics/skills",
+    },
+    {
+      name: "release-notes",
+      description: "Write release notes from the commits since the last tag.",
+      providers: ["claude", "codex"],
+      paths: [`${DEMO_HOME}/.claude/skills/release-notes/SKILL.md`],
+    },
+  ]
+}
+
+/** The composer's "/" menu: the harness's own commands, then the global skills it can use. */
+function demoSkills(provider: AgentProvider, globalSkills: GlobalSkillSummary[]): HarnessSkill[] {
+  const builtins: Record<AgentProvider, HarnessSkill[]> = {
+    claude: [
+      { name: "compact", description: "Clear the conversation but keep a summary in context", source: "builtin" },
+      { name: "review", description: "Review a pull request", source: "builtin" },
+      { name: "init", description: "Initialize a CLAUDE.md file with codebase documentation", source: "builtin" },
+    ],
+    codex: [
+      { name: "review", description: "Review my current changes and find issues", source: "builtin" },
+      { name: "init", description: "Create an AGENTS.md file with instructions for Codex", source: "builtin" },
+    ],
+    cursor: [],
+    grok: [],
+    pi: [],
+  }
+  const skills = globalSkills
+    .filter((skill) => skill.providers.includes(provider))
+    .map((skill): HarnessSkill => ({ name: skill.name, description: skill.description, source: "skill", path: skill.paths[0] }))
+  return [...builtins[provider], ...skills]
+}
+
+/** What the Skills page finds on skills.sh, in the demo. */
+const SKILL_CATALOG: SkillSearchResult[] = [
+  { id: "anthropics/skills/pdf", skillId: "pdf", name: "pdf", installs: 48_210, source: "anthropics/skills" },
+  { id: "anthropics/skills/xlsx", skillId: "xlsx", name: "xlsx", installs: 31_877, source: "anthropics/skills" },
+  { id: "vercel-labs/agent-skills/react-best-practices", skillId: "react-best-practices", name: "react-best-practices", installs: 27_450, source: "vercel-labs/agent-skills" },
+  { id: "obra/superpowers/test-driven-development", skillId: "test-driven-development", name: "test-driven-development", installs: 12_034, source: "obra/superpowers" },
+]

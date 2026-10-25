@@ -23,6 +23,14 @@ export function update(model: Model, _message: Message, _app: AppModel): SliceRe
   return { model }
 }
 
+/**
+ * Open the palette, optionally on a page (React's `kanna:open-command-palette`
+ * window event, now `AppAction.OpenCommandPalette`). The root calls this.
+ */
+export function requestOpen(model: Model, _page: string | null, _app: AppModel): SliceReturn<Model, Message> {
+  return { model }
+}
+
 export const view = Submodel.defineView<Model, Message, SliceViewInputs>((_model, _inputs, _h) => null)
 
 export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()(() => ({}))
