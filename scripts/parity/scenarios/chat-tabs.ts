@@ -1,6 +1,6 @@
 import type { Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { click, contextClick, parkPointer, REGIONS, regions, sidebarChatRow } from "./_lib/helpers"
+import { click, composer, contextClick, parkPointer, press, REGIONS, regions, sidebarChatRow } from "./_lib/helpers"
 
 // Chat tabs (Settings → General → Chat Tabs): the open chats as tabs in the
 // title bar, switched, closed one by one or from a tab's menu.
@@ -71,6 +71,26 @@ export const scenarios: Scenario[] = [
       await openThreeTabs(context)
       await click(context, context.page.locator(REGIONS.navbar).getByRole("button", { name: "Chat actions" }).first())
       await context.capture("menu")
+    },
+  }),
+  defineScenario({
+    // In a browser: Option+[ and Option+] step through the tabs, Option+W
+    // closes the active one. From anywhere, the composer included.
+    name: "chat-tabs-keyboard",
+    route: "/settings/general",
+    ...desktop,
+    regions: regions("navbar"),
+    async run(context) {
+      await openThreeTabs(context)
+      await press(context, "Alt+BracketLeft")
+      await context.capture("previous")
+      await press(context, "Alt+BracketLeft")
+      await press(context, "Alt+BracketRight")
+      await context.capture("next")
+      await composer(context.page).click()
+      await press(context, "Alt+KeyW")
+      await parkPointer(context)
+      await context.capture("closed")
     },
   }),
 ]

@@ -148,4 +148,19 @@ export const scenarios: Scenario[] = [
       await context.capture("models")
     },
   }),
+  defineScenario({
+    // A phone has its own Attach button in the composer's controls row.
+    name: "mobile-attach",
+    route: CHATS.units,
+    ...mobile,
+    regions: regions("composer"),
+    async run(context) {
+      await context.page.getByLabel("Add attachment").last().setInputFiles([
+        { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("Low tide at 06:12, swell 1.4 m from the WSW.\n") },
+      ])
+      await rest(context)
+      await parkPointer(context)
+      await context.capture("attached")
+    },
+  }),
 ]

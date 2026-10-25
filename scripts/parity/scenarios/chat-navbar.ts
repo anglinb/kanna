@@ -201,10 +201,14 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
+    // A shortcut-only tooltip (⌘B), 62.5px wide: Chromium shades its rounded
+    // corners a level apart from run to run, a dozen pixels where a region
+    // that small allows none, so React failed against itself there. Compared
+    // as part of the page instead (its paint and aria still exactly).
     name: "navbar-widgets-tooltip",
     route: CHATS.units,
     ...desktop,
-    regions: regions("tooltip"),
+    regions: regions("navbar"),
     async run(context) {
       await hover(context, navbar(context).getByRole("button", { name: "Show widgets" }))
       await context.capture("tooltip")

@@ -282,6 +282,11 @@ export class DemoBackend {
     }
   }
 
+  /** Where a project lives, for the upload route in environment.ts. Null for an unknown id. */
+  projectLocalPath(projectId: string) {
+    return this.projects.get(projectId)?.seed.localPath ?? null
+  }
+
   receive(envelope: ClientEnvelope) {
     if (envelope.type === "subscribe") {
       this.subscriptions.set(envelope.id, envelope.topic)

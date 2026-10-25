@@ -1,17 +1,35 @@
+import { PNG } from "pngjs"
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, click, composer, parkPointer, press, regions, rest, typeIntoComposer } from "./_lib/helpers"
+import { CHATS, click, composer, openPalette, parkPointer, press, REGIONS, regions, rest, typeIntoComposer } from "./_lib/helpers"
 
 // The chat composer: typing, sending (the optimistic prompt, then the
 // scripted turn as the clock advances), the harness / model / effort /
 // speed pickers, modes (Shift+Tab), the "/" and "@" menus, queueing while a
-// turn runs, stopping it.
+// turn runs, stopping it, attachments (the demo's fetch shim keeps uploads
+// in memory, src/demo/environment.ts).
 //
-// Not here: recording a voice message past the microphone prompt, and
-// attachments. An upload goes to /api/projects/:id/uploads, which
-// the demo's fetch shim (src/demo/environment.ts) answers 404, and the error
-// report the composer then shows quotes the JS stack (bundle file names), so
-// no other build could ever match it. Covering uploads needs the shim to
-// accept them.
+// Not here: recording a voice message past the microphone prompt (the
+// browser under the runner has no microphone).
+
+/** A 48×32 swatch, sea to sand, so the image preview has something to show. */
+function swellPng() {
+  const png = new PNG({ width: 48, height: 32 })
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const index = (y * png.width + x) * 4
+      png.data[index] = 30 + x * 4
+      png.data[index + 1] = 110 + y * 3
+      png.data[index + 2] = 190 - x * 2
+      png.data[index + 3] = 255
+    }
+  }
+  return PNG.sync.write(png)
+}
+
+const ATTACHMENTS = [
+  { name: "swell.png", mimeType: "image/png", buffer: swellPng() },
+  { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("Low tide at 06:12, swell 1.4 m from the WSW.\n") },
+]
 
 const desktop = { viewports: ["desktop" as const] }
 
@@ -347,6 +365,71 @@ export const scenarios: Scenario[] = [
       await click(context, context.page.getByRole("button", { name: "Record voice message" }))
       await parkPointer(context)
       await context.capture("needs-microphone")
+    },
+  }),
+  defineScenario({
+    // The palette's Attach Files opens the picker; an image and a text file
+    // upload, then go out with the prompt and show in the transcript.
+    name: "composer-attach-files",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("composer", "transcript"),
+    covers: { commands: ["chat.send"] },
+    async run(context) {
+      const { page } = context
+      await openPalette(context)
+      const chooser = page.waitForEvent("filechooser")
+      await page.getByRole("dialog", { name: "Command Palette" }).getByRole("option", { name: /^Attach Files/ }).first().click()
+      await (await chooser).setFiles(ATTACHMENTS)
+      await rest(context)
+      await context.capture("attached")
+      await typeIntoComposer(context, "The swell chart from this morning, and my notes")
+      await composer(page).press("Enter")
+      await rest(context)
+      await context.advance(30_000)
+      await parkPointer(context)
+      await context.capture("sent")
+    },
+  }),
+  defineScenario({
+    // An attachment comes off before sending.
+    name: "composer-attachment-remove",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("composer"),
+    async run(context) {
+      const { page } = context
+      await openPalette(context)
+      const chooser = page.waitForEvent("filechooser")
+      await page.getByRole("dialog", { name: "Command Palette" }).getByRole("option", { name: /^Attach Files/ }).first().click()
+      await (await chooser).setFiles(ATTACHMENTS)
+      await rest(context)
+      await click(context, page.getByRole("button", { name: "Remove swell.png" }))
+      await parkPointer(context)
+      await context.capture("removed")
+    },
+  }),
+  defineScenario({
+    // A sent image opens in the viewer from the transcript.
+    name: "composer-attachment-open",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("viewer"),
+    covers: { commands: ["chat.send"] },
+    async run(context) {
+      const { page } = context
+      await openPalette(context)
+      const chooser = page.waitForEvent("filechooser")
+      await page.getByRole("dialog", { name: "Command Palette" }).getByRole("option", { name: /^Attach Files/ }).first().click()
+      await (await chooser).setFiles(ATTACHMENTS.slice(0, 1))
+      await rest(context)
+      await typeIntoComposer(context, "Here's the chart")
+      await composer(page).press("Enter")
+      await rest(context)
+      await context.advance(30_000)
+      await click(context, page.locator(REGIONS.transcript).getByRole("button", { name: /swell\.png/ }).first())
+      await parkPointer(context)
+      await context.capture("viewer")
     },
   }),
 ]

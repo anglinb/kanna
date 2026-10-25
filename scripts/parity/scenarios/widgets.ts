@@ -136,6 +136,25 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
+    // A message typed by hand commits with ⌘Enter from the field.
+    name: "widgets-commit-with-keyboard",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("widgets"),
+    covers: { commands: ["project.commitDiffs"] },
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      await quickClick(context, column(page).getByRole("button", { name: "Write commit message" }))
+      await column(page).getByPlaceholder("Commit message").fill("Let wave heights switch between feet and meters")
+      await context.settle()
+      await context.capture("typed")
+      await page.keyboard.press("Meta+Enter")
+      await context.settle()
+      await context.capture("committed")
+    },
+  }),
+  defineScenario({
     // Generate & push: a message is drafted, the files committed, the card empties and Commits grows.
     name: "widgets-generate-and-push",
     route: CHATS.units,

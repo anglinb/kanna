@@ -1,5 +1,5 @@
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, countUuids, parkPointer, press, REGIONS, regions, rest } from "./_lib/helpers"
+import { CHATS, composer, countUuids, parkPointer, press, REGIONS, regions, rest } from "./_lib/helpers"
 
 // Every default keybinding (src/shared/types.ts DEFAULT_KEYBINDINGS) that
 // isn't already pressed by its own area's scenarios: ⌘K is in
@@ -119,6 +119,23 @@ export const scenarios: Scenario[] = [
     async run(context) {
       await press(context, "Meta+Shift+f")
       await context.page.locator(REGIONS.sidebar).getByRole("button", { name: /^Exit focus mode/ }).click()
+      await parkPointer(context)
+      await context.capture("exited")
+    },
+  }),
+  defineScenario({
+    // Escape leaves focus mode too, from anywhere but a field (the composer counts as anywhere).
+    name: "keybinding-focus-mode-escape",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("sidebar"),
+    covers: { keybindings: ["toggleFocusMode"] },
+    async run(context) {
+      await press(context, "Meta+Shift+f")
+      await parkPointer(context)
+      await context.capture("focused")
+      await composer(context.page).click()
+      await press(context, "Escape")
       await parkPointer(context)
       await context.capture("exited")
     },
