@@ -13,7 +13,12 @@ export const scenarios: Scenario[] = [
       await capture("hover-share")
       await page.getByRole("button", { name: "Context window 1.3m tokens used" }).hover()
       await capture("hover-tokens")
+      // Two moves, apart, then past the close: Radix checks the pointer
+      // against the grace area only once a listener after the leave is in.
       await page.mouse.move(700, 800)
+      await page.waitForTimeout(100)
+      await page.mouse.move(720, 820)
+      await page.waitForTimeout(400)
       await page.keyboard.press("Tab")
       await capture("focus-first")
     },

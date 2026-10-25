@@ -61,6 +61,8 @@ export const scenarios: Scenario[] = [
       await page.keyboard.press("Enter")
       await capture("renamed")
       await page.getByTitle("Rename").click()
+      // The field, once it is there (it takes focus as it appears).
+      await page.getByRole("textbox", { name: "Chat title" }).waitFor()
       await page.keyboard.press("Escape")
       await capture("escaped")
     },

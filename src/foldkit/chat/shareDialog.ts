@@ -63,9 +63,13 @@ type Return = Update.ReturnWithOutMessage<Model, Message, OutMessage>
 const CopyLink = Command.define("CopyStandaloneShareLink", {
   args: { url: Schema.String },
   messages: [Message.SucceededCopyLink, Message.FailedCopyLink],
-  execute: ({ url }) => Effect.tryPromise(async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) throw new Error("Clipboard is not available")
-    await navigator.clipboard.writeText(url)
+  execute: ({ url }) => Effect.tryPromise({
+    try: async () => {
+      if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) throw new Error("Clipboard is not available")
+      await navigator.clipboard.writeText(url)
+    },
+    // The browser's own error, as useShareExport showed it.
+    catch: (error) => error,
   }).pipe(
     Effect.as(Message.SucceededCopyLink()),
     Effect.catch((error) => Effect.succeed(Message.FailedCopyLink({
