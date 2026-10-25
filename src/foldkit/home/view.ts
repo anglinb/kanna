@@ -478,9 +478,9 @@ function projectsHomeView(model: Model, app: AppModel, h: H): Html {
 
   return h.div([h.Class("mx-auto w-full max-w-3xl px-6 pb-10 pt-16"), h.OnUnmount(Message.LeftProjectsList())], [
     h.div([h.Class("mb-6 flex items-end justify-between gap-4")], [
-      h.keyed("h1")(`projects-${ghStatus}`, [
+      h.keyed("h1")("projects", [
         h.Class("text-2xl font-semibold text-foreground"),
-        h.OnMount(MountProjectsList({ ghStatus })),
+        h.OnMount(MountProjectsList()),
       ], ["Projects"]),
       h.span([h.Class("flex min-w-0 items-center gap-1.5 pb-1 text-sm text-muted-foreground")], [
         LaptopMinimal({ class: "size-4 shrink-0" }, h),

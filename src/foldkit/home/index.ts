@@ -8,12 +8,13 @@ import { Message, type Model } from "./model"
 // useGitHubRecentRepos). The slice contract is app/slice.ts.
 //
 //   model.ts     what the page holds, its Messages
-//   update.ts    what they do, and the reads of the root the view shares
+//   update.ts    what they do, the reads of the root the view shares, and
+//                `observe` (a refetch when GitHub's sign-in changes)
 //   commands.ts  the recent-repos request, window calls, the page's Mounts
 //   view.ts      the page, the list, its menus and the archived-chats dialog
 
 export { init, Message, Model } from "./model"
-export { update } from "./update"
+export { observe, update } from "./update"
 export { view } from "./view"
 
 /**
