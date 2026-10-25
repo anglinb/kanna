@@ -74,7 +74,8 @@ function columnView(context: ColumnContext, h: H): Html {
   const { model, app, chatId } = context
   const facts = chatFacts(app, chatId)
   const attachments = deriveSentAttachments(facts.entries)
-  const stopping = new Set(model.stopping)
+  // useStopTask: an id leaves the set once its task is no longer running.
+  const stopping = new Set(model.stopping.filter((id) => facts.subagents.some((task) => task.id === id && task.status === "running")))
   const canOpenChats = true
   const paths = context.diffs.files.map((file) => file.path)
   const anyRunning = facts.subagents.some((task) => task.status === "running")
@@ -107,6 +108,7 @@ function columnView(context: ColumnContext, h: H): Html {
             list: TASKS_LIST,
             hoveredKey: model.hovered[TASKS_LIST] ?? null,
             toHover,
+            toParts,
             stopping,
             error: model.stopError,
             showAll: model.showAllTasks,
@@ -128,6 +130,7 @@ function columnView(context: ColumnContext, h: H): Html {
           list: workflowList,
           hovered: model.hovered,
           toHover,
+          toParts,
           stopping,
           onStop: (workflowId) => Message.ClickedStopTask({ taskId: workflowId }),
           now: model.now,

@@ -84,7 +84,7 @@ export function mergeDialogView(context: ColumnContext, h: H): Html {
       content: ({ titleId, descriptionId }) => [
         Dialog.dialogBody({ class: "flex min-h-0 flex-col gap-3 px-4 pb-4 pt-4" }, [
           h.div([h.Class("space-y-1")], [
-            Dialog.dialogTitle({ id: titleId }, [`Merge into ${diffs.branchName ?? "current branch"}`], h),
+            Dialog.dialogTitle({ id: titleId }, ["Merge into ", diffs.branchName ?? "current branch"], h),
             Dialog.dialogDescription({ id: descriptionId }, ["Choose a branch to continue."], h),
           ]),
           branchSearchInput({ value: merge.query, placeholder: "Search branches", onInput: (value) => Message.ChangedMergeQuery({ value }) }, h),

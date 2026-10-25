@@ -50,7 +50,9 @@ export function init(key: string): Model {
 
 export const Message = defineMessageUnion({
   GotMenuMessage: { message: ContextMenu.Message },
-  GotHoverMessage: { message: HoverMessage },
+  // The list hover card's own Messages (hoverCard.ts's HoverMessage), as this card's.
+  ChangedHoveredRow: { list: Schema.String, key: Schema.NullOr(Schema.String) },
+  CompletedSyncHoverTracker: {},
   ClickedEdit: { scheduleId: Schema.String },
   ClickedRunChat: { chatId: Schema.String },
 })
@@ -77,13 +79,12 @@ export function update(model: Model, message: Message): Return {
       }
       return { model: next, commands }
     },
-    GotHoverMessage: ({ message: child }) => ({
-      model: child._tag === "ChangedHoveredRow" ? modifyFields(model, { hovered: (hovered) => applyHover(hovered, child.list, child.key) }) : model,
-    }),
+    ChangedHoveredRow: ({ list, key }) => ({ model: modifyFields(model, { hovered: (hovered) => applyHover(hovered, list, key) }) }),
+    CompletedSyncHoverTracker: () => ({ model }),
     // The card goes first: the composer is where the eye should land.
     ClickedEdit: ({ scheduleId }) => ({
       model,
-      commands: [Command.mapMessage(SyncHoverTracker({ list: listOf(model.key), action: "dismiss" }), (inner: HoverMessage) => Message.GotHoverMessage({ message: inner }))],
+      commands: [Command.mapMessage(SyncHoverTracker({ list: listOf(model.key), action: "dismiss" }), toHover)],
       outMessage: OutMessage.RequestedEdit({ scheduleId }),
     }),
     ClickedRunChat: ({ chatId }) => ({ model, outMessage: OutMessage.RequestedOpenChat({ chatId }) }),
@@ -98,7 +99,8 @@ export interface ViewInputs {
   canOpenChats: boolean
 }
 
-const toHover = (message: HoverMessage) => Message.GotHoverMessage({ message })
+/** The hover card's Messages are this card's own (the same tags and fields). */
+const toHover = (message: HoverMessage): Message => message
 
 export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inputs, h) => {
   const { schedule, caption, quote } = inputs.card

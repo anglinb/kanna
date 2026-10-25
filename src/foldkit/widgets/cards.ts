@@ -110,14 +110,14 @@ function checksHeader(rollup: ChatCommitChecks, runs: readonly ChatCheckRun[], n
   const counts = countCheckRuns(runs)
   const wallClock = checksWallClock(runs, now)
   const tallies = [
-    counts.failure ? h.span([h.Class("text-destructive")], [`${counts.failure} failed`]) : null,
-    counts.pending ? h.span([h.Class("text-amber-500")], [`${counts.pending} running`]) : null,
-    counts.skipped ? h.span([], [`${counts.skipped} skipped`]) : null,
+    counts.failure ? h.span([h.Class("text-destructive")], [String(counts.failure), " failed"]) : null,
+    counts.pending ? h.span([h.Class("text-amber-500")], [String(counts.pending), " running"]) : null,
+    counts.skipped ? h.span([], [String(counts.skipped), " skipped"]) : null,
   ].filter((tally) => tally !== null)
   return h.div([h.Class(cn("mt-1.5 mb-1 flex items-center gap-1.5 text-[12px] tracking-wide text-muted-foreground", TURN_CARD_ROW_INSET))], [
     checksRing(counts, runs.length, h),
     h.span([h.Class("min-w-0 truncate tabular-nums")], [
-      h.span([h.Class("font-medium text-popover-foreground")], [`${rollup.passed}/${rollup.total}`]),
+      h.span([h.Class("font-medium text-popover-foreground")], [String(rollup.passed), "/", String(rollup.total)]),
       " passed",
       ...tallies.map((tally) => h.span([], [", ", tally])),
     ]),
@@ -174,7 +174,7 @@ export function checkRunsSection(options: { runs: readonly ChatCheckRun[]; check
           TURN_CARD_ROW_INSET,
           onOpen && rollup.url ? "cursor-pointer transition-colors hover:bg-muted/60 hover:text-foreground" : "cursor-default",
         )),
-      ], [`${hiddenCount} more check${hiddenCount === 1 ? "" : "s"}`])
+      ], [String(hiddenCount), " more check", hiddenCount === 1 ? "" : "s"])
       : null,
   ]
 }
@@ -209,7 +209,7 @@ export function commitCardContent(options: {
         options.copied ? Check({ class: "size-2.5 shrink-0 text-success", strokeWidth: 2.5 }, h) : Copy({ class: "size-2.5 shrink-0 opacity-60", strokeWidth: 2.5 }, h),
       ]),
       ...(isMerge ? [turnCardMetaSeparator(h), h.span([h.Class("shrink-0")], ["Merge"])] : []),
-      ...(details?.committerName ? [turnCardMetaSeparator(h), h.span([h.Class("truncate")], [`committed by ${details.committerName}`])] : []),
+      ...(details?.committerName ? [turnCardMetaSeparator(h), h.span([h.Class("truncate")], ["committed by ", details.committerName])] : []),
       h.span([h.Class("ml-auto shrink-0 pl-2"), ...(details?.authorEmail !== undefined ? [h.Title(details.authorEmail)] : [])], [formatPromptTimestamp(entry.authoredAt)]),
     ], h),
     h.div([h.Class("mt-1 space-y-1")], [
@@ -238,7 +238,7 @@ export function commitCardContent(options: {
 
 /** "↑3 ↓1 main", "even with main": where a branch stands against another. */
 function divergence(ahead: number, behind: number, name: string, h: H): Html {
-  if (ahead === 0 && behind === 0) return h.span([h.Class("truncate")], [`Even with ${name}`])
+  if (ahead === 0 && behind === 0) return h.span([h.Class("truncate")], ["Even with ", name])
   return h.span([h.Class("flex min-w-0 items-center gap-1"), h.Title(`${ahead} ahead, ${behind} behind ${name}`)], [
     ahead ? h.span([h.Class("flex items-center text-foreground")], [ArrowUp({ class: "size-2.5", strokeWidth: 2.5 }, h), String(ahead)]) : null,
     behind ? h.span([h.Class("flex items-center")], [ArrowDown({ class: "size-2.5", strokeWidth: 2.5 }, h), String(behind)]) : null,
@@ -298,7 +298,7 @@ export function pullRequestCardContent(options: {
         pr?.baseRefName ?? "",
       ]),
       pr?.createdAt
-        ? h.span([h.Class("ml-auto shrink-0 pl-2"), h.Title(`Opened ${formatPromptTimestamp(pr.createdAt)}`)], [`opened ${formatCompactAge(pr.createdAt)}`])
+        ? h.span([h.Class("ml-auto shrink-0 pl-2"), h.Title(`Opened ${formatPromptTimestamp(pr.createdAt)}`)], ["opened ", formatCompactAge(pr.createdAt)])
         : null,
     ], h),
     h.div([h.Class("mt-1 space-y-1")], [
@@ -359,10 +359,10 @@ export function diffFileCardContent(options: { file: DiffFile; patch: string | n
                 line.kind === "remove" && "bg-red-500/10 text-red-700 dark:text-red-300",
                 line.kind === "context" && "text-muted-foreground",
               )),
-            ], [`${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text || " "}`])),
+            ], [line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " ", line.text || " "])),
           ]),
           peek.moreChanges > 0
-            ? h.div([h.Class(cn("mt-1 text-[12px] text-muted-foreground/70", TURN_CARD_ROW_INSET))], [`${peek.moreChanges} more changed line${peek.moreChanges === 1 ? "" : "s"}`])
+            ? h.div([h.Class(cn("mt-1 text-[12px] text-muted-foreground/70", TURN_CARD_ROW_INSET))], [String(peek.moreChanges), " more changed line", peek.moreChanges === 1 ? "" : "s"])
             : null,
         ]
         : note

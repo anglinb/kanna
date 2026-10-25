@@ -170,6 +170,7 @@ export function pickerView(context: ColumnContext, h: H): ReadonlyArray<Child> {
         key: `more-${section}`,
         count: total - UNSEARCHED_BRANCH_LIMIT,
         shown: showAll,
+        toParts: stopped,
         onClick: Message.ClickedPickerShowAll({ section, shown: !showAll }),
         tabIndex: -1,
         suppressHover: mode === "keyboard",
@@ -279,7 +280,7 @@ export function pickerView(context: ColumnContext, h: H): ReadonlyArray<Child> {
                 title: [
                   "Create ",
                   h.span([h.Class("font-mono text-[13px]")], [option.name]),
-                  option.baseBranchName ? h.span([h.Class("text-muted-foreground")], [` from ${option.baseBranchName}`]) : null,
+                  option.baseBranchName ? h.span([h.Class("text-muted-foreground")], [" from ", option.baseBranchName]) : null,
                 ],
                 disabled: picker.isMutating,
                 highlightClassName: optionClassName(isActive),

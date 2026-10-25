@@ -70,7 +70,7 @@ export function rowMenuView(context: ColumnContext, toolIds: ReadonlyMap<string,
   } else if (target?._tag === "Task") {
     const task = findTask(context, target.taskId)
     if (task) {
-      const actions = taskRowActions(task, { canJump: toolIds.has(task.id), isStopping: model.stopping.includes(task.id) })
+      const actions = taskRowActions(task, { canJump: toolIds.has(task.id), isStopping: task.status === "running" && model.stopping.includes(task.id) })
       const stopLabel = task.chatId ? "Stop Chat" : `Stop ${taskKindName(task.type)}`
       items = [
         ...(task.chatId ? chatOpenMenuEntries(context.app, task.chatId) : []),

@@ -124,7 +124,7 @@ function usageWidget(context: ColumnContext, usage: ProviderUsage, show: boolean
       align: "center",
       content: () => [
         h.div([], [summaryWindow.label]),
-        summaryResets ? h.div([h.Class("text-muted-foreground")], [`Resets ${summaryResets}`]) : null,
+        summaryResets ? h.div([h.Class("text-muted-foreground")], ["Resets ", summaryResets]) : null,
       ],
       toView: ({ trigger, portal }) => h.div([...trigger, h.Class("flex items-center gap-2 pr-1")], [
         // Bare ("2h"); the tooltip says "Resets in 2h".

@@ -93,7 +93,7 @@ export function quickActionsWidget(context: ColumnContext, h: H): Html {
                 const ran = state.ranActionId === action.id
                 return widgetRow({
                   key: action.id,
-                  icon: swapIn({ swapKey: ran ? "ran" : "idle" }, [
+                  icon: swapIn({ swapKey: ran ? "ran" : "idle", toParts }, [
                     ran
                       ? Check({ class: "text-success", attributes: [h.AriaLabel("Started")] }, h)
                       : Play({ class: "group-hover/row:text-foreground" }, h),

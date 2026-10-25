@@ -8,7 +8,7 @@ import { buttonClass } from "../ui/button"
 import { Loader2, Square, Workflow as WorkflowIcon } from "../ui/icons"
 import { TURN_CARD_ROW_INSET, turnCardMetaRow, turnCardMetaSeparator } from "../ui/turn-card"
 import { listHoverAttributes, listHoverCard, type HoverMessage } from "./hoverCard"
-import { swapIn, widgetGroup, widgetSection, widgetStatic } from "./parts"
+import { swapIn, widgetGroup, widgetSection, widgetStatic, type PartsMessage } from "./parts"
 import { formatElapsed, TASK_STATUS_ICON } from "./tasks"
 
 // WorkflowWidget (widgets/WorkflowWidget.tsx): Claude workflows, one
@@ -56,7 +56,7 @@ function workflowStatus<M>(workflow: SubagentActivity, summary: WorkflowSummary,
   if (summary.total === 0) return ["Starting…"]
   if (!summary.currentPhase) return [tally]
   const number = phases.findIndex((phase) => phase.index === summary.currentPhase!.index) + 1
-  return [h.span([h.Class("text-muted-foreground/70")], [`Phase ${number} of ${phases.length}`]), ` ${summary.currentPhase.title}`]
+  return [h.span([h.Class("text-muted-foreground/70")], ["Phase ", String(number), " of ", String(phases.length)]), " ", summary.currentPhase.title]
 }
 
 /** What a Workflow card asks of its host. */
@@ -65,6 +65,8 @@ export interface WorkflowHost<M> {
   list: (workflowId: string) => string
   hovered: Readonly<Record<string, string>>
   toHover: (message: HoverMessage) => M
+  /** The parts' own Mounts (a status's cross-fade), lifted. */
+  toParts: (message: PartsMessage) => M
   stopping: ReadonlySet<string>
   onStop: (workflowId: string) => M
   now: number
@@ -88,7 +90,7 @@ export function workflowTiles<M>(options: { agents: readonly WorkflowAgent[]; su
       ))], []),
     ])),
     agents.length > shown.length
-      ? h.span([h.Class("pl-1 text-[10px] leading-none tabular-nums text-muted-foreground")], [`+${agents.length - shown.length}`])
+      ? h.span([h.Class("pl-1 text-[10px] leading-none tabular-nums text-muted-foreground")], ["+", String(agents.length - shown.length)])
       : null,
   ])
 }
@@ -107,7 +109,8 @@ export function workflowAgentCardContent<M>(options: { agent: WorkflowAgent; pha
       ...(agent.model ? [turnCardMetaSeparator(h), h.span([h.Class("truncate")], [agent.model])] : []),
       agent.startedAt !== undefined
         ? h.span([h.Class("ml-auto shrink-0 pl-2 tabular-nums")], [
-          `${formatPromptTimestamp(new Date(agent.startedAt).toISOString())}${elapsed !== null ? ` · ${formatElapsed(elapsed)}` : ""}`,
+          formatPromptTimestamp(new Date(agent.startedAt).toISOString()),
+          elapsed !== null ? ` · ${formatElapsed(elapsed)}` : "",
         ])
         : null,
     ], h),
@@ -116,8 +119,8 @@ export function workflowAgentCardContent<M>(options: { agent: WorkflowAgent; pha
     hasUsage || agent.error || agent.resultPreview ? h.div([h.Class("-mx-1.5 mt-2 border-t border-border/60"), h.AriaHidden(true)], []) : null,
     hasUsage
       ? turnCardMetaRow({ class: "mt-1.5" }, [
-        h.span([], [`${(agent.toolCalls ?? 0).toLocaleString()} tool call${agent.toolCalls === 1 ? "" : "s"}`]),
-        ...(agent.tokens ? [turnCardMetaSeparator(h), h.span([], [`${formatTokens(agent.tokens)} tokens`])] : []),
+        h.span([], [(agent.toolCalls ?? 0).toLocaleString(), " tool call", agent.toolCalls === 1 ? "" : "s"]),
+        ...(agent.tokens ? [turnCardMetaSeparator(h), h.span([], [formatTokens(agent.tokens), " tokens"])] : []),
       ], h)
       : null,
     agent.error
@@ -125,7 +128,8 @@ export function workflowAgentCardContent<M>(options: { agent: WorkflowAgent; pha
       : agent.resultPreview
         ? h.div([h.Class(cn("mt-0.5 line-clamp-4 whitespace-pre-wrap text-[12px] text-muted-foreground", TURN_CARD_ROW_INSET))], [
           h.span([h.Class("text-muted-foreground/70")], ["Result"]),
-          ` ${agent.resultPreview}`,
+          " ",
+          agent.resultPreview,
         ])
         : null,
   ]
@@ -152,10 +156,10 @@ function workflowSection<M>(workflow: SubagentActivity, host: WorkflowHost<M>, h
         h.AriaLabel("Stop workflow"),
         h.Title("Stop workflow"),
         h.OnClick(host.onStop(workflow.id)),
-      ], [swapIn({ swapKey: stopping ? "stopping" : "stop" }, [stopping ? Loader2({ class: "size-4 animate-spin" }, h) : Square({ class: "size-4" }, h)], h)])]
+      ], [swapIn({ swapKey: stopping ? "stopping" : "stop", toParts: host.toParts }, [stopping ? Loader2({ class: "size-4 animate-spin" }, h) : Square({ class: "size-4" }, h)], h)])]
       : null
     : [h.span([h.Class("flex size-6 items-center justify-center")], [
-      swapIn({ swapKey: workflow.status }, [outcome.Icon({ class: cn("size-4", outcome.className), attributes: [h.Role("img"), h.AriaLabel(outcome.label)] }, h)], h),
+      swapIn({ swapKey: workflow.status, toParts: host.toParts }, [outcome.Icon({ class: cn("size-4", outcome.className), attributes: [h.Role("img"), h.AriaLabel(outcome.label)] }, h)], h),
     ])]
 
   return widgetSection({
@@ -173,7 +177,7 @@ function workflowSection<M>(workflow: SubagentActivity, host: WorkflowHost<M>, h
               : null,
             h.div([h.Class("flex min-w-0 items-center gap-1 text-xs text-muted-foreground")], [
               h.span([h.Class("min-w-0 truncate")], workflowStatus(workflow, summary, progress.phases, stopping, h)),
-              h.span([h.Class("ml-auto shrink-0 pl-2 tabular-nums")], [`${elapsed}${summary.tokens > 0 ? ` · ${formatTokens(summary.tokens)} tokens` : ""}`]),
+              h.span([h.Class("ml-auto shrink-0 pl-2 tabular-nums")], [elapsed, summary.tokens > 0 ? ` · ${formatTokens(summary.tokens)} tokens` : ""]),
             ]),
           ], h),
           hoveredAgent

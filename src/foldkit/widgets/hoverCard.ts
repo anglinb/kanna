@@ -434,8 +434,19 @@ export const ListHoverCardContent = Mount.defineStream("WidgetListHoverCardConte
       // Radix's non-modal popover: Escape or a press outside closes it.
       cleanups.push(registerLayer(content, {
         disableOutsidePointerEvents: false,
+        // Focus is judged below: the layer registry counts later layers (a
+        // row's right-click menu) as inside, where Radix's React tree didn't.
+        shouldDismiss: ({ reason }) => reason !== "focus-outside",
         onDismiss: () => sync({ action: "dismiss" }),
       }))
+      // Focus moving anywhere outside the card (into a row's menu) closes it,
+      // as the popover's onFocusOutside did.
+      const handleFocusIn = (event: FocusEvent) => {
+        if (event.target instanceof Node && content.contains(event.target)) return
+        sync({ action: "dismiss" })
+      }
+      document.addEventListener("focusin", handleFocusIn)
+      cleanups.push(() => document.removeEventListener("focusin", handleFocusIn))
 
       // A right-click menu opened from inside the card makes everything under
       // it dead to the pointer, which the browser reports as the pointer

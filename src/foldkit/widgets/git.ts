@@ -198,7 +198,7 @@ function remoteSyncActions(context: ColumnContext, facts: GitFacts, h: H): Reado
       }, h)
       // Counts, not words: at the column's width the branch name is what matters.
       : tooltip(model, "pull", {
-        content: () => [`Pull ${behind} ${behind === 1 ? "commit" : "commits"}`],
+        content: () => ["Pull ", String(behind), " ", behind === 1 ? "commit" : "commits"],
         toView: ({ trigger, portal }) => h.button([
           h.Class(buttonClass({ variant: "ghost", size: "sm", class: SYNC_BUTTON_CLASS })),
           h.AriaLabel(`Pull ${behind}`),
@@ -209,7 +209,7 @@ function remoteSyncActions(context: ColumnContext, facts: GitFacts, h: H): Reado
       }, h),
     facts.isPublishedBranch && ahead > 0
       ? tooltip(model, "push", {
-        content: () => [`Push ${ahead} ${ahead === 1 ? "commit" : "commits"}`],
+        content: () => ["Push ", String(ahead), " ", ahead === 1 ? "commit" : "commits"],
         toView: ({ trigger, portal }) => h.button([
           h.Class(buttonClass({ variant: "default", size: "sm", class: "h-6 gap-1 px-1.5 text-xs" })),
           h.AriaLabel(`Push ${ahead}`),
@@ -360,11 +360,11 @@ function commitBox(context: ColumnContext, facts: GitFacts, h: H): Html | null {
         h.Class("flex h-full min-w-0 flex-1 items-center justify-center px-4 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:text-foreground/50"),
       ], [
         // Cross-fades per state: the label changes width and wording while you watch it.
-        swapIn({ swapKey: commitButtonState, class: "min-w-0 gap-1.5" }, [
+        swapIn({ swapKey: commitButtonState, class: "min-w-0 gap-1.5", toParts }, [
           glyph,
           h.span([h.Class("min-w-0 truncate text-left")], git.isGenerating || facts.isCommitting
             ? [prefix]
-            : [`${prefix} `, GitBranch({ class: "mr-[4.5px] ml-0.5 inline size-3 ", strokeWidth: 2.5 }, h), resolvedBranchName]),
+            : [prefix, " ", GitBranch({ class: "mr-[4.5px] ml-0.5 inline size-3 ", strokeWidth: 2.5 }, h), resolvedBranchName]),
         ], h),
         portal,
       ]),
@@ -495,6 +495,7 @@ function commitList(context: ColumnContext, facts: GitFacts, h: H): ReadonlyArra
           count: visible.hiddenCount,
           shown: git.showAllHistory,
           onClick: Message.ClickedShowAllHistory({ shown: !git.showAllHistory }),
+          toParts,
         }, h)
         : null,
     ], h),
@@ -548,9 +549,10 @@ function fileList(context: ColumnContext, facts: GitFacts, h: H): ReadonlyArray<
       count: Math.min(VISIBLE_DIFF_FILE_INCREMENT, hiddenCount),
       ...(hiddenCount > VISIBLE_DIFF_FILE_INCREMENT ? { detail: `${hiddenCount.toLocaleString()} left` } : {}),
       onClick: Message.ClickedShowMoreFiles(),
+      toParts,
     }, h)
     : !searching && diffs.files.length > INITIAL_VISIBLE_DIFF_FILE_COUNT
-      ? widgetMoreRow({ count: 0, shown: true, onClick: Message.ClickedShowFewerFiles() }, h)
+      ? widgetMoreRow({ count: 0, shown: true, onClick: Message.ClickedShowFewerFiles(), toParts }, h)
       : null
   const allSelected = facts.allSelected
   const list = HOVER_LISTS.changes
@@ -614,7 +616,7 @@ function fileList(context: ColumnContext, facts: GitFacts, h: H): ReadonlyArray<
     widgetList({ attributes: listHoverAttributes(list, toHover, h) }, [
       ...shown.map((file, index) => diffFileRow(context, file, !searching && index >= INITIAL_VISIBLE_DIFF_FILE_COUNT ? WIDGET_ROW_REVEAL_CLASS : undefined, h)),
       searching && matchingFiles.length === 0
-        ? h.keyed("div")("no-match", [h.Class("truncate px-2 py-1.5 text-xs text-muted-foreground")], [`No files match “${git.fileQuery.trim()}”`])
+        ? h.keyed("div")("no-match", [h.Class("truncate px-2 py-1.5 text-xs text-muted-foreground")], ["No files match “", git.fileQuery.trim(), "”"])
         : null,
       filesMore,
     ], h),

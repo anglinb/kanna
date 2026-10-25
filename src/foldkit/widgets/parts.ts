@@ -244,9 +244,41 @@ export function widgetPresence<M>(
   ])
 }
 
-/** A status that changes in place (spinner → check). Keyed by its state, as React remounted it. */
-export function swapIn<M>(options: { swapKey: string; class?: string }, children: ReadonlyArray<Child>, h: HtmlBuilder<M>): Html {
-  return h.keyed("span")(`swap-${options.swapKey}`, [h.Class(cn("inline-flex items-center", options.class))], children)
+const SWAPPED_CLASSES = ["transition-[opacity,filter,scale]", "duration-150", "ease-snappy", "starting:scale-75", "starting:opacity-0", "starting:blur-[2px]", "motion-reduce:transition-opacity"]
+/** Each SwapIn's first key, by the element it sits in (its instance, as React's state was). */
+const swapInitialKeys = new WeakMap<Element, string>()
+/** SwapIns whose key has changed since: from then on every key fades in. */
+const swappedParents = new WeakSet<Element>()
+
+/**
+ * SwapIn's cross-fade: the first key never animates; once the key has
+ * changed, each new one fades in (opacity, a slight scale, 2px of blur).
+ */
+export const SwapInEnter = Mount.define("WidgetSwapInEnter", {
+  args: { swapKey: Schema.String },
+  messages: [PartsMessage.CompletedStopPropagation],
+  execute: ({ element, swapKey }) => Effect.sync(() => {
+    const parent = element.parentElement
+    if (parent) {
+      const initial = swapInitialKeys.get(parent)
+      if (initial === undefined) swapInitialKeys.set(parent, swapKey)
+      else if (initial !== swapKey) swappedParents.add(parent)
+      if (swappedParents.has(parent)) element.classList.add(...SWAPPED_CLASSES)
+    }
+    return PartsMessage.CompletedStopPropagation()
+  }),
+})
+
+/**
+ * A status that changes in place (spinner → check). Keyed by its state, as
+ * React remounted it; after the first change, each new state cross-fades in
+ * (`SwapInEnter`).
+ */
+export function swapIn<M>(options: { swapKey: string; class?: string; toParts?: (message: PartsMessage) => M }, children: ReadonlyArray<Child>, h: HtmlBuilder<M>): Html {
+  return h.keyed("span")(`swap-${options.swapKey}`, [
+    h.Class(cn("inline-flex items-center", options.class)),
+    ...(options.toParts ? [h.OnMount(Mount.mapMessage(SwapInEnter({ swapKey: options.swapKey }), options.toParts))] : []),
+  ], children)
 }
 
 /**
@@ -531,6 +563,8 @@ export function widgetMoreRow<M>(
     suppressHover?: boolean
     tabIndex?: number
     key?: string
+    /** Lifts the label's cross-fade Mount into the host's Message. */
+    toParts?: (message: PartsMessage) => M
   },
   h: HtmlBuilder<M>,
 ): Html {
@@ -548,8 +582,8 @@ export function widgetMoreRow<M>(
       !options.suppressHover && "hover:text-foreground",
     )),
   ], [
-    swapIn({ swapKey: label }, [label], h),
-    options.detail && !shown ? h.span([h.Class("text-muted-foreground/70")], [`· ${options.detail}`]) : null,
+    swapIn({ swapKey: label, ...(options.toParts ? { toParts: options.toParts } : {}) }, [label], h),
+    options.detail && !shown ? h.span([h.Class("text-muted-foreground/70")], ["· ", options.detail]) : null,
     options.href
       ? ArrowUpRight({ class: "size-3 shrink-0" }, h)
       : ChevronDown({ class: cn("size-3 shrink-0 transition-transform duration-200 ease-snappy", shown && "rotate-180") }, h),

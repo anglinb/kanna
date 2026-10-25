@@ -433,7 +433,7 @@ function chooseMenuItem(model: Model, app: AppModel, facts: Facts, target: MenuT
     case "Task": {
       const task = chatFacts(app, facts.chatId).subagents.find((candidate) => candidate.id === target.taskId)
       if (!task) return { model }
-      if (value === "stop") return stopTask(model, facts, task.id)
+      if (value === "stop") return stopTask(model, app, facts, task.id)
       if (value === "show-in-chat") {
         const toolId = chatFacts(app, facts.chatId).toolIds.get(task.id)
         return toolId ? jumpToToolCall(model, facts, toolId) : { model }
@@ -475,10 +475,12 @@ function chooseMenuItem(model: Model, app: AppModel, facts: Facts, target: MenuT
 
 // TASKS
 
-function stopTask(model: Model, facts: Facts, taskId: string): Return {
+function stopTask(model: Model, app: AppModel, facts: Facts, taskId: string): Return {
   if (!facts.chatId) return { model }
+  // Ids whose task has ended since leave the set (useStopTask's effect on the tasks).
+  const running = new Set(chatFacts(app, facts.chatId).subagents.filter((task) => task.status === "running").map((task) => task.id))
   return {
-    model: modifyFields(model, { stopError: () => null, stopping: (stopping) => (stopping.includes(taskId) ? stopping : [...stopping, taskId]) }),
+    model: modifyFields(model, { stopError: () => null, stopping: (stopping) => [...stopping.filter((id) => running.has(id) && id !== taskId), taskId] }),
     commands: [StopTask({ chatId: facts.chatId, taskId })],
   }
 }
@@ -926,7 +928,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ClickedShowAllTasks: ({ shown }) => ({ model: modifyFields(model, { showAllTasks: () => shown }) }),
     ClickedTask: ({ toolId }) => needFacts((facts) => jumpToToolCall(model, facts, toolId)),
     ClickedSubChat: ({ chatId }) => withActions({ model }, openChatActions(app, chatId)),
-    ClickedStopTask: ({ taskId }) => needFacts((facts) => stopTask(model, facts, taskId)),
+    ClickedStopTask: ({ taskId }) => needFacts((facts) => stopTask(model, app, facts, taskId)),
     FailedStopTask: ({ taskId, error }) => ({
       model: modifyFields(model, { stopping: (stopping) => stopping.filter((id) => id !== taskId), stopError: () => error }),
     }),

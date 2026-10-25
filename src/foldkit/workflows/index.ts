@@ -211,6 +211,7 @@ function staticCard(children: ReadonlyArray<Child>, h: H): Html {
 }
 
 const toHover = (message: HoverMessage) => Message.GotHoverMessage({ message })
+const toParts = (message: PartsMessage) => Message.GotPartsMessage({ message })
 
 function tasksCard(model: Model, options: { list: string; control: string; tasks: SubagentActivity[]; toolIds: ReadonlyMap<string, string>; entries: readonly TranscriptEntry[]; error?: string; now: number }, h: H): Html {
   return tasksWidget({
@@ -221,6 +222,7 @@ function tasksCard(model: Model, options: { list: string; control: string; tasks
       list: options.list,
       hoveredKey: model.hovered[options.list] ?? null,
       toHover,
+      toParts,
       stopping: new Set(model.stops[options.control] ?? []),
       error: options.error ?? null,
       showAll: model.showAll[options.list] ?? false,
@@ -237,6 +239,7 @@ function workflowCard(model: Model, options: { key: string; control: string; wor
     list: (workflowId) => `wf:${options.key}:${workflowId}`,
     hovered: model.hovered,
     toHover,
+    toParts,
     stopping: new Set(model.stops[options.control] ?? []),
     onStop: (workflowId) => Message.ClickedStop({ control: options.control, taskId: workflowId }),
     now: options.now,

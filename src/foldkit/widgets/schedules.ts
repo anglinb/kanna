@@ -85,7 +85,7 @@ export function scheduleCard<M>(schedule: ChatSchedule, host: ScheduleCardHost<M
     h.div([h.Class(cn("line-clamp-[6] whitespace-pre-wrap text-sm text-muted-foreground", TURN_CARD_ROW_INSET))], [toMessagePreview(schedule.content)]),
     turnCardMetaRow({ class: "mt-1" }, [
       h.span([h.Class("truncate")], [destination]),
-      ...(schedule.maxRuns ? [turnCardMetaSeparator(h), h.span([h.Class("shrink-0")], [`${schedule.runCount} of ${schedule.maxRuns} runs`])] : []),
+      ...(schedule.maxRuns ? [turnCardMetaSeparator(h), h.span([h.Class("shrink-0")], [String(schedule.runCount), " of ", String(schedule.maxRuns), " runs"])] : []),
     ], h),
     // Edge to edge, as the chat card's rule is: the card pads by 6px.
     h.div([h.Class("-mx-1.5 mt-2 border-t border-border/60"), h.AriaHidden(true)], []),

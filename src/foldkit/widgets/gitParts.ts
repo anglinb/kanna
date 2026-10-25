@@ -70,7 +70,7 @@ export function checksIcon<M>(checks: ChatCommitChecks, options: { onOpen: (url:
       ? X({ class: "size-3 text-destructive", strokeWidth: 2.5 }, h)
       : h.span([h.Class("size-1.5 rounded-full bg-amber-500")], [])
   const content: ReadonlyArray<Child> = [
-    h.span([h.Class("tabular-nums")], [`${checks.passed}/${checks.total}`]),
+    h.span([h.Class("tabular-nums")], [String(checks.passed), "/", String(checks.total)]),
     h.span([h.Class("flex size-3 shrink-0 items-center justify-center")], [glyph]),
   ]
   const className = "flex shrink-0 items-center gap-1"

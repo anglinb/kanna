@@ -9,7 +9,7 @@ import type { Icon } from "../ui/icon"
 import { Check, Loader2, Network, Radar, Square, X } from "../ui/icons"
 import { TURN_CARD_ROW_INSET, turnCardMetaRow, turnCardMetaSeparator } from "../ui/turn-card"
 import { listHoverAttributes, listHoverCard, type HoverMessage } from "./hoverCard"
-import { swapIn, WIDGET_ROW_REVEAL_CLASS, widgetCard, widgetError, widgetList, widgetMoreRow, widgetRow, type WidgetRowMenu } from "./parts"
+import { swapIn, WIDGET_ROW_REVEAL_CLASS, widgetCard, widgetError, widgetList, widgetMoreRow, widgetRow, type PartsMessage, type WidgetRowMenu } from "./parts"
 
 // TasksWidget (widgets/TasksWidget.tsx) and task-status-icon.ts: what runs
 // on the chat's behalf, as a log that runs across turns. Generic over the
@@ -104,7 +104,7 @@ export function agentHoverCardContent<M>(options: { agent: SubagentActivity; det
       turnCardMetaSeparator(h),
       h.span([h.Class("shrink-0")], [TASK_STATUS_ICON[agent.status].label]),
       h.span([h.Class("ml-auto shrink-0 pl-2 tabular-nums")], [
-        `${formatPromptTimestamp(new Date(agent.startedAt).toISOString())} · ${formatElapsed((agent.endedAt ?? now) - agent.startedAt)}`,
+        formatPromptTimestamp(new Date(agent.startedAt).toISOString()), " · ", formatElapsed((agent.endedAt ?? now) - agent.startedAt),
       ]),
     ], h),
     details.description ? h.div([h.Class(cn("mt-1 line-clamp-3 text-sm font-medium text-popover-foreground", TURN_CARD_ROW_INSET))], [details.description]) : null,
@@ -114,12 +114,13 @@ export function agentHoverCardContent<M>(options: { agent: SubagentActivity; det
       h.span([], [countLabel(details.toolCalls, "tool call")]),
       turnCardMetaSeparator(h),
       h.span([], [countLabel(details.messages, "message")]),
-      ...(agent.usage?.totalTokens ? [turnCardMetaSeparator(h), h.span([], [`${formatTokens(agent.usage.totalTokens)} tokens`])] : []),
+      ...(agent.usage?.totalTokens ? [turnCardMetaSeparator(h), h.span([], [formatTokens(agent.usage.totalTokens), " tokens"])] : []),
     ], h),
     latest
       ? h.div([h.Class(cn("truncate text-[12px] text-muted-foreground", TURN_CARD_ROW_INSET))], [
         h.span([h.Class("text-muted-foreground/70")], [running ? "Now" : "Last"]),
-        ` ${latest}`,
+        " ",
+        latest,
       ])
       : running
         ? h.div([h.Class(cn("text-[12px] text-muted-foreground/70", TURN_CARD_ROW_INSET))], ["No steps yet"])
@@ -143,7 +144,7 @@ export function taskHoverCardContent<M>(options: { task: SubagentActivity; now: 
       turnCardMetaSeparator(h),
       h.span([h.Class("shrink-0")], [status.label]),
       h.span([h.Class("ml-auto shrink-0 pl-2 tabular-nums")], [
-        `${formatPromptTimestamp(new Date(task.startedAt).toISOString())} · ${formatElapsed((task.endedAt ?? now) - task.startedAt)}`,
+        formatPromptTimestamp(new Date(task.startedAt).toISOString()), " · ", formatElapsed((task.endedAt ?? now) - task.startedAt),
       ]),
     ], h),
     h.div([h.Class(cn("mt-1 line-clamp-3 text-sm font-medium text-popover-foreground", TURN_CARD_ROW_INSET))], [title]),
@@ -156,14 +157,15 @@ export function taskHoverCardContent<M>(options: { task: SubagentActivity; now: 
         h.div([h.Class("-mx-1.5 mt-2 border-t border-border/60"), h.AriaHidden(true)], []),
         turnCardMetaRow({ class: "mt-1.5" }, [
           workflow && workflow.total > 0
-            ? h.span([], [`${workflow.done} of ${countLabel(workflow.total, "agent")} done`])
+            ? h.span([], [String(workflow.done), " of ", countLabel(workflow.total, "agent"), " done"])
             : task.usage ? h.span([], [countLabel(task.usage.toolUses, "tool call")]) : null,
-          ...(tokens ? [turnCardMetaSeparator(h), h.span([], [`${formatTokens(tokens)} tokens`])] : []),
+          ...(tokens ? [turnCardMetaSeparator(h), h.span([], [formatTokens(tokens), " tokens"])] : []),
         ], h),
         workflow?.currentPhase
           ? h.div([h.Class(cn("truncate text-[12px] text-muted-foreground", TURN_CARD_ROW_INSET))], [
-            h.span([h.Class("text-muted-foreground/70")], [`Phase ${phaseNumber} of ${phases.length}`]),
-            ` ${workflow.currentPhase.title}`,
+            h.span([h.Class("text-muted-foreground/70")], ["Phase ", String(phaseNumber), " of ", String(phases.length)]),
+            " ",
+            workflow.currentPhase.title,
           ])
           : null,
       ]
@@ -194,6 +196,8 @@ export interface TasksHost<M> {
   list: string
   hoveredKey: string | null
   toHover: (message: HoverMessage) => M
+  /** The parts' own Mounts (a status's cross-fade), lifted. */
+  toParts: (message: PartsMessage) => M
   stopping: ReadonlySet<string>
   error: string | null
   showAll: boolean
@@ -228,7 +232,7 @@ export function tasksWidget<M>(
     const { Icon, className, label } = statusIcon(task, isStopping)
     const toolId = toolIds.get(task.id)
     const reveal = index >= collapsedCount ? WIDGET_ROW_REVEAL_CLASS : undefined
-    const icon = swapIn({ swapKey: isStopping ? "stopping" : task.status }, [
+    const icon = swapIn({ swapKey: isStopping ? "stopping" : task.status, toParts: host.toParts }, [
       Icon({ class: className, attributes: [h.Role("img"), h.AriaLabel(label)] }, h),
     ], h)
     const meta = isStopping ? "Stopping…" : formatElapsed((task.endedAt ?? host.now) - task.startedAt)
@@ -291,7 +295,7 @@ export function tasksWidget<M>(
         host.error ? widgetError(host.error, h) : null,
         ...shown.map(row),
         tasks.length > collapsedCount
-          ? widgetMoreRow({ count: tasks.length - collapsedCount, shown: host.showAll, onClick: host.onShowAll(!host.showAll) }, h)
+          ? widgetMoreRow({ count: tasks.length - collapsedCount, shown: host.showAll, onClick: host.onShowAll(!host.showAll), toParts: host.toParts }, h)
           : null,
       ], h),
       hoveredTask && cardContent ? listHoverCard({ list: host.list, rowKey: hoveredTask.id, toMessage: host.toHover }, cardContent, h) : null,
