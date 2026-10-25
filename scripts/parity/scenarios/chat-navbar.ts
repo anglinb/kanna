@@ -1,5 +1,5 @@
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, click, hover, openWidgets, parkPointer, quickClick, REGIONS, regions, rest } from "./_lib/helpers"
+import { CHATS, click, hover, openWidgets, parkPointer, quickClick, REGIONS, regions } from "./_lib/helpers"
 
 // The chat's title bar: the chat actions menu, the title (renames inline),
 // the project and branch, Open in…, terminal, share and widgets buttons.
@@ -201,7 +201,7 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    // The search button opens the palette (it shows on phones and with the old sidebar).
+    // With the sidebar collapsed the navbar leads with the flower and the expand button.
     name: "navbar-collapsed-sidebar",
     route: CHATS.safari,
     ...desktop,
@@ -212,7 +212,6 @@ export const scenarios: Scenario[] = [
       await context.capture("collapsed")
       await hover(context, navbar(context).getByRole("button", { name: "Expand sidebar" }))
       await context.capture("expand-hover")
-      await rest(context)
     },
   }),
 ]
