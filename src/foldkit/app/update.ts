@@ -14,6 +14,7 @@ import * as ChatPreferences from "../core/stores/chatPreferences"
 import * as PendingSend from "../core/stores/pendingSend"
 import * as Composer from "../composer"
 import * as Sidebar from "../core/stores/sidebar"
+import * as ViewerStore from "../core/stores/viewer"
 import {
   ApplyTheme,
   DelayAuthRetry,
@@ -194,16 +195,19 @@ function runningChatIds(data: SidebarData): string[] {
 }
 
 /**
- * Hold a subscription on every running chat except the open one, so opening
+ * Hold a subscription on every running chat except the open ones, so opening
  * a running chat paints from a current window and the server only has to
- * send what landed since the last background push. A chat that stops
- * running is let go after a grace period.
+ * send what landed since the last background push. Open means the chat the
+ * page is on, and the one in the previewer beside it (the viewer store's
+ * live chat). A chat that stops running is let go after a grace period.
  */
 function reconcileBackgroundChats(model: Model): UpdateReturn {
   if (!model.socketReady) return { model }
   const openChatId = activeChatId(model)
+  const previewChatId = ViewerStore.previewedChatId(model.stores.viewer)
   const wanted = new Set(runningChatIds(sidebarData(model)))
   if (openChatId) wanted.delete(openChatId)
+  if (previewChatId) wanted.delete(previewChatId)
 
   const next: Record<string, "following" | "dropping"> = { ...model.backgroundChats }
   const commands: AppCommand[] = []
@@ -212,7 +216,7 @@ function reconcileBackgroundChats(model: Model): UpdateReturn {
       next[chatId] = "following"
       continue
     }
-    if (chatId === openChatId) {
+    if (chatId === openChatId || chatId === previewChatId) {
       delete next[chatId]
       commands.push(UnfollowBackgroundChat({ chatId }))
       continue
@@ -298,6 +302,14 @@ function appliedSidebarSnapshot(before: Model): Step {
 }
 
 function updateStores(model: Model, message: Stores.Message): UpdateReturn {
+  const result = foldStores(model, message)
+  // A previewer taking or letting go of a chat changes what the background follows.
+  if (ViewerStore.previewedChatId(result.model.stores.viewer) === ViewerStore.previewedChatId(model.stores.viewer)) return result
+  const background = reconcileBackgroundChats(result.model)
+  return { model: background.model, commands: [...(result.commands ?? []), ...(background.commands ?? [])] }
+}
+
+function foldStores(model: Model, message: Stores.Message): UpdateReturn {
   return Update.foldChild({
     update: Stores.update,
     read: (parent: Model) => Option.some(parent.stores),
