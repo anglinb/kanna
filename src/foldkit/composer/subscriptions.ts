@@ -31,12 +31,12 @@ const isMain = (model: Model) => !(model.instance?.secondary ?? false)
 
 export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()((entry) => ({
   /** useIsStandalone. */
-  standalone: Subscription.persistentEntry(
+  composerStandalone: Subscription.persistentEntry(
     Dom.streamFromMediaQuery({ query: STANDALONE_QUERY, mapMatches: (matches) => Message.ChangedStandalone({ matches: matches || (navigator as { standalone?: boolean }).standalone === true }) }),
   ),
 
   /** Files from the viewer or a drop on the page, attached as a paste is (`attachFilesToComposer`). */
-  attachFiles: entry({ main: Schema.Boolean }, {
+  composerAttachFiles: entry({ main: Schema.Boolean }, {
     modelToDependencies: (model) => ({ main: isMain(model) }),
     dependenciesToStream: ({ main }) => main
       ? Dom.streamFromEventFilterMapPreventDefault({
@@ -52,7 +52,7 @@ export const subscriptions = Subscription.make<Model, Message, KannaSocketServic
   }),
 
   /** The command palette's "Attach Files" opens the hidden picker, in the click that asked. */
-  requestAttach: entry({ main: Schema.Boolean, domId: Schema.String }, {
+  composerRequestAttach: entry({ main: Schema.Boolean, domId: Schema.String }, {
     modelToDependencies: (model) => ({ main: isMain(model), domId: domIdOf(model) }),
     dependenciesToStream: ({ main, domId }) => main
       ? Dom.streamFromEvent({
@@ -71,7 +71,7 @@ export const subscriptions = Subscription.make<Model, Message, KannaSocketServic
    * with the moment it confirms, and everything that ends it short. `keyup`
    * is heard on the window: the key can come up after focus has gone.
    */
-  hold: entry({ domId: Schema.String, version: Schema.Number, holding: Schema.Boolean }, {
+  composerHold: entry({ domId: Schema.String, version: Schema.Number, holding: Schema.Boolean }, {
     modelToDependencies: (model) => ({ domId: domIdOf(model), version: model.hold.version, holding: model.hold.phase === "holding" }),
     dependenciesToStream: ({ domId, version, holding }) => !holding
       ? Stream.empty

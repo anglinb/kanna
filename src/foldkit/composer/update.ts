@@ -68,6 +68,8 @@ interface Step {
   model: Model
   commands?: ReadonlyArray<AnyCommand>
   actions?: ReadonlyArray<AppAction>
+  /** The step saw to the draft store itself (a send): `finish` writes nothing there. */
+  draftHandled?: boolean
 }
 
 const store = (message: Stores.Message) => AppAction.Store({ message })
@@ -198,7 +200,7 @@ function finish(before: Model, step: Step, ctx: Context): Step {
   const menus = menusOf(model, ctx, view.selectedProvider)
 
   if (model.value !== before.value) {
-    if (draftId) commands.push(Commands.changeDraft(draftId, model.value))
+    if (draftId && !step.draftHandled) commands.push(Commands.changeDraft(draftId, model.value))
     commands.push(Commands.AutoResize({ domId }))
   }
 
@@ -233,7 +235,7 @@ function finish(before: Model, step: Step, ctx: Context): Step {
   }
 
   // The uploaded files are the attachment draft.
-  if (draftId && persistedKey(model) !== persistedKey(before)) {
+  if (draftId && !step.draftHandled && persistedKey(model) !== persistedKey(before)) {
     const persisted = uploadedAttachments(model).map(toChatAttachment)
     if (persisted.length === 0) actions.push(chatInputAction(ChatInput.Message.ClearedAttachmentDrafts({ chatId: draftId })))
     else commands.push(Commands.changeAttachmentDrafts(draftId, persisted))
@@ -385,11 +387,12 @@ function submit(model: Model, ctx: Context, withModifier: boolean): Step {
       value: "",
       pendingSubmit: { kind: "typed", value: model.value, attachments: model.attachments, uploadError: model.uploadError },
     },
-    commands: [Commands.ResetHeight({ domId })],
-    actions: [
-      ...(draftId ? [chatInputAction(ChatInput.Message.ClearedAttachmentDrafts({ chatId: draftId }))] : []),
-      AppAction.Chat({ message: ChatSession.Message.SubmittedMessage({ content: model.value, options }) }),
-    ],
+    // The draft goes once the send is out (`ClearDraftAfterSend`): React
+    // cleared it first, but what that cleared reached the server (draft
+    // protection) only after the render, behind the send.
+    commands: [Commands.ResetHeight({ domId }), ...(draftId ? [Commands.ClearDraftAfterSend({ draftId })] : [])],
+    actions: [AppAction.Chat({ message: ChatSession.Message.SubmittedMessage({ content: model.value, options }) })],
+    draftHandled: true,
   }
 }
 
@@ -733,6 +736,15 @@ function step(model: Model, message: Message, ctx: Context): Step {
     CompletedMountWaveform: () => ({ model }),
     CompletedMountComposer: () => ({ model }),
 
+    ClearedDraftAfterSend: ({ draftId }) => ({
+      // Text typed since the send is a new draft, already saved: it stays.
+      model: { ...model, writtenDraft: model.value === "" ? null : model.writtenDraft },
+      actions: [
+        ...(model.value === "" ? [chatInputAction(ChatInput.Message.ClearedDraft({ chatId: draftId }))] : []),
+        ...(uploadedAttachments(model).length === 0 ? [chatInputAction(ChatInput.Message.ClearedAttachmentDrafts({ chatId: draftId }))] : []),
+      ],
+      draftHandled: true,
+    }),
     SucceededSend: () => {
       const pending = model.pendingSubmit
       if (!pending) return { model }

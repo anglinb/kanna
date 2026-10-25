@@ -90,6 +90,8 @@ export const Message = defineMessageUnion({
   GotSignInMessage: { message: SignInDialogMessage },
 
   // FROM THE PAGE (ChatInputHandle, the session's answer, page-wide events)
+  /** A send is out: its draft (text and files) leaves the store. */
+  ClearedDraftAfterSend: { draftId: Schema.String },
   /** The send went through: the draft taken out for it is gone for good. Forwarded from the session's `SucceededSend`. */
   SucceededSend: {},
   /** The send failed: the draft comes back. Forwarded from the session's `FailedSend`. */

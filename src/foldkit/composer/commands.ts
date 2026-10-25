@@ -340,6 +340,23 @@ export const EmptyRing = Command.define("EmptyHoldRing", {
   }),
 })
 
+// SENDING
+
+/**
+ * The draft leaves the store behind the send. React cleared it in the
+ * same tick as the send, and the server heard of the change (draft
+ * protection) from an effect after the render; here the clear itself waits
+ * for the render, so the send is out first either way.
+ */
+export const ClearDraftAfterSend = Command.define("ClearComposerDraftAfterSend", {
+  args: { draftId: Schema.String },
+  messages: [Message.ClearedDraftAfterSend],
+  execute: ({ draftId }) => Effect.gen(function* () {
+    yield* Render.afterCommit
+    return Message.ClearedDraftAfterSend({ draftId })
+  }),
+})
+
 // THE MENUS
 
 /** The highlighted row into view (selectedSkillItemRef.scrollIntoView), once it is drawn. */
