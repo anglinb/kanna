@@ -590,7 +590,11 @@ function observePage(model: Model, app: AppModel, watch: Watch, paths: ReadonlyA
   const revealed = projectChanged || previous.reviewedPath !== watch.reviewedPath || previous.filesKey !== watch.filesKey
     ? revealReviewed(next, app, facts)
     : { model: next }
-  return withActions(revealed, actions)
+  // PortsWidget's read at once as the column opens (its effect on `active`).
+  const opened = watch.active && (projectChanged || !previous.active)
+    ? then(revealed, (current) => readPorts(current, facts))
+    : revealed
+  return withActions(opened, actions)
 }
 
 // UPDATE

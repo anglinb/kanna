@@ -197,6 +197,6 @@ function workflowSection<M>(workflow: SubagentActivity, host: WorkflowHost<M>, h
 }
 
 /** The runs to show, oldest first: one section each in one card. */
-export function workflowWidget<M>(workflows: readonly SubagentActivity[], host: WorkflowHost<M>, h: HtmlBuilder<M>): Html {
-  return widgetGroup({}, workflows.map((workflow) => workflowSection(workflow, host, h)), h)
+export function workflowWidget<M>(workflows: readonly SubagentActivity[], host: WorkflowHost<M>, h: HtmlBuilder<M>, key?: string): Html {
+  return widgetGroup({ ...(key !== undefined ? { key } : {}) }, workflows.map((workflow) => workflowSection(workflow, host, h)), h)
 }

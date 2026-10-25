@@ -173,11 +173,13 @@ export function widgetSection<M>(options: WidgetSectionOptions<M>, h: HtmlBuilde
  * The card surface that holds a widget's sections, divided from each other.
  * Lifted off whatever is under it while the column is a slideover.
  */
-export function widgetGroup<M>(options: { class?: string; attributes?: ReadonlyArray<Attribute<M>> }, children: ReadonlyArray<Child>, h: HtmlBuilder<M>): Html {
-  return h.section([
+export function widgetGroup<M>(options: { class?: string; attributes?: ReadonlyArray<Attribute<M>>; key?: string }, children: ReadonlyArray<Child>, h: HtmlBuilder<M>): Html {
+  const attributes = [
     h.Class(cn("divide-y divide-border overflow-hidden rounded-2xl border border-border bg-background dark:bg-card mac-app:rounded-[calc(var(--mac-window-radius)-8px)] transition-shadow duration-200 ease-out group-data-[slideover]/widgets:shadow-md", options.class)),
     ...(options.attributes ?? []),
-  ], children)
+  ]
+  // Keyed, a new key is a new card (React's `key` on the widget: the gallery's live run each loop).
+  return options.key !== undefined ? h.keyed("section")(options.key, attributes, children) : h.section(attributes, children)
 }
 
 /** A one-section widget: the common case. */
