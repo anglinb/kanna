@@ -8,6 +8,7 @@ import * as Stores from "../app/stores"
 import { init as initApp } from "../app/update"
 import * as ChatSession from "../core/chatSession"
 import { memoryStorage } from "../core/stores/testing"
+import { Message as SidebarMessage } from "../sidebar/message"
 import { Message, type Watch } from "./message"
 import { init } from "./model"
 import { routeDelegatedSend, routeLocalLink, update } from "./update"
@@ -191,6 +192,38 @@ describe("chat page: navbar", () => {
     const opened = update(init(), Message.ClickedDelegatedList({ chatId: "c1", overlay: false }), app)
     const message = opened.outMessage?.action._tag === "Store" ? opened.outMessage.action.message : null
     expect(message?._tag).toBe("GotViewerMessage")
+  })
+})
+
+describe("chat page: the tabs' hover card", () => {
+  test("a card asks for what the sidebar's card hasn't already fetched, files before preview", () => {
+    const app = boot("/chat/c1")
+    const opened = update(init(), Message.ChangedTabCardRow({ key: "c2" }), app).model
+    expect(opened.tabCard.hovered).toBe("c2")
+    const files = update(opened, Message.GotTabCardMessage({ message: SidebarMessage.RequestedCardLoad({ chatId: "c2", kind: "files", cacheKey: "c2-files" }) }), app)
+    expect(names(files)).toEqual(["LoadChatTabCardFiles"])
+    // The sidebar's card had the preview: no second fetch.
+    const preview = { lastUserMessagePreview: "Deploy it", lastAgentMessagePreview: null } as never
+    const known: AppModel = { ...app, sidebar: { ...app.sidebar, previewCache: { "c2-preview": preview } } }
+    const fromCache = update(files.model, Message.GotTabCardMessage({ message: SidebarMessage.RequestedCardLoad({ chatId: "c2", kind: "preview", cacheKey: "c2-preview" }) }), known)
+    expect(names(fromCache)).toEqual([])
+    expect(fromCache.model.tabCard.heldPreview).toEqual({ chatId: "c2", preview })
+    // The answer lands in the card it was asked for.
+    const result = { files: [] } as never
+    const landed = update(files.model, Message.SucceededLoadTabCardFiles({ chatId: "c2", cacheKey: "c2-files", result }), app).model
+    expect(landed.tabCard.heldTouchedFiles).toEqual({ chatId: "c2", result })
+    // Closed, it stops waiting: a late answer is cached, not shown.
+    const closed = update(files.model, Message.ChangedTabCardRow({ key: null }), app).model
+    const late = update(closed, Message.SucceededLoadTabCardFiles({ chatId: "c2", cacheKey: "c2-files", result }), app).model
+    expect(late.tabCard.touchedFilesCache["c2-files"]).toBe(result)
+    expect(late.tabCard.heldTouchedFiles).toBeNull()
+  })
+
+  test("a preview in the card opens its chat at that message, dismissing the card first", () => {
+    const app = boot("/chat/c1")
+    const clicked = update(init(), Message.GotTabCardMessage({ message: SidebarMessage.ClickedCardMessage({ list: "chats", chatId: "c2", role: "reply" }) }), app)
+    expect(names(clicked)).toEqual(["DismissChatTabCard"])
+    expect(clicked.outMessage?.action).toEqual(AppAction.OpenChatAt({ chatId: "c2", jump: "reply" }))
   })
 })
 

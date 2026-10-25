@@ -13,6 +13,7 @@ import { domStream } from "../ui/overlay/stream"
 import { chatRowMenuEntries, DelegatorIcon, renderChatRowMenuItem, type ChatRowMenuContext } from "./chatRowMenu"
 import { chatStatusDot } from "./emptyStateProject"
 import { Message, type TabDrag } from "./message"
+import { HOVER_CARD_OPEN_ATTRIBUTE, openTabCardKey, tabHoverCardView, trackTabCard } from "./tabHoverCard"
 import type { Model } from "./model"
 
 // ChatTabs (components/chat-ui/ChatTabs.tsx): with the Chat Tabs setting on,
@@ -107,9 +108,10 @@ type TabListMessage =
   | typeof Message.DroppedTab.Type
   | typeof Message.MiddleClickedTab.Type
   | typeof Message.PressedTabShortcut.Type
+  | typeof Message.ChangedTabCardRow.Type
 
 export const TabListMount = Mount.defineStream("ChatTabList", {
-  messages: [Message.PressedTab, Message.StartedTabDrag, Message.MovedTabDrag, Message.DroppedTab, Message.MiddleClickedTab, Message.PressedTabShortcut],
+  messages: [Message.PressedTab, Message.StartedTabDrag, Message.MovedTabDrag, Message.DroppedTab, Message.MiddleClickedTab, Message.PressedTabShortcut, Message.ChangedTabCardRow],
   execute: ({ element }) => domStream<TabListMessage>((emit) => {
     const list = element as HTMLElement
     let press: { chatId: string; pointerId: number; x: number; rects: DOMRect[]; index: number; dragging: boolean } | null = null
@@ -121,8 +123,13 @@ export const TabListMount = Mount.defineStream("ChatTabList", {
       const tab = tabOf(event.target)
       if (!tab || !list.contains(tab)) return
       // The close button, the open tab's menu button and the title's field
-      // keep their presses to themselves.
-      if (event.target instanceof Element && event.target.closest("[data-tab-own-press]")) return
+      // keep their presses to themselves: past the bar too, as React's
+      // stopPropagation did, so a card or menu over the page doesn't take
+      // them for a press outside.
+      if (event.target instanceof Element && event.target.closest("[data-tab-own-press]")) {
+        event.stopPropagation()
+        return
+      }
       const chatId = tab.dataset.chatTab!
       if (event.button === 0) {
         const all = tabs()
@@ -197,12 +204,15 @@ export const TabListMount = Mount.defineStream("ChatTabList", {
     }
 
     list.addEventListener("pointerdown", down)
+    // The chat card beneath the tab under the pointer (tabHoverCard.ts).
+    const stopTrackingCard = trackTabCard(list, emit)
     window.addEventListener("pointermove", move)
     window.addEventListener("pointerup", end)
     window.addEventListener("pointercancel", end)
     list.addEventListener("auxclick", aux)
     window.addEventListener("keydown", key, true)
     return () => {
+      stopTrackingCard()
       list.removeEventListener("pointerdown", down)
       window.removeEventListener("pointermove", move)
       window.removeEventListener("pointerup", end)
@@ -249,6 +259,8 @@ function tabView(
     editorLabel: string
     hasOthers: boolean
     hasTabsToRight: boolean
+    /** The chat card is up beneath this tab (`HOVER_CARD_OPEN_ATTRIBUTE`). */
+    cardOpen: boolean
     titleView: (title: string) => Html
   },
   h: H,
@@ -323,6 +335,8 @@ function tabView(
     h.DataAttribute("chat-tab", tab.chatId),
     // What the chat hover card finds the tab under the pointer by.
     h.DataAttribute("chat-id", normalizeChatId(tab.chatId)),
+    // The tab keeps its hover look while the pointer crosses to its card.
+    ...(options.cardOpen ? [h.DataAttribute(HOVER_CARD_OPEN_ATTRIBUTE, "")] : []),
     // For a keyboard: a tab is focusable, and has no press to select on.
     h.OnKeyDownPreventDefault((key) => ((key === "Enter" || key === " ") && !active ? Option.some(Message.PressedTab({ chatId: tab.chatId })) : Option.none())),
     h.Class(cn(
@@ -378,6 +392,7 @@ export function chatTabsView(model: Model, app: AppModel, activeChatId: string |
   const tabs = app.stores.chatTabs.tabs
   const threads = threadsByChatId(app, tabs)
   const initial = new Set(model.tabsInitial ?? tabs.map((tab) => tab.chatId))
+  const cardKey = openTabCardKey(model, app, threads)
   return h.div([h.Class("pointer-events-none hidden min-w-0 flex-1 translate-y-[9px] md:flex mac-app:md:translate-y-0 transition-[translate] duration-300 ease-glide motion-reduce:transition-none group-data-[sidebar-collapsed]/navbar:translate-y-0")], [
     h.div([
       h.Role("tablist"),
@@ -395,12 +410,38 @@ export function chatTabsView(model: Model, app: AppModel, activeChatId: string |
       editorLabel,
       hasOthers: tabs.length > 1,
       hasTabsToRight: index < tabs.length - 1,
+      cardOpen: cardKey !== null && cardKey === normalizeChatId(tab.chatId),
       titleView,
     }, h))),
     // dnd-kit's screen reader instructions, which every tab is described by.
     h.div([h.Id("DndDescribedBy-0"), h.Style({ display: "none" })], [
       "To pick up a draggable item, press the space bar. While dragging, use the arrow keys to move the item. Press space again to drop the item in its new position, or press escape to cancel.",
     ]),
+    // And its live region, where it announces a drag (empty: tabs drag by pointer only).
+    h.div([
+      h.Id("DndLiveRegion-0"),
+      h.Role("status"),
+      h.AriaLive("assertive"),
+      h.AriaAtomic(true),
+      h.Style({
+        position: "fixed",
+        top: "0px",
+        left: "0px",
+        width: "1px",
+        height: "1px",
+        margin: "-1px",
+        border: "0px",
+        padding: "0px",
+        overflow: "hidden",
+        clip: "rect(0px, 0px, 0px, 0px)",
+        "clip-path": "inset(100%)",
+        "white-space": "nowrap",
+      }),
+    ], []),
+    // The chat rows' card, beneath the tab under the pointer. Pressing a tab
+    // closes it, as any click outside a card does, so it is never up over a
+    // tab being dragged.
+    tabHoverCardView(model, app, threads, h),
   ])
 }
 

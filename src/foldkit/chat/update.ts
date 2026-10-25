@@ -31,6 +31,7 @@ import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
 import { chooseChatRowMenuItem } from "./chatRowMenu"
+import { updateTabCard } from "./tabHoverCard"
 import {
   ElapseColumnSlide,
   ElapseTerminalDiffRefresh,
@@ -492,6 +493,13 @@ function commitColumnWidth(model: Model, app: AppModel, widthPx: number): Return
   return withActions({ model }, [rightSidebar(RightSidebar.Message.ChangedSize({ size: Math.round(getWidgetsColumnWidthPx(widthPx, model.layoutWidth)) }))])
 }
 
+/** The tab bar's hover card (tabHoverCard.ts). */
+function tabCardStep(model: Model, message: Message, app: AppModel): Return {
+  const step = updateTabCard(model, message, app)
+  if (!step) return { model }
+  return withActions({ model: step.model, commands: step.commands }, step.action ? [step.action] : [])
+}
+
 // UPDATE
 
 export function update(model: Model, message: Message, app: AppModel): Return {
@@ -601,6 +609,11 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       if (!drag || drag.overIndex === drag.fromIndex) return { model: cleared }
       return withActions({ model: cleared }, [chatTabs(ChatTabs.Message.ReorderedTabs({ orderedChatIds: movedTabIds(app.stores.chatTabs.tabs, drag.fromIndex, drag.overIndex) }))])
     },
+    ChangedTabCardRow: () => tabCardStep(model, message, app),
+    GotTabCardMessage: () => tabCardStep(model, message, app),
+    SucceededLoadTabCardFiles: () => tabCardStep(model, message, app),
+    SucceededLoadTabCardPreview: () => tabCardStep(model, message, app),
+    FailedLoadTabCard: () => ({ model }),
 
     ClickedTitle: () => beginTitleEdit(model, facts()),
     PressedTitleKey: () => beginTitleEdit(model, facts()),

@@ -11,7 +11,7 @@ import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
 import * as DefaultModelsDialog from "./defaultModelsDialog"
-import { TabDrag, Watch } from "./message"
+import { TabCard, TabDrag, Watch } from "./message"
 
 // The chat page's Model: the sub-slices, and what ChatPage kept in state and
 // refs of its own.
@@ -84,6 +84,8 @@ export const Model = Schema.Struct({
   tabDrag: Schema.NullOr(TabDrag),
   /** The tabs the bar came up with: those don't animate in. */
   tabsInitial: Schema.NullOr(Schema.Array(Schema.String)),
+  /** The chat card beneath the tab under the pointer (tabHoverCard.ts). */
+  tabCard: TabCard,
 
   washes: Schema.Struct({ transcript: Wash, widgets: Wash }),
   washTokens: Schema.Number,
@@ -240,6 +242,7 @@ export function init(): Model {
     tabMenus: {},
     tabDrag: null,
     tabsInitial: null,
+    tabCard: { hovered: null, previewCache: {}, touchedFilesCache: {}, heldPreview: null, heldTouchedFiles: null, cardFilesKey: null, cardPreviewKey: null },
     washes: { transcript: wash, widgets: wash },
     washTokens: 0,
     title: { draft: null, submitted: null, submittedOver: null },

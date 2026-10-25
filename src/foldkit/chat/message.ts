@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { ProjectQuickAction } from "../../shared/protocol"
-import type { UsageLimitsSnapshot } from "../../shared/types"
+import type { ChatPreview, ChatTouchedFilesResult, UsageLimitsSnapshot } from "../../shared/types"
 import type { SendOptions } from "../core/chatSession"
 import { opaque } from "../core/schema"
 import { defineMessageUnion } from "foldkit/message"
@@ -13,6 +13,7 @@ import * as Widgets from "../widgets"
 import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
+import { Message as SidebarMessage } from "../sidebar/message"
 import * as DefaultModelsDialog from "./defaultModelsDialog"
 
 // The chat page's Messages (app/slice.ts). Kept apart from index.ts so the
@@ -85,6 +86,24 @@ export const TabDrag = Schema.Struct({
 })
 export type TabDrag = typeof TabDrag.Type
 
+/**
+ * The sidebar's chat hover card beneath the tab under the pointer
+ * (tabHoverCard.ts): which tab it is on, and what it has fetched. React's
+ * caches were module-wide and shared with the sidebar's card; here the
+ * sidebar's are read alongside these.
+ */
+export const TabCard = Schema.Struct({
+  hovered: Schema.NullOr(Schema.String),
+  previewCache: Schema.Record(Schema.String, opaque<ChatPreview>("ChatPreview")),
+  touchedFilesCache: Schema.Record(Schema.String, opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult")),
+  heldPreview: Schema.NullOr(Schema.Struct({ chatId: Schema.String, preview: opaque<ChatPreview>("ChatPreview") })),
+  heldTouchedFiles: Schema.NullOr(Schema.Struct({ chatId: Schema.String, result: opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult") })),
+  /** The keys the open card is waiting on: an answer for another is cached, not shown. */
+  cardFilesKey: Schema.NullOr(Schema.String),
+  cardPreviewKey: Schema.NullOr(Schema.String),
+})
+export type TabCard = typeof TabCard.Type
+
 export const TabShortcut = Schema.Literals(["next", "previous", "close", "new"])
 export type TabShortcut = typeof TabShortcut.Type
 
@@ -142,6 +161,13 @@ export const Message = defineMessageUnion({
   StartedTabDrag: { chatId: Schema.String, fromIndex: Schema.Number, width: Schema.Number },
   MovedTabDrag: { dx: Schema.Number, overIndex: Schema.Number },
   DroppedTab: {},
+  /** The tab the hover card is on, from the bar's pointer tracking (null: closed). */
+  ChangedTabCardRow: { key: Schema.NullOr(Schema.String) },
+  /** From the card's body, which is the sidebar's (`chatCardBody`). */
+  GotTabCardMessage: { message: SidebarMessage },
+  SucceededLoadTabCardFiles: { chatId: Schema.String, cacheKey: Schema.String, result: opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult") },
+  SucceededLoadTabCardPreview: { chatId: Schema.String, cacheKey: Schema.String, preview: opaque<ChatPreview>("ChatPreview") },
+  FailedLoadTabCard: {},
 
   // The title
   ClickedTitle: {},
