@@ -1,4 +1,3 @@
-import { Effect } from "effect"
 import { Mount } from "foldkit"
 import { domStream } from "../ui/overlay/stream"
 import { Message } from "./message"
@@ -41,19 +40,6 @@ function checkPeekAway(away: PeekAway, now: number, held: boolean): { away: Peek
 function isOnPeekPanel(fromEdgePx: number, y: number, panel: { reachPx: number; top: number; bottom: number }, slopPx: number) {
   return fromEdgePx <= panel.reachPx + slopPx && y >= panel.top - slopPx && y <= panel.bottom + slopPx
 }
-
-/** Moves an element to the end of <body> (a React portal that renders no element of its own). */
-export const PortalToBody = Mount.define("SidebarPortalToBody", {
-  messages: [Message.CompletedSideEffect],
-  execute: ({ element }) =>
-    Effect.gen(function* () {
-      yield* Effect.acquireRelease(
-        Effect.sync(() => element.ownerDocument.body.appendChild(element)),
-        () => Effect.sync(() => element.remove()),
-      )
-      return Message.CompletedSideEffect()
-    }),
-})
 
 /** Whether a chat's send time moved between two serialized `sentAt` maps (a removal is not a send). */
 function sendStarted(previous: string, next: string) {

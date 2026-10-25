@@ -433,7 +433,6 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     }))),
 
     ToggledProjectGroup: ({ projectId }) => {
-      if (model.suppressProjectToggle) return { model: modifyFields(model, { suppressProjectToggle: () => false }) }
       const group = app.stores.sidebar.data.projectGroups.find((item) => item.groupKey === projectId)
       const collapsed = group ? isProjectCollapsed(model, group) : Boolean(model.projectFolds[projectId])
       return { model: modifyFields(model, { projectFolds: (folds) => ({ ...folds, [projectId]: !collapsed }) }) }
@@ -629,7 +628,8 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     },
     PressedAddProjectShortcut: () => ({ model, commands: [OpenCommandPalette({ page: "add-project" })] }),
     PressedToggleFocusShortcut: () => requestAction(
-      modifyFields(model, { skipFocusMotion: () => true }),
+      // No copy of the page is taken: a shortcut lands at once (motion.ts).
+      model,
       store(Stores.Message.GotFocusModeMessage({ message: FocusMode.Message.ToggledFocusMode() })),
     ),
     PressedJumpShortcut: ({ chatId }) => requestAction(model, navigate(`/chat/${chatId}`)),

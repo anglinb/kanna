@@ -128,10 +128,6 @@ export const Model = Schema.Struct({
   /** A Cmd/Ctrl-click on a chat, heard before the row's own click. */
   backgroundClickChatId: Schema.NullOr(Schema.String),
   projectDrag: Schema.NullOr(ProjectDrag),
-  /** A drag just ended on a header: the click that follows it is not a toggle. */
-  suppressProjectToggle: Schema.Boolean,
-  /** The next focus-mode change lands without motion (the toggle shortcut). */
-  skipFocusMotion: Schema.Boolean,
 })
 export type Model = typeof Model.Type
 
@@ -192,7 +188,5 @@ export function init(storage?: Storage): Model {
     cardPreviewKey: null,
     backgroundClickChatId: null,
     projectDrag: null,
-    suppressProjectToggle: false,
-    skipFocusMotion: false,
   }
 }
