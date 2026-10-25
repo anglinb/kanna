@@ -46,7 +46,7 @@ import { isNightlyVersion } from "../../shared/types"
 import * as OpenRouterCallback from "./openRouterCallback"
 import { FollowRestart, HandleReloadRequest, MigrateChannelPins, MigrateLegacyBrowserSettings, MigrateLegacySetupFlags, updateCheckInterval } from "./maintenance"
 import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
-import { SliceOutMessage, type AppModel, type SliceReturn } from "./slice"
+import { SliceOutMessage, type AppModel, type SliceObserve, type SliceReturn } from "./slice"
 import type { AppAction } from "./action"
 import * as Stores from "./stores"
 import { resolveTheme, themePreference } from "./theme"
@@ -451,6 +451,10 @@ const foldAppDialog = Update.foldChild({
 /** Runs a slice's request. Sidebar collapse and the page's chat are the root's own. */
 export function performAction(model: Model, action: AppAction): UpdateReturn {
   switch (action._tag) {
+    case "Batch":
+      return Update.combine(model, (action.actions as ReadonlyArray<AppAction>).map((each) => (step: Model) => performAction(step, each)))
+    case "OpenCommandPalette":
+      return foldPaletteResult(model, PaletteSlice.requestOpen(model.palette, action.page, model))
     case "CollapseSidebar":
       return update(model, Message.ClickedCollapseSidebar())
     case "ExpandSidebar":
@@ -508,9 +512,52 @@ const foldSetup = sliceFold("setup", SetupSlice.update, (message: SetupSlice.Mes
 const foldWorkflows = sliceFold("workflows", WorkflowsSlice.update, (message: WorkflowsSlice.Message) => Message.GotWorkflowsMessage({ message }))
 const foldTerminalPage = sliceFold("terminalPage", TerminalPageSlice.update, (message: TerminalPageSlice.Message) => Message.GotTerminalPageMessage({ message }))
 
+/** A palette result the root started (requestOpen), folded as a palette message would be. */
+function foldPaletteResult(model: Model, result: SliceReturn<PaletteSlice.Model, PaletteSlice.Message>): UpdateReturn {
+  const next = modifyFields(model, { palette: () => result.model })
+  const commands = Command.mapMessages(result.commands, (message: PaletteSlice.Message) => Message.GotPaletteMessage({ message }))
+  if (!result.outMessage) return { model: next, commands }
+  const acted = performAction(next, result.outMessage.action)
+  return { model: acted.model, commands: [...commands, ...(acted.commands ?? [])] }
+}
+
+// SLICE OBSERVERS (app/slice.ts `observe`)
+
+type AnySliceModule = { observe?: SliceObserve<unknown, unknown> }
+const observers: ReadonlyArray<[keyof Model, AnySliceModule, (message: never) => Message]> = [
+  ["sidebar", SidebarSlice as AnySliceModule, (message: SidebarSlice.Message) => Message.GotSidebarMessage({ message })],
+  ["home", HomeSlice as AnySliceModule, (message: HomeSlice.Message) => Message.GotHomeMessage({ message })],
+  ["settings", SettingsSlice as AnySliceModule, (message: SettingsSlice.Message) => Message.GotSettingsMessage({ message })],
+  ["chatPage", ChatPageSlice as AnySliceModule, (message: ChatPageSlice.Message) => Message.GotChatPageMessage({ message })],
+  ["palette", PaletteSlice as AnySliceModule, (message: PaletteSlice.Message) => Message.GotPaletteMessage({ message })],
+  ["setup", SetupSlice as AnySliceModule, (message: SetupSlice.Message) => Message.GotSetupMessage({ message })],
+  ["workflows", WorkflowsSlice as AnySliceModule, (message: WorkflowsSlice.Message) => Message.GotWorkflowsMessage({ message })],
+  ["terminalPage", TerminalPageSlice as AnySliceModule, (message: TerminalPageSlice.Message) => Message.GotTerminalPageMessage({ message })],
+]
+
+function observeSlices(previous: Model, result: UpdateReturn): UpdateReturn {
+  if (result.model === previous) return result
+  let model = result.model
+  const commands: AppCommand[] = [...(result.commands ?? [])]
+  for (const [key, module, wrap] of observers) {
+    if (!module.observe) continue
+    const observed = module.observe(model[key], previous, model)
+    if (observed.model !== model[key]) model = { ...model, [key]: observed.model }
+    commands.push(...Command.mapMessages(observed.commands, wrap as (message: unknown) => Message) as AppCommand[])
+    if (observed.outMessage) {
+      const acted = performAction(model, observed.outMessage.action)
+      model = acted.model
+      commands.push(...(acted.commands ?? []))
+    }
+  }
+  return { model, commands }
+}
+
 // UPDATE
 
-export const update = (model: Model, message: Message): UpdateReturn =>
+export const update = (model: Model, message: Message): UpdateReturn => observeSlices(model, updateRoot(model, message))
+
+const updateRoot = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     ClickedLink: ({ request }) =>
       Navigation.UrlRequest.match<UpdateReturn>(request, {
