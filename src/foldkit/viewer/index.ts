@@ -1,4 +1,4 @@
-import { Option, Stream } from "effect"
+import { Option } from "effect"
 import { Dom, Subscription } from "foldkit"
 import * as Composer from "../composer"
 import * as ChatSession from "../core/chatSession"
@@ -33,6 +33,15 @@ export { view, type ViewInputs } from "./view"
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)"
 
+/**
+ * A lifted record under keys of its own: the page aggregates the root's
+ * session and its own composer under the same names, and an aggregate
+ * takes each key once.
+ */
+function prefixed<Record extends object>(prefix: string, record: Record): Record {
+  return Object.fromEntries(Object.entries(record).map(([key, entry]) => [`${prefix}${key[0]!.toUpperCase()}${key.slice(1)}`, entry])) as Record
+}
+
 export const subscriptions = Subscription.aggregate(
   Subscription.make<Model, Message, KannaSocketService>()(() => ({
     /** prefersReducedMotion(): a close then drops the card at once. */
@@ -41,14 +50,12 @@ export const subscriptions = Subscription.aggregate(
     ),
   })),
   // The previewed chat's session and its composer.
-  Subscription.lift(ChatSession.subscriptions)<Model, Message>({
+  prefixed("viewerPreview", Subscription.lift(ChatSession.subscriptions)<Model, Message>({
     read: (model) => Option.fromNullishOr(model.preview?.session),
     toParentMessage: (message: ChatSession.Message) => Message.GotPreviewSessionMessage({ chatId: null, message }),
-  }),
-  Subscription.lift(Composer.subscriptions)<Model, Message>({
+  })),
+  prefixed("viewerPreview", Subscription.lift(Composer.subscriptions)<Model, Message>({
     read: (model) => Option.fromNullishOr(model.preview?.composer),
     toParentMessage: (message: Composer.Message) => Message.GotPreviewComposerMessage({ chatId: null, message }),
-  }),
+  })),
 )
-
-export { Stream }
