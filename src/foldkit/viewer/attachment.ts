@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { Mount, Submodel } from "foldkit"
+import { Mount } from "foldkit"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import {
   classifyAttachmentPreview,
@@ -13,7 +13,7 @@ import {
 import { cn } from "../../client/lib/utils"
 import type { ViewerAttachment } from "../core/stores/viewer"
 import * as Messages from "../transcript/messages"
-import { transcriptMarkdownChildren } from "../transcript/messages/context"
+import { rowsSlot } from "./rows"
 import type { Child } from "../ui/attributes"
 import { ArrowDown, ArrowUp, ChevronsUpDown, ExternalLink, File, FileImage, FileJson, FileText, FileVideo, Link2, Sheet } from "../ui/icons"
 import type { Icon } from "../ui/icon"
@@ -232,40 +232,12 @@ function attachmentBody(
   }
   if (kind === "markdown" && view === "rendered") {
     // A reading measure: ~72 characters a line, centred, however wide the viewer is.
+    // The prose box and its markdown are the transcript rows' (rows.ts).
     return h.article([h.Class("mx-auto max-w-[72ch] px-6 py-8")], [
-      markdownRows(model, slot, content.content, h),
+      rowsSlot(model, slot, { kind: "markdown", key: `viewer:${slot}`, text: content.content }, h),
     ])
   }
-  return h.div([h.Class("p-4")], [rowsSlot(model, `file-content:${slot}`, (_context, rowsH) => Messages.fileContentView({ content: content.content }, rowsH), h)])
-}
-
-// MARKDOWN AND TEXT, DRAWN WITH THE TRANSCRIPT'S ROWS
-
-/**
- * Markup drawn by the transcript rows' own helpers, in their Model's
- * boundary: the markdown's code copy and local links are theirs, and come
- * back through `GotRowsMessage`.
- */
-const RowsSlot = Submodel.defineView<Messages.Model, Messages.Message, { render: (context: Messages.RowContext, h: HtmlBuilder<Messages.Message>) => Html }>(
-  (rows, inputs, h) => inputs.render(Messages.rowContext(rows, { interceptLocalLinks: true }), h),
-)
-
-export function rowsSlot(model: Model, slotId: string, render: (context: Messages.RowContext, h: HtmlBuilder<Messages.Message>) => Html, h: H): Html {
-  return h.submodel({
-    slotId,
-    model: model.rows,
-    view: RowsSlot,
-    viewInputs: { render },
-    toParentMessage: (message: Messages.Message) => Message.GotRowsMessage({ message }),
-  })
-}
-
-/** The prose box with `<TranscriptMarkdown text>` in it. */
-function markdownRows(model: Model, slot: string, text: string, h: H): Html {
-  return rowsSlot(model, `markdown:${slot}`, (context, rowsH) => rowsH.div(
-    [rowsH.Class("prose prose-sm max-w-none dark:prose-invert")],
-    transcriptMarkdownChildren(text, `viewer:${slot}`, context, rowsH),
-  ), h)
+  return h.div([h.Class("p-4")], [rowsSlot(model, slot, { kind: "file-content", content: content.content }, h)])
 }
 
 // SKELETONS

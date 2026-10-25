@@ -11,7 +11,7 @@ import * as Dialog from "../ui/dialog"
 import { ChartColumn, Download, PenLine, Shapes } from "../ui/icons"
 import { input } from "../ui/input"
 import { segmentedControl } from "../ui/segmented-control"
-import { rowsSlot } from "./attachment"
+import { rowsSlot } from "./rows"
 import { captureOf } from "./capture"
 import { markupView } from "./markup"
 import { Message } from "./message"
@@ -46,7 +46,7 @@ export function chartFullView(model: Model, context: LayerContext, payload: Char
         onClick: Message.GotRowsMessage({ message: Messages.downloadChartTable(payload) }),
       }, Download({}, h), h),
     ],
-    body: [rowsSlot(model, "viewer-chart-body", (rowContext, rowsH) => Messages.chartFullViewBody(CHART_ROWS_KEY, payload, rowContext, rowsH), h)],
+    body: [rowsSlot(model, "chart", { kind: "chart", key: CHART_ROWS_KEY, payload }, h)],
   }, h)
 }
 
@@ -81,7 +81,7 @@ export function visualizationFullView(model: Model, context: LayerContext, artif
       dialog?.kind === "markup" ? markupView(model, artifact.title, h) : null,
       h.div([h.Class("p-4")], [
         // A key pressed in the frame is the frame's; the frame hands Escape back when it has no use for it.
-        rowsSlot(model, "viewer-visualization-body", (rowContext, rowsH) => Messages.visualizationFrame(visualizationRowsKey(artifact), artifact, { reportsEscape: true }, rowContext, rowsH), h),
+        rowsSlot(model, "visualization", { kind: "visualization", key: visualizationRowsKey(artifact), artifact }, h),
       ]),
     ],
   }, h)
