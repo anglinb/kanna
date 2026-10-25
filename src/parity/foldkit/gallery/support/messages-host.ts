@@ -53,6 +53,7 @@ const foldMessages = Update.foldChild({
         model: { ...model, status: describeResume(action), messages: Messages.settledResume(model.messages, RESUME_KEY) },
       }),
       RequestedStop: () => setStatus(STOPPED),
+      EscapedVisualization: () => (model) => ({ model }),
     }),
 })
 

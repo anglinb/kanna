@@ -70,10 +70,11 @@ const SETTLED_FOR_GOOD_MS = 5000
  * Model's start, so the two agree.
  */
 export const VisualizationFrame = Mount.defineStream("VisualizationFrame", {
-  args: { key: Schema.String, url: Schema.String, declared: Schema.Number },
-  messages: [Message.MeasuredFrameWidth, Message.KnewFrameHeights, Message.GotFrameDocument, Message.FailedFrameDocument, Message.ResizedFrame, Message.LoadedFrame],
-  execute: ({ element, key, url, declared }) =>
+  args: { key: Schema.String, url: Schema.String, declared: Schema.Number, reportsEscape: Schema.Boolean },
+  messages: [Message.MeasuredFrameWidth, Message.KnewFrameHeights, Message.GotFrameDocument, Message.FailedFrameDocument, Message.ResizedFrame, Message.LoadedFrame, Message.PressedEscapeInFrame],
+  execute: ({ element, key, url, declared, reportsEscape }) =>
     domStream<
+      | typeof Message.PressedEscapeInFrame.Type
       | typeof Message.MeasuredFrameWidth.Type
       | typeof Message.KnewFrameHeights.Type
       | typeof Message.GotFrameDocument.Type
@@ -159,6 +160,8 @@ export const VisualizationFrame = Mount.defineStream("VisualizationFrame", {
         const iframe = frame()
         if (!iframe?.contentWindow || event.source !== iframe.contentWindow) return
         if (event.data?.type === "kanna:ready") syncTheme()
+        // A key pressed in the frame is the frame's; it hands Escape back when it has no use for it.
+        if (event.data?.type === "kanna:escape" && reportsEscape) emit(Message.PressedEscapeInFrame({ key, repeat: event.data.repeat === true }))
         if (event.data?.type === "kanna:resize") {
           const next = visualizationHeight(event.data.height)
           // The shell opens by reporting the declared height, before the page
@@ -208,15 +211,20 @@ export const VisualizationFrame = Mount.defineStream("VisualizationFrame", {
     }),
 })
 
-/** The frame, bare, with its loading line until the document is in. `key` names its state in the Model. */
-export function visualizationFrame(key: string, artifact: VisualizationArtifact, context: RowContext, h: HtmlBuilder<Message>): Html {
+/**
+ * The frame, bare, with its loading line until the document is in. `key`
+ * names its state in the Model. With `reportsEscape` (the viewer's full
+ * size), Escape pressed in the frame and unused by it comes back as the
+ * `EscapedVisualization` OutMessage, for the viewer to close on.
+ */
+export function visualizationFrame(key: string, artifact: VisualizationArtifact, options: { reportsEscape?: boolean }, context: RowContext, h: HtmlBuilder<Message>): Html {
   const frame = frameOf(context.model, key)
   if (frame.failed) return h.p([h.Role("alert"), h.Class("text-sm text-muted-foreground")], ["This visualization could not be loaded."])
   const height = frame.measured ?? (frame.width === null ? null : pickVisualizationHeight(frame.known, frame.width)) ?? artifact.height
   return h.div([
     h.Class("min-w-0"),
     h.Style({ height: `${height}px` }),
-    h.OnMount(VisualizationFrame({ key, url: artifact.url, declared: artifact.height })),
+    h.OnMount(VisualizationFrame({ key, url: artifact.url, declared: artifact.height, reportsEscape: options.reportsEscape ?? false })),
   ], [
     frame.document !== null
       ? h.iframe([
@@ -238,7 +246,7 @@ export function visualizationFrame(key: string, artifact: VisualizationArtifact,
 export function visualization(key: string, artifact: VisualizationArtifact, context: RowContext, h: HtmlBuilder<Message>): Html {
   const loaded = frameOf(context.model, key).loaded
   return h.div([h.Class("visualization relative min-w-0")], [
-    visualizationFrame(key, artifact, context, h),
+    visualizationFrame(key, artifact, {}, context, h),
     loaded ? visualizationExpandButton(key, Message.ClickedExpandVisualization({ artifact }), context, h) : null,
   ])
 }

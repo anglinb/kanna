@@ -254,6 +254,7 @@ export const Message = defineMessageUnion({
   LoadedFrame: { key: Schema.String },
   ClickedExpandVisualization: { artifact: opaque<VisualizationArtifact>("VisualizationArtifact") },
   GotTooltipMessage: { key: Schema.String, message: Tooltip.Message },
+  PressedEscapeInFrame: { key: Schema.String, repeat: Schema.Boolean },
 
   // Queue and resume
   ClickedQueued: { messageId: Schema.String, action: Schema.Literals(["remove", "send-now"]) },
@@ -296,6 +297,8 @@ export const OutMessage = defineMessageUnion({
   RequestedResumeAction: { action: Schema.Literals(["cancel", "now"]) },
   /** DrainingIndicator's Stop. */
   RequestedStop: {},
+  /** Escape in a full-size visualization's frame, unused by it (`visualizationFrame`'s `reportsEscape`). */
+  EscapedVisualization: { key: Schema.String, repeat: Schema.Boolean },
 })
 export type OutMessage = typeof OutMessage.Type
 
@@ -709,6 +712,7 @@ export const update = (model: Model, message: Message): Return =>
     },
     LoadedFrame: ({ key }) => ({ model: { ...model, frames: { ...model.frames, [key]: { ...(model.frames[key] ?? emptyFrame()), loaded: true } } } }),
     ClickedExpandVisualization: ({ artifact }) => ({ model, outMessage: viewerAction({ kind: "visualization", artifact }, true) }),
+    PressedEscapeInFrame: ({ key, repeat }) => ({ model, outMessage: OutMessage.EscapedVisualization({ key, repeat }) }),
     GotTooltipMessage: ({ key, message: child }) => {
       const next = Tooltip.update(tooltipOf(model, key), child)
       return {

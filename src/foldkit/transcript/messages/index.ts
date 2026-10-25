@@ -62,6 +62,8 @@
  *   RequestedQueueAction { messageId, action }   then `settledQueued`
  *   RequestedResumeAction { action }             then `settledResume`
  *   RequestedStop {}                DrainingIndicator's Stop
+ *   EscapedVisualization { key, repeat }   Escape a full-size visualization's
+ *                                   frame didn't use (the viewer closes on it)
  *   RequestedAppAction { action }   the viewer: an attachment, a chart or a
  *                                   visualization at full size
  *
