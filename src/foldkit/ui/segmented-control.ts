@@ -42,60 +42,64 @@ const sizeClasses: Record<SegmentedSize, string> = {
  */
 const INDICATOR_TAG = "kanna-segmented-indicator"
 
-class SegmentedIndicator extends HTMLElement {
-  private placed = false
-  private current = { value: "", optionsKey: "", size: "" }
+// Registered where there is a DOM: tests (Story, Scene) import this module
+// under Bun, where HTMLElement doesn't exist.
+function defineIndicatorElement() {
+  if (typeof customElements === "undefined" || customElements.get(INDICATOR_TAG)) return
+  class SegmentedIndicator extends HTMLElement {
+    private placed = false
+    private current = { value: "", optionsKey: "", size: "" }
 
-  // Set by Foldkit as properties (see `Indicator` below), before and after
-  // the element is connected.
-  set value(value: string) {
-    this.update({ ...this.current, value })
-  }
-  set optionsKey(optionsKey: string) {
-    this.update({ ...this.current, optionsKey })
-  }
-  set size(size: string) {
-    this.update({ ...this.current, size })
-  }
+    // Set by Foldkit as properties (see `Indicator` below), before and after
+    // the element is connected.
+    set value(value: string) {
+      this.update({ ...this.current, value })
+    }
+    set optionsKey(optionsKey: string) {
+      this.update({ ...this.current, optionsKey })
+    }
+    set size(size: string) {
+      this.update({ ...this.current, size })
+    }
 
-  connectedCallback() {
-    this.place()
-  }
+    connectedCallback() {
+      this.place()
+    }
 
-  private update(next: typeof this.current) {
-    const changed = next.value !== this.current.value || next.optionsKey !== this.current.optionsKey || next.size !== this.current.size
-    this.current = next
-    if (changed && this.isConnected) this.place()
-  }
+    private update(next: typeof this.current) {
+      const changed = next.value !== this.current.value || next.optionsKey !== this.current.optionsKey || next.size !== this.current.size
+      this.current = next
+      if (changed && this.isConnected) this.place()
+    }
 
-  private place() {
-    const container = this.parentElement
-    const active = container
-      ? Array.from(container.children).find((child): child is HTMLElement =>
-        child instanceof HTMLElement && child.tagName === "BUTTON" && child.dataset.segmentValue === this.current.value)
-      : undefined
-    if (!container || !active) return
-    const containerRect = container.getBoundingClientRect()
-    const rect = active.getBoundingClientRect()
-    if (!this.placed) this.style.transition = "none"
-    // `left` on the absolute indicator resolves against the container's padding
-    // box, but these rects are border-box — subtract the left border width so
-    // the indicator doesn't sit one border-width to the right at every position.
-    this.style.left = `${rect.left - containerRect.left - container.clientLeft}px`
-    this.style.width = `${rect.width}px`
-    if (!this.placed) {
-      // Commit the first position without a transition, then hand the
-      // transition back for the moves that follow.
-      void this.offsetWidth
-      this.style.removeProperty("transition")
-      this.placed = true
+    private place() {
+      const container = this.parentElement
+      const active = container
+        ? Array.from(container.children).find((child): child is HTMLElement =>
+          child instanceof HTMLElement && child.tagName === "BUTTON" && child.dataset.segmentValue === this.current.value)
+        : undefined
+      if (!container || !active) return
+      const containerRect = container.getBoundingClientRect()
+      const rect = active.getBoundingClientRect()
+      if (!this.placed) this.style.transition = "none"
+      // `left` on the absolute indicator resolves against the container's padding
+      // box, but these rects are border-box — subtract the left border width so
+      // the indicator doesn't sit one border-width to the right at every position.
+      this.style.left = `${rect.left - containerRect.left - container.clientLeft}px`
+      this.style.width = `${rect.width}px`
+      if (!this.placed) {
+        // Commit the first position without a transition, then hand the
+        // transition back for the moves that follow.
+        void this.offsetWidth
+        this.style.removeProperty("transition")
+        this.placed = true
+      }
     }
   }
-}
 
-if (typeof customElements !== "undefined" && !customElements.get(INDICATOR_TAG)) {
   customElements.define(INDICATOR_TAG, SegmentedIndicator)
 }
+defineIndicatorElement()
 
 const Indicator = CustomElement.define({
   tag: INDICATOR_TAG,
