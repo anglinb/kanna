@@ -5,6 +5,7 @@ import type { ChatBrowserNotificationPreference, FsListResult, GitHubRecentRepos
 import { opaque } from "../core/schema"
 import * as AppDialog from "../ui/app-dialog"
 import type { RepoMeta } from "./model"
+import * as Usage from "./usage"
 
 export const Message = defineMessageUnion({
   // Opening and closing
@@ -55,6 +56,8 @@ export const Message = defineMessageUnion({
   ChangedPhoneLayout: { phone: Schema.Boolean },
   ReceivedNotificationPermission: { preference: opaque<ChatBrowserNotificationPreference>("ChatBrowserNotificationPreference") },
   GeneratedTerminalId: { projectId: Schema.String, terminalId: Schema.String, chatKey: Schema.NullOr(Schema.String) },
+
+  GotUsageMessage: { message: Usage.Message },
 
   // New Delegator (chat-ui/create-delegator.ts)
   GotDialogMessage: { message: AppDialog.Message },

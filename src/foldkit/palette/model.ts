@@ -4,6 +4,7 @@ import type { MacSetupState } from "../../client/lib/macApp"
 import type { FsListResult, GitHubRecentReposResult, KeybindingsSnapshot } from "../../shared/types"
 import { opaque } from "../core/schema"
 import * as AppDialog from "../ui/app-dialog"
+import * as Usage from "./usage"
 
 // What CommandPalette held in React state and refs, and what its two hooks
 // (useDirectoryBrowser, useRepoMetadata) kept. Everything it lists (chats,
@@ -137,6 +138,8 @@ export const Model = Schema.Struct({
   phoneLayout: Schema.Boolean,
   /** The keybindings snapshot, mirrored for the global shortcut's listener (observe). */
   keybindings: Schema.NullOr(opaque<KeybindingsSnapshot>("KeybindingsSnapshot")),
+  /** The Usage… page's UsageSection. */
+  usage: Usage.Model,
   /** The New Delegator prompt (createDelegator's dialog.prompt / alert). */
   dialog: AppDialog.Model,
   /** The project a New Delegator prompt is for, by its request id. */
@@ -169,6 +172,7 @@ export function init(): Model {
     mac: null,
     phoneLayout: false,
     keybindings: null,
+    usage: Usage.init(),
     dialog: AppDialog.init(),
     delegatorRequest: null,
     dialogSeq: 0,

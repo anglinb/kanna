@@ -19,6 +19,13 @@ import type { RepoMeta } from "./model"
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
+/**
+ * React sent these from effects, after the render the handler's own sends
+ * (a clone, a project request) went out in: a turn later keeps that order on
+ * the wire when both start in the same update.
+ */
+const afterHandlers = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.sleep(Duration.millis(0)).pipe(Effect.andThen(effect))
+
 // OPENING
 
 /** The root's open request, with the time the palette snaps its age labels to. */
@@ -62,7 +69,7 @@ export const FocusInputAfterSelect = Command.define("FocusPaletteInputAfterSelec
 export const FetchGithubRepos = Command.define("FetchPaletteGithubRepos", {
   args: { seq: Schema.Number },
   messages: [Message.ReceivedGithubRepos],
-  execute: ({ seq }) => sendCommand<GitHubRecentReposResult>({ type: "github.listRecentRepos" }).pipe(
+  execute: ({ seq }) => afterHandlers(sendCommand<GitHubRecentReposResult>({ type: "github.listRecentRepos" })).pipe(
     Effect.catch(() => Effect.succeed<GitHubRecentReposResult>({ available: false, repos: [] })),
     Effect.map((result) => Message.ReceivedGithubRepos({ seq, result })),
   ),
@@ -72,7 +79,7 @@ export const FetchGithubRepos = Command.define("FetchPaletteGithubRepos", {
 export const ListCreateDir = Command.define("ListPaletteCreateDir", {
   args: { seq: Schema.Number, path: Schema.String },
   messages: [Message.ReceivedCreateDirNames],
-  execute: ({ seq, path }) => sendCommand<FsListResult>({ type: "fs.list", path }).pipe(
+  execute: ({ seq, path }) => afterHandlers(sendCommand<FsListResult>({ type: "fs.list", path })).pipe(
     Effect.map((result) => result.entries.map((entry) => entry.name.toLocaleLowerCase())),
     Effect.catch(() => Effect.succeed<string[]>([])),
     Effect.map((names) => Message.ReceivedCreateDirNames({ seq, names })),
@@ -83,7 +90,7 @@ export const ListCreateDir = Command.define("ListPaletteCreateDir", {
 export const LoadDirectory = Command.define("LoadPaletteDirectory", {
   args: { seq: Schema.Number, path: Schema.NullOr(Schema.String) },
   messages: [Message.ReceivedDirectory, Message.FailedDirectory],
-  execute: ({ seq, path }) => sendCommand<FsListResult>(path === null ? { type: "fs.list" } : { type: "fs.list", path }).pipe(
+  execute: ({ seq, path }) => afterHandlers(sendCommand<FsListResult>(path === null ? { type: "fs.list" } : { type: "fs.list", path })).pipe(
     Effect.map((result) => Message.ReceivedDirectory({ seq, result })),
     Effect.catch((error) => Effect.succeed(Message.FailedDirectory({ seq, error: errorMessage(error) }))),
   ),

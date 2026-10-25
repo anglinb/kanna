@@ -1,5 +1,5 @@
 import { Number, Option } from "effect"
-import { Update } from "foldkit"
+import { Command, Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
 import { AppAction } from "../app/action"
 import { requestAction, type AppModel, type SliceObserve } from "../app/slice"
@@ -8,11 +8,12 @@ import type { KannaSocketService } from "../core/socket"
 import * as Delegate from "../core/stores/delegate"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import * as AppDialog from "../ui/app-dialog"
-import { findItem, navigate as navigateSelection } from "./cmdk"
+import { effectiveSelection, findItem, navigate as navigateSelection } from "./cmdk"
 import * as Commands from "./commands"
-import { derive, dialogCommands } from "./derive"
+import { derive, dialogCommands, type PaletteData } from "./derive"
 import { Message } from "./message"
 import { currentPage, isLocked, pageKey, PAGES, type Model, type PalettePage } from "./model"
+import * as Usage from "./usage"
 import { closePalette, closeWith, newProjectsDir, openPalette, popPage, pushPage, withCommands, type Return } from "./steps"
 
 // CommandPalette's handlers and effects. Each Message is handled, then
@@ -29,6 +30,7 @@ function open(model: Model, page: PalettePage | null, at: number): Return {
 }
 
 const toDialogMessage = (message: AppDialog.Message) => Message.GotDialogMessage({ message })
+const toUsageMessage = (message: Usage.Message) => Message.GotUsageMessage({ message })
 
 const foldDialog = (model: Model, message: AppDialog.Message): Return => Update.foldChild({
   update: AppDialog.update,
@@ -87,7 +89,7 @@ function runRepoMetadata(model: Model, repo: { host: string; owner: string; repo
 const browseDirPath = (model: Model) => (currentPage(model) === "browse" ? model.browser.dir?.path ?? null : null)
 
 /** What React ran in effects after the render this change caused. */
-function afterChange(previous: Model, result: Return, app: AppModel): Return {
+function afterChange(previous: Model, result: Return, app: AppModel, discrete: boolean): Return {
   let next = result
   const model = () => next.model
   const wasOpen = previous.phase === "Open"
@@ -121,6 +123,18 @@ function afterChange(previous: Model, result: Return, app: AppModel): Return {
     }
   }
 
+  // The Usage… page's UsageSection mounts and unmounts with the page.
+  const onUsage = (candidate: Model, open: boolean) => open && currentPage(candidate) === "usage"
+  if (onUsage(model(), isOpenNow) !== onUsage(previous, wasOpen)) {
+    if (onUsage(model(), isOpenNow)) {
+      const mounted = Usage.mounted()
+      next = { ...next, model: { ...model(), usage: mounted.model } }
+      commands(...Command.mapMessages(mounted.commands, toUsageMessage))
+    } else {
+      next = { ...next, model: { ...model(), usage: Usage.unmounted() } }
+    }
+  }
+
   // Browse pages resolve their stack entry's directory.
   if (isOpenNow && currentPage(model()) === "browse" && (!wasOpen || pageKey(previous) !== pageKey(model()))) {
     const loaded = loadBrowseDirectory(model())
@@ -147,14 +161,62 @@ function afterChange(previous: Model, result: Return, app: AppModel): Return {
     || previous.query !== model().query
     || browseDirPath(previous) !== browseDirPath(model())
   )) {
-    next = { ...next, model: { ...model(), selectedValue: derive(model(), app).firstResultValue } }
+    const data = derive(model(), app)
+    // cmdk re-selects its first enabled row when the highlighted one
+    // unmounts, a render later. After user input React has already run the
+    // palette's reset effect by then, so cmdk's pick wins; after an
+    // asynchronous result (a listing landing) the effect runs last and wins.
+    const unmounted = discrete && wasOpen && selectedRowUnmounted(previous, model(), data, app)
+    next = { ...next, model: { ...model(), selectedValue: unmounted ? effectiveSelection(data.nodes, "") : data.firstResultValue } }
     commands(Commands.ResetListScroll())
   }
   return next
 }
 
+/** A row's React identity: its page (each renders in its own place), its group's key and its own value. */
+function rowIdentities(model: Model, nodes: PaletteData["nodes"]): Map<string, string> {
+  const identities = new Map<string, string>()
+  const page = currentPage(model)
+  for (const node of nodes) {
+    if (node.kind !== "group") continue
+    for (const child of node.children) {
+      if (child.kind === "item") identities.set(child.value, `${page}\u0000${node.key}\u0000${child.value}`)
+    }
+  }
+  return identities
+}
+
+/** Whether the row highlighted before this change is gone from the list after it. */
+function selectedRowUnmounted(previous: Model, current: Model, data: PaletteData, app: AppModel): boolean {
+  const before = derive(previous, app)
+  if (!before.selected) return false
+  const identity = rowIdentities(previous, before.nodes).get(before.selected)
+  if (!identity) return false
+  return ![...rowIdentities(current, data.nodes).values()].includes(identity)
+}
+
+/** User input (a key, a click, typing), as against a result arriving: React renders the first synchronously. */
+function isDiscrete(message: Message): boolean {
+  switch (message._tag) {
+    case "PressedPaletteShortcut":
+    case "DismissedPalette":
+    case "ChangedQuery":
+    case "PressedNavigationKey":
+    case "PressedEnter":
+    case "HoveredItem":
+    case "ClickedItem":
+    case "ClickedBack":
+    case "PressedBackKey":
+    case "PressedCopyShortcut":
+    case "ClickedBrowseFooter":
+      return true
+    default:
+      return false
+  }
+}
+
 export function update(model: Model, message: Message, app: AppModel): Return {
-  return afterChange(model, handle(model, message, app), app)
+  return afterChange(model, handle(model, message, app), app, isDiscrete(message))
 }
 
 function handle(model: Model, message: Message, app: AppModel): Return {
@@ -263,6 +325,10 @@ function handle(model: Model, message: Message, app: AppModel): Return {
       }),
     })),
 
+    GotUsageMessage: ({ message: child }) => {
+      const result = Usage.update(model.usage, child)
+      return { model: { ...model, usage: result.model }, commands: Command.mapMessages(result.commands, toUsageMessage) }
+    },
     GotDialogMessage: ({ message: child }) => foldDialog(model, child),
     SucceededCreateDelegator: ({ projectId, chatId }) => requestAction(model, AppAction.Store({
       message: Stores.Message.GotDelegateMessage({

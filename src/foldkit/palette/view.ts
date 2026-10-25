@@ -5,13 +5,13 @@ import { cn } from "../../client/lib/utils"
 import type { AppModel, SliceViewInputs } from "../app/slice"
 import * as AppDialog from "../ui/app-dialog"
 import { ArrowLeft, Search } from "../ui/icons"
-import { inputView, listView, rootView } from "./cmdk"
+import { block, inputView, listView, rootView } from "./cmdk"
 import { CONTENT_ID } from "./commands"
 import { derive, type PaletteData } from "./derive"
 import { Message } from "./message"
 import type { Model } from "./model"
 import { BROWSE_FOOTER_ID, COPY_FOOTER_ID, PaletteContent, PaletteList, PaletteRoot } from "./mounts"
-import { usageBlock } from "./usage"
+import * as Usage from "./usage"
 
 // CommandPalette's markup: ui/command.tsx's CommandDialog (Radix Dialog
 // content, no overlay) around cmdk's Command, Input and List, the page's
@@ -62,7 +62,9 @@ function paletteView(model: Model, app: AppModel, h: HtmlBuilder<Message>): Html
   const data = derive(model, app)
   const state = model.phase === "Open" ? "open" : "closed"
   const footerVisible = Boolean(data.footerCopyPath) || Boolean(data.footerBrowseTarget)
-  const nodes = data.page === "usage" ? [usageBlock(app), ...data.nodes] : data.nodes
+  const nodes = data.page === "usage"
+    ? [block<Message>("usage", (builder) => Usage.view(model.usage, (message) => Message.GotUsageMessage({ message }), builder)), ...data.nodes]
+    : data.nodes
   return h.keyed("div")("command-palette", [
     h.Role("dialog"),
     h.Id(CONTENT_ID),

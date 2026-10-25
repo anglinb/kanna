@@ -27,7 +27,10 @@ function statusMark<Message>(kind: StatusMarkKind, label: string | undefined, h:
     return h.span([h.Class(STATUS_MARK_SLOT_CLASS)], [
       Loader2({
         class: cn("size-3.5 animate-spin", kind === "working" ? "text-logo" : "text-muted-foreground"),
-        attributes: label !== undefined ? [h.AriaLabel(label)] : [],
+        // React passed `aria-label={label}` even when undefined, and
+        // lucide-react drops its aria-hidden for any aria-* prop it is
+        // handed: the spinner is an unnamed image. An empty label keeps that.
+        attributes: [h.Attribute("aria-label", label ?? "")],
       }, h),
     ])
   }
