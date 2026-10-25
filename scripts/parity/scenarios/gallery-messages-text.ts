@@ -8,6 +8,9 @@ import { defineScenario, type Scenario, type ScenarioContext } from "../scenario
  * gallery-messages-* scenarios.
  */
 export async function captureScrolled({ page, capture, settle }: Pick<ScenarioContext, "page" | "capture" | "settle">, prefix = "scroll") {
+  // What a press just changed is drawn first: the page's height decides the steps.
+  await settle()
+  await nextFrames(page)
   const { scrollHeight, clientHeight } = await page.evaluate(() => {
     const scroller = document.querySelector("[data-gallery-scroll]")!
     return { scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight }
@@ -22,6 +25,11 @@ export async function captureScrolled({ page, capture, settle }: Pick<ScenarioCo
   await settle()
 }
 
+/** Two animation frames: an app that draws on the next one has drawn. */
+export function nextFrames(page: Page) {
+  return page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+}
+
 export function scrollGallery(page: Page, top: number) {
   return page.evaluate((y) => {
     document.querySelector("[data-gallery-scroll]")!.scrollTop = y
@@ -33,7 +41,7 @@ export function scrollGallery(page: Page, top: number) {
  * press just changed has been drawn (two frames: an app may draw on the next).
  */
 export async function centerInGallery(page: Page, selector: string) {
-  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await nextFrames(page)
   await page.evaluate((target) => {
     const element = document.querySelector(target)
     const scroller = document.querySelector("[data-gallery-scroll]")!
