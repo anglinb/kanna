@@ -58,14 +58,49 @@ function createDebouncedWriter(storage: Storage, delayMs: number): DebouncedWrit
 
 let debouncedWriter: DebouncedWriter | null = null
 
+/**
+ * Text typed that no saved state holds yet, by chat. zustand's set persisted
+ * inside the input handler; here the keystroke reaches the store an update
+ * and a Command later, which a busy page can still be waiting on when it is
+ * left. The input handler notes the text at once (`noteTypedDraft`), a save
+ * that carries it clears the note, and `pagehide` writes what is left.
+ */
+const unsaved = new Map<string, string>()
+
+function writeUnsaved() {
+  if (unsaved.size === 0) return
+  try {
+    const raw = window.localStorage.getItem(STORAGE_NAME)
+    const blob = raw ? JSON.parse(raw) as { state?: Record<string, unknown>; version?: number } : { state: {}, version: STORAGE_VERSION }
+    const state = blob.state ?? {}
+    const drafts = { ...(state.drafts as Record<string, string> | undefined ?? {}) }
+    for (const [chatId, value] of unsaved) {
+      if (value) drafts[chatId] = value
+      else delete drafts[chatId]
+    }
+    window.localStorage.setItem(STORAGE_NAME, JSON.stringify({ ...blob, state: { ...state, drafts } }))
+  } catch {
+    // Quota, private mode or a blob this can't read: the store's own save stands.
+  }
+  unsaved.clear()
+}
+
 /** Null where there is no `localStorage` (tests); the drafts then live in memory only. */
 function getDebouncedWriter(): DebouncedWriter | null {
   if (typeof window === "undefined" || !("localStorage" in window)) return null
   if (!debouncedWriter) {
     debouncedWriter = createDebouncedWriter(window.localStorage, DRAFT_PERSIST_DELAY_MS)
     window.addEventListener("pagehide", debouncedWriter.flush)
+    // After the writer's own flush: on top of the last state it saved.
+    window.addEventListener("pagehide", writeUnsaved)
   }
   return debouncedWriter
+}
+
+/** The composer's input handler: this text is the chat's draft, before the store has it. */
+export function noteTypedDraft(chatId: string, value: string) {
+  if (!getDebouncedWriter()) return
+  unsaved.set(chatId, value)
 }
 
 export interface StartedChat {
@@ -152,6 +187,10 @@ export const SaveDrafts = Command.define("SaveChatInputDrafts", {
   messages: [Message.CompletedSave],
   execute: ({ state }) => Effect.sync(() => {
     getDebouncedWriter()?.setItem(STORAGE_NAME, JSON.stringify({ state, version: STORAGE_VERSION }))
+    // What this state carries is saved the ordinary way now.
+    for (const [chatId, value] of unsaved) {
+      if ((state.drafts[chatId] ?? "") === value) unsaved.delete(chatId)
+    }
     return Message.CompletedSave()
   }),
 })

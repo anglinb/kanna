@@ -9,6 +9,7 @@ import { chatModeFromFlags, type ChatMode } from "../../shared/types"
 import type { SliceViewInputs } from "../app/slice"
 import type { ChatPageContext, ChatPageRequests } from "../chat/pageInputs"
 import * as ContextWindowMeter from "../chat/contextWindowMeter"
+import { noteTypedDraft } from "../core/stores/chatInput"
 import * as ProviderAuth from "../core/stores/providerAuth"
 import * as Sidebar from "../core/stores/sidebar"
 import { signInDialogView, type SignInDialogMessage } from "../settings/auth-cards"
@@ -28,6 +29,7 @@ import {
   composerViewOf,
   contextFromApp,
   delegateSettingsOf,
+  draftIdOf,
   hasPendingUploads,
   menusOf,
   placeholderOf,
@@ -278,6 +280,8 @@ function composerView(model: Model, ctx: Context, editModels: ReadonlyArray<Chil
         ...([
           onBridged(h, "input", (event) => {
             const element = event.target as HTMLTextAreaElement
+            const draftId = model.instance?.draftId ?? draftIdOf(props)
+            if (draftId) noteTypedDraft(draftId, element.value)
             return Message.ChangedInput({ value: element.value, caret: element.selectionStart ?? element.value.length, at: Date.now() })
           }),
           onBridged(h, "keydown", handleKeyDown),
