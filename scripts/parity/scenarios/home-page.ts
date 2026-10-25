@@ -3,9 +3,9 @@ import { defineScenario, type Scenario } from "../scenario"
 // The projects page (src/foldkit/home/ against LocalProjectsPage, LocalDev
 // and ProjectsHome). Until the sidebar is ported the whole page differs, so
 // each scenario also compares the page's own element (`main`), the list
-// column inside it (`list`: on desktop it is the same width whatever sits
-// beside the page) and the overlays it opens, which render at the end of
-// <body>.
+// column inside it (`list`: on desktop its paint and aria compare without
+// the sidebar, its pixels only with it, as the column centres on a half
+// pixel) and the overlays it opens, which render at the end of <body>.
 
 /** LocalProjectsPage's root: the element holding the Mac app's drag strip. */
 const MAIN = "div:has(> [data-window-drag][aria-hidden])"
