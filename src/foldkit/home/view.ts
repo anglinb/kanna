@@ -63,7 +63,7 @@ import {
   rowTooltipKey,
   type Model,
 } from "./model"
-import { AUTH_SERVICE_ICONS, GitHubIcon, type BrandIcon } from "./providerIcons"
+import { AUTH_SERVICE_ICONS, GitHubIcon, type ProviderIcon } from "../ui/provider-icons"
 import {
   cloneDestination,
   cloneError,
@@ -87,7 +87,9 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
 // LOCAL PROJECTS PAGE
 
 function pageView(model: Model, app: AppModel, h: H): Html {
-  return h.div([h.Class("flex-1 flex flex-col min-w-0 relative"), h.OnMount(MountPage()), h.OnUnmount(Message.LeftPage())], [
+  // `contents`: the page and the back button sit in the layout's row as
+  // React's siblings do (the button is KannaSidebar's, outside the page).
+  return h.div([h.Class("contents")], [
     // KannaSidebar's floating back button: pages with no header of their own
     // get one on mobile, and /home is one of them.
     app.route._tag === "Home"
@@ -98,6 +100,12 @@ function pageView(model: Model, app: AppModel, h: H): Html {
         attributes: [h.OnClick(Message.ClickedBack()), h.Title("Back")],
       }, [ArrowLeft({ class: "h-5 w-5" }, h)], h)
       : h.empty,
+    localProjectsPage(model, app, h),
+  ])
+}
+
+function localProjectsPage(model: Model, app: AppModel, h: H): Html {
+  return h.div([h.Class("flex-1 flex flex-col min-w-0 relative"), h.OnMount(MountPage()), h.OnUnmount(Message.LeftPage())], [
     // The Mac app's title bar across the projects page: it drags the window,
     // as on the settings page. The page starts with pt-16 of empty space, so
     // at the top of the scroll it covers nothing clickable.
@@ -618,7 +626,7 @@ const ROW_ACTION_CLASS = cn(
 
 interface HomeRowOptions {
   key: string
-  icon: Icon | BrandIcon
+  icon: Icon | ProviderIcon
   title: string
   /** Marks the row, like a private repo's lock, right after the title. */
   badge?: Html
