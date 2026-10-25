@@ -21,6 +21,7 @@ import * as PaletteSlice from "../palette"
 import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
+import * as AppDialog from "../ui/app-dialog"
 import { AppAction } from "./action"
 import { ActionMessage } from "./actions"
 import * as Stores from "./stores"
@@ -92,5 +93,6 @@ export const Message = defineMessageUnion({
   GotWorkflowsMessage: { message: WorkflowsSlice.Message },
   GotTerminalPageMessage: { message: TerminalPageSlice.Message },
   GotActionMessage: { message: ActionMessage },
+  GotAppDialogMessage: { message: AppDialog.Message },
 })
 export type Message = typeof Message.Type

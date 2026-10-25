@@ -41,6 +41,7 @@ import * as PaletteSlice from "../palette"
 import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
+import * as AppDialog from "../ui/app-dialog"
 import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
 import { SliceOutMessage, type AppModel, type SliceReturn } from "./slice"
 import type { AppAction } from "./action"
@@ -85,6 +86,7 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     chat: null,
     stores,
     actions: initialActionsModel,
+    appDialog: AppDialog.init(),
     sidebar: SidebarSlice.init(),
     home: HomeSlice.init(),
     settings: SettingsSlice.init(),
@@ -415,6 +417,18 @@ const actions = makeActions<Model>({
     appSettings: (message) => Stores.Message.GotAppSettingsMessage({ message }),
   },
   toMessage: (message: ActionMessage) => Message.GotActionMessage({ message }),
+  toAppDialogMessage: (message: AppDialog.Message) => Message.GotAppDialogMessage({ message }),
+})
+
+// An answer resumes the action that asked (app/actions.ts answeredDialog).
+const foldAppDialog = Update.foldChild({
+  update: AppDialog.update,
+  read: (model: Model) => Option.some(model.appDialog),
+  write: (model, appDialog) => modifyFields(model, { appDialog: () => appDialog }),
+  toParentMessage: (message: AppDialog.Message) => Message.GotAppDialogMessage({ message }),
+  foldOutMessage: AppDialog.OutMessage.match<Step>({
+    Answered: ({ requestId, answer }) => (model) => actions.answeredDialog(model, requestId, answer) as UpdateReturn,
+  }),
 })
 
 /** Runs a slice's request. Sidebar collapse and the page's chat are the root's own. */
@@ -609,6 +623,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     GotSetupMessage: ({ message: child }) => foldSetup(model, child),
     GotWorkflowsMessage: ({ message: child }) => foldWorkflows(model, child),
     GotTerminalPageMessage: ({ message: child }) => foldTerminalPage(model, child),
+    GotAppDialogMessage: ({ message: dialogMessage }) => foldAppDialog(model, dialogMessage),
     GotActionMessage: ({ message: actionMessage }) => withDraftProtection(model, actions.handleActionMessage(model, actionMessage) as UpdateReturn),
   })
 

@@ -20,6 +20,7 @@ import * as PaletteSlice from "../palette"
 import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
+import * as AppDialog from "../ui/app-dialog"
 import { ActionsModel } from "./actions"
 import * as Stores from "./stores"
 
@@ -64,6 +65,8 @@ export const Model = Schema.Struct({
   stores: Stores.Model,
   /** What the root's actions keep: chats being started, the share and app dialogs. */
   actions: ActionsModel,
+  /** The app's confirm/prompt/alert dialog (React's AppDialogProvider). */
+  appDialog: AppDialog.Model,
   // The slices (app/slice.ts): each a Submodel in its own folder.
   sidebar: SidebarSlice.Model,
   home: HomeSlice.Model,

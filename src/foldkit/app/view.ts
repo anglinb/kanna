@@ -13,6 +13,7 @@ import * as PaletteSlice from "../palette"
 import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
+import * as AppDialog from "../ui/app-dialog"
 import { AppRoute } from "./route"
 import { activeChatId, activeProjectId, sidebarData } from "./update"
 
@@ -99,6 +100,7 @@ function layoutView(model: Model, h: HtmlBuilder<Message>): Html {
     pageView(model, h),
     h.submodel({ slotId: "setup", model: model.setup, view: SetupSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotSetupMessage({ message }) }),
     h.submodel({ slotId: "palette", model: model.palette, view: PaletteSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotPaletteMessage({ message }) }),
+    h.submodel({ slotId: "app-dialog", model: model.appDialog, view: AppDialog.view, toParentMessage: (message) => Message.GotAppDialogMessage({ message }) }),
   ])
 }
 
