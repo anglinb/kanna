@@ -9,7 +9,10 @@ import { AppAction } from "../app/action"
 import { SliceOutMessage, type AppModel, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
 import * as Composer from "../composer"
+import * as ChatInput from "../core/stores/chatInput"
+import * as ChatTabs from "../core/stores/chatTabs"
 import * as Delegate from "../core/stores/delegate"
+import { adjacentTab, chatAfterClose, movedTabIds, ScrollTabIntoView, tabMenu, threadsByChatId } from "./chatTabs"
 import * as OpenDestination from "../core/stores/openDestination"
 import * as PendingSend from "../core/stores/pendingSend"
 import * as ProviderAuth from "../core/stores/providerAuth"
@@ -30,6 +33,7 @@ import {
   FocusChatInput,
   MakeTerminalId,
   MeasureMenuButton,
+  MeasureTabMenuButton,
   OpenCommandPalette,
   OpenWindow,
   ReadQuickActions,
@@ -75,6 +79,7 @@ const store = (message: Stores.Message) => AppAction.Store({ message })
 const rightSidebar = (message: RightSidebar.Message) => store(Stores.Message.GotRightSidebarMessage({ message }))
 const terminalLayout = (message: TerminalLayout.Message) => store(Stores.Message.GotTerminalLayoutMessage({ message }))
 const viewerStore = (message: ViewerStore.Message) => store(Stores.Message.GotViewerMessage({ message }))
+const chatTabs = (message: ChatTabs.Message) => store(Stores.Message.GotChatTabsMessage({ message }))
 const delegate = (message: Delegate.Message) => store(Stores.Message.GotDelegateMessage({ message }))
 const openDestination = (message: OpenDestination.Message) => store(Stores.Message.GotOpenDestinationMessage({ message }))
 const pendingSend = (message: PendingSend.Message) => store(Stores.Message.GotPendingSendMessage({ message }))
@@ -215,7 +220,7 @@ function openValue(model: Model, facts: PageFacts, value: OpenAppValue, remember
 function commitTitle(model: Model, facts: PageFacts): Return {
   const draft = model.title.draft
   if (draft === null) return { model }
-  const serverTitle = facts.runtime?.title ?? ""
+  const serverTitle = facts.activeTitle ?? ""
   const shown = shownTitle(model, serverTitle)
   const next = draft.trim()
   const cleared = modifyFields(model, { title: (title) => ({ ...title, draft: null }) })
@@ -285,6 +290,28 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
   }
   if (watch.showRightSidebar && watch.chatId && previous?.isProcessing && !watch.isProcessing) {
     commands.push(RefreshDiffs({ chatId: watch.chatId }))
+  }
+
+  // ChatTabs' effects, while the bar is up: the open chat has a tab (opened
+  // right of the chat you came from, read before this visit joins the
+  // history), a tab outlives neither its chat nor its archiving, and the open
+  // tab is scrolled into view.
+  if (watch.chatTabsEnabled) {
+    if (next.tabsInitial === null) next = modifyFields(next, { tabsInitial: () => app.stores.chatTabs.tabs.map((tab) => tab.chatId) })
+    if (watch.chatId && (!previous || !previous.chatTabsEnabled || previous.chatId !== watch.chatId)) {
+      actions.push(chatTabs(ChatTabs.Message.OpenedTab({ chatId: watch.chatId, afterChatId: app.stores.chatTabs.recentChatIds[0] ?? null })))
+    }
+    if (watch.pruneTabs && watch.pruneTabs !== previous?.pruneTabs) {
+      actions.push(chatTabs(ChatTabs.Message.PrunedTabs({ keepChatIds: JSON.parse(watch.pruneTabs) as string[] })))
+    }
+    if (watch.chatId && (!previous || !previous.chatTabsEnabled || previous.chatId !== watch.chatId || previous.tabsCount !== watch.tabsCount)) {
+      commands.push(ScrollTabIntoView({ chatId: watch.chatId }))
+    }
+    if (watch.chatId && (!previous || !previous.chatTabsEnabled || previous.chatId !== watch.chatId)) {
+      actions.push(chatTabs(ChatTabs.Message.VisitedChat({ chatId: watch.chatId })))
+    }
+  } else if (next.tabsInitial !== null) {
+    next = modifyFields(next, { tabsInitial: () => null, tabDrag: () => null })
   }
 
   // The empty state types its line each time it appears, and animates in
@@ -425,6 +452,37 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       return then(pressed, (next) => menuStep(next, id, ContextMenu.Message.RequestedContextMenu()).result)
     },
 
+    // Selected on the press, not the release: the tab answers the moment it
+    // is touched, as a browser's does.
+    PressedTab: ({ chatId }) => withActions({ model }, [navigateTo(chatId)]),
+    ClickedCloseTab: ({ chatId }) => closeTab(model, app, facts(), chatId),
+    MiddleClickedTab: ({ chatId }) => closeTab(model, app, facts(), chatId),
+    ClickedTabMenuButton: ({ chatId }) => ({ model, commands: [MeasureTabMenuButton({ chatId })] }),
+    MeasuredTabMenuButton: ({ chatId, x, y }) => {
+      const pressed = tabMenuStep(model, chatId, ContextMenu.Message.PressedTrigger({ pointerType: "mouse", button: 2, x, y })).result
+      return then(pressed, (next) => tabMenuStep(next, chatId, ContextMenu.Message.RequestedContextMenu()).result)
+    },
+    GotTabMenuMessage: ({ chatId, message: inner }) => {
+      const { result, selected } = tabMenuStep(model, chatId, inner)
+      if (selected === null) return result
+      return then(result, (next) => chooseTabMenuItem(next, app, facts(), chatId, selected))
+    },
+    PressedTabShortcut: ({ shortcut }) => {
+      const current = facts()
+      if (shortcut === "new") return withActions({ model }, [AppAction.Compose()])
+      if (shortcut === "close") return current.chatId ? closeTab(model, app, current, current.chatId) : { model }
+      const next = adjacentTab(app, current.chatId, shortcut === "next" ? 1 : -1)
+      return next ? withActions({ model }, [navigateTo(next)]) : { model }
+    },
+    StartedTabDrag: ({ chatId, fromIndex, width }) => ({ model: modifyFields(model, { tabDrag: () => ({ chatId, dx: 0, fromIndex, overIndex: fromIndex, width }) }) }),
+    MovedTabDrag: ({ dx, overIndex }) => (model.tabDrag ? { model: modifyFields(model, { tabDrag: (drag) => (drag ? { ...drag, dx, overIndex } : drag) }) } : { model }),
+    DroppedTab: () => {
+      const drag = model.tabDrag
+      const cleared = modifyFields(model, { tabDrag: () => null })
+      if (!drag || drag.overIndex === drag.fromIndex) return { model: cleared }
+      return withActions({ model: cleared }, [chatTabs(ChatTabs.Message.ReorderedTabs({ orderedChatIds: movedTabIds(app.stores.chatTabs.tabs, drag.fromIndex, drag.overIndex) }))])
+    },
+
     ClickedTitle: () => beginTitleEdit(model, facts()),
     PressedTitleKey: () => beginTitleEdit(model, facts()),
     ChangedTitleDraft: ({ value }) => (model.title.draft === null ? { model } : { model: modifyFields(model, { title: (title) => ({ ...title, draft: value }) }) }),
@@ -539,8 +597,64 @@ function routeDelegatedSend(result: Return, app: AppModel, facts: PageFacts): Re
   return { model: result.model, commands: [...(result.commands ?? []), send] }
 }
 
+// TABS
+
+const navigateTo = (chatId: string) => AppAction.Navigate({ path: `/chat/${chatId}`, replace: false })
+
+function tabMenuStep(model: Model, chatId: string, message: ContextMenu.Message): { result: Return; selected: string | null } {
+  const result = ContextMenu.update(tabMenu(model, chatId), message)
+  const selected = result.outMessage && result.outMessage._tag === "Selected" ? result.outMessage.value : null
+  return {
+    result: {
+      model: modifyFields(model, { tabMenus: (menus) => ({ ...menus, [chatId]: result.model }) }),
+      commands: Command.mapMessages(result.commands, (inner: ContextMenu.Message) => Message.GotTabMenuMessage({ chatId, message: inner })) as Return["commands"],
+    },
+    selected,
+  }
+}
+
+/** ChatTabs' handleClose: back to the tab you were on before, else its neighbour, else home. */
+function closeTab(model: Model, app: AppModel, facts: PageFacts, chatId: string): Return {
+  const next = chatAfterClose(app, facts.chatId, chatId)
+  const actions: AppAction[] = [chatTabs(ChatTabs.Message.ClosedTab({ chatId }))]
+  if (next !== undefined) actions.push(next ? navigateTo(next) : AppAction.Navigate({ path: "/", replace: false }))
+  return withActions({ model }, actions)
+}
+
+function chooseTabMenuItem(model: Model, app: AppModel, facts: PageFacts, chatId: string, value: string): Return {
+  if (value === "tab:close") return closeTab(model, app, facts, chatId)
+  // Closing several from a tab's menu: if the open tab is among those
+  // closed, the tab the menu was opened on is what's left to show.
+  if (value === "tab:close-others") {
+    return withActions({ model }, [
+      chatTabs(ChatTabs.Message.ClosedOtherTabs({ chatId })),
+      ...(facts.chatId !== chatId ? [navigateTo(chatId)] : []),
+    ])
+  }
+  if (value === "tab:close-right") {
+    const tabs = app.stores.chatTabs.tabs
+    const index = tabs.findIndex((tab) => tab.chatId === chatId)
+    const activeIndex = tabs.findIndex((tab) => tab.chatId === facts.chatId)
+    return withActions({ model }, [
+      chatTabs(ChatTabs.Message.ClosedTabsToRight({ chatId })),
+      ...(activeIndex > index ? [navigateTo(chatId)] : []),
+    ])
+  }
+  const thread = threadsByChatId(app, [{ chatId }]).get(chatId)
+  if (!thread) return { model }
+  const choice = chooseChatRowMenuItem(value, {
+    thread,
+    archived: thread.archived,
+    editorLabel: facts.editorLabel,
+    hasDraft: ChatInput.chatHasDraft(app.stores.chatInput, chatId),
+  })
+  if (!choice || choice._tag === "None") return { model }
+  if (choice._tag === "OpenUrl") return { model, commands: [OpenWindow({ url: choice.url })] }
+  return withActions({ model }, [choice.action])
+}
+
 function beginTitleEdit(model: Model, facts: PageFacts): Return {
-  const title = facts.runtime?.title
+  const title = facts.activeTitle
   if (title === undefined || model.title.draft !== null) return { model }
   return { model: modifyFields(model, { title: (state) => ({ ...state, draft: shownTitle(model, title) }) }) }
 }

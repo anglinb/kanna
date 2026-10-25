@@ -38,6 +38,11 @@ export const Watch = Schema.Struct({
   isDelegator: Schema.Boolean,
   /** The resolved keybindings the page's shortcuts answer to, as JSON. */
   bindings: Schema.String,
+  /** The Chat Tabs setting: the bar's effects run while it is on. */
+  chatTabsEnabled: Schema.Boolean,
+  tabsCount: Schema.Number,
+  /** The tabs to keep, as JSON, when some should be pruned (`tabsToKeep`). */
+  pruneTabs: Schema.NullOr(Schema.String),
 })
 export type Watch = typeof Watch.Type
 
@@ -60,6 +65,20 @@ export const TerminalPurpose = Schema.Union([
   Schema.TaggedStruct("QuickAction", { command: Schema.String }),
 ])
 export type TerminalPurpose = typeof TerminalPurpose.Type
+
+/** A tab being dragged along the bar (chatTabs.ts). */
+export const TabDrag = Schema.Struct({
+  chatId: Schema.String,
+  dx: Schema.Number,
+  fromIndex: Schema.Number,
+  overIndex: Schema.Number,
+  /** The dragged tab's width, which the tabs it passes give way by. */
+  width: Schema.Number,
+})
+export type TabDrag = typeof TabDrag.Type
+
+export const TabShortcut = Schema.Literals(["next", "previous", "close", "new"])
+export type TabShortcut = typeof TabShortcut.Type
 
 export const Message = defineMessageUnion({
   // The sub-slices
@@ -101,6 +120,18 @@ export const Message = defineMessageUnion({
   /** A button that opens a context menu was clicked: measured, then opened below it. */
   ClickedMenuButton: { id: MenuId, selector: Schema.String },
   MeasuredMenuButton: { id: MenuId, x: Schema.Number, y: Schema.Number },
+
+  // The tabs (chatTabs.ts)
+  PressedTab: { chatId: Schema.String },
+  ClickedCloseTab: { chatId: Schema.String },
+  MiddleClickedTab: { chatId: Schema.String },
+  ClickedTabMenuButton: { chatId: Schema.String },
+  MeasuredTabMenuButton: { chatId: Schema.String, x: Schema.Number, y: Schema.Number },
+  GotTabMenuMessage: { chatId: Schema.String, message: ContextMenu.Message },
+  PressedTabShortcut: { shortcut: TabShortcut },
+  StartedTabDrag: { chatId: Schema.String, fromIndex: Schema.Number, width: Schema.Number },
+  MovedTabDrag: { dx: Schema.Number, overIndex: Schema.Number },
+  DroppedTab: {},
 
   // The title
   ClickedTitle: {},

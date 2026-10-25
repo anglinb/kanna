@@ -11,6 +11,7 @@ import * as Sidebar from "../core/stores/sidebar"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import * as Viewer from "../core/stores/viewer"
 import { effectiveEditorPreset } from "./openExternal"
+import { tabsToKeep, threadsByChatId } from "./chatTabs"
 
 // What the chat page reads off the root Model, worked out once per render:
 // useKannaState's chat-page fields and ChatPage's own derivations. The
@@ -94,6 +95,11 @@ export interface PageFacts {
   showEmptyState: boolean
   isMobile: boolean
   chatTabsEnabled: boolean
+  /** The open chat's name where the navbar shows it: its tab's (the sidebar's) with tabs on, the snapshot's without. */
+  activeTitle: string | undefined
+  tabsCount: number
+  /** With tabs on: the tabs to keep, as JSON, when some should go. */
+  pruneTabs: string | null
   widgetsChatKey: string | null
   terminalChatKey: string | null
   showRightSidebar: boolean
@@ -128,6 +134,19 @@ export interface PageFacts {
 }
 
 type TerminalLayoutEditorPreset = AppModel["stores"]["terminalPreferences"]["editorPreset"]
+
+/** A chat's title as the sidebar has it (its tab's), archived ones included. */
+function threadTitle(app: AppModel, chatId: string): string | undefined {
+  const group = app.stores.sidebar.data.projectGroups.find((item) => (
+    item.chats.some((chat) => chat.chatId === chatId)
+    || (item.archivedChats ?? []).some((chat) => chat.chatId === chatId)
+  ))
+  return group ? threadsByChatId(app, [{ chatId }]).get(chatId)?.title : undefined
+}
+
+function keepJson(keep: ReadonlyArray<string> | null) {
+  return keep ? JSON.stringify(keep) : null
+}
 
 /** Where a viewer item shows: a diff or file only on its own project's page. */
 function showsOn(item: Viewer.ViewerItem | null, projectId: string | null) {
@@ -200,6 +219,7 @@ export function pageFacts(app: AppModel, viewportWidth: number, settledShowEmpty
   const installedEditors = settings?.installedEditors ?? null
   const firstGroup = Sidebar.firstProjectGroup(sidebarStore)
   const localPath = navbarLocalPath(app)
+  const chatTabsEnabled = settings?.chatTabsEnabled === true
 
   return {
     chatId,
@@ -212,7 +232,10 @@ export function pageFacts(app: AppModel, viewportWidth: number, settledShowEmpty
     sidebarListsChat,
     showEmptyState,
     isMobile,
-    chatTabsEnabled: settings?.chatTabsEnabled === true,
+    chatTabsEnabled,
+    activeTitle: chatTabsEnabled ? (chatId ? threadTitle(app, chatId) ?? "New Chat" : undefined) : runtime?.title,
+    tabsCount: app.stores.chatTabs.tabs.length,
+    pruneTabs: chatTabsEnabled ? keepJson(tabsToKeep(app, chatId)) : null,
     widgetsChatKey,
     terminalChatKey,
     showRightSidebar: Boolean(projectId && widgetsOpen),

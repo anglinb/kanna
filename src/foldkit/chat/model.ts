@@ -10,7 +10,7 @@ import * as Widgets from "../widgets"
 import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
-import { Watch } from "./message"
+import { TabDrag, Watch } from "./message"
 
 // The chat page's Model: the sub-slices, and what ChatPage kept in state and
 // refs of its own.
@@ -74,6 +74,12 @@ export const Model = Schema.Struct({
     nowMs: Schema.NullOr(Schema.Number),
     stuck: Schema.Boolean,
   }),
+
+  /** The chat tabs' menus, one per tab, made on first use (chatTabs.ts `tabMenu`). */
+  tabMenus: Schema.Record(Schema.String, ContextMenu.Model),
+  tabDrag: Schema.NullOr(TabDrag),
+  /** The tabs the bar came up with: those don't animate in. */
+  tabsInitial: Schema.NullOr(Schema.Array(Schema.String)),
 
   washes: Schema.Struct({ transcript: Wash, widgets: Wash }),
   washTokens: Schema.Number,
@@ -149,6 +155,9 @@ export function init(): Model {
     emptyStateTyping: { started: false, count: 0, complete: false },
     emptyStateEntrance: null,
     projectChats: { query: "", cascadeDone: false, nowMs: null, stuck: false },
+    tabMenus: {},
+    tabDrag: null,
+    tabsInitial: null,
     washes: { transcript: wash, widgets: wash },
     washTokens: 0,
     title: { draft: null, submitted: null, submittedOver: null },

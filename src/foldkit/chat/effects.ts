@@ -260,6 +260,18 @@ export const MeasureMenuButton = Command.define("MeasureMenuButton", {
   }),
 })
 
+/** The open tab's menu button, measured the same way (`openContextMenuFromButton`). */
+export const MeasureTabMenuButton = Command.define("MeasureTabMenuButton", {
+  args: { chatId: Schema.String },
+  messages: [Message.MeasuredTabMenuButton, Message.CompletedSideEffect],
+  execute: ({ chatId }) => Effect.sync(() => {
+    const button = document.querySelector(`[data-chat-tab="${CSS.escape(chatId)}"] [aria-label="Chat actions"]`)
+    if (!button) return Message.CompletedSideEffect()
+    const rect = button.getBoundingClientRect()
+    return Message.MeasuredTabMenuButton({ chatId, x: rect.left + rect.width / 2, y: rect.bottom })
+  }),
+})
+
 export const RefreshDiffs = Command.define("RefreshChatDiffs", {
   args: { chatId: Schema.String },
   messages: [Message.CompletedSideEffect],

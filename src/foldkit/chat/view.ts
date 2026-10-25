@@ -13,7 +13,8 @@ import { card, cardContent } from "../ui/card"
 import { HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
 import { Message, type Watch } from "./message"
 import type { Model } from "./model"
-import { delegatedListButtonView, navbarTitleView, navbarView, washView } from "./navbar"
+import { delegatedListButtonView, editableTitleView, navbarTitleView, navbarView, washView } from "./navbar"
+import { chatTabsView } from "./chatTabs"
 import { pageFacts, getTerminalPanelDefaultSizes, CHAT_MIN_SIZE_PERCENT, type PageFacts } from "./page"
 import type { ChatPageContext, ChatPageSliceInputs } from "./pageInputs"
 import { panel, panelGroup, separator } from "./resizable"
@@ -41,6 +42,9 @@ export function watchOf(facts: PageFacts): Watch {
     sidebarReady: facts.sidebarReady,
     isDelegator: facts.isDelegator,
     bindings: JSON.stringify(facts.keybindings.bindings),
+    chatTabsEnabled: facts.chatTabsEnabled,
+    tabsCount: facts.tabsCount,
+    pruneTabs: facts.pruneTabs,
   }
 }
 
@@ -180,9 +184,13 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
 
   // The navbar spans the chat, the viewer's pane and the widget column, over
   // the top of all three.
-  const titleSlot = facts.chatId && facts.runtime?.title
-    ? navbarTitleView(model, app, facts, facts.runtime.title, facts.diffs?.branchName, h)
-    : null
+  // The navbar's left end names the open chat, or with the Chat Tabs
+  // setting on holds every chat you have open, as tabs.
+  const titleSlot = facts.chatTabsEnabled
+    ? chatTabsView(model, app, facts.chatId, facts.editorLabel, (title) => editableTitleView(model, title, h), h)
+    : facts.chatId && facts.runtime?.title
+      ? navbarTitleView(model, app, facts, facts.runtime.title, facts.diffs?.branchName, h)
+      : null
   // On a phone a delegator has no pane to keep its list in, so the list is a
   // button in the navbar instead, always there.
   const actionsSlot = facts.isDelegator && facts.chatId ? delegatedListButtonView(model, app, facts.chatId, facts.isMobile, h) : null
