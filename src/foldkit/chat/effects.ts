@@ -13,6 +13,7 @@ import {
 } from "../../client/app/chatFocusPolicy"
 import { hasFileDragTypes } from "../../client/app/ChatPage/utils"
 import { snapshotDroppedFiles } from "../../client/lib/snapshotDroppedFiles"
+import { separatorDrag } from "./resizable"
 import { DIFF_REFRESH_INTERVAL_MS, EMPTY_STATE_TEXT, EMPTY_STATE_TYPING_INTERVAL_MS } from "../../client/app/ChatPage/utils"
 import { Message, ShortcutAction, TerminalPurpose, Watch, WashId, type MenuId } from "./message"
 import { actionMatchesEvent } from "../../client/lib/keybindings"
@@ -283,6 +284,29 @@ export const AnimateTerminalSplit = Mount.defineStream("AnimateTerminalSplit", {
     frame = window.requestAnimationFrame(step)
     return () => window.cancelAnimationFrame(frame)
   }),
+})
+
+/**
+ * Dragging the terminal's or the viewer's split. The chat keeps its least
+ * share (`minFirstPx`, else `minFirst` percent); the second panel can be
+ * dragged to nothing, which closes it.
+ */
+export const DragSeparator = Mount.defineStream("DragChatSeparator", {
+  args: { split: Schema.Literals(["terminal", "viewer"]), minFirst: Schema.Number, minFirstPx: Schema.Number },
+  messages: [Message.DraggedSeparator],
+  execute: ({ element, split, minFirst, minFirstPx }) => domStream<typeof Message.DraggedSeparator.Type>((emit) =>
+    separatorDrag({
+      element: element as HTMLElement,
+      orientation: split === "terminal" ? "vertical" : "horizontal",
+      min: () => {
+        if (minFirstPx <= 0) return minFirst
+        const group = element.parentElement?.getBoundingClientRect()
+        const size = split === "terminal" ? group?.height ?? 0 : group?.width ?? 0
+        return size > 0 ? Math.min(100, (minFirstPx / size) * 100) : minFirst
+      },
+      max: () => 100,
+      report: (first, groupSizePx, done) => emit(Message.DraggedSeparator({ split, first, groupSizePx, done })),
+    })),
 })
 
 // FOCUS (useStickyChatFocus)

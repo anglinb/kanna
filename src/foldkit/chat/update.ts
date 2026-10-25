@@ -44,6 +44,7 @@ import {
 import { Message, type MenuId, type ShortcutAction, type TerminalPurpose, type TooltipId, type WashId, type Watch } from "./message"
 import { initialTerminalPane, type Model } from "./model"
 import { resolveTerminalAnimationState, shouldRequestTerminalFocus } from "./terminalPane"
+import { shouldCloseTerminalPane } from "../../client/app/terminalLayoutResize"
 import { shownTitle, titleMenuContext } from "./navbar"
 import { openAppValueOfMenuValue, openAppValueRequest, type OpenAppValue } from "./openExternal"
 import { getTerminalPanelDefaultSizes, pageFacts, type PageFacts } from "./page"
@@ -614,6 +615,9 @@ export function update(model: Model, message: Message, app: AppModel): Return {
         : model
       return withActions({ model: next }, [terminalLayout(TerminalLayout.Message.AddedTerminal({ projectId, terminalId, afterTerminalId: null, chatKey }))])
     },
+    DraggedSeparator: ({ split, first, groupSizePx, done }) => (split === "terminal"
+      ? dragTerminalSplit(model, facts(), first, done)
+      : dragViewerSplit(model, facts(), first, groupSizePx, done)),
     SteppedTerminalSplit: ({ token, chat, terminal, done }) => model.terminalPane.animation?.token === token
       ? { model: modifyFields(model, { terminalPane: (pane) => ({ ...pane, split: [chat, terminal] as const, animation: done ? null : pane.animation }) }) }
       : { model },
@@ -672,6 +676,39 @@ export function routeDelegatedSend(result: Return, app: AppModel, facts: PageFac
     : StampDelegatedSend({ chatId: target.chatId, content, options })
   return { model: result.model, commands: [...(result.commands ?? []), send] }
 }
+
+// SPLITS
+
+/** handleTerminalResize: a split dragged to is the project's; dragged nearly shut, the pane closes. */
+function dragTerminalSplit(model: Model, facts: PageFacts, first: number, done: boolean): Return {
+  const sizes: [number, number] = [first, 100 - first]
+  const moved = modifyFields(model, { terminalPane: (pane) => ({ ...pane, split: sizes }) })
+  if (!done || !facts.projectId || !facts.showTerminalPane || model.terminalPane.animation !== null) return { model: moved }
+  // Mobile pins the pane to its ceiling: nothing a phone does here is a split to keep.
+  if (facts.isMobile) return { model: moved }
+  if (shouldCloseTerminalPane(model.layoutHeight, sizes[1])) {
+    return withActions({ model: moved }, [
+      terminalLayout(TerminalLayout.Message.ResetMainSizes({ projectId: facts.projectId })),
+      terminalLayout(TerminalLayout.Message.ToggledVisibility({ projectId: facts.projectId, chatKey: facts.terminalChatKey })),
+    ])
+  }
+  return withActions({ model: moved }, [terminalLayout(TerminalLayout.Message.ChangedMainSizes({ projectId: facts.projectId, sizes }))])
+}
+
+/** Dragging the viewer's pane: the width it is let go at is kept; dragged shut is shut. */
+function dragViewerSplit(model: Model, facts: PageFacts, first: number, groupSizePx: number, done: boolean): Return {
+  const moved = modifyFields(model, { viewerSplit: () => [first, 100 - first] as const })
+  if (!done || !facts.viewerDocked || groupSizePx <= 0) return { model: moved }
+  const viewerWidth = groupSizePx * ((100 - first) / 100)
+  return withActions({ model: moved }, [
+    viewerWidth < VIEWER_PANE_CLOSE_WIDTH_PX
+      ? viewerStore(ViewerStore.Message.ShutViewer({ byKey: false }))
+      : viewerStore(ViewerStore.Message.ChangedWidth({ widthPx: Math.round(viewerWidth) })),
+  ])
+}
+
+/** Dragging the viewer's pane narrower than this closes it, as the terminal's does. */
+const VIEWER_PANE_CLOSE_WIDTH_PX = 240
 
 // TABS
 

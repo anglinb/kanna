@@ -80,6 +80,64 @@ export function panel<Message>(
   ])
 }
 
+/**
+ * A separator's drag, on its element: the pointer is captured on the press,
+ * and every move reports the first panel's new share of the group (its
+ * parent), held between `min` and `max` percent; the release reports the
+ * last one again as `done`. A disabled separator doesn't drag.
+ */
+export function separatorDrag(options: {
+  element: HTMLElement
+  orientation: Orientation
+  min: () => number
+  max: () => number
+  report: (first: number, groupSizePx: number, done: boolean) => void
+}): () => void {
+  const { element, orientation } = options
+  let start: { pointer: number; first: number; size: number; pointerId: number } | null = null
+  let last = 0
+  const firstPanel = () => element.previousElementSibling as HTMLElement | null
+  const down = (event: PointerEvent) => {
+    if (event.button !== 0 || element.getAttribute("data-separator") === "disabled") return
+    const group = element.parentElement
+    const panel = firstPanel()
+    if (!group || !panel) return
+    const groupRect = group.getBoundingClientRect()
+    const panelRect = panel.getBoundingClientRect()
+    const size = orientation === "horizontal" ? groupRect.width : groupRect.height
+    if (size <= 0) return
+    event.preventDefault()
+    element.setPointerCapture(event.pointerId)
+    const first = ((orientation === "horizontal" ? panelRect.width : panelRect.height) / size) * 100
+    start = { pointer: orientation === "horizontal" ? event.clientX : event.clientY, first, size, pointerId: event.pointerId }
+    last = first
+    element.setAttribute("data-separator", "active")
+  }
+  const move = (event: PointerEvent) => {
+    if (!start || event.pointerId !== start.pointerId) return
+    const delta = (orientation === "horizontal" ? event.clientX : event.clientY) - start.pointer
+    last = Math.min(options.max(), Math.max(options.min(), start.first + (delta / start.size) * 100))
+    options.report(last, start.size, false)
+  }
+  const end = (event: PointerEvent) => {
+    if (!start || event.pointerId !== start.pointerId) return
+    const size = start.size
+    start = null
+    element.setAttribute("data-separator", "inactive")
+    options.report(last, size, true)
+  }
+  element.addEventListener("pointerdown", down)
+  element.addEventListener("pointermove", move)
+  element.addEventListener("pointerup", end)
+  element.addEventListener("pointercancel", end)
+  return () => {
+    element.removeEventListener("pointerdown", down)
+    element.removeEventListener("pointermove", move)
+    element.removeEventListener("pointerup", end)
+    element.removeEventListener("pointercancel", end)
+  }
+}
+
 // The library writes the layout's number as it is; trim float noise so the
 // style string stays the one a settled layout gives.
 function formatGrow(size: number) {

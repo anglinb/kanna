@@ -10,7 +10,7 @@ import * as Transcript from "../transcript"
 import * as Viewer from "../viewer"
 import * as Widgets from "../widgets"
 import { card, cardContent } from "../ui/card"
-import { AnimateTerminalSplit, HoldArrivalFocus, KeepChatFocus, PageFileDrop, HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
+import { AnimateTerminalSplit, DragSeparator, HoldArrivalFocus, KeepChatFocus, PageFileDrop, HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
 import { Message, type Watch } from "./message"
 import type { Model } from "./model"
 import { delegatedListButtonView, editableTitleView, navbarTitleView, navbarView, washView } from "./navbar"
@@ -18,7 +18,7 @@ import { chatTabsView } from "./chatTabs"
 import { pageFacts, getTerminalPanelDefaultSizes, CHAT_MIN_SIZE_PERCENT, type PageFacts } from "./page"
 import type { ChatPageContext, ChatPageSliceInputs } from "./pageInputs"
 import { panel, panelGroup, separator } from "./resizable"
-import { getWidgetsColumnWidthPx, widgetsColumnView, widgetsPeeking } from "./widgetsColumn"
+import { CHAT_MIN_WORKSPACE_SIZE_PERCENT, getWidgetsColumnWidthPx, widgetsColumnView, widgetsPeeking } from "./widgetsColumn"
 import { emptyStateView } from "./emptyState"
 import { newChatDelegate } from "./newChatDelegate"
 
@@ -163,6 +163,7 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
           // The card sits 8px into its pane, so this reaches from 4px into
           // the chat to 4px past the border (still no width of its own).
           class: cn("z-40 w-4 -ml-1 -mr-3", !facts.viewerDocked && "pointer-events-none opacity-0"),
+          attributes: [h.OnMount(DragSeparator({ split: "viewer", minFirst: 0, minFirstPx: model.layoutWidth * (CHAT_MIN_WORKSPACE_SIZE_PERCENT / 100) }))],
         }, h),
         panel({ id: "viewerPane", orientation: "horizontal", size: model.viewerSplit[1], class: cn("min-h-0 min-w-0", !facts.viewerExpanded && "relative") }, [viewerLayer], h),
       ], h),
@@ -259,6 +260,7 @@ function terminalWorkspaceView(model: Model, facts: PageFacts, content: Html, pa
       disabled: !facts.showTerminalPane || clampTerminalToMaxHeight,
       class: cn(!facts.showTerminalPane && "pointer-events-none opacity-0"),
       value: { controls: "chat", now: sizes[0], min: CHAT_MIN_SIZE_PERCENT, max: 100 },
+      attributes: [h.OnMount(DragSeparator({ split: "terminal", minFirst: CHAT_MIN_SIZE_PERCENT, minFirstPx: 0 }))],
     }, h),
     panel({
       id: "terminal",

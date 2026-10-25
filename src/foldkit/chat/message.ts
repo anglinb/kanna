@@ -175,6 +175,11 @@ export const Message = defineMessageUnion({
 
   // Terminals and diffs
   MadeTerminalId: { purpose: TerminalPurpose, projectId: Schema.String, chatKey: Schema.NullOr(Schema.String), terminalId: Schema.String },
+  /**
+   * A split's handle dragged (react-resizable-panels' drag): the first
+   * panel's share, in percent, as it moves, and once more as it's let go.
+   */
+  DraggedSeparator: { split: Schema.Literals(["terminal", "viewer"]), first: Schema.Number, groupSizePx: Schema.Number, done: Schema.Boolean },
   /** A frame of the terminal pane opening or closing (useTerminalToggleAnimation). */
   SteppedTerminalSplit: { token: Schema.Number, chat: Schema.Number, terminal: Schema.Number, done: Schema.Boolean },
   TickedDiffRefresh: {},
