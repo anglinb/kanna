@@ -124,10 +124,10 @@ into this):
 | Command palette | `palette/` | 2 | merged |
 | Composer | `composer/` | 2 | merged (gallery 98/98; real-page regions pass) |
 | Transcript viewport (+ export viewer) | `transcript/` | 3 | merged (export viewer 12/12; chat captures wait on the composer) |
-| Right sidebar widgets | `widgets/` | 3 | in progress |
+| Right sidebar widgets | `widgets/` | 3 | merged (live schedule card in transcript rows; `AppAction.PrefillComposer`) |
 | Viewer / previewer | `viewer/` | 3 | in progress |
-| Setup wizard | `setup/` | 3 | to do |
-| Workflows gallery | `workflows/` | 3 | to do |
+| Setup wizard | `setup/` | 3 | merged (galleries and wizard scenarios pass; e2e setup-later passes) |
+| Workflows gallery | `workflows/` | 3 | merged (with the widgets) |
 | Demo entry, export viewer | `src/demo`, `src/export-viewer` | 4 | done (demo routes in memory: `core/navigation.ts`; `bun run demo:smoke`) |
 | Switch entries, delete React | — | 4 | to do |
 
@@ -187,6 +187,15 @@ wizard (not ported yet) and the widgets' git changes (in progress).
   (`ResolvedTranscriptRow` from KannaTranscript.tsx) and the pure client
   helpers that import zustand stores' types (kannaStateHelpers,
   viewer-split, chatBrowserNotifications): fix in the deletion sweep.
+- Deleting React (rehearsed in a worktree, green: typecheck, `bun test`
+  same failures as before, all four builds): `src/client` keeps only the
+  pure helpers the rest reaches (the reach script in
+  `/home/dev/foldkit-briefs/delete/`); `src/main.tsx`, `src/export-viewer`,
+  `src/parity/react`, `vite-plugin-message-scroller.ts` and the React
+  dependencies go; `vite.parity.config.ts` builds Foldkit alone and
+  `bun run parity` compares it with `.parity/baseline` (recorded from React
+  by `--save-baseline` before the deletion); client tests stay out of
+  typecheck as before.
 - Production entry: `index.html` still loads React. The live dev instance
   runs Vite from this checkout, so the switch waits until every slice is
   in and the e2e suite passes; then `index.html` loads
