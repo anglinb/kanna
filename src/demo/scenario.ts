@@ -858,6 +858,8 @@ export interface ScriptedReplyContext {
   /** `git status --short` as it will read once PLAN.md is written. */
   gitStatusAfterPlan: string
   firstTurn: boolean
+  /** Plan mode: propose the plan and wait for it to be approved before writing anything. */
+  planMode?: boolean
 }
 
 /**
@@ -885,12 +887,7 @@ export function composeScriptedReply(context: ScriptedReplyContext): DemoTurn {
   script.read(readPath, files.get(readPath) ?? "", `${project.localPath}/${readPath}`)
 
   const planTitle = prompt.trim().split("\n")[0]!.slice(0, 80)
-  script.todos([
-    todo("Find the code this touches", "Finding the code this touches", "completed"),
-    todo("Write up a plan", "Writing up a plan", "in_progress"),
-    todo("Check the working tree", "Checking the working tree", "pending"),
-  ])
-  script.write("PLAN.md", `${project.localPath}/PLAN.md`, [
+  const plan = [
     `# Plan: ${planTitle}`,
     "",
     `1. Start in \`${readPath}\`${hits.length > 0 ? `, where "${keyword}" shows up` : ""}.`,
@@ -898,23 +895,48 @@ export function composeScriptedReply(context: ScriptedReplyContext): DemoTurn {
     "3. Add or update tests that cover it.",
     "4. Run the tests and read the diff before committing.",
     "",
-  ].join("\n"))
-  script.bash("git status --short", "Show the working tree", context.gitStatusAfterPlan, 500)
-  script.todos([
-    todo("Find the code this touches", "Finding the code this touches", "completed"),
-    todo("Write up a plan", "Writing up a plan", "completed"),
-    todo("Check the working tree", "Checking the working tree", "completed"),
-  ])
-
-  const summary = [
-    "I wrote a plan to `PLAN.md`. You can see it in the diff panel on the right.",
-    "",
-    `This chat is part of Kanna's in-browser demo, so a script is answering instead of ${PROVIDER_LABELS[provider]}. With Kanna installed, the agent works on your real code: it reads and edits files, runs commands, and asks you when it needs a decision.`,
-    "",
-    "```sh",
-    "bun install -g kanna-code",
-    "```",
   ].join("\n")
-  script.say(summary, 1200).finish(summary, { usedTokens: 9_000 + prompt.length * 4, maxTokens: 1_000_000 })
+
+  // The work after the plan: write it down, check the tree, sum up.
+  const work = (next: TurnScript) => {
+    next.todos([
+      todo("Find the code this touches", "Finding the code this touches", "completed"),
+      todo("Write up a plan", "Writing up a plan", "in_progress"),
+      todo("Check the working tree", "Checking the working tree", "pending"),
+    ])
+    next.write("PLAN.md", `${project.localPath}/PLAN.md`, plan)
+    next.bash("git status --short", "Show the working tree", context.gitStatusAfterPlan, 500)
+    next.todos([
+      todo("Find the code this touches", "Finding the code this touches", "completed"),
+      todo("Write up a plan", "Writing up a plan", "completed"),
+      todo("Check the working tree", "Checking the working tree", "completed"),
+    ])
+
+    const summary = [
+      "I wrote a plan to `PLAN.md`. You can see it in the diff panel on the right.",
+      "",
+      `This chat is part of Kanna's in-browser demo, so a script is answering instead of ${PROVIDER_LABELS[provider]}. With Kanna installed, the agent works on your real code: it reads and edits files, runs commands, and asks you when it needs a decision.`,
+      "",
+      "```sh",
+      "bun install -g kanna-code",
+      "```",
+    ].join("\n")
+    next.say(summary, 1200).finish(summary, { usedTokens: 9_000 + prompt.length * 4, maxTokens: 1_000_000 })
+    return next
+  }
+
+  if (context.planMode) {
+    // Plan mode: nothing is written until the plan is approved.
+    script.proposePlan(plan, (answer) => {
+      if (answer === "approved") return work(new TurnScript(provider, model)).steps
+      const reply = "Okay, I'll hold off. Tell me what to change in the plan and I'll write it up again."
+      return new TurnScript(provider, model)
+        .say(reply, 800)
+        .finish(reply, { usedTokens: 6_000 + prompt.length * 4, maxTokens: 1_000_000 })
+        .steps
+    })
+  } else {
+    work(script)
+  }
   return { prompt, provider, model, steps: script.steps }
 }

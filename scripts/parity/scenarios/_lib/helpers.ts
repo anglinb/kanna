@@ -33,8 +33,12 @@ export const REGIONS = {
   dialog: "[role=dialog][aria-modal=true], [role=alertdialog]",
   /** A select's or combobox's option list that is open. */
   listbox: "[role=listbox]",
-  /** A tooltip that is up. */
-  tooltip: "[role=tooltip]",
+  /**
+   * A tooltip that is up: the box holding the `role=tooltip` text. (The
+   * role sits on a visually hidden copy of the text inside the box, 1px
+   * square, so the role alone would compare a single pixel.)
+   */
+  tooltip: ":has(> [role=tooltip])",
   /** The embedded terminal workspace under a chat. */
   terminal: "[data-terminal-visual]",
   /** The file / diff / attachment viewer pane. */
@@ -92,6 +96,36 @@ export async function parkPointer(context: ScenarioContext) {
 export async function click(context: ScenarioContext, locator: Locator, options?: Parameters<Locator["click"]>[0]) {
   await locator.click(options)
   await rest(context)
+}
+
+/**
+ * Right-clicks after resting on the target first. A row's hover card opens
+ * on the pointer's arrival and races the menu a right-click opens; resting
+ * first lets the card win every time, in both apps.
+ */
+export async function contextClick(context: ScenarioContext, locator: Locator) {
+  await locator.hover()
+  await rest(context)
+  await locator.click({ button: "right" })
+  await rest(context)
+}
+
+/**
+ * Clicks and settles without waiting out hover delays. For the widget
+ * column: once it is open it polls on wall-clock intervals
+ * (chat.refreshDiffs every 5s, browser.listLocalHttpServers every 7s), and
+ * a capture taken after the first poll would hold a command the other run
+ * may not have sent yet. A widget scenario opens the column, does one
+ * thing and captures, well inside those 5 seconds.
+ */
+export async function quickClick(context: ScenarioContext, locator: Locator) {
+  await locator.click()
+  await context.settle()
+}
+
+/** Opens the widget column from the navbar. */
+export async function openWidgets(context: ScenarioContext) {
+  await quickClick(context, context.page.locator(REGIONS.navbar).getByRole("button", { name: "Show widgets" }))
 }
 
 /** Hovers, then waits for whatever opens on hover. */
