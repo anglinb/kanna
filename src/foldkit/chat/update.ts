@@ -18,6 +18,7 @@ import * as OpenDestination from "../core/stores/openDestination"
 import * as PendingSend from "../core/stores/pendingSend"
 import * as ProviderAuth from "../core/stores/providerAuth"
 import { delegatorIsBusy, newChatDelegate, SendToDelegator, StampDelegatedSend } from "./newChatDelegate"
+import { usageCardKey, usageTooltip } from "./usageCards"
 import * as RightSidebar from "../core/stores/rightSidebar"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import * as ViewerStore from "../core/stores/viewer"
@@ -572,6 +573,17 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ChangedProjectChatsStuck: ({ stuck }) => (model.projectChats.stuck === stuck ? { model } : { model: modifyFields(model, { projectChats: (state) => ({ ...state, stuck }) }) }),
     // Typing a search ends the cascade early: results should land at once.
     ChangedProjectChatsQuery: ({ value }) => ({ model: modifyFields(model, { projectChats: (state) => ({ ...state, query: value, cascadeDone: true }) }) }),
+    ClickedUsageCard: ({ provider }) => {
+      const key = usageCardKey(facts().chatId, provider)
+      return { model: modifyFields(model, { usageCards: (cards) => ({ ...cards, expanded: { ...cards.expanded, [key]: !cards.expanded[key] } }) }) }
+    },
+    GotUsageTooltipMessage: ({ provider, message: inner }) => {
+      const result = Tooltip.update(usageTooltip(model, provider), inner)
+      return {
+        model: modifyFields(model, { usageCards: (cards) => ({ ...cards, tooltips: { ...cards.tooltips, [provider]: result.model } }) }),
+        commands: Command.mapMessages(result.commands, (m: Tooltip.Message) => Message.GotUsageTooltipMessage({ provider, message: m })) as Return["commands"],
+      }
+    },
     ClickedProjectChat: ({ chatId }) => withActions({ model }, [AppAction.Navigate({ path: `/chat/${chatId}`, replace: false })]),
 
     PressedShortcut: ({ action }) => shortcut(model, facts(), action),

@@ -157,6 +157,8 @@ export const Message = defineMessageUnion({
   ChangedProjectChatsStuck: { stuck: Schema.Boolean },
   ChangedProjectChatsQuery: { value: Schema.String },
   ClickedProjectChat: { chatId: Schema.String },
+  ClickedUsageCard: { provider: Schema.String },
+  GotUsageTooltipMessage: { provider: Schema.String, message: Tooltip.Message },
 
   // Shortcuts and the mobile sheet
   PressedShortcut: { action: ShortcutAction },

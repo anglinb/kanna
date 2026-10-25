@@ -12,19 +12,8 @@ import type { Model } from "./model"
 import type { PageFacts } from "./page"
 import type { ChatPageContext } from "./pageInputs"
 import { projectChatsView, setupCardView } from "./emptyStateProject"
+import { usageCardsView } from "./usageCards"
 
-/**
- * EmptyStateUsageCards: the harness usage meters on a phone's new chat page,
- * for providers with live limit data. The demo and a machine signed in with
- * no subscription report none, and then it is nothing. Settings' ProviderCard
- * (settings/'s to port) draws each one; until it is ported here a provider
- * with data shows nothing either.
- */
-function usageCardsView(model: Model, _h: H): Html | null {
-  const withData = (model.usageLimits?.providers ?? []).filter((provider) => provider.status === "ok" && provider.windows.length > 0)
-  if (withData.length === 0) return null
-  return null
-}
 
 // The new chat page's empty state, as ChatTranscriptViewport drew it when
 // `showEmptyState` (src/client/app/ChatPage/ChatTranscriptViewport.tsx), with
@@ -135,7 +124,7 @@ export function emptyStateView(model: Model, app: AppModel, facts: PageFacts, pa
             setupCardView(app, h),
             // On desktop usage lives in the widget column, which a new chat
             // opens; a phone's column is a closed sheet.
-            facts.isMobile ? usageCardsView(model, h) : null,
+            facts.isMobile ? usageCardsView(model, app, facts.chatId, h) : null,
             projectId
               ? projectChatsView(model, app, projectId, facts.chatId, Boolean(animatesIn) && page.isEmptyStateTypingComplete, h)
               : null,

@@ -143,6 +143,11 @@ export const Model = Schema.Struct({
   quickActionsError: Schema.NullOr(Schema.String),
   usageLimits: Schema.NullOr(opaque<UsageLimitsSnapshot>("UsageLimitsSnapshot")),
   usageRefreshing: Schema.Boolean,
+  /** A phone's new chat page shows the usage as cards (usageCards.ts): which are open, and their bars' tooltips. */
+  usageCards: Schema.Struct({
+    expanded: Schema.Record(Schema.String, Schema.Boolean),
+    tooltips: Schema.Record(Schema.String, Tooltip.Model),
+  }),
 
   /** Commands for terminals made by a quick action, sent once each opens. */
   pendingTerminalCommands: Schema.Record(Schema.String, Schema.String),
@@ -209,6 +214,7 @@ export function init(): Model {
     quickActionsError: null,
     usageLimits: null,
     usageRefreshing: false,
+    usageCards: { expanded: {}, tooltips: {} },
     pendingTerminalCommands: {},
     tooltips: {
       openIn: Tooltip.init({ id: "chat-navbar-open-in" }),
