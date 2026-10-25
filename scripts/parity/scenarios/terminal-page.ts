@@ -8,7 +8,8 @@ import { defineScenario, type Scenario } from "../scenario"
 // with `devbox: false`, so /terminal sends them to `/`. To reach the page,
 // the app-settings frames the backend sends are read with `devbox: true`
 // (the frames only; the backend is untouched), the page is reloaded, and the
-// sidebar's Terminal button opens it as a person would.
+// sidebar's Terminal button opens it as a person would. (Not a dev box,
+// /terminal sends you home: routes.ts's terminal-page-redirect.)
 
 /** The TerminalPage's own element. */
 const PAGE = "div.md\\:pt-0:has(.kanna-terminal)"
@@ -39,13 +40,6 @@ async function blur(page: Page) {
 
 export const scenarios: Scenario[] = [
   defineScenario({
-    // Not a dev box: the page sends you home.
-    name: "terminal-redirect",
-    route: "/terminal",
-    viewports: ["desktop"],
-    covers: { routes: ["/terminal"] },
-  }),
-  defineScenario({
     name: "terminal-page",
     route: "/",
     regions: { terminal: PAGE },
@@ -63,7 +57,7 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    name: "terminal-split",
+    name: "terminal-page-split",
     route: "/",
     viewports: ["desktop"],
     regions: { terminal: PAGE },
@@ -103,7 +97,7 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    name: "terminal-clear",
+    name: "terminal-page-clear",
     route: "/",
     viewports: ["desktop"],
     regions: { terminal: PAGE },
