@@ -9,6 +9,14 @@ import type {
 } from "../../shared/types"
 import { forgetAllFollowed } from "../core/backgroundChats"
 import * as ChatSession from "../core/chatSession"
+import * as SidebarSlice from "../sidebar"
+import * as HomeSlice from "../home"
+import * as SettingsSlice from "../settings"
+import * as ChatPageSlice from "../chat"
+import * as PaletteSlice from "../palette"
+import * as SetupSlice from "../setup"
+import * as WorkflowsSlice from "../workflows"
+import * as TerminalPageSlice from "../terminal"
 import * as Stores from "./stores"
 import { KannaSocketResource, acquireSocket, releaseSocket, statusStream, topicStream, type KannaSocketService } from "../core/socket"
 import { Message } from "./message"
@@ -112,4 +120,59 @@ const storeBrowserSubscriptions = Subscription.lift(Stores.browserSubscriptions)
   toParentMessage: (message) => Message.GotStoresMessage({ message }),
 })
 
-export const subscriptions = Subscription.aggregate(rootSubscriptions, chatSubscriptions, storeSocketSubscriptions, storeBrowserSubscriptions)
+// The slices' (app/slice.ts), once the socket is up.
+const sidebarSubscriptions = Subscription.lift(SidebarSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.sidebar),
+  toParentMessage: (message) => Message.GotSidebarMessage({ message: message as SidebarSlice.Message }),
+  when: (model) => model.socketReady,
+})
+const homeSubscriptions = Subscription.lift(HomeSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.home),
+  toParentMessage: (message) => Message.GotHomeMessage({ message: message as HomeSlice.Message }),
+  when: (model) => model.socketReady,
+})
+const settingsSubscriptions = Subscription.lift(SettingsSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.settings),
+  toParentMessage: (message) => Message.GotSettingsMessage({ message: message as SettingsSlice.Message }),
+  when: (model) => model.socketReady,
+})
+const chatPageSubscriptions = Subscription.lift(ChatPageSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.chatPage),
+  toParentMessage: (message) => Message.GotChatPageMessage({ message: message as ChatPageSlice.Message }),
+  when: (model) => model.socketReady,
+})
+const paletteSubscriptions = Subscription.lift(PaletteSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.palette),
+  toParentMessage: (message) => Message.GotPaletteMessage({ message: message as PaletteSlice.Message }),
+  when: (model) => model.socketReady,
+})
+const setupSubscriptions = Subscription.lift(SetupSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.setup),
+  toParentMessage: (message) => Message.GotSetupMessage({ message: message as SetupSlice.Message }),
+  when: (model) => model.socketReady,
+})
+const workflowsSubscriptions = Subscription.lift(WorkflowsSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.workflows),
+  toParentMessage: (message) => Message.GotWorkflowsMessage({ message: message as WorkflowsSlice.Message }),
+  when: (model) => model.socketReady,
+})
+const terminalPageSubscriptions = Subscription.lift(TerminalPageSlice.subscriptions)<Model, Message>({
+  read: (model) => Option.some(model.terminalPage),
+  toParentMessage: (message) => Message.GotTerminalPageMessage({ message: message as TerminalPageSlice.Message }),
+  when: (model) => model.socketReady,
+})
+
+export const subscriptions = Subscription.aggregate(
+  rootSubscriptions,
+  chatSubscriptions,
+  storeSocketSubscriptions,
+  storeBrowserSubscriptions,
+  sidebarSubscriptions,
+  homeSubscriptions,
+  settingsSubscriptions,
+  chatPageSubscriptions,
+  paletteSubscriptions,
+  setupSubscriptions,
+  workflowsSubscriptions,
+  terminalPageSubscriptions,
+)

@@ -33,7 +33,16 @@ import {
 import { Message } from "./message"
 import type { Flags, Model } from "./model"
 import { routeChatId, settingsRouter, urlToAppRoute, type AppRoute } from "./route"
+import * as SidebarSlice from "../sidebar"
+import * as HomeSlice from "../home"
+import * as SettingsSlice from "../settings"
+import * as ChatPageSlice from "../chat"
+import * as PaletteSlice from "../palette"
+import * as SetupSlice from "../setup"
+import * as WorkflowsSlice from "../workflows"
+import * as TerminalPageSlice from "../terminal"
 import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
+import { SliceOutMessage, type AppModel, type SliceReturn } from "./slice"
 import type { AppAction } from "./action"
 import * as Stores from "./stores"
 import { resolveTheme, themePreference } from "./theme"
@@ -76,6 +85,14 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     chat: null,
     stores,
     actions: initialActionsModel,
+    sidebar: SidebarSlice.init(),
+    home: HomeSlice.init(),
+    settings: SettingsSlice.init(),
+    chatPage: ChatPageSlice.init(),
+    palette: PaletteSlice.init(),
+    setup: SetupSlice.init(),
+    workflows: WorkflowsSlice.init(),
+    terminalPage: TerminalPageSlice.init(),
   }
   const session = syncChatSession(model, 0)
   return {
@@ -430,6 +447,36 @@ export function navbarLocalPath(model: Model): string | null {
     ?? null
 }
 
+// SLICES (app/slice.ts)
+
+/** A slice's request runs as the root's action. */
+const handleSliceOutMessage = SliceOutMessage.match<Step>({
+  RequestedAppAction: ({ action }) => (model) => performAction(model, action),
+})
+
+function sliceFold<Key extends keyof Model, ChildModel, ChildMessage>(
+  key: Key,
+  childUpdate: (model: ChildModel, message: ChildMessage, app: AppModel) => SliceReturn<ChildModel, ChildMessage>,
+  wrap: (message: ChildMessage) => Message,
+) {
+  return (model: Model, message: ChildMessage): UpdateReturn => Update.foldChild({
+    update: (child: ChildModel, input: ChildMessage) => childUpdate(child, input, model),
+    read: (parent: Model) => Option.some(parent[key] as unknown as ChildModel),
+    write: (parent: Model, next: ChildModel) => ({ ...parent, [key]: next }),
+    toParentMessage: wrap,
+    foldOutMessage: handleSliceOutMessage,
+  })(model, message) as UpdateReturn
+}
+
+const foldSidebar = sliceFold("sidebar", SidebarSlice.update, (message: SidebarSlice.Message) => Message.GotSidebarMessage({ message }))
+const foldHome = sliceFold("home", HomeSlice.update, (message: HomeSlice.Message) => Message.GotHomeMessage({ message }))
+const foldSettings = sliceFold("settings", SettingsSlice.update, (message: SettingsSlice.Message) => Message.GotSettingsMessage({ message }))
+const foldChatPage = sliceFold("chatPage", ChatPageSlice.update, (message: ChatPageSlice.Message) => Message.GotChatPageMessage({ message }))
+const foldPalette = sliceFold("palette", PaletteSlice.update, (message: PaletteSlice.Message) => Message.GotPaletteMessage({ message }))
+const foldSetup = sliceFold("setup", SetupSlice.update, (message: SetupSlice.Message) => Message.GotSetupMessage({ message }))
+const foldWorkflows = sliceFold("workflows", WorkflowsSlice.update, (message: WorkflowsSlice.Message) => Message.GotWorkflowsMessage({ message }))
+const foldTerminalPage = sliceFold("terminalPage", TerminalPageSlice.update, (message: TerminalPageSlice.Message) => Message.GotTerminalPageMessage({ message }))
+
 // UPDATE
 
 export const update = (model: Model, message: Message): UpdateReturn =>
@@ -554,6 +601,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ]),
     GotStoresMessage: ({ message: storesMessage }) => withDraftProtection(model, updateStores(model, storesMessage)),
     RequestedAppAction: ({ action }) => performAction(model, action),
+    GotSidebarMessage: ({ message: child }) => foldSidebar(model, child),
+    GotHomeMessage: ({ message: child }) => foldHome(model, child),
+    GotSettingsMessage: ({ message: child }) => foldSettings(model, child),
+    GotChatPageMessage: ({ message: child }) => foldChatPage(model, child),
+    GotPaletteMessage: ({ message: child }) => foldPalette(model, child),
+    GotSetupMessage: ({ message: child }) => foldSetup(model, child),
+    GotWorkflowsMessage: ({ message: child }) => foldWorkflows(model, child),
+    GotTerminalPageMessage: ({ message: child }) => foldTerminalPage(model, child),
     GotActionMessage: ({ message: actionMessage }) => withDraftProtection(model, actions.handleActionMessage(model, actionMessage) as UpdateReturn),
   })
 

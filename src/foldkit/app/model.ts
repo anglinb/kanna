@@ -12,6 +12,14 @@ import { opaque } from "../core/schema"
 import { readStorageItem } from "../core/storage"
 import * as ChatSession from "../core/chatSession"
 import { AppRoute } from "./route"
+import * as SidebarSlice from "../sidebar"
+import * as HomeSlice from "../home"
+import * as SettingsSlice from "../settings"
+import * as ChatPageSlice from "../chat"
+import * as PaletteSlice from "../palette"
+import * as SetupSlice from "../setup"
+import * as WorkflowsSlice from "../workflows"
+import * as TerminalPageSlice from "../terminal"
 import { ActionsModel } from "./actions"
 import * as Stores from "./stores"
 
@@ -56,6 +64,15 @@ export const Model = Schema.Struct({
   stores: Stores.Model,
   /** What the root's actions keep: chats being started, the share and app dialogs. */
   actions: ActionsModel,
+  // The slices (app/slice.ts): each a Submodel in its own folder.
+  sidebar: SidebarSlice.Model,
+  home: HomeSlice.Model,
+  settings: SettingsSlice.Model,
+  chatPage: ChatPageSlice.Model,
+  palette: PaletteSlice.Model,
+  setup: SetupSlice.Model,
+  workflows: WorkflowsSlice.Model,
+  terminalPage: TerminalPageSlice.Model,
 })
 export type Model = typeof Model.Type
 

@@ -13,6 +13,14 @@ import type {
 import { opaque } from "../core/schema"
 import * as ChatSession from "../core/chatSession"
 import { ConnectionStatus } from "./model"
+import * as SidebarSlice from "../sidebar"
+import * as HomeSlice from "../home"
+import * as SettingsSlice from "../settings"
+import * as ChatPageSlice from "../chat"
+import * as PaletteSlice from "../palette"
+import * as SetupSlice from "../setup"
+import * as WorkflowsSlice from "../workflows"
+import * as TerminalPageSlice from "../terminal"
 import { AppAction } from "./action"
 import { ActionMessage } from "./actions"
 import * as Stores from "./stores"
@@ -73,6 +81,16 @@ export const Message = defineMessageUnion({
 
   // A slice's request (app/action.ts) and what the root's actions hear back
   RequestedAppAction: { action: AppAction },
+
+  // The slices
+  GotSidebarMessage: { message: SidebarSlice.Message },
+  GotHomeMessage: { message: HomeSlice.Message },
+  GotSettingsMessage: { message: SettingsSlice.Message },
+  GotChatPageMessage: { message: ChatPageSlice.Message },
+  GotPaletteMessage: { message: PaletteSlice.Message },
+  GotSetupMessage: { message: SetupSlice.Message },
+  GotWorkflowsMessage: { message: WorkflowsSlice.Message },
+  GotTerminalPageMessage: { message: TerminalPageSlice.Message },
   GotActionMessage: { message: ActionMessage },
 })
 export type Message = typeof Message.Type

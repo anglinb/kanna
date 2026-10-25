@@ -5,6 +5,14 @@ import { APP_NAME } from "../../shared/branding"
 import { Flower } from "../ui/icons"
 import { Message } from "./message"
 import type { Model } from "./model"
+import * as SidebarSlice from "../sidebar"
+import * as HomeSlice from "../home"
+import * as SettingsSlice from "../settings"
+import * as ChatPageSlice from "../chat"
+import * as PaletteSlice from "../palette"
+import * as SetupSlice from "../setup"
+import * as WorkflowsSlice from "../workflows"
+import * as TerminalPageSlice from "../terminal"
 import { AppRoute } from "./route"
 import { activeChatId, activeProjectId, sidebarData } from "./update"
 
@@ -85,38 +93,32 @@ function passwordView(auth: Extract<Model["auth"], { _tag: "Locked" }>, h: HtmlB
 }
 
 function layoutView(model: Model, h: HtmlBuilder<Message>): Html {
+  const app = { app: model }
   return h.div([h.Class("flex h-[100dvh] min-h-[100dvh] overflow-hidden")], [
-    sidebarSlot(model, h),
+    h.submodel({ slotId: "sidebar", model: model.sidebar, view: SidebarSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotSidebarMessage({ message }) }),
     pageView(model, h),
+    h.submodel({ slotId: "setup", model: model.setup, view: SetupSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotSetupMessage({ message }) }),
+    h.submodel({ slotId: "palette", model: model.palette, view: PaletteSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotPaletteMessage({ message }) }),
   ])
 }
 
-// Filled by the sidebar slice (src/foldkit/sidebar).
-function sidebarSlot(_model: Model, _h: HtmlBuilder<Message>): Html {
-  return null
-}
-
 function pageView(model: Model, h: HtmlBuilder<Message>): Html {
+  const app = { app: model }
+  const home = () => h.submodel({ slotId: "home", model: model.home, view: HomeSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotHomeMessage({ message }) })
   return AppRoute.match(model.route, {
     // On mobile the sidebar fills the screen at `/` (see KannaSidebar), so
     // the projects page hides there and lives at `/home` instead. Desktop
     // shows it at both paths.
-    Root: () => h.div([h.Class("hidden md:contents")], [pendingPageView("home", h)]),
-    Home: () => pendingPageView("home", h),
+    Root: () => h.div([h.Class("hidden md:contents")], [home()]),
+    Home: () => home(),
     SettingsIndex: () => null,
-    Settings: ({ sectionId }) => pendingPageView(`settings:${sectionId}`, h),
-    Chat: ({ chatId }) => pendingPageView(`chat:${chatId}`, h),
-    Project: () => h.div([h.Class("hidden md:contents")], [pendingPageView("home", h)]),
-    Terminal: () => pendingPageView("terminal", h),
-    Workflows: () => pendingPageView("workflows", h),
+    Settings: () => h.submodel({ slotId: "settings", model: model.settings, view: SettingsSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotSettingsMessage({ message }) }),
+    Chat: () => h.submodel({ slotId: "chat", model: model.chatPage, view: ChatPageSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotChatPageMessage({ message }) }),
+    Project: () => h.div([h.Class("hidden md:contents")], [home()]),
+    Terminal: () => h.submodel({ slotId: "terminal", model: model.terminalPage, view: TerminalPageSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotTerminalPageMessage({ message }) }),
+    Workflows: () => h.submodel({ slotId: "workflows", model: model.workflows, view: WorkflowsSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotWorkflowsMessage({ message }) }),
     OpenRouterCallback: () => null,
     NotFound: () => null,
   })
-}
-
-// Until a page's slice lands. Keeps the layout's shape so regions already
-// ported can be compared.
-function pendingPageView(name: string, h: HtmlBuilder<Message>): Html {
-  return h.div([h.Class("flex-1"), h.DataAttribute("pending-page", name)])
 }
 
