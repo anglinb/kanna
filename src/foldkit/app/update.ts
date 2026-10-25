@@ -45,7 +45,8 @@ import * as AppDialog from "../ui/app-dialog"
 import { isNightlyVersion } from "../../shared/types"
 import * as OpenRouterCallback from "./openRouterCallback"
 import { FollowRestart, HandleReloadRequest, MigrateChannelPins, MigrateLegacyBrowserSettings, MigrateLegacySetupFlags, updateCheckInterval } from "./maintenance"
-import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
+import { ActionMessage as ActionMessageUnion, initialActionsModel, makeActions, type ActionMessage } from "./actions"
+import * as ShareDialog from "../chat/shareDialog"
 import { SliceOutMessage, type AppModel, type SliceObserve, type SliceReturn } from "./slice"
 import type { AppAction } from "./action"
 import * as Stores from "./stores"
@@ -90,6 +91,7 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     stores,
     actions: initialActionsModel,
     appDialog: AppDialog.init(),
+    shareDialog: ShareDialog.init(),
     openRouterCallback: OpenRouterCallback.init(Option.getOrElse(url.search, () => "")),
     legacySettingsMigrationStarted: false,
     pageHidden: false,
@@ -553,9 +555,38 @@ function observeSlices(previous: Model, result: UpdateReturn): UpdateReturn {
   return { model, commands }
 }
 
+// THE SHARE DIALOG (chat/shareDialog.ts), open while there is a link
+
+const liftShare = (commands: Update.Return<ShareDialog.Model, ShareDialog.Message>["commands"]) =>
+  Command.mapMessages(commands, (message: ShareDialog.Message) => Message.GotShareDialogMessage({ message }))
+
+function syncShareDialog(previous: Model, result: UpdateReturn): UpdateReturn {
+  if (result.model.actions.standaloneShareUrl === previous.actions.standaloneShareUrl) return result
+  const synced = ShareDialog.sync(result.model.shareDialog, result.model.actions.standaloneShareUrl)
+  return {
+    model: modifyFields(result.model, { shareDialog: () => synced.model }),
+    commands: [...(result.commands ?? []), ...liftShare(synced.commands)],
+  }
+}
+
+function updateShareDialog(model: Model, message: ShareDialog.Message): UpdateReturn {
+  const result = ShareDialog.update(model.shareDialog, message)
+  const next = modifyFields(model, { shareDialog: () => result.model })
+  const commands = liftShare(result.commands)
+  if (!result.outMessage) return { model: next, commands }
+  const answer = ShareDialog.OutMessage.match<ActionMessage>(result.outMessage, {
+    Closed: () => ActionMessageUnion.ClosedShareDialog(),
+    OpenedLink: () => ActionMessageUnion.ClickedOpenShareLink(),
+    FailedCopy: ({ error }) => ActionMessageUnion.FailedCopyShareLink({ error }),
+  })
+  const acted = actions.handleActionMessage(next, answer) as UpdateReturn
+  return { model: acted.model, commands: [...commands, ...(acted.commands ?? [])] }
+}
+
 // UPDATE
 
-export const update = (model: Model, message: Message): UpdateReturn => observeSlices(model, updateRoot(model, message))
+export const update = (model: Model, message: Message): UpdateReturn =>
+  syncShareDialog(model, observeSlices(model, updateRoot(model, message)))
 
 const updateRoot = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -709,6 +740,7 @@ const updateRoot = (model: Model, message: Message): UpdateReturn =>
     GotWorkflowsMessage: ({ message: child }) => foldWorkflows(model, child),
     GotTerminalPageMessage: ({ message: child }) => foldTerminalPage(model, child),
     GotAppDialogMessage: ({ message: dialogMessage }) => foldAppDialog(model, dialogMessage),
+    GotShareDialogMessage: ({ message: shareMessage }) => updateShareDialog(model, shareMessage),
     GotOpenRouterCallbackMessage: ({ message: callbackMessage }) => {
       const result = OpenRouterCallback.update(model.openRouterCallback, callbackMessage)
       return {
