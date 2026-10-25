@@ -20,7 +20,7 @@
 
 export { Model, init } from "./model"
 export { Message } from "./message"
-export { update, updateWith, reconcile, observe } from "./update"
+export { update, updateWith, reconcile, observe, observes } from "./update"
 export { view, contextFromInputs, pageComposerInputs, type ViewInputs } from "./view"
 export { subscriptions } from "./subscriptions"
 export { contextFromApp, propsFromApp, type ComposerDelegate, type ComposerProps, type Context, type PageComposerInputs } from "./context"

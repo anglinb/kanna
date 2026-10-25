@@ -286,11 +286,16 @@ export function update(model: Model, message: Message, app: AppModel): Return {
  * doing anything. Nothing happens unless one of those moved.
  */
 export function observe(model: Model, previousApp: AppModel, app: AppModel): Return {
+  if (!observes(model, previousApp, app)) return { model }
+  return update(model, Message.ObservedApp(), app)
+}
+
+/** Whether `observe` has anything to do; the chat page then sends `ObservedApp` through its own fold. */
+export function observes(model: Model, previousApp: AppModel, app: AppModel): boolean {
   const authChanged = previousApp.stores.providerAuth !== app.stores.providerAuth && model.pendingSignInProvider !== null
   const draftId = model.instance?.draftId
   const draftChanged = draftId !== null && draftId !== undefined && previousApp.stores.chatInput.drafts[draftId] !== app.stores.chatInput.drafts[draftId]
-  if (!authChanged && !draftChanged) return { model }
-  return update(model, Message.ObservedApp(), app)
+  return authChanged || draftChanged
 }
 
 /** `update`, with the page's props given (the chat page's own, or a gallery's). */

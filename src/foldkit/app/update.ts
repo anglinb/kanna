@@ -10,7 +10,9 @@ import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES } from "../../shared/trans
 import type { AppSettingsSnapshot, SidebarData } from "../../shared/types"
 import * as ChatSession from "../core/chatSession"
 import type { KannaSocketService } from "../core/socket"
+import * as ChatPreferences from "../core/stores/chatPreferences"
 import * as PendingSend from "../core/stores/pendingSend"
+import * as Composer from "../composer"
 import * as Sidebar from "../core/stores/sidebar"
 import {
   ApplyTheme,
@@ -327,14 +329,19 @@ function syncChatSession(model: Model, at: number): UpdateReturn {
   return { model: modifyFields(model, { chat: () => opened.model }), commands }
 }
 
+const toComposer = (message: Composer.Message) => ChatPageSlice.Message.GotComposerMessage({ message })
+
 const handleChatOutMessage = ChatSession.OutMessage.match<Step>({
   ChangedCommandError: ({ message }) => (model) => ({ model: commandError(model, message) }),
   MarkedSending: ({ chatId, sentAt }) => (model) => updateStores(model, Stores.Message.GotPendingSendMessage({ message: PendingSend.Message.StartedSending({ chatId, sentAt }) })),
   ClearedSending: ({ chatId }) => (model) => updateStores(model, Stores.Message.GotPendingSendMessage({ message: PendingSend.Message.ClearedSending({ chatId }) })),
-  // The composer and chatPreferences hear of these with their slices.
-  SucceededSend: () => (model) => ({ model }),
-  FailedSend: ({ error }) => (model) => ({ model: commandError(model, error) }),
-  ConfirmedExitPlanMode: () => (model) => ({ model }),
+  // The composer lets go of the draft it took out for the send, or puts it back.
+  SucceededSend: () => (model) => foldChatPage(model, toComposer(Composer.Message.SucceededSend())),
+  FailedSend: ({ content, error }) => (model) => foldChatPage(commandError(model, error), toComposer(Composer.Message.FailedSend({ content, error }))),
+  // The plan is accepted: the composer leaves plan mode for this chat.
+  ConfirmedExitPlanMode: ({ chatId }) => (model) => updateStores(model, Stores.Message.GotChatPreferencesMessage({
+    message: ChatPreferences.Message.ClearedChatComposerPlanMode({ chatId }),
+  })),
 })
 
 /**
@@ -769,12 +776,22 @@ export function draftProtectedChatIds(model: Model): string[] {
   return [...new Set([...Object.keys(chatInput.drafts), ...Object.keys(chatInput.attachmentDrafts)])].sort()
 }
 
-/** useKannaState re-sent `chat.setDraftProtection` whenever that list changed while connected. */
+const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every((id, index) => id === b[index])
+
+/**
+ * useKannaState re-sent `chat.setDraftProtection` whenever either list
+ * changed while connected: the text drafts' ids or the attachment drafts'
+ * ids, each its own effect dependency. So a chat that swaps its text for
+ * an attachment sends again, though the union stays the same.
+ */
 function withDraftProtection(before: Model, result: UpdateReturn): UpdateReturn {
   if (result.model.connectionStatus !== "connected") return result
-  const previous = draftProtectedChatIds(before)
-  const next = draftProtectedChatIds(result.model)
-  if (previous.length === next.length && previous.every((id, index) => id === next[index])) return result
-  return { ...result, commands: [...(result.commands ?? []), SendCommand({ command: { type: "chat.setDraftProtection", chatIds: next } })] }
+  const was = before.stores.chatInput
+  const is = result.model.stores.chatInput
+  if (was === is) return result
+  const textSame = sameIds(Object.keys(was.drafts).sort(), Object.keys(is.drafts).sort())
+  const attachmentsSame = sameIds(Object.keys(was.attachmentDrafts).sort(), Object.keys(is.attachmentDrafts).sort())
+  if (textSame && attachmentsSame) return result
+  return { ...result, commands: [...(result.commands ?? []), SendCommand({ command: { type: "chat.setDraftProtection", chatIds: draftProtectedChatIds(result.model) } })] }
 }
 
