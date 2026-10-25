@@ -904,7 +904,7 @@ export function titleFromPrompt(prompt: string) {
   const firstLine = prompt.trim().split("\n")[0] ?? ""
   const words = firstLine.replace(/[.?!]+$/, "").split(/\s+/).slice(0, 7).join(" ")
   const title = words.length > 48 ? `${words.slice(0, 47).trimEnd()}…` : words
-  return title ? title[0]!.toUpperCase() + title.slice(1) : "New chat"
+  return title ? title[0]!.toUpperCase() + title.slice(1) : "New Chat"
 }
 
 export interface ScriptedReplyContext {

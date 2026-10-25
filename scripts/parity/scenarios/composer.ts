@@ -94,6 +94,19 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
+    // Grok Build isn't set up in the demo: picking it asks to sign in first.
+    name: "composer-harness-sign-in",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("dialog", "composer"),
+    async run(context) {
+      await click(context, context.page.getByRole("button", { name: "Claude", exact: true }))
+      await click(context, context.page.getByRole("dialog").getByRole("button", { name: /^Grok/ }))
+      await parkPointer(context)
+      await context.capture("sign-in")
+    },
+  }),
+  defineScenario({
     name: "composer-model-picker",
     route: CHATS.units,
     ...desktop,
@@ -410,7 +423,10 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    // A sent image opens in the viewer from the transcript.
+    // A sent image opens in the viewer from the transcript. With reduced
+    // motion the pane opens at once: sliding in, it narrows the transcript
+    // over a few frames, and each frame's width rides on a chat.setReadAnchor,
+    // so how many went out depended on the machine's speed.
     name: "composer-attachment-open",
     route: CHATS.units,
     ...desktop,
@@ -418,6 +434,7 @@ export const scenarios: Scenario[] = [
     covers: { commands: ["chat.send"] },
     async run(context) {
       const { page } = context
+      await page.emulateMedia({ reducedMotion: "reduce" })
       await openPalette(context)
       const chooser = page.waitForEvent("filechooser")
       await page.getByRole("dialog", { name: "Command Palette" }).getByRole("option", { name: /^Attach Files/ }).first().click()

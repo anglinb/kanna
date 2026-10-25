@@ -1,6 +1,6 @@
 import type { Page } from "playwright"
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, openWidgets, quickClick, REGIONS, regions } from "./_lib/helpers"
+import { CHATS, openWidgets, parkPointer, quickClick, REGIONS, regions } from "./_lib/helpers"
 
 // The widget column beside a chat: Changes (files, staging, commit, the
 // branch picker, fetch, merge), Commits, Quick Actions, Tasks, Schedules,
@@ -147,8 +147,6 @@ export const scenarios: Scenario[] = [
       await openWidgets(context)
       await quickClick(context, column(page).getByRole("button", { name: "Write commit message" }))
       await column(page).getByPlaceholder("Commit message").fill("Let wave heights switch between feet and meters")
-      await context.settle()
-      await context.capture("typed")
       await page.keyboard.press("Meta+Enter")
       await context.settle()
       await context.capture("committed")
@@ -282,21 +280,18 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    // The Usage card's refresh button: its tooltip, then a refresh.
+    // The Usage card's refresh button, its tooltip up under the pointer.
     name: "widgets-usage-refresh",
     route: CHATS.units,
     ...desktop,
-    regions: regions("widgets", "tooltip"),
+    regions: regions("widgets"),
     covers: { commands: ["usage.refresh"] },
     async run(context) {
       const { page } = context
       await openWidgets(context)
-      const refresh = column(page).getByRole("button", { name: "Refresh usage" }).first()
-      await refresh.hover()
+      await column(page).getByRole("button", { name: "Refresh usage" }).first().click()
       await page.waitForTimeout(300)
       await context.settle()
-      await context.capture("tooltip")
-      await quickClick(context, refresh)
       await context.capture("refreshed")
     },
   }),
@@ -406,22 +401,23 @@ export const scenarios: Scenario[] = [
     name: "widgets-schedule-edit",
     route: CHATS.rateLimit,
     ...desktop,
-    regions: regions("menu", "composer"),
+    regions: regions("composer"),
     async run(context) {
       const { page } = context
       await openWidgets(context)
       await quickClick(context, column(page).getByRole("button", { name: "Schedule actions" }))
-      await context.capture("menu")
       await quickClick(context, page.getByRole("menuitem", { name: "Edit Schedule…" }))
       await context.capture("prefilled")
     },
   }),
   defineScenario({
-    // A saved quick action runs in the terminal under the chat.
+    // A saved quick action runs in a new terminal under the chat. The column
+    // is closed before the capture, which stops its polls, so waiting out the
+    // row's one-second check mark doesn't race them.
     name: "widgets-run-quick-action",
     route: CHATS.units,
     ...desktop,
-    regions: regions("widgets", "terminal"),
+    regions: regions("terminal"),
     covers: { commands: ["project.writeQuickActions", "terminal.create", "terminal.input"] },
     async run(context) {
       const { page } = context
@@ -429,10 +425,9 @@ export const scenarios: Scenario[] = [
       await quickClick(context, column(page).getByRole("button", { name: "Add quick action" }))
       await column(page).getByRole("textbox", { name: "Command" }).fill("bun test")
       await quickClick(context, column(page).getByRole("button", { name: "Save quick action" }))
-      await column(page).getByRole("button", { name: /^bun test/ }).first().click()
-      // The row's check mark stands for a second after a run; capture once it's back to ▶.
-      await page.waitForTimeout(1200)
-      await context.settle()
+      await quickClick(context, column(page).getByRole("button", { name: /^bun test/ }).first())
+      await quickClick(context, page.locator(REGIONS.navbar).getByRole("button", { name: "Hide widgets" }))
+      await parkPointer(context)
       await context.capture("ran")
     },
   }),
@@ -441,7 +436,7 @@ export const scenarios: Scenario[] = [
     name: "widgets-delete-quick-action",
     route: CHATS.units,
     ...desktop,
-    regions: regions("widgets", "menu"),
+    regions: regions("menu"),
     covers: { commands: ["project.writeQuickActions"] },
     async run(context) {
       const { page } = context

@@ -238,7 +238,8 @@ export class DemoBackend {
       history: [],
       quickActions: [],
     }
-    this.commit(project, "Initial commit", [...files.keys()], this.clock.now() - 9 * 24 * 60 * 60_000)
+    // A project made in the demo was just made; the seeded ones go back a while.
+    this.commit(project, "Initial commit", [...files.keys()], this.clock.now() - (seed.localOnly ? 0 : 9 * 24 * 60 * 60_000))
     this.projects.set(seed.id, project)
     return project
   }
@@ -537,7 +538,9 @@ export class DemoBackend {
     const chat: ChatState = {
       id: chatId ?? this.nextId("demo-chat"),
       projectId,
-      title: "New chat",
+      // The server's own placeholder, word for word: the client shows a
+      // fresh chat's empty state only while its title is still "New Chat".
+      title: "New Chat",
       provider: null,
       model: null,
       createdAt: this.clock.now(),

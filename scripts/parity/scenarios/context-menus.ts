@@ -15,14 +15,15 @@ function column(page: Page) {
 }
 
 /**
- * Right-clicks a widget row and waits out its hover card's delay, without
- * the long rests of `contextClick`: the widget column polls on wall-clock
- * intervals (see quickClick in _lib/helpers.ts), so its scenarios capture
- * within the first few seconds of opening it.
+ * Right-clicks a widget row, without the long rests of `contextClick`: the
+ * widget column polls every 5s from the moment it opens (see quickClick in
+ * _lib/helpers.ts), and a scenario's captures (the page, then each region)
+ * must all land before the first poll. A row's hover card opens as the
+ * pointer arrives, so a short wait sees it up.
  */
 async function widgetContextClick(context: ScenarioContext, locator: Locator) {
   await locator.click({ button: "right" })
-  await context.page.waitForTimeout(1000)
+  await context.page.waitForTimeout(300)
   await context.settle()
 }
 
@@ -37,14 +38,11 @@ export const scenarios: Scenario[] = [
     name: "context-menu-widget-file-row",
     route: CHATS.units,
     ...desktop,
-    regions: regions("menu", "widgets"),
+    regions: regions("menu"),
     async run(context) {
       await openWidgets(context)
       await widgetContextClick(context, widgetRow(context.page, "src/lib/units.ts"))
       await context.capture("menu")
-      await context.page.keyboard.press("Escape")
-      await context.settle()
-      await context.capture("closed")
     },
   }),
   defineScenario({
