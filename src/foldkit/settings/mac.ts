@@ -9,7 +9,7 @@ import { switchControl } from "../ui/switch"
 import { makeSectionMount } from "./activeSection"
 import { SETTINGS_ROWS } from "./registry"
 import { liftChild, sectionLabel, sectionSubtitle, type AppModel, type SectionReturn, type SectionViewInputs } from "./section"
-import { sectionContainer, settingsActionButton, settingsGroup, settingsGroups, settingsPlaceholder, settingsRow, settingsSelect } from "./shared"
+import { sectionContainer, settingsActionButton, settingsGroup, settingsGroups, settingsPlaceholder, settingsRow, settingsSelect, updateSettingsSelect } from "./shared"
 
 // Settings › This Mac (app/settings/MacSection.tsx), in Kanna for Mac only:
 // the setup wizard's This Mac step, for after setup. The app does each thing
@@ -99,7 +99,7 @@ export function update(model: Model, message: Message, _app: AppModel): Return {
     ClickedOpenFullDiskAccess: () => ({ model, commands: [PostMacSetup({ request: { _tag: "OpenFullDiskAccess" } })] }),
     GotQuitBehaviorMessage: ({ message: child }) => {
       const lifted = liftChild(
-        Select.update(model.quitBehavior, child),
+        updateSettingsSelect(model.quitBehavior, child, model.state?.quitBehavior ?? ""),
         (quitBehavior) => ({ ...model, quitBehavior }),
         (selectMessage) => Message.GotQuitBehaviorMessage({ message: selectMessage }),
       )

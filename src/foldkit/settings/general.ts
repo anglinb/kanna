@@ -24,7 +24,7 @@ import {
 } from "../../shared/types"
 import { AppAction } from "../app/action"
 import * as Stores from "../app/stores"
-import { themePreference, type ThemePreference } from "../app/theme"
+import { resolveTheme, syncThemeMetadata, themePreference, type ThemePreference } from "../app/theme"
 import * as ChatSoundPreferences from "../core/stores/chatSoundPreferences"
 import * as TerminalPreferences from "../core/stores/terminalPreferences"
 import { button } from "../ui/button"
@@ -54,6 +54,7 @@ import {
   settingsRow,
   settingsSelect,
   shouldPreviewChatSoundChange,
+  updateSettingsSelect,
 } from "./shared"
 
 // Settings › General (app/settings/GeneralSection.tsx).
@@ -144,6 +145,7 @@ export const Message = defineMessageUnion({
   ResolvedNotificationPermission: { requested: Schema.String, permission: Schema.String },
   CompletedPreviewChatSound: {},
   CompletedBlurActiveElement: {},
+  CompletedApplyTheme: {},
 })
 export type Message = typeof Message.Type
 
@@ -174,6 +176,17 @@ const RequestNotificationPermission = Command.define("RequestChatNotificationPer
   }),
 })
 
+/** The root's ApplyTheme (app/commands.ts, which this can't import: it imports every slice). */
+const ApplyTheme = Command.define("SettingsApplyTheme", {
+  args: { resolved: Schema.Literals(["light", "dark"]) },
+  messages: [Message.CompletedApplyTheme],
+  execute: ({ resolved }) => Effect.sync(() => {
+    document.documentElement.classList.toggle("dark", resolved === "dark")
+    syncThemeMetadata(resolved)
+    return Message.CompletedApplyTheme()
+  }),
+})
+
 const blurActiveElement = Command.mapMessage(BlurActiveElement(), () => Message.CompletedBlurActiveElement())
 
 // UPDATE
@@ -187,7 +200,13 @@ const chatSoundPreferences = (message: ChatSoundPreferences.Message) =>
 function selectedValue(model: Model, id: SelectId, value: string, app: AppModel): Return {
   switch (id) {
     case "theme":
-      return requestActions(model, [write({ theme: value as ThemePreference })])
+      // The root applies a theme when an app-settings snapshot changes it,
+      // but the optimistic patch has already changed it by the time the
+      // write's snapshot lands, so it never does: apply it here, as React's
+      // ThemeProvider does on the optimistic store change. (Root follow-up.)
+      return requestActions(model, [write({ theme: value as ThemePreference })], [
+        ApplyTheme({ resolved: resolveTheme(value as ThemePreference, app.systemTheme) }),
+      ])
     case "chatSounds": {
       const current = app.stores.chatSoundPreferences.chatSoundPreference
       if (!shouldPreviewChatSoundChange(current, value)) return { model }
@@ -225,6 +244,30 @@ function selectedValue(model: Model, id: SelectId, value: string, app: AppModel)
         write({ editor: { preset: nextPreset, commandTemplate } }),
       ])
     }
+  }
+}
+
+/** The value a select shows (as the view passes it). */
+function selectValue(id: SelectId, app: AppModel): string {
+  const settings = app.stores.appSettings.settings
+  const sounds = app.stores.chatSoundPreferences
+  switch (id) {
+    case "theme":
+      return themePreference(settings)
+    case "chatSounds":
+      return sounds.chatSoundPreference
+    case "chatSound":
+      return sounds.chatSoundId
+    case "chatBrowserNotifications":
+      return sounds.chatBrowserNotificationPreference
+    case "submitWhileRunning":
+      return settings?.submitWhileRunning ?? "queue"
+    case "widgetsVisibility":
+      return settings?.paneVisibility?.widgets ?? "chat"
+    case "terminalVisibility":
+      return settings?.paneVisibility?.terminal ?? "chat"
+    case "defaultEditor":
+      return app.stores.terminalPreferences.editorPreset
   }
 }
 
@@ -302,7 +345,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     UnmountedSection: () => ({ model: init() }),
     GotSelectMessage: ({ id, message: child }) => {
       const lifted = liftChild(
-        Select.update(model.selects[id], child),
+        updateSettingsSelect(model.selects[id], child, selectValue(id, app)),
         (select) => ({ ...model, selects: { ...model.selects, [id]: select } }),
         (selectMessage) => Message.GotSelectMessage({ id, message: selectMessage }),
       )
@@ -342,6 +385,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     },
     CompletedPreviewChatSound: () => ({ model }),
     CompletedBlurActiveElement: () => ({ model }),
+    CompletedApplyTheme: () => ({ model }),
   })
 }
 

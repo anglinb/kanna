@@ -164,6 +164,20 @@ export interface SettingsSelectConfig<ParentMessage> {
 }
 
 /**
+ * Select.update, reporting a choice when Radix's controlled Select would
+ * call `onValueChange`: an item chosen while the list is open (a mouse
+ * release and the click after it can both reach an item before the closing
+ * list re-renders, and the second is no choice), and only for a value other
+ * than the one shown (`useControllableState` skips an unchanged value).
+ */
+export function updateSettingsSelect(model: Select.Model, message: Select.Message, current: string): ReturnType<typeof Select.update> {
+  const result = Select.update(model, message)
+  if (!result.outMessage) return result
+  if (model.phase !== "Open" || result.outMessage.value === current) return { model: result.model, commands: result.commands }
+  return result
+}
+
+/**
  * A select whose trigger is a row accessory. The panel lines up with the
  * trigger's right edge, where the trigger sits, instead of hanging off its
  * left into the row text.

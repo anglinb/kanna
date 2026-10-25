@@ -23,6 +23,7 @@ import {
   settingsPlaceholder,
   settingsRow,
   settingsSelect,
+  updateSettingsSelect,
 } from "./shared"
 
 // Settings › MCP Servers (app/settings/McpSection.tsx).
@@ -260,7 +261,7 @@ export function update(model: Model, message: Message, _app: AppModel): Return {
     },
     ClickedSignOut: ({ id }) => perform(model, { _tag: "Disconnect", id }),
     GotTransportMessage: ({ message: child }) => {
-      const lifted = liftChild(Select.update(model.transport, child), (transport) => ({ ...model, transport }), (selectMessage) => Message.GotTransportMessage({ message: selectMessage }))
+      const lifted = liftChild(updateSettingsSelect(model.transport, child, model.draft?.transport ?? ""), (transport) => ({ ...model, transport }), (selectMessage) => Message.GotTransportMessage({ message: selectMessage }))
       if (!lifted.outMessage || !lifted.model.draft) return { model: lifted.model, commands: lifted.commands }
       return {
         model: { ...lifted.model, draft: { ...lifted.model.draft, transport: lifted.outMessage.value as McpServerInput["transport"] } },

@@ -52,6 +52,7 @@ import {
   settingsNotice,
   settingsRow,
   settingsSelect,
+  updateSettingsSelect,
 } from "./shared"
 
 // Settings › Providers (app/settings/ProvidersSection.tsx, with
@@ -300,9 +301,23 @@ function commitLlmProvider(model: Model, app: AppModel, draft: LlmDraft): Return
   )
 }
 
+/** The value a select shows (as the view passes it). */
+function selectValue(model: Model, id: SelectId, app: AppModel): string {
+  switch (id) {
+    case "defaultProvider":
+      return app.stores.chatPreferences.defaultProvider
+    case "llmProvider":
+      return currentDraft(model, app).provider
+    case "accountProvider":
+      return model.accountDraft?.provider ?? ""
+    case "accountApiProvider":
+      return model.accountDraft?.apiProvider ?? "openai"
+  }
+}
+
 function foldSelect(model: Model, id: SelectId, child: Select.Message, app: AppModel): Return {
   const lifted = liftChild(
-    Select.update(model.selects[id], child),
+    updateSettingsSelect(model.selects[id], child, selectValue(model, id, app)),
     (select) => ({ ...model, selects: { ...model.selects, [id]: select } }),
     (selectMessage) => Message.GotSelectMessage({ id, message: selectMessage }),
   )

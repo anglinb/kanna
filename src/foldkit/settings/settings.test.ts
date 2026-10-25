@@ -166,6 +166,18 @@ describe("settings › general", () => {
     expect(resolved.outMessage?.actions[1]).toEqual(write({ chatBrowserNotificationPreference: "never" }))
   })
 
+  test("a select reports a choice once, only for a new value, as Radix's onValueChange does", () => {
+    const choose = (value: string) => General.Message.GotSelectMessage({ id: "theme", message: Select.Message.ChoseItem({ value, pointerType: "mouse" }) })
+    const opened = run(General.init(), General.Message.GotSelectMessage({ id: "theme", message: Select.Message.PressedOpenKey() })).model
+    // The value shown (no theme saved yet: System) is no change.
+    expect(run(opened, choose("system")).outMessage).toBeUndefined()
+    const chosen = run(opened, choose("light"))
+    expect(chosen.outMessage?.actions).toEqual([write({ theme: "light" })])
+    expect(chosen.commands?.map((command) => command.name)).toContain("SettingsApplyTheme")
+    // The click after the release reaches the item again while the list closes.
+    expect(run(chosen.model, choose("light")).outMessage).toBeUndefined()
+  })
+
   test("leaving the section forgets its drafts", () => {
     const typed = run(General.init(), General.Message.ChangedField({ id: "scrollback", text: "9", base: "1000" })).model
     expect(run(typed, General.Message.UnmountedSection()).model).toEqual(General.init())
