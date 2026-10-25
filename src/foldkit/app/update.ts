@@ -250,7 +250,7 @@ function receiveAppSettings(model: Model, snapshot: AppSettingsSnapshot): Update
     }
     migrations.push(MigrateLegacySetupFlags({ snapshot }))
   }
-  return { model: next, commands: [...(fanned.commands ?? []), ...themeCommands(model, next), ...migrations] }
+  return { model: next, commands: [...(fanned.commands ?? []), ...migrations] }
 }
 
 /** App.tsx's sidebar store subscription: chime and notify on what changed. */
@@ -585,8 +585,18 @@ function updateShareDialog(model: Model, message: ShareDialog.Message): UpdateRe
 
 // UPDATE
 
+/**
+ * The theme follows whatever changed it: a settings snapshot, the system
+ * theme, or a write's optimistic patch (ThemeProvider applied the
+ * preference the moment it changed).
+ */
+function syncTheme(previous: Model, result: UpdateReturn): UpdateReturn {
+  const commands = themeCommands(previous, result.model)
+  return commands.length === 0 ? result : { ...result, commands: [...(result.commands ?? []), ...commands] }
+}
+
 export const update = (model: Model, message: Message): UpdateReturn =>
-  syncShareDialog(model, observeSlices(model, updateRoot(model, message)))
+  syncTheme(model, syncShareDialog(model, observeSlices(model, updateRoot(model, message))))
 
 const updateRoot = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -695,7 +705,7 @@ const updateRoot = (model: Model, message: Message): UpdateReturn =>
 
     ChangedSystemTheme: ({ theme }) => {
       const next = modifyFields(model, { systemTheme: () => theme })
-      return { model: next, commands: themeCommands(model, next) }
+      return { model: next }
     },
 
     ElapsedBackgroundChatGrace: ({ chatId }) => {

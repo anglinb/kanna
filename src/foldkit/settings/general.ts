@@ -24,7 +24,7 @@ import {
 } from "../../shared/types"
 import { AppAction } from "../app/action"
 import * as Stores from "../app/stores"
-import { resolveTheme, syncThemeMetadata, themePreference, type ThemePreference } from "../app/theme"
+import { themePreference, type ThemePreference } from "../app/theme"
 import * as ChatSoundPreferences from "../core/stores/chatSoundPreferences"
 import * as TerminalPreferences from "../core/stores/terminalPreferences"
 import { button } from "../ui/button"
@@ -176,17 +176,6 @@ const RequestNotificationPermission = Command.define("RequestChatNotificationPer
   }),
 })
 
-/** The root's ApplyTheme (app/commands.ts, which this can't import: it imports every slice). */
-const ApplyTheme = Command.define("SettingsApplyTheme", {
-  args: { resolved: Schema.Literals(["light", "dark"]) },
-  messages: [Message.CompletedApplyTheme],
-  execute: ({ resolved }) => Effect.sync(() => {
-    document.documentElement.classList.toggle("dark", resolved === "dark")
-    syncThemeMetadata(resolved)
-    return Message.CompletedApplyTheme()
-  }),
-})
-
 const blurActiveElement = Command.mapMessage(BlurActiveElement(), () => Message.CompletedBlurActiveElement())
 
 // UPDATE
@@ -200,13 +189,8 @@ const chatSoundPreferences = (message: ChatSoundPreferences.Message) =>
 function selectedValue(model: Model, id: SelectId, value: string, app: AppModel): Return {
   switch (id) {
     case "theme":
-      // The root applies a theme when an app-settings snapshot changes it,
-      // but the optimistic patch has already changed it by the time the
-      // write's snapshot lands, so it never does: apply it here, as React's
-      // ThemeProvider does on the optimistic store change. (Root follow-up.)
-      return requestActions(model, [write({ theme: value as ThemePreference })], [
-        ApplyTheme({ resolved: resolveTheme(value as ThemePreference, app.systemTheme) }),
-      ])
+      // The root applies the theme as soon as the optimistic patch changes it.
+      return requestActions(model, [write({ theme: value as ThemePreference })], [])
     case "chatSounds": {
       const current = app.stores.chatSoundPreferences.chatSoundPreference
       if (!shouldPreviewChatSoundChange(current, value)) return { model }
