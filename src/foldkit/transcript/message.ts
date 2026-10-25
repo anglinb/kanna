@@ -55,6 +55,8 @@ export const Message = defineMessageUnion({
   ReceivedDebugRaw: { chatId: Schema.String, entryId: Schema.String, body: Schema.NullOr(Schema.String), failed: Schema.Boolean },
   /** The local-link menu's trigger got its contextmenu (the menu opens at the link). */
   CompletedOpenLinkMenu: {},
+  /** Where the right click that asked for the local-link menu was. */
+  LocatedLinkMenu: { x: Schema.Number, y: Schema.Number },
 
   // A live chat card (chatCard.ts)
   ClickedChatCard: { chatId: Schema.String },

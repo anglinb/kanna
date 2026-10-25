@@ -18,7 +18,7 @@ import type { Model } from "./model"
 import { pageChat, pageLinkMenu, viewportKey } from "./source"
 import { openAppValueOfMenuValue, openAppValueRequest } from "../chat/openExternal"
 import * as ContextMenu from "../ui/context-menu"
-import { DriveViewport, JumpViewportToRow } from "./viewport"
+import { DriveViewport, JumpViewportToRow, LocateLinkMenu } from "./viewport"
 import { RESUME_KEY } from "./view"
 import { routeChatId } from "../app/route"
 
@@ -208,14 +208,24 @@ function openLocalLink(model: Model, target: OpenLocalLinkTarget): Step {
     const action = shouldOpenLocalFileLinkInEditor(target.path) ? "open_editor" : "open_default"
     return done(model, [], [AppAction.OpenLocalLink({ target, action, editor: null })])
   }
-  // The menu opens at the link, as the contextmenu event React re-dispatched
-  // on its trigger did (Chromium truncates that event's coordinates).
-  const x = Math.trunc(target.clientX ?? 0)
-  const y = Math.trunc(target.clientY ?? 0)
+  // The link's handler hears the right click but not where it was: that is
+  // read next, and the menu opens there (`openLinkMenuAt`).
+  return done(modifyFields(model, { linkMenuTarget: () => target }), [LocateLinkMenu()])
+}
+
+/**
+ * The menu at the right click, as the contextmenu event React re-dispatched
+ * on its trigger put it (Chromium truncates that event's coordinates).
+ */
+function openLinkMenuAt(model: Model, point: { x: number; y: number }): Step {
+  const target = model.linkMenuTarget
+  if (!target) return done(model)
+  const x = Math.trunc(point.x)
+  const y = Math.trunc(point.y)
   const pressed = ContextMenu.update(model.linkMenu, ContextMenu.Message.PressedTrigger({ pointerType: "mouse", button: 2, x, y }))
   const opened = ContextMenu.update(pressed.model, ContextMenu.Message.RequestedContextMenu())
   return done(
-    modifyFields(model, { linkMenuTarget: () => target, linkMenu: () => opened.model }),
+    modifyFields(model, { linkMenuTarget: () => ({ ...target, clientX: point.x, clientY: point.y }), linkMenu: () => opened.model }),
     liftLinkMenu([...(pressed.commands ?? []), ...(opened.commands ?? [])]),
   )
 }
@@ -306,6 +316,8 @@ export function update(model: Model, message: Message, app: AppModel): SliceRetu
       return { model }
     case "GotLinkMenuMessage":
       return toReturn(linkMenuStep(model, message.message, app))
+    case "LocatedLinkMenu":
+      return toReturn(openLinkMenuAt(model, message))
     case "ClickedChatCard":
       return toReturn(done(model, [], openChatActions(app, message.chatId)))
     case "GotCardMenuMessage":

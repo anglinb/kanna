@@ -87,6 +87,19 @@ type Emit = (message: Reported) => void
 
 const controllers = new WeakMap<Element, ViewportController>()
 
+/**
+ * Where the last right click in a transcript was: the markdown's link
+ * handler hears the contextmenu but not its position, and the local-link
+ * menu opens there, as React's did from the event's clientX/clientY.
+ */
+let lastContextMenuPoint: { x: number; y: number } | null = null
+
+/** The local-link menu's point: the right click that asked for it. */
+export const LocateLinkMenu = Command.define("LocateTranscriptLinkMenu", {
+  messages: [Message.LocatedLinkMenu],
+  execute: Effect.sync(() => Message.LocatedLinkMenu({ x: lastContextMenuPoint?.x ?? 0, y: lastContextMenuPoint?.y ?? 0 })),
+})
+
 /** The controller of the viewport keyed `key`, if it is on the page. */
 export function controllerFor(key: string): ViewportController | null {
   const viewport = document.querySelector(`[${VIEWPORT_KEY_ATTRIBUTE}="${CSS.escape(key)}"]`)
@@ -248,6 +261,11 @@ export class ViewportController {
     const onScroll = () => this.handleScroll()
     viewport.addEventListener("scroll", onScroll, { passive: true })
     for (const name of userIntentEvents) viewport.addEventListener(name, markUserScrolled, { passive: true })
+    const recordContextMenu = (event: MouseEvent) => {
+      lastContextMenuPoint = { x: event.clientX, y: event.clientY }
+    }
+    viewport.addEventListener("contextmenu", recordContextMenu, { capture: true })
+    this.cleanups.push(() => viewport.removeEventListener("contextmenu", recordContextMenu, { capture: true }))
     this.cleanups.push(() => {
       sizeObserver.disconnect()
       contentObserver.disconnect()

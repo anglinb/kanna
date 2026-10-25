@@ -1,6 +1,6 @@
 import type { Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { CHATS, click, hover, parkPointer, press, quietReadAnchor, reduceMotion, REGIONS, regions, sidebarChatRow } from "./_lib/helpers"
+import { CHATS, click, hover, parkPointer, quietReadAnchor, reduceMotion, REGIONS, regions, sidebarChatRow } from "./_lib/helpers"
 
 // The transcript viewport around its rows: the minimap (a tick's card, a
 // jump from it), the scroll-to-bottom button, a local link's right-click
@@ -101,9 +101,33 @@ export const scenarios: Scenario[] = [
       await transcript(context.page).getByRole("link", { name: "src/middleware/rateLimit.ts" }).click({ button: "right" })
       await context.settle()
       await context.capture("open")
-      await press(context, "Escape")
+      // A press outside closes it. (Not Escape: React's menu stays up on
+      // Escape here, focus in the menu or not; a bug to file, not to copy.)
+      await context.page.mouse.click(1430, 450)
       await parkPointer(context)
       await context.capture("closed")
+    },
+  }),
+  defineScenario({
+    // A window of a longer chat: Load More lands the older turns in front of
+    // the rows on screen without moving them; the minimap's tick for a turn
+    // before the window loads until it and lands there.
+    name: "transcript-window",
+    route: "/__gallery/transcript-window",
+    ...desktop,
+    regions: regions("transcript"),
+    async run(context) {
+      const { page } = context
+      await reduceMotion(context)
+      await context.capture("opened")
+      await click(context, transcript(page).getByRole("button", { name: "Load More" }))
+      await parkPointer(context)
+      await context.capture("older")
+      await hover(context, page.getByRole("button", { name: "Jump to: Now add the tide chart's axis labels." }))
+      await context.capture("card")
+      await click(context, page.getByRole("button", { name: "Jump to this prompt" }))
+      await parkPointer(context)
+      await context.capture("jumped")
     },
   }),
   defineScenario({
