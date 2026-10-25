@@ -18,6 +18,7 @@ import * as ContextMenu from "../ui/context-menu"
 import { Ellipsis, ExternalLink, FolderOpen, Loader2, Search, Trash2, X } from "../ui/icons"
 import * as Tooltip from "../ui/tooltip"
 import { makeSectionMount } from "./activeSection"
+import * as MenuWithHeader from "./menu"
 import { PROVIDER_ICONS } from "../ui/provider-icons"
 import { liftChild, sectionLabel, sectionSubtitle, type AppModel, type SectionReturn, type SectionViewInputs } from "./section"
 import { sectionContainer, SETTINGS_LIST_CARD_CLASS, settingsActionButton, settingsNotice } from "./shared"
@@ -371,23 +372,20 @@ function skillProviderIcons(model: Model, skillName: string, providers: Readonly
 }
 
 const DESTRUCTIVE_ITEM_CLASS = "text-destructive dark:text-red-400 hover:bg-destructive/10 focus:bg-destructive/10 dark:hover:bg-red-500/20 dark:focus:bg-red-500/20"
-// The menu's heading ("Added via npx skills"). The menu primitive has no
-// label entry, so it is an item that can't be chosen, drawn as the label.
-const MENU_LABEL_CLASS = "rounded-none px-3 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground data-[disabled]:opacity-100"
+/** The menu's heading ("Added via npx skills"): a div, not an item. */
+const MENU_HEADER_CLASS = "px-3 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground"
 
 function globalSkillCard(model: Model, skill: GlobalSkillSummary, h: HtmlBuilder<Message>): Html {
   const uninstalling = model.uninstallingSkillId === skill.name
   const href = skill.source ? `https://skills.sh/${skill.source}/${skill.name}` : null
   const description = skill.description || skill.source || skill.paths[0] || ""
   const items: ContextMenu.MenuEntry[] = [
-    ContextMenu.item({ value: "label", disabled: true, className: MENU_LABEL_CLASS }),
     ContextMenu.separator(),
     ...skill.paths.map((skillPath) => ContextMenu.item({ value: `open:${skillPath}` })),
     ...(href ? [ContextMenu.item({ value: "skills-sh" })] : []),
     ...(skill.source ? [ContextMenu.item({ value: "uninstall", disabled: uninstalling, className: DESTRUCTIVE_ITEM_CLASS })] : []),
   ]
   const renderItem = (value: string): ReadonlyArray<Html | string> => {
-    if (value === "label") return [skill.source ? "Added via npx skills" : "Added by you"]
     if (value === "skills-sh") return [ExternalLink({ class: "h-3.5 w-3.5" }, h), h.span([h.Class("text-xs font-medium")], ["View on skills.sh"])]
     if (value === "uninstall") return [Trash2({ class: "h-3.5 w-3.5" }, h), h.span([h.Class("text-xs font-medium")], ["Uninstall"])]
     const skillPath = value.slice("open:".length)
@@ -399,8 +397,10 @@ function globalSkillCard(model: Model, skill: GlobalSkillSummary, h: HtmlBuilder
   return h.submodel({
     slotId: `menu-${skill.name}`,
     model: menuFor(model, skill.name),
-    view: ContextMenu.view,
+    view: MenuWithHeader.view,
     viewInputs: {
+      header: skill.source ? "Added via npx skills" : "Added by you",
+      headerClassName: MENU_HEADER_CLASS,
       items,
       renderItem,
       toView: ({ trigger, portal }: ContextMenu.RenderInfo) => h.keyed("div")(skill.name, [
