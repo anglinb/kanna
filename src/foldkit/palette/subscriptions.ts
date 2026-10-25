@@ -1,6 +1,6 @@
 import { Option, Schema, Stream } from "effect"
 import { Dom, Subscription } from "foldkit"
-import { macSetupAvailable, type MacSetupState } from "../../client/lib/macApp"
+import { macSetupAvailable, type MacSetupState } from "../core/macApp"
 import { bindingMatchesEvent, getBindingsForAction } from "../../client/lib/keybindings"
 import type { KannaSocketService } from "../core/socket"
 import { Message } from "./message"

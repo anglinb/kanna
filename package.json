@@ -49,6 +49,7 @@
     "test": "bun test",
     "typecheck": "flock /tmp/kanna-tsc.lock env NODE_OPTIONS=--max-old-space-size=4096 tsc --noEmit",
     "react-free": "bun run ./scripts/foldkit/react-free.ts",
+    "demo:smoke": "bun run build:demo && bun run ./scripts/foldkit/demo-smoke.ts",
     "test:cloud": "bun test ./src/server/cloud/wire.e2e.ts",
     "parity": "bun run ./scripts/parity/run.ts",
     "parity:coverage": "bun run ./scripts/parity/coverage.ts",

@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { RepoRef } from "../../client/lib/project-fs"
-import type { MacSetupState } from "../../client/lib/macApp"
+import type { MacSetupState } from "../core/macApp"
 import type { FsListResult, GitHubRecentReposResult, KeybindingsSnapshot } from "../../shared/types"
 import { opaque } from "../core/schema"
 import * as AppDialog from "../ui/app-dialog"

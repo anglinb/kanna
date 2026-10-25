@@ -9,7 +9,7 @@ import type {
   SubscriptionTopic,
   TerminalTailResult,
 } from "../shared/protocol"
-import { mergeAppSettingsPatch } from "../client/stores/appSettingsStore"
+import { mergeAppSettingsPatch } from "../shared/app-settings-merge"
 import { cloneTranscriptEntriesForClient } from "../server/events"
 import { existingAccountId, type AccountInput, type ProviderAccount } from "../shared/accounts"
 import type { McpServerInput, McpServerSummary, McpSnapshot } from "../shared/mcp"

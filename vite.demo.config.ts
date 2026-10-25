@@ -1,8 +1,7 @@
 import path from "node:path"
 import { rm } from "node:fs/promises"
 import { defineConfig } from "vite"
-import react from "@vitejs/plugin-react"
-import { messageScrollerPatch } from "./vite-plugin-message-scroller"
+import { foldkit } from "@foldkit/vite-plugin"
 
 // The playable demo on kanna.sh: the real client on a fake in-browser backend
 // (src/demo). kanna-site copies this folder into its public/demo.
@@ -21,8 +20,7 @@ const UNUSED_PUBLIC_ENTRIES = [
 export default defineConfig({
   root: path.resolve(import.meta.dirname, "src/demo"),
   plugins: [
-    messageScrollerPatch(),
-    react(),
+    foldkit(),
     {
       name: "prune-demo-public-assets",
       async closeBundle() {
