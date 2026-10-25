@@ -147,6 +147,9 @@ export const scenarios: Scenario[] = [
       await openWidgets(context)
       await quickClick(context, column(page).getByRole("button", { name: "Write commit message" }))
       await column(page).getByPlaceholder("Commit message").fill("Let wave heights switch between feet and meters")
+      // Off the column first: the commit reflows the list, and whichever
+      // commit row lands under a resting pointer would fetch its card.
+      await page.mouse.move(1439, 899)
       await page.keyboard.press("Meta+Enter")
       await context.settle()
       await context.capture("committed")
@@ -407,6 +410,10 @@ export const scenarios: Scenario[] = [
       await openWidgets(context)
       await quickClick(context, column(page).getByRole("button", { name: "Schedule actions" }))
       await quickClick(context, page.getByRole("menuitem", { name: "Edit Schedule…" }))
+      // Closed, so the column's polls stop and the composer can finish
+      // growing around the new text before it's captured.
+      await quickClick(context, page.locator(REGIONS.navbar).getByRole("button", { name: "Hide widgets" }))
+      await parkPointer(context)
       await context.capture("prefilled")
     },
   }),
@@ -427,6 +434,8 @@ export const scenarios: Scenario[] = [
       await quickClick(context, column(page).getByRole("button", { name: "Save quick action" }))
       await quickClick(context, column(page).getByRole("button", { name: /^bun test/ }).first())
       await quickClick(context, page.locator(REGIONS.navbar).getByRole("button", { name: "Hide widgets" }))
+      // The command goes in once the new terminal's shell is up.
+      await page.locator(REGIONS.terminal).getByText("bun: not available in the demo", { exact: false }).waitFor()
       await parkPointer(context)
       await context.capture("ran")
     },
@@ -444,7 +453,7 @@ export const scenarios: Scenario[] = [
       await quickClick(context, column(page).getByRole("button", { name: "Add quick action" }))
       await column(page).getByRole("textbox", { name: "Command" }).fill("bun run lint")
       await quickClick(context, column(page).getByRole("button", { name: "Save quick action" }))
-      await quickClick(context, column(page).getByRole("button", { name: "Quick action options" }))
+      await quickClick(context, column(page).getByRole("button", { name: "Quick action options", exact: true }))
       await context.capture("menu")
       await quickClick(context, page.getByRole("menuitem", { name: "Delete" }))
       await context.capture("deleted")
