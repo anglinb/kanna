@@ -42,6 +42,9 @@ bun run parity                       # every scenario, React vs Foldkit
 bun run parity chat-featured         # one scenario
 bun run parity:selfcheck             # React vs React must pass, and a
                                      # one-rule CSS change must be caught
+bun run parity:coverage              # what no scenario covers, and why
+bun run parity:coverage --verify     # also: each scenario sent what its
+                                     # `covers` names (.parity/latest)
 ```
 
 - `src/parity/fixture.ts` puts the demo's in-browser backend (`src/demo`)

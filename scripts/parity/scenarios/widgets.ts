@@ -293,4 +293,62 @@ export const scenarios: Scenario[] = [
       await context.capture("card")
     },
   }),
+  defineScenario({
+    // Settings → Peek at Widgets on: the pointer at the window's right edge
+    // slides the closed column over the chat.
+    name: "widgets-edge-peek",
+    route: "/settings/general",
+    ...desktop,
+    regions: regions("widgets"),
+    covers: { commands: ["settings.writeAppSettingsPatch"] },
+    async run(context) {
+      const { page } = context
+      await quickClick(context, page.getByRole("switch", { name: "Peek at Widgets" }))
+      await quickClick(context, page.locator("[data-sidebar=open] [data-chat-id=demo-chat-units]"))
+      await page.mouse.move(1439, 450)
+      await page.waitForTimeout(1000)
+      await context.settle()
+      await context.capture("peeking")
+    },
+  }),
+  defineScenario({
+    // The README chat has background work: a finished subagent and a running monitor.
+    name: "widgets-tasks",
+    route: CHATS.readme,
+    ...desktop,
+    regions: regions("widgets"),
+    async run(context) {
+      await openWidgets(context)
+      await context.capture("open")
+    },
+  }),
+  defineScenario({
+    name: "widgets-task-hover-card",
+    route: CHATS.readme,
+    ...desktop,
+    regions: regions("popover"),
+    async run(context) {
+      await openWidgets(context)
+      await column(context.page).getByText("Watch the dev server for errors").first().hover()
+      await context.page.waitForTimeout(800)
+      await context.settle()
+      await context.capture("card")
+    },
+  }),
+  defineScenario({
+    // A running task stops on its own, leaving the turn running.
+    name: "widgets-stop-task",
+    route: CHATS.readme,
+    ...desktop,
+    regions: regions("widgets", "menu"),
+    covers: { commands: ["chat.stopTask"] },
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      await quickClick(context, column(page).getByRole("button", { name: "Monitor actions" }))
+      await context.capture("menu")
+      await quickClick(context, page.getByRole("menuitem", { name: /^Stop/ }))
+      await context.capture("stopped")
+    },
+  }),
 ]

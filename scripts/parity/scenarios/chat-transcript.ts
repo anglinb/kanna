@@ -52,7 +52,7 @@ export const scenarios: Scenario[] = [
     name: "transcript-tool-group-expand",
     route: CHATS.units,
     regions: regions("transcript"),
-    covers: { commands: ["chat.getToolEntries"] },
+    covers: { commands: ["chat.getToolEntries", "chat.setReadAnchor"] },
     async run(context) {
       await click(context, transcript(context).getByRole("button", { name: "1 search, 2 reads, 4 edits, 2 writes, 1 command" }))
       await parkPointer(context)
@@ -121,7 +121,7 @@ export const scenarios: Scenario[] = [
     name: "transcript-ask-user-question-answer",
     route: CHATS.deploy,
     regions: regions("transcript", "composer", "sidebar"),
-    covers: { commands: ["chat.respondTool"] },
+    covers: { commands: ["chat.respondTool", "chat.setReadAnchor"] },
     async run(context) {
       const card = transcript(context)
       await click(context, card.getByRole("button", { name: /^Vercel/ }))

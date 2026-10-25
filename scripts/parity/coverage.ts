@@ -48,15 +48,24 @@ const UNCOVERABLE: Record<string, string> = {
   "browser.killLocalHttpServer": "needs a local HTTP server; seeding one would link demo visitors to a port that isn't there",
   "browser.exposeLocalHttpServer": "needs a local HTTP server (see browser.killLocalHttpServer) and cloudflared",
   "browser.unexposeLocalHttpServer": "needs an exposed local HTTP server (see browser.exposeLocalHttpServer)",
-  "chat.stopTask": "needs a chat with a running background task (runtime.subagents); no demo chat has one",
   "chat.usageLimitResume": "needs a chat waiting on its usage limit (runtime.usageLimitResume); no demo chat is",
   "chat.initGit": "needs a project without a git repo; every demo project has one",
   "chat.getGitHubPublishInfo": "needs a repo without an origin remote; every demo project has one",
   "chat.checkGitHubRepoAvailability": "follows chat.getGitHubPublishInfo (see there)",
   "chat.publishToGitHub": "follows chat.getGitHubPublishInfo (see there)",
   "chat.stopDraining": "needs a chat draining its queue after a stop (runtime.isDraining); the demo never drains",
-  "chat.setReadAnchor": "sent on a scroll throttle by wall-clock time; how many go out depends on timing, so no scenario can pin the log",
 }
+
+/** Sent by every page as it boots or opens a chat; `--verify` doesn't ask scenarios to list them. */
+const BOOT_COMMANDS = new Set([
+  "chat.setDraftProtection",
+  "update.check",
+  "settings.readAppSettings",
+  "settings.readLlmProvider",
+  "project.readQuickActions",
+  "chat.refreshDiffs",
+  "github.listRecentRepos",
+])
 
 function clientCommandTypes() {
   const source = readFileSync(path.join(ROOT, "src/shared/protocol.ts"), "utf8")
@@ -198,18 +207,28 @@ function main() {
     const runDir = path.resolve(ROOT, dirArg && !dirArg.startsWith("--") ? dirArg : ".parity/latest")
     const sent = sentCommands(runDir)
     const mismatched: string[] = []
+    const undeclared: string[] = []
     for (const scenario of scenarios) {
       const types = sent.get(scenario.name)
       if (!types) continue
-      for (const command of scenario.covers?.commands ?? []) {
+      const declared = new Set(scenario.covers?.commands ?? [])
+      for (const command of declared) {
         if (!types.has(command)) mismatched.push(`${scenario.name}: covers ${command} but never sent it`)
       }
+      const extra = [...types].filter((type) => !declared.has(type) && !BOOT_COMMANDS.has(type))
+      if (extra.length > 0) undeclared.push(`${scenario.name}: ${extra.join(", ")}`)
     }
     lines.push(`## Verified against ${path.relative(ROOT, runDir) || runDir} (${sent.size} scenarios in the run)`, "")
     if (mismatched.length === 0) lines.push("Every declared command was sent.")
     for (const entry of mismatched) lines.push(`- ${entry}`)
     lines.push("")
     problems += mismatched.length
+    if (undeclared.length > 0) {
+      // Not a failure: a scenario may send what another one is about.
+      lines.push("Sent but not in `covers` (beyond what every page sends on boot):", "")
+      for (const entry of undeclared) lines.push(`- ${entry}`)
+      lines.push("")
+    }
   }
 
   lines.push(`Scenarios: ${scenarios.length}`)

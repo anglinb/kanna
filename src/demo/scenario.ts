@@ -36,6 +36,21 @@ export interface DemoChatSeed {
    * index are already in the transcript, the rest play live.
    */
   liveFromStep?: number
+  /** Work running on the chat's behalf, for its Tasks widget. */
+  tasks?: DemoTaskSeed[]
+}
+
+/** A background task: a subagent, shell or monitor the agent started. */
+export interface DemoTaskSeed {
+  id: string
+  type: "subagent" | "shell" | "monitor"
+  label: string
+  description?: string
+  status: "running" | "completed"
+  /** When it started, and (completed) ended, relative to page load. */
+  startedMinutesAgo: number
+  endedMinutesAgo?: number
+  usage?: { totalTokens: number; toolUses: number }
 }
 
 function projectPath(name: string) {
@@ -795,6 +810,26 @@ export function createDemoChats(): DemoChatSeed[] {
       turns: [readmeTurn()],
       minutesAgo: 1,
       liveFromStep: 5,
+      tasks: [
+        {
+          id: "task-demo-routes",
+          type: "subagent",
+          label: "Explore",
+          description: "List every route and the middleware in front of it",
+          status: "completed",
+          startedMinutesAgo: 4,
+          endedMinutesAgo: 3,
+          usage: { totalTokens: 18_240, toolUses: 9 },
+        },
+        {
+          id: "task-demo-dev-server",
+          type: "monitor",
+          label: "Watch the dev server for errors",
+          description: "bun run dev",
+          status: "running",
+          startedMinutesAgo: 3,
+        },
+      ],
     },
     {
       id: "demo-chat-hero",

@@ -57,6 +57,7 @@ import {
   type SidebarData,
   type SkillSearchResult,
   type StandaloneTranscriptExportFailureResult,
+  type SubagentActivity,
   type TranscriptEntry,
   type UpdateSnapshot,
   type UsageLimitsSnapshot,
@@ -147,6 +148,8 @@ interface ChatState {
   delegator?: boolean
   /** The last send asked for a plan first. */
   planMode: boolean
+  /** Background work for the Tasks widget (runtime.subagents). */
+  tasks: SubagentActivity[]
   entries: TranscriptEntry[]
   queued: QueuedChatMessage[]
   turn: ActiveTurn | null
@@ -331,6 +334,17 @@ export class DemoBackend {
       turn: null,
       touchedPaths: new Set(),
       planMode: false,
+      tasks: (seed.tasks ?? []).map((task): SubagentActivity => ({
+        id: task.id,
+        type: task.type,
+        label: task.label,
+        status: task.status,
+        startedAt: this.clock.now() - task.startedMinutesAgo * 60_000,
+        ...(task.endedMinutesAgo !== undefined ? { endedAt: this.clock.now() - task.endedMinutesAgo * 60_000 } : {}),
+        ...(task.description ? { description: task.description } : {}),
+        ...(task.usage ? { usage: task.usage } : {}),
+        ...(task.status === "running" ? { stoppable: true } : {}),
+      })),
     }
     this.chats.set(chat.id, chat)
 
@@ -508,6 +522,7 @@ export class DemoBackend {
       turn: null,
       touchedPaths: new Set(),
       planMode: false,
+      tasks: [],
     }
     this.chats.set(chat.id, chat)
     return chat
@@ -589,6 +604,16 @@ export class DemoBackend {
         chat.queued = chat.queued.filter((message) => message !== queued)
         this.cancelTurn(chat)
         this.startTurn(chat, queued)
+        return null
+      }
+      case "chat.stopTask": {
+        const task = this.requireChat(command.chatId).tasks.find((entry) => entry.id === command.taskId)
+        if (!task) throw new Error("Task not found")
+        if (task.status === "running") {
+          task.status = "stopped"
+          task.endedAt = this.clock.now()
+          delete task.stoppable
+        }
         return null
       }
       case "chat.cancel":
@@ -1440,6 +1465,7 @@ export class DemoBackend {
         autoPlan: false,
         sessionToken: chat.turnCount > 0 || chat.turn ? `demo-session-${chat.id}` : null,
         ...(chat.delegator ? { delegator: true as const } : {}),
+        ...(chat.tasks.length > 0 ? { subagents: chat.tasks.map((task) => ({ ...task })) } : {}),
       },
       queuedMessages: chat.queued,
       // Header form, as the real router sends it: tool bodies stay here
