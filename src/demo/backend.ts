@@ -795,19 +795,23 @@ export class DemoBackend {
         return { ok: true, action: command.action, aheadCount: 0, behindCount: 0, snapshotChanged: false }
       case "chat.previewMergeBranch": {
         const project = this.requireProject(this.requireChat(command.chatId).projectId)
+        // Branches in the demo share their history; another one is a commit ahead.
+        const behind = command.branch.name !== project.branchName
         return {
           currentBranchName: project.branchName,
           targetBranchName: command.branch.name,
           targetDisplayName: command.branch.name,
-          status: "up_to_date",
-          commitCount: 0,
+          status: behind ? "mergeable" : "up_to_date",
+          commitCount: behind ? 1 : 0,
           hasConflicts: false,
-          message: `${project.branchName} already has everything in ${command.branch.name}.`,
+          message: behind
+            ? `1 commit from ${command.branch.name} merges cleanly into ${project.branchName}.`
+            : `${project.branchName} already has everything in ${command.branch.name}.`,
         } satisfies ChatMergePreviewResult
       }
       case "chat.mergeBranch":
         this.requireChat(command.chatId)
-        return { ok: true, snapshotChanged: false }
+        return { ok: true, branchName: command.branch.name, snapshotChanged: true }
       case "chat.ignoreDiffFile": {
         const project = this.requireProject(this.requireChat(command.chatId).projectId)
         const gitignore = project.files.get(".gitignore") ?? ""
@@ -1502,16 +1506,18 @@ function createUpdate(now: number): UpdateSnapshot {
   }
 }
 
+// Every harness is signed in except Grok Build, which isn't installed, and
+// GitHub's CLI isn't signed in (so the home page lists no GitHub repos).
 function createProviderAuth(): ProviderAuthSnapshot {
   return {
     services: AUTH_SERVICE_ORDER.map((service) => ({
       service,
       label: AUTH_SERVICE_LABELS[service],
-      installed: true,
+      installed: service !== "grok",
       version: null,
       latestVersion: null,
       updateAvailable: false,
-      authStatus: "signed_in",
+      authStatus: service === "grok" ? "not_installed" : service === "gh" ? "signed_out" : "signed_in",
       account: null,
       statusDetail: null,
       login: { phase: "idle" },

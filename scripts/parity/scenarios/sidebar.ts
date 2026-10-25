@@ -526,4 +526,27 @@ export const scenarios: Scenario[] = [
       await context.capture("new-chat")
     },
   }),
+  defineScenario({
+    // Projects can be dragged into another order in the Projects view.
+    name: "sidebar-reorder-projects",
+    route: "/",
+    ...desktop,
+    regions: regions("sidebar"),
+    covers: { commands: ["sidebar.reorderProjectGroups"] },
+    async run(context) {
+      const { page } = context
+      await switchSidebarView(context, "Projects")
+      const sidebar = page.locator(REGIONS.sidebar)
+      const from = (await sidebar.getByText("portfolio", { exact: true }).first().boundingBox())!
+      const to = (await sidebar.getByText("ledger-api", { exact: true }).first().boundingBox())!
+      await page.mouse.move(from.x + 10, from.y + from.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(from.x + 10, from.y - 10, { steps: 5 })
+      await page.mouse.move(to.x + 10, to.y + 2, { steps: 10 })
+      await page.waitForTimeout(300)
+      await page.mouse.up()
+      await parkPointer(context)
+      await context.capture("reordered")
+    },
+  }),
 ]

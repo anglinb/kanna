@@ -178,4 +178,30 @@ export const scenarios: Scenario[] = [
       await context.capture("open")
     },
   }),
+  defineScenario({
+    // Grok Build isn't installed in the demo; installing a CLI needs the real machine.
+    name: "settings-providers-install-cli",
+    route,
+    ...desktop,
+    regions: regions("settings"),
+    covers: { routes: [route], commands: ["auth.install"] },
+    async run(context) {
+      await click(context, context.page.getByRole("button", { name: "Install" }).first())
+      await parkPointer(context)
+      await context.capture("after-install")
+    },
+  }),
+  defineScenario({
+    // GitHub's CLI is signed out in the demo; Log In starts a sign-in the demo can't run.
+    name: "settings-providers-log-in",
+    route,
+    ...desktop,
+    regions: regions("settings"),
+    covers: { routes: [route], commands: ["auth.login.start"] },
+    async run(context) {
+      await click(context, context.page.getByRole("button", { name: "Log In" }).first())
+      await parkPointer(context)
+      await context.capture("after-log-in")
+    },
+  }),
 ]

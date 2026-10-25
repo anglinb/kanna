@@ -28,6 +28,7 @@ const UNCOVERABLE: Record<string, string> = {
   // Never sent by the React client: no code path builds them.
   "accounts.cancelLogin": "not sent by the React client (declared in the protocol for the iOS app)",
   "accounts.submitCode": "not sent by the React client (declared in the protocol for the iOS app)",
+  "accounts.rename": "not sent by the React client (no rename in Settings → Providers)",
   "chat.getReadAnchor": "not sent by the React client (the read anchor rides on the chat snapshot)",
   "fs.mkdir": "not sent by the React client",
   "settings.readKeybindings": "not sent by the React client (keybindings come by subscription)",
@@ -41,6 +42,7 @@ const UNCOVERABLE: Record<string, string> = {
   "auth.openrouter.exchange": "needs a code from OpenRouter's OAuth redirect",
   "update.install": "only offered with an update available; the demo is always up to date",
   "update.installStable": "only offered while on a nightly build",
+  "system.ping": "the socket pings only a connection that has been quiet for 25s by Date.now(), which the runner freezes, so it is never sent under the harness",
   // The harness can't compare these yet.
   "chat.exportStandalone": "harness: the command carries window.location.origin, and the two apps are served on different ports, so their command logs never match; compareCommands needs to normalize origins as the url check does",
   "browser.killLocalHttpServer": "needs a local HTTP server; seeding one would link demo visitors to a port that isn't there",

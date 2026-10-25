@@ -259,4 +259,38 @@ export const scenarios: Scenario[] = [
       await context.capture("collapsed")
     },
   }),
+  defineScenario({
+    // ledger-api's docs branch is a commit behind main: the merge previews, then runs.
+    name: "widgets-merge-branch",
+    route: CHATS.readme,
+    ...desktop,
+    regions: regions("dialog"),
+    covers: { commands: ["chat.previewMergeBranch", "chat.mergeBranch"] },
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      await quickClick(context, column(page).getByRole("button", { name: "Branch docs/readme" }))
+      await quickClick(context, page.getByRole("button", { name: /^Merge into/ }))
+      await quickClick(context, page.getByRole("dialog").getByRole("button", { name: "main", exact: true }))
+      await quickClick(context, page.getByRole("dialog").getByRole("button", { name: "Merge", exact: true }))
+      await context.capture("merged")
+    },
+  }),
+  defineScenario({
+    // A branch in the picker has a hover card: its last commit and how far it is from main.
+    name: "widgets-branch-hover-card",
+    route: CHATS.readme,
+    ...desktop,
+    regions: regions("popover"),
+    covers: { commands: ["chat.listBranches", "project.readBranch"] },
+    async run(context) {
+      const { page } = context
+      await openWidgets(context)
+      await quickClick(context, column(page).getByRole("button", { name: "Branch docs/readme" }))
+      await page.getByRole("option", { name: /^main/ }).first().hover()
+      await page.waitForTimeout(800)
+      await context.settle()
+      await context.capture("card")
+    },
+  }),
 ]
