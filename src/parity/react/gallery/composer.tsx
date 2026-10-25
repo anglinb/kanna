@@ -20,7 +20,7 @@ import {
   GALLERY_PROJECT_ID,
   GALLERY_SIDEBAR,
   GALLERY_SKILLS,
-} from "./support/composer-states"
+} from "../../gallery-support/composer-states"
 
 const state = composerGalleryState(window.location.search)
 

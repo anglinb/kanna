@@ -8,7 +8,7 @@ import * as Tooltip from "../../../foldkit/ui/tooltip"
 import { Message } from "../../../foldkit/chat/message"
 import { init, Model } from "../../../foldkit/chat/model"
 import { usageCardKey, usageCardsView, usageTooltip } from "../../../foldkit/chat/usageCards"
-import { USAGE_SNAPSHOTS } from "../../react/gallery/support/usage-snapshots"
+import { USAGE_SNAPSHOTS } from "../../gallery-support/usage-snapshots"
 import { galleryPage } from "../gallery-page"
 
 const app = {

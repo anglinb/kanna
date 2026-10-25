@@ -2,15 +2,12 @@ import { Duration, Effect, Option, Schema } from "effect"
 import { Command, Update } from "foldkit"
 import * as AppNavigation from "../core/navigation"
 import { modifyFields } from "foldkit/struct"
-import { resolveDiffFilePath } from "../../client/app/ChatPage/utils"
 import { copyTextToClipboard } from "../../client/lib/clipboard"
 import { getPathBasename } from "../../client/lib/formatters"
 import { fetchPairSession, startPairSession } from "../../client/lib/pairSession"
-import type { ChatPreview, ChatTouchedFilesResult } from "../../shared/types"
-import { AppAction } from "../app/action"
-import { requestAction, type AppModel, type SliceOutMessage, type SliceReturn } from "../app/slice"
+import { AppAction, batch } from "../app/action"
+import { requestAction, type AppModel, type SliceObserve, type SliceOutMessage, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
-import { sendCommand } from "../core/socket"
 import * as ChatInput from "../core/stores/chatInput"
 import * as ChatTabs from "../core/stores/chatTabs"
 import * as Connection from "../core/stores/connection"
@@ -21,8 +18,9 @@ import * as ContextMenu from "../ui/context-menu"
 import * as Dialog from "../ui/dialog"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
-import { activeChatId, appSettings, currentProjectId, isProjectCollapsed, routeProjectId, sidebarData, visibleProjectGroups, newSidebarEnabled } from "./derived"
-import { CARD_CACHE_LIMIT, SyncHoverTracker } from "./hoverCard"
+import { activeChatId, appSettings, currentProjectId, isProjectCollapsed, routeProjectId, sidebarData, threadByRowId, visibleProjectGroups, newSidebarEnabled } from "./derived"
+import * as ChatCard from "../ui/chat-hover-card"
+import { sharedCardData, SyncHoverTracker } from "./hoverCard"
 import { FLEET_URL } from "./machine"
 import { findProject, findThread } from "./menus"
 import { Message } from "./message"
@@ -46,16 +44,6 @@ type Cmd = Command.Command<Message, never, never>
 // COMMANDS
 
 const done = () => Message.CompletedSideEffect()
-
-/** The palette's own window event (CommandPalette.tsx's `openCommandPalette`). */
-const OpenCommandPalette = Command.define("SidebarOpenCommandPalette", {
-  args: { page: Schema.NullOr(Schema.String) },
-  messages: [Message.CompletedSideEffect],
-  execute: ({ page }) => Effect.sync(() => {
-    window.dispatchEvent(new CustomEvent("kanna:open-command-palette", { detail: page ? { page } : undefined }))
-    return done()
-  }),
-})
 
 export const SaveSidebarWidth = Command.define("SaveSidebarWidth", {
   args: { width: Schema.Number },
@@ -95,12 +83,6 @@ const LeaveProjectPage = Command.define("SidebarLeaveProjectPage", {
   }),
 })
 
-const ContinueActions = Command.define("SidebarContinueActions", {
-  args: { actions: Schema.Array(AppAction) },
-  messages: [Message.ContinuedActions],
-  execute: ({ actions }) => Effect.succeed(Message.ContinuedActions({ actions })),
-})
-
 const MeasureMoreButton = Command.define("SidebarMeasureMoreButton", {
   args: { buttonId: Schema.String, target: Schema.Unknown },
   messages: [Message.MeasuredMoreButton, Message.CompletedSideEffect],
@@ -111,24 +93,6 @@ const MeasureMoreButton = Command.define("SidebarMeasureMoreButton", {
     // its contextmenu: under the button's middle.
     return Message.MeasuredMoreButton({ target: target as MenuTarget, x: Math.trunc(rect.left + rect.width / 2), y: Math.trunc(rect.bottom) })
   }),
-})
-
-export const LoadTouchedFiles = Command.define("SidebarLoadTouchedFiles", {
-  args: { chatId: Schema.String, cacheKey: Schema.String },
-  messages: [Message.SucceededLoadTouchedFiles, Message.FailedLoadCard],
-  execute: ({ chatId, cacheKey }) => sendCommand<ChatTouchedFilesResult>({ type: "chat.touchedFiles", chatId }).pipe(
-    Effect.map((result) => Message.SucceededLoadTouchedFiles({ chatId, cacheKey, result })),
-    Effect.catch(() => Effect.succeed(Message.FailedLoadCard())),
-  ),
-})
-
-const LoadPreview = Command.define("SidebarLoadPreview", {
-  args: { chatId: Schema.String, cacheKey: Schema.String },
-  messages: [Message.SucceededLoadPreview, Message.FailedLoadCard],
-  execute: ({ chatId, cacheKey }) => sendCommand<ChatPreview>({ type: "chat.getPreview", chatId }).pipe(
-    Effect.map((preview) => Message.SucceededLoadPreview({ chatId, cacheKey, preview })),
-    Effect.catch(() => Effect.succeed(Message.FailedLoadCard())),
-  ),
 })
 
 const FetchPairSession = Command.define("SidebarFetchPairSession", {
@@ -190,15 +154,15 @@ const LoadConnection = Command.mapMessage(Connection.LoadConnection(), (message)
 
 // HELPERS
 
-/** Asks the root for several things in order: the first now, the rest a tick later each. */
+/** Asks the root for several things, run in order in one update (React's loop of calls). */
 function requestActions(model: Model, actions: ReadonlyArray<AppAction>, commands: ReadonlyArray<Cmd> = []): Return {
   const [first, ...rest] = actions
   if (!first) return { model, commands: [...commands] }
-  return {
-    ...requestAction(model, first),
-    commands: [...commands, ...(rest.length > 0 ? [ContinueActions({ actions: rest })] : [])],
-  }
+  return { ...requestAction(model, rest.length === 0 ? first : batch(first, ...rest)), commands: [...commands] }
 }
+
+/** CommandPalette.tsx's `openCommandPalette(page)`. */
+const openPalette = (model: Model, page: string | null): Return => requestAction(model, AppAction.OpenCommandPalette({ page }))
 
 function withCommands(result: Return, commands: ReadonlyArray<Cmd>): Return {
   return { ...result, commands: [...(result.commands ?? []), ...commands] }
@@ -298,12 +262,34 @@ function persistWidth(model: Model, width: number): Return {
   return { model: modifyFields(model, { sidebarWidth: () => clamped }), commands: [SaveSidebarWidth({ width: clamped })] }
 }
 
-function cacheInsert<Value>(cache: Readonly<Record<string, Value>>, key: string, value: Value): Record<string, Value> {
-  const next: Record<string, Value> = { ...cache }
-  const keys = Object.keys(next)
-  if (!(key in next) && keys.length >= CARD_CACHE_LIMIT) delete next[keys[0]!]
-  next[key] = value
-  return next
+/**
+ * A chat card's Messages: its fetches, and its actions, each of which
+ * dismisses the card first (SidebarChatCard): each takes you somewhere, and a
+ * card left standing would hang over wherever that is.
+ */
+function cardStep(model: Model, app: AppModel, list: HoverList, message: ChatCard.CardMessage): Return {
+  const step = ChatCard.updateCard(model.card, message, sharedCardData(app))
+  const next = step.data === model.card ? model : modifyFields(model, { card: () => step.data })
+  const own = Command.mapMessages(step.commands, (child: ChatCard.CardMessage) => Message.GotCardMessage({ list, message: child })) as Cmd[]
+  const intent = step.intent
+  if (!intent) return { model: next, commands: own }
+  const dismissed = dismissCard(next, list)
+  const commands = [...dismissed.commands, ...own]
+  switch (intent.kind) {
+    case "openAt":
+      // React navigated with the jump in the location state (`buildChatJumpLocationState(role)`).
+      return withCommands(requestAction(dismissed.model, AppAction.OpenChatAt({ chatId: intent.chatId, jump: intent.role })), commands)
+    case "open":
+      return withCommands(intent.archived
+        ? requestAction(dismissed.model, AppAction.OpenArchivedChat({ chatId: intent.chatId }))
+        : selectChat(dismissed.model, app, intent.chatId, false), commands)
+    case "setupGit":
+      return withCommands(requestAction(dismissed.model, AppAction.SetupGit({ chatId: intent.chatId })), commands)
+    case "openFile":
+      return withCommands(requestAction(dismissed.model, AppAction.OpenExternalPath({ action: "open_editor", localPath: intent.localPath })), commands)
+    case "dismiss":
+      return { model: dismissed.model, commands }
+  }
 }
 
 /** What a chosen menu item does, by what the menu was opened on. */
@@ -400,8 +386,8 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ClickedCollapseSidebar: () => requestAction(model, AppAction.CollapseSidebar()),
     ClickedExpandSidebar: () => requestAction(model, AppAction.ExpandSidebar()),
     ClickedLink: ({ path }) => requestAction(model, navigate(path)),
-    ClickedSearch: () => ({ model, commands: [OpenCommandPalette({ page: null })] }),
-    ClickedAddProject: () => ({ model, commands: [OpenCommandPalette({ page: "add-project" })] }),
+    ClickedSearch: () => openPalette(model, null),
+    ClickedAddProject: () => openPalette(model, "add-project"),
     // On a project's page, a chat in that project; else the current one's.
     ClickedNewChat: () => {
       const projectId = routeProjectId(app)
@@ -538,72 +524,10 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       model: modifyFields(model, {
         hovered: (hovered) => ({ ...hovered, [list]: key }),
         // A card that leaves stops waiting on its answers.
-        ...(key === null && list !== "channels" ? { cardFilesKey: () => null, cardPreviewKey: () => null } : {}),
+        ...(key === null && list !== "channels" ? { card: ChatCard.closedCard } : {}),
       }),
     }),
-    RequestedCardLoad: ({ chatId, kind, cacheKey }) => {
-      if (kind === "files") {
-        const cached = model.touchedFilesCache[cacheKey]
-        if (cached) return { model: modifyFields(model, { heldTouchedFiles: () => ({ chatId, result: cached }), cardFilesKey: () => cacheKey }) }
-        return {
-          model: modifyFields(model, {
-            heldTouchedFiles: (held) => (held?.chatId === chatId ? held : null),
-            cardFilesKey: () => cacheKey,
-          }),
-          commands: [LoadTouchedFiles({ chatId, cacheKey })],
-        }
-      }
-      const cached = model.previewCache[cacheKey]
-      if (cached) return { model: modifyFields(model, { heldPreview: () => ({ chatId, preview: cached }), cardPreviewKey: () => cacheKey }) }
-      return {
-        model: modifyFields(model, {
-          heldPreview: (held) => (held?.chatId === chatId ? held : null),
-          cardPreviewKey: () => cacheKey,
-        }),
-        commands: [LoadPreview({ chatId, cacheKey })],
-      }
-    },
-    SucceededLoadTouchedFiles: ({ chatId, cacheKey, result }) => ({
-      model: modifyFields(model, {
-        touchedFilesCache: (cache) => cacheInsert(cache, cacheKey, result),
-        heldTouchedFiles: (held) => (model.cardFilesKey === cacheKey ? { chatId, result } : held),
-      }),
-    }),
-    SucceededLoadPreview: ({ chatId, cacheKey, preview }) => ({
-      model: modifyFields(model, {
-        previewCache: (cache) => cacheInsert(cache, cacheKey, preview),
-        heldPreview: (held) => (model.cardPreviewKey === cacheKey ? { chatId, preview } : held),
-      }),
-    }),
-    FailedLoadCard: () => ({ model }),
-    ClickedCardMessage: ({ list, chatId }) => {
-      const dismissed = dismissCard(model, list)
-      // TODO(root): React navigated with a jump target in the location state
-      // (`buildChatJumpLocationState(role)`); AppAction.Navigate carries none.
-      return withCommands(requestAction(dismissed.model, navigate(`/chat/${chatId}`)), dismissed.commands)
-    },
-    ClickedCardChat: ({ list, chatId, archived }) => {
-      const dismissed = dismissCard(model, list)
-      const result = archived
-        ? requestAction(dismissed.model, AppAction.OpenArchivedChat({ chatId }))
-        : selectChat(dismissed.model, app, chatId, false)
-      return withCommands(result, dismissed.commands)
-    },
-    ClickedCardSetupGit: ({ list, chatId }) => {
-      const dismissed = dismissCard(model, list)
-      return withCommands(requestAction(dismissed.model, AppAction.SetupGit({ chatId })), dismissed.commands)
-    },
-    ClickedCardRepo: ({ list, url }) => {
-      const dismissed = dismissCard(model, list)
-      return { model: dismissed.model, commands: [...dismissed.commands, OpenWindow({ url, features: "noopener,noreferrer" })] }
-    },
-    ClickedCardFile: ({ list, localPath, filePath }) => {
-      const dismissed = dismissCard(model, list)
-      return withCommands(
-        requestAction(dismissed.model, AppAction.OpenExternalPath({ action: "open_editor", localPath: resolveDiffFilePath(localPath, filePath) })),
-        dismissed.commands,
-      )
-    },
+    GotCardMessage: ({ list, message: child }) => cardStep(model, app, list, child),
     DismissedChannelCard: () => {
       const unpinned = unpinChannel(model)
       return { model: unpinned.model, commands: unpinned.commands }
@@ -626,7 +550,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       const projectId = currentProjectId(app)
       return projectId ? requestAction(model, AppAction.CreateChat({ projectId })) : { model }
     },
-    PressedAddProjectShortcut: () => ({ model, commands: [OpenCommandPalette({ page: "add-project" })] }),
+    PressedAddProjectShortcut: () => openPalette(model, "add-project"),
     PressedToggleFocusShortcut: () => requestAction(
       // No copy of the page is taken: a shortcut lands at once (motion.ts).
       model,
@@ -705,6 +629,29 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ContinuedActions: ({ actions }) => requestActions(model, actions),
     CompletedSideEffect: () => ({ model }),
   })
+}
+
+/**
+ * The slice contract's `observe`: a sidebar push that changed the row an
+ * open chat card shows reruns the card's fetch effects (React's ran on `row`).
+ */
+export const observe: SliceObserve<Model, Message> = (model, previousApp, app) => {
+  if (previousApp.stores.sidebar.data === app.stores.sidebar.data || !model.hasFinePointer) return { model }
+  const lists = (["chats", "peek"] as const).filter((list) => model.hovered[list] !== null)
+  if (lists.length === 0) return { model }
+  const before = threadByRowId(previousApp)
+  const after = threadByRowId(app)
+  let card = model.card
+  const commands: Cmd[] = []
+  for (const list of lists) {
+    const key = model.hovered[list]!
+    const row = after.get(key)?.row
+    if (!ChatCard.rowChanged(before.get(key)?.row, row)) continue
+    const refreshed = ChatCard.refreshForRow(card, row, sharedCardData(app))
+    card = refreshed.data
+    commands.push(...(Command.mapMessages(refreshed.commands, (child: ChatCard.CardMessage) => Message.GotCardMessage({ list, message: child })) as Cmd[]))
+  }
+  return card === model.card ? { model, commands } : { model: modifyFields(model, { card: () => card }), commands }
 }
 
 export type { SliceOutMessage }

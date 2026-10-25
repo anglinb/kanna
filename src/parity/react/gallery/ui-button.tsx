@@ -1,7 +1,7 @@
 // src/client/components/ui/button.tsx: every variant at every size, then
 // each variant disabled (gallery/ui-button.ts on the Foldkit side).
 import { Button } from "../../../client/components/ui/button"
-import { BUTTON_SIZES, BUTTON_VARIANTS } from "./support/button-states"
+import { BUTTON_SIZES, BUTTON_VARIANTS } from "../../gallery-support/button-states"
 
 export default function ButtonGallery() {
   return (

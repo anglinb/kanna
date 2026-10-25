@@ -1,5 +1,5 @@
 // src/foldkit/composer against the React ChatInput (gallery/composer.tsx), in
-// the state `?state=` names (react/gallery/support/composer-states.ts). The
+// the state `?state=` names (parity/gallery-support/composer-states.ts). The
 // page holds the stores the composer reads and applies the store changes it
 // asks for, as the root would; sends and cancels go nowhere, as the React
 // page's handlers do nothing.
@@ -25,7 +25,7 @@ import {
   GALLERY_PROJECT_ID,
   GALLERY_SIDEBAR,
   GALLERY_SKILLS,
-} from "../../react/gallery/support/composer-states"
+} from "../../gallery-support/composer-states"
 import { galleryPage } from "../gallery-page"
 
 const state = composerGalleryState(window.location.search)

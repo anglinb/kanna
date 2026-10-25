@@ -1,6 +1,6 @@
 // src/foldkit/ui/scroll-area.ts against the React <ScrollArea> (gallery/ui-scroll-area.tsx).
 import { scrollArea } from "../../../foldkit/ui/scroll-area"
-import { SCROLL_ROWS } from "../../react/gallery/support/scroll-rows"
+import { SCROLL_ROWS } from "../../gallery-support/scroll-rows"
 import { staticPage } from "./support/static-page"
 
 export default staticPage((h) =>

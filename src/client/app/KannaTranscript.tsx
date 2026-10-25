@@ -30,42 +30,8 @@ export type TranscriptRenderItem =
   | { type: "single"; message: HydratedTranscriptMessage; index: number }
   | { type: "tool-group"; messages: HydratedTranscriptMessage[]; startIndex: number }
 
-export interface ResolvedSingleTranscriptRow {
-  kind: "single"
-  id: string
-  message: HydratedTranscriptMessage
-  index: number
-  isLoading: boolean
-  localPath?: string
-  isFirstSystem: boolean
-  isModelChange: boolean
-  /** Set on a system_init that follows a harness switch (handoff_boundary). */
-  handoff?: SessionHandoff
-  /** Set on a system_init that follows a session restore (session_restored). */
-  restored?: SessionRestore
-  isFirstAccount: boolean
-  isLatestAskUserQuestion: boolean
-  isLatestExitPlanMode: boolean
-  isLatestTodoWrite: boolean
-  hideResult: boolean
-  isFinalStatus: boolean
-  nextPromptTimestamp?: string
-  /** On a result: who sent the prompt that follows, when not the user. */
-  nextPromptOrigin?: string
-  /** On a prompt nobody typed that no result's boundary introduces: it draws its own. */
-  showsOwnBoundary?: boolean
-}
-
-export interface ResolvedToolGroupTranscriptRow {
-  kind: "tool-group"
-  id: string
-  startIndex: number
-  messages: HydratedTranscriptMessage[]
-  isLoading: boolean
-  localPath?: string
-}
-
-export type ResolvedTranscriptRow = ResolvedSingleTranscriptRow | ResolvedToolGroupTranscriptRow
+export type { ResolvedSingleTranscriptRow, ResolvedToolGroupTranscriptRow, ResolvedTranscriptRow } from "./transcriptRowTypes"
+import type { ResolvedSingleTranscriptRow, ResolvedTranscriptRow } from "./transcriptRowTypes"
 
 export interface StableResolvedTranscriptRowsState {
   byId: Map<string, ResolvedTranscriptRow>

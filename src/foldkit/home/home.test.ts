@@ -2,18 +2,19 @@ import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
 import { Scene, Story } from "foldkit/test"
 import { fromString } from "foldkit/url"
-import type { GitHubRecentReposResult, LocalProjectsSnapshot, SidebarProjectGroup } from "../../shared/types"
+import type { AuthServiceStatus, GitHubRecentReposResult, LocalProjectsSnapshot, SidebarProjectGroup } from "../../shared/types"
 import { AppAction } from "../app/action"
 import type { Flags, Model as AppModel } from "../app/model"
 import { SliceOutMessage } from "../app/slice"
 import * as Stores from "../app/stores"
 import * as Connection from "../core/stores/connection"
 import * as ContextMenu from "../ui/context-menu"
+import { urlToAppRoute } from "../app/route"
 import { init as initApp } from "../app/update"
-import { FetchRecentRepos, MountPage, MountProjectsList, OpenArchive, OpenCommandPalette, WaitArrivalFade } from "./commands"
+import { FetchRecentRepos, MountPage, MountProjectsList, OpenArchive, WaitArrivalFade } from "./commands"
 import { defaultEnvironment } from "./environment"
 import { init, Message, type Model } from "./model"
-import { SETUP_HELP_AFTER_MS, update } from "./update"
+import { observe, SETUP_HELP_AFTER_MS, update } from "./update"
 import { view } from "./view"
 
 class MemoryStorage {
@@ -55,6 +56,21 @@ function connectedApp(overrides: Partial<AppModel> = {}): AppModel {
   return { ...boot(), connectionStatus: "connected", localProjectsReady: true, localProjects: PROJECTS, ...overrides }
 }
 
+/** Commands as name and args (instances carry their Effect, which doesn't compare). */
+const sent = (commands: ReadonlyArray<{ name: string; args?: unknown }> | undefined) =>
+  (commands ?? []).map(({ name, args }) => ({ name, args }))
+const fetched = (version: number) => ({ name: FetchRecentRepos.name, args: { version } })
+
+/** The root with GitHub's sign-in in the provider-auth snapshot. */
+function withGitHub(app: AppModel, authStatus: AuthServiceStatus): AppModel {
+  const gh = { service: "gh", label: "GitHub", installed: true, version: null, latestVersion: null, updateAvailable: false, authStatus, account: null }
+  return { ...app, stores: { ...app.stores, providerAuth: { ...app.stores.providerAuth, snapshot: { services: [gh] } as never } } }
+}
+
+function appAt(path: string): AppModel {
+  return { ...connectedApp(), route: urlToAppRoute(Option.getOrThrow(fromString(`http://localhost${path}`))) }
+}
+
 const mounted: Model = { ...init(), environment: { ...defaultEnvironment, nowMs: Date.now() } }
 
 function updateWith(app: AppModel) {
@@ -68,7 +84,7 @@ describe("home: recent repos", () => {
     Story.story(
       updateWith(connectedApp()),
       Story.given(mounted),
-      Story.message(Message.MountedProjectsList({ ghStatus: "none" })),
+      Story.message(Message.MountedProjectsList()),
       Story.Command.expectExact(FetchRecentRepos({ version: 1 })),
       Story.Command.resolve(FetchRecentRepos, Message.ReceivedRecentRepos({ version: 1, result: REPOS, at: 1_000 })),
       Story.model((model) => {
@@ -78,12 +94,64 @@ describe("home: recent repos", () => {
       Story.Command.expectExact(WaitArrivalFade({ arrivedAt: 1_000 })),
       Story.Command.resolve(WaitArrivalFade, Message.ElapsedArrivalFade({ arrivedAt: 1_000 })),
       Story.model((model) => expect(model.reposJustArrived).toBe(false)),
-      // GitHub's sign-in changed: fetched again, and the rows don't fade a second time.
-      Story.message(Message.MountedProjectsList({ ghStatus: "signed_in" })),
-      Story.Command.resolve(FetchRecentRepos, Message.ReceivedRecentRepos({ version: 2, result: REPOS, at: 2_000 })),
-      Story.model((model) => expect(model.reposJustArrived).toBe(false)),
-      Story.Command.expectNone(),
     )
+  })
+
+  test("GitHub's sign-in changing under the list fetches again; the rows don't fade twice", () => {
+    const before = withGitHub(connectedApp(), "signed_out")
+    const after = withGitHub(connectedApp(), "signed_in")
+    const listed = update(mounted, Message.MountedProjectsList(), before).model
+    const answered = update(listed, Message.ReceivedRecentRepos({ version: 1, result: REPOS, at: 1_000 }), before).model
+    const settled = update(answered, Message.ElapsedArrivalFade({ arrivedAt: 1_000 }), before).model
+    // The same state is no change: nothing goes, and the model is the one given.
+    const unchanged = observe(settled, before, before)
+    expect(unchanged.model).toBe(settled)
+    expect(unchanged.commands ?? []).toEqual([])
+    const changed = observe(settled, before, after)
+    expect(sent(changed.commands)).toEqual([fetched(2)])
+    expect(changed.model.reposFetchedFor).toBe("signed_in")
+    const refreshed = update(changed.model, Message.ReceivedRecentRepos({ version: 2, result: REPOS, at: 2_000 }), after)
+    expect(refreshed.model.reposJustArrived).toBe(false)
+    expect(refreshed.commands ?? []).toEqual([])
+  })
+
+  test("off the page, a sign-in change fetches nothing and owes nothing", () => {
+    const left = update({ ...mounted, pageMounted: true, reposFetchedFor: "signed_out", reposRequestVersion: 1 }, Message.LeftProjectsList(), connectedApp()).model
+    expect(left.reposFetchedFor).toBeNull()
+    const gone = update(left, Message.LeftPage(), appAt("/settings/general")).model
+    const elsewhere = observe(gone, appAt("/settings/general"), withGitHub(appAt("/settings/general"), "signed_in"))
+    expect(elsewhere.commands ?? []).toEqual([])
+    expect(elsewhere.model).toBe(gone)
+    // In the preview there is no list to owe a request to.
+    const preview = { ...mounted, pageMounted: true, environment: { ...mounted.environment, preview: "mac" } }
+    expect(observe(preview, connectedApp(), withGitHub(connectedApp(), "signed_in")).model.signInChangedBeforeList).toBe(false)
+    // Nor when the page, mounting, turns out to be the preview.
+    const early = observe(mounted, connectedApp(), withGitHub(connectedApp(), "signed_in")).model
+    expect(early.signInChangedBeforeList).toBe(true)
+    expect(update(early, Message.MountedPage({ environment: preview.environment }), connectedApp()).model.signInChangedBeforeList).toBe(false)
+  })
+
+  test("a sign-in landing before the list is up is owed to the list's mount", () => {
+    // React's list was up when the provider-auth snapshot came (its root
+    // subscribes local-projects first): a request at mount, one for the
+    // sign-in. Here the sign-in can come first; the boot sends the same two.
+    const page = { ...mounted, pageMounted: true }
+    const connecting = { ...boot(), connectionStatus: "connected" as const }
+    const signedIn = observe(page, connecting, withGitHub(connecting, "signed_out"))
+    expect(signedIn.commands ?? []).toEqual([])
+    expect(signedIn.model.signInChangedBeforeList).toBe(true)
+    const app = withGitHub(connectedApp(), "signed_out")
+    const listed = update(signedIn.model, Message.MountedProjectsList(), app)
+    expect(sent(listed.commands)).toEqual([fetched(1), fetched(2)])
+    expect(listed.model.signInChangedBeforeList).toBe(false)
+    expect(listed.model.reposFetchedFor).toBe("signed_out")
+    // Only the later answer lands.
+    expect(update(listed.model, Message.ReceivedRecentRepos({ version: 1, result: REPOS, at: 1_000 }), app).model.recentRepos).toBeNull()
+    expect(update(listed.model, Message.ReceivedRecentRepos({ version: 2, result: REPOS, at: 2_000 }), app).model.recentRepos).toEqual(REPOS)
+    // Nothing changed since: no third request.
+    expect(observe(listed.model, app, app).commands ?? []).toEqual([])
+    // Without a change before it, the mount's one request.
+    expect(sent(update(page, Message.MountedProjectsList(), app).commands)).toEqual([fetched(1)])
   })
 
   test("an answer for a list that has gone is dropped", () => {
@@ -121,8 +189,11 @@ describe("home: search and rows", () => {
       Story.message(Message.ClickedLocalProject({ localPath: "/Users/you/Projects/tidepool" })),
       Story.expectOutMessage(requested(AppAction.OpenLocalProject({ localPath: "/Users/you/Projects/tidepool" }))),
       Story.message(Message.ClickedAddProject()),
-      Story.Command.expectExact(OpenCommandPalette({ page: "add-project" })),
-      Story.Command.resolve(OpenCommandPalette, Message.CompletedSideEffect()),
+      Story.Command.expectNone(),
+      Story.expectOutMessage(requested(AppAction.OpenCommandPalette({ page: "add-project" }))),
+      Story.message(Message.ClickedSearchGitHub()),
+      Story.Command.expectNone(),
+      Story.expectOutMessage(requested(AppAction.OpenCommandPalette({ page: "clone-github" }))),
     )
   })
 
@@ -205,7 +276,7 @@ describe("home: the page (Scene)", () => {
   ] as const
   const mountPage = [
     ...resolvePage,
-    Scene.Mount.resolve(MountProjectsList, Message.MountedProjectsList({ ghStatus: "none" })),
+    Scene.Mount.resolve(MountProjectsList, Message.MountedProjectsList()),
     Scene.Command.resolve(FetchRecentRepos, Message.ReceivedRecentRepos({ version: 1, result: { available: false, repos: [] }, at: 0 })),
   ] as const
 

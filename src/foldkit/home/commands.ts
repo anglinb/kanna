@@ -2,11 +2,11 @@ import { Duration, Effect, Schema } from "effect"
 import { Command, Mount } from "foldkit"
 import type { GitHubRecentReposResult } from "../../shared/types"
 import { sendCommand } from "../core/socket"
-import { openCommandPalette, postToMacApp, readEnvironment } from "./environment"
+import { postToMacApp, readEnvironment } from "./environment"
 import { Message } from "./model"
 
-// The page's side effects: the recent-repos request, the palette and other
-// window calls, and the Mounts that stand for React's mount effects.
+// The page's side effects: the recent-repos request, window calls, and the
+// Mounts that stand for React's mount effects.
 
 /** Newly arrived GitHub rows fade in; later renders (filters, search) don't. */
 export const ARRIVAL_FADE_MS = 600
@@ -30,15 +30,6 @@ export const WaitArrivalFade = Command.define("WaitGitHubArrivalFade", {
   messages: [Message.ElapsedArrivalFade],
   execute: ({ arrivedAt }) =>
     Effect.sleep(Duration.millis(ARRIVAL_FADE_MS)).pipe(Effect.as(Message.ElapsedArrivalFade({ arrivedAt }))),
-})
-
-export const OpenCommandPalette = Command.define("OpenCommandPalette", {
-  args: { page: Schema.Literals(["add-project", "clone-github"]) },
-  messages: [Message.CompletedSideEffect],
-  execute: ({ page }) => Effect.sync(() => {
-    openCommandPalette(page)
-    return Message.CompletedSideEffect()
-  }),
 })
 
 /** `window.open(url, "_blank", features)`: Manage Fleet, Open on GitHub. */
@@ -79,13 +70,11 @@ export const MountPage = Mount.define("MountHomePage", {
 })
 
 /**
- * On the list's heading, keyed by GitHub's sign-in state: useGitHubRecentRepos's
- * effect ran when ProjectsHome mounted and again whenever that state changed
- * (the setup wizard just connected GitHub). A new key is a new element, so
- * this runs at exactly those moments.
+ * On the list's heading: ProjectsHome mounted, so useGitHubRecentRepos's
+ * effect runs. Its reruns when GitHub's sign-in changes (the setup wizard
+ * just connected it) are the slice's `observe`.
  */
 export const MountProjectsList = Mount.define("MountProjectsList", {
-  args: { ghStatus: Schema.String },
   messages: [Message.MountedProjectsList],
-  execute: ({ ghStatus }) => Effect.succeed(Message.MountedProjectsList({ ghStatus })),
+  execute: () => Effect.succeed(Message.MountedProjectsList()),
 })

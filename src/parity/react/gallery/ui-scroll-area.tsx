@@ -1,6 +1,6 @@
 // src/client/components/ui/scroll-area.tsx (gallery/ui-scroll-area.ts on the Foldkit side).
 import { ScrollArea } from "../../../client/components/ui/scroll-area"
-import { SCROLL_ROWS } from "./support/scroll-rows"
+import { SCROLL_ROWS } from "../../gallery-support/scroll-rows"
 
 export default function ScrollAreaGallery() {
   return (

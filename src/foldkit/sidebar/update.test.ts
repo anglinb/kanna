@@ -3,7 +3,7 @@ import { Option } from "effect"
 import { Story } from "foldkit/test"
 import { fromString } from "foldkit/url"
 import type { AppSettingsSnapshot, SidebarChatRow, SidebarData, SidebarProjectGroup } from "../../shared/types"
-import { AppAction } from "../app/action"
+import { AppAction, batch } from "../app/action"
 import type { Flags, Model as AppModel } from "../app/model"
 import { SliceOutMessage } from "../app/slice"
 import * as Stores from "../app/stores"
@@ -17,7 +17,9 @@ import * as ContextMenu from "../ui/context-menu"
 import { Message } from "./message"
 import { init, type Model } from "./model"
 import { CaptureOutgoingPage } from "./motion"
-import { LoadTouchedFiles, SaveSidebarWidth, update } from "./update"
+import { SyncHoverTracker } from "./hoverCard"
+import { observe, SaveSidebarWidth, update } from "./update"
+import * as ChatCard from "../ui/chat-hover-card"
 
 function row(chatId: string, overrides: Partial<SidebarChatRow> = {}): SidebarChatRow {
   return {
@@ -110,14 +112,17 @@ describe("sidebar: chats", () => {
     )
   })
 
-  test("restoring leaves the Archived view first, then restores", () => {
-    const app = appAt("/home")
-    const first = update(sidebar, Message.ClickedRestoreChat({ chatId: "c1" }), app)
-    expect(first.outMessage).toEqual(store(Stores.Message.GotSidebarViewMessage({ message: SidebarView.Message.LeftArchived() })))
-    expect(first.commands?.map((command) => command.name)).toEqual(["SidebarContinueActions"])
-    const second = update(first.model, Message.ContinuedActions({ actions: [AppAction.RestoreChat({ chatId: "c1" })] }), app)
-    expect(second.outMessage).toEqual(asks(AppAction.RestoreChat({ chatId: "c1" })))
-    expect(second.commands ?? []).toEqual([])
+  test("restoring leaves the Archived view first, then restores, in one request", () => {
+    Story.story(
+      updateFor(appAt("/home")),
+      Story.given(sidebar),
+      Story.message(Message.ClickedRestoreChat({ chatId: "c1" })),
+      Story.Command.expectNone(),
+      Story.expectOutMessage(asks(batch(
+        AppAction.Store({ message: Stores.Message.GotSidebarViewMessage({ message: SidebarView.Message.LeftArchived() }) }),
+        AppAction.RestoreChat({ chatId: "c1" }),
+      ))),
+    )
   })
 
   test("a section's toggle flips it against its current state", () => {
@@ -173,6 +178,19 @@ describe("sidebar: header and navigation", () => {
     expect(update(sidebar, Message.PressedCreateChatShortcut(), appAt("/settings/general")).outMessage).toBeUndefined()
     expect(update(sidebar, Message.PressedCreateChatShortcut(), appAt("/chat/c3")).outMessage)
       .toEqual(asks(AppAction.CreateChat({ projectId: "p2" })))
+  })
+
+  test("Search and Add Project open the palette through the root", () => {
+    const app = appAt("/home")
+    for (const [message, page] of [
+      [Message.ClickedSearch(), null],
+      [Message.ClickedAddProject(), "add-project"],
+      [Message.PressedAddProjectShortcut(), "add-project"],
+    ] as const) {
+      const result = update(sidebar, message, app)
+      expect(result.outMessage).toEqual(asks(AppAction.OpenCommandPalette({ page })))
+      expect(result.commands ?? []).toEqual([])
+    }
   })
 })
 
@@ -259,31 +277,85 @@ describe("sidebar: the right-click menu", () => {
     expect(chosen.archivedDialog.phase).toBe("Open")
   })
 
-  test("Archive All archives each chat in turn", () => {
+  test("Archive All archives each chat in turn, in one request", () => {
     const app = appAt("/home")
     const open = openOn({ _tag: "Section", chatIds: ["c1", "c2"] }, app)
-    const first = choose(open, "archive-all", app)
-    expect(first.outMessage).toEqual(asks(AppAction.ArchiveChat({ chatId: "c1" })))
-    const second = update(first.model, Message.ContinuedActions({ actions: [AppAction.ArchiveChat({ chatId: "c2" })] }), app)
-    expect(second.outMessage).toEqual(asks(AppAction.ArchiveChat({ chatId: "c2" })))
+    const chosen = choose(open, "archive-all", app)
+    expect(chosen.outMessage).toEqual(asks(batch(AppAction.ArchiveChat({ chatId: "c1" }), AppAction.ArchiveChat({ chatId: "c2" }))))
+    expect(chosen.commands?.some((command) => command.name === "SidebarContinueActions")).toBe(false)
+    // One chat is a plain request.
+    const single = choose(openOn({ _tag: "Section", chatIds: ["c1"] }, app), "archive-all", app)
+    expect(single.outMessage).toEqual(asks(AppAction.ArchiveChat({ chatId: "c1" })))
   })
 })
 
 describe("sidebar: hover cards", () => {
+  test("a card's prompt or reply opens the chat at that message, closing the card", () => {
+    const hovered = { ...sidebar, hovered: { ...sidebar.hovered, chats: "c1" } }
+    Story.story(
+      updateFor(appAt("/chat/c2")),
+      Story.given(hovered),
+      Story.message(Message.GotCardMessage({ list: "chats", message: ChatCard.CardMessage.ClickedCardMessage({ chatId: "c1", role: "reply" }) })),
+      Story.expectOutMessage(asks(AppAction.OpenChatAt({ chatId: "c1", jump: "reply" }))),
+      Story.model((model) => expect(model.hovered.chats).toBeNull()),
+      Story.Command.resolve(SyncHoverTracker, Message.CompletedSideEffect()),
+    )
+  })
+
   test("a card asks for what the cache lacks, and keeps the answer", () => {
+    const card = (message: ChatCard.CardMessage) => Message.GotCardMessage({ list: "chats", message })
     Story.story(
       updateFor(appAt("/home")),
       Story.given(sidebar),
-      Story.message(Message.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" })),
-      Story.Command.expectHas(LoadTouchedFiles),
-      Story.Command.resolve(LoadTouchedFiles, Message.SucceededLoadTouchedFiles({ chatId: "c1", cacheKey: "k1", result: { files: [], totalCount: 0 } })),
+      Story.message(card(ChatCard.CardMessage.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" }))),
+      Story.Command.expectHas(ChatCard.LoadTouchedFiles),
+      Story.Command.resolve(ChatCard.LoadTouchedFiles, ChatCard.CardMessage.SucceededLoadTouchedFiles({ chatId: "c1", cacheKey: "k1", result: { files: [], totalCount: 0 } })),
       Story.model((model) => {
-        expect(model.touchedFilesCache["k1"]).toEqual({ files: [], totalCount: 0 })
-        expect(model.heldTouchedFiles?.chatId).toBe("c1")
+        expect(model.card.touchedFilesCache["k1"]).toEqual({ files: [], totalCount: 0 })
+        expect(model.card.heldTouchedFiles?.chatId).toBe("c1")
       }),
-      Story.message(Message.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" })),
+      Story.message(card(ChatCard.CardMessage.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" }))),
       Story.Command.expectNone(),
     )
+  })
+
+  test("a push that changes the open card's row asks again for what isn't in yet (React's effects on `row`)", () => {
+    const before = appAt("/home")
+    const open: Model = { ...sidebar, hasFinePointer: true, hovered: { ...sidebar.hovered, chats: "c1" } }
+    const changedData = { projectGroups: [group("p1", [row("c1", { status: "running" }), row("c2", { pinnedAt: 5 })]), DATA.projectGroups[1]!] }
+    const after: AppModel = { ...before, stores: { ...before.stores, sidebar: { ...before.stores.sidebar, data: changedData } } }
+    const asked = observe(open, before, after)
+    expect(asked.commands?.map((command) => command.name)).toEqual(["ChatCardLoadTouchedFiles", "ChatCardLoadPreview"])
+    // Answers in: the same change asks for nothing.
+    const filesKey = asked.model.card.cardFilesKey!
+    const previewKey = asked.model.card.cardPreviewKey!
+    const cached: Model = { ...asked.model, card: { ...asked.model.card, touchedFilesCache: { [filesKey]: { files: [], totalCount: 0 } }, previewCache: { [previewKey]: {} as never } } }
+    expect(observe(cached, before, after).commands ?? []).toEqual([])
+    // No card up, or the row the same: nothing.
+    expect(observe(sidebar, before, after).commands ?? []).toEqual([])
+    expect(observe(open, before, before).model).toBe(open)
+  })
+
+  test("what the tab card or a transcript card fetched serves the sidebar's card", () => {
+    const base = appAt("/home")
+    const preview = { lastUserMessagePreview: "Deploy it", lastAgentMessagePreview: null } as never
+    const app: AppModel = { ...base, chatPage: { ...base.chatPage, tabCard: { ...base.chatPage.tabCard, card: { ...base.chatPage.tabCard.card, previewCache: { k2: preview } } } } }
+    const asked = update(sidebar, Message.GotCardMessage({ list: "chats", message: ChatCard.CardMessage.RequestedCardLoad({ chatId: "c1", kind: "preview", cacheKey: "k2" }) }), app)
+    expect(asked.commands ?? []).toEqual([])
+    expect(asked.model.card.heldPreview).toEqual({ chatId: "c1", preview })
+  })
+
+  test("the card's other actions dismiss it and ask the root; the repo opens here", () => {
+    const app = appAt("/home")
+    const via = (message: ChatCard.CardMessage) => update(sidebar, Message.GotCardMessage({ list: "chats", message }), app)
+    expect(via(ChatCard.CardMessage.ClickedCardChat({ chatId: "c1", archived: true })).outMessage).toEqual(asks(AppAction.OpenArchivedChat({ chatId: "c1" })))
+    expect(via(ChatCard.CardMessage.ClickedCardChat({ chatId: "c1", archived: false })).outMessage).toEqual(asks(AppAction.Navigate({ path: "/chat/c1", replace: false })))
+    expect(via(ChatCard.CardMessage.ClickedCardSetupGit({ chatId: "c1" })).outMessage).toEqual(asks(AppAction.SetupGit({ chatId: "c1" })))
+    expect(via(ChatCard.CardMessage.ClickedCardFile({ localPath: "/repo/p1", filePath: "src/a.ts" })).outMessage)
+      .toEqual(asks(AppAction.OpenExternalPath({ action: "open_editor", localPath: "/repo/p1/src/a.ts" })))
+    const repo = via(ChatCard.CardMessage.ClickedCardRepo({ url: "https://github.com/you/p1" }))
+    expect(repo.outMessage).toBeUndefined()
+    expect(repo.commands?.map((command) => command.name)).toEqual(["SyncHoverTracker", "ChatCardOpenRepo"])
   })
 
   test("a channel click opens its new chat with a mouse, and its page on touch", () => {

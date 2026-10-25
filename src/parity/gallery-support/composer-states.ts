@@ -9,8 +9,8 @@ import type {
   SidebarChatRow,
   SidebarData,
   SidebarProjectGroup,
-} from "../../../../shared/types"
-import type { ContextWindowSnapshot } from "../../../../client/lib/contextWindow"
+} from "../../shared/types"
+import type { ContextWindowSnapshot } from "../../client/lib/contextWindow"
 
 export const GALLERY_CHAT_ID = "gallery-chat"
 export const GALLERY_PROJECT_ID = "gallery-project-tidepool"

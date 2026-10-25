@@ -319,6 +319,14 @@ describe("palette: the chat page's actions", () => {
     expect(chosen.outMessage).toEqual(asks(AppAction.ArchiveChat({ chatId: "c-units" })))
     expect(chosen.model.phase).toBe("Closing")
   })
+
+  test("New Delegator closes and asks the root to make one in the current project (its prompt is the root's)", () => {
+    const searched = update(opened(CHAT), Message.ChangedQuery({ value: "delegator" }), CHAT).model
+    expect(itemValues(derive(searched, CHAT).nodes)).toContain("action-new-delegator-current")
+    const chosen = update(searched, Message.ClickedItem({ value: "action-new-delegator-current" }), CHAT)
+    expect(chosen.outMessage).toEqual(asks(AppAction.CreateDelegator({ projectId: "p-tide" })))
+    expect(chosen.model.phase).toBe("Closing")
+  })
 })
 
 describe("palette: cmdk", () => {

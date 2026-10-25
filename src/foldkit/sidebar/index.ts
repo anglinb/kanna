@@ -17,6 +17,6 @@
 
 export { Model, init } from "./model"
 export { Message } from "./message"
-export { update } from "./update"
+export { observe, update } from "./update"
 export { view } from "./view"
 export { subscriptions } from "./subscriptions"

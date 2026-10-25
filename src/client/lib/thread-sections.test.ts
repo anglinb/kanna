@@ -17,7 +17,7 @@ import {
   RECENT_THREADS_LIMIT,
   stabilizeSidebarThreads,
 } from "./thread-sections"
-import { focusSidebarData, resolveFocusedProjectGroup } from "../stores/focusModeStore"
+import { focusSidebarData, resolveFocusedProjectGroup } from "../../foldkit/core/stores/focusMode"
 import { stabilizeSidebarData } from "../app/sidebarStability"
 
 function makeChatRow(overrides: Partial<SidebarChatRow> & Pick<SidebarChatRow, "chatId" | "title">): SidebarChatRow {

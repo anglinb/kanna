@@ -4,7 +4,7 @@ import { Command } from "foldkit"
 import type { Document, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import * as ContextWindowMeter from "../../../foldkit/chat/contextWindowMeter"
-import { CONTEXT_METER_USAGES } from "../../react/gallery/support/context-meter-usages"
+import { CONTEXT_METER_USAGES } from "../../gallery-support/context-meter-usages"
 import { galleryPage } from "../gallery-page"
 
 const Model = Schema.Struct({ meters: Schema.Array(ContextWindowMeter.Model) })

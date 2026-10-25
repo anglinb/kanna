@@ -226,18 +226,3 @@ export const MakeTerminalId = Command.define("MakePaletteTerminalId", {
   execute: ({ projectId, chatKey, nextTerminalIndex }) => Effect.sync(() =>
     Message.GeneratedTerminalId({ projectId, chatKey, terminalId: newTerminalId(nextTerminalIndex) })),
 })
-
-// NEW DELEGATOR
-
-/** createDelegator after its prompt: create it empty, then name it. */
-export const CreateDelegator = Command.define("CreatePaletteDelegator", {
-  args: { projectId: Schema.String, name: Schema.String },
-  messages: [Message.SucceededCreateDelegator, Message.FailedCreateDelegator],
-  execute: ({ projectId, name }) => Effect.gen(function* () {
-    const { chatId } = yield* sendCommand<{ chatId: string }>({ type: "chat.create", projectId, delegator: true })
-    if (name) yield* sendCommand({ type: "chat.rename", chatId, title: name })
-    return Message.SucceededCreateDelegator({ projectId, chatId })
-  }).pipe(
-    Effect.catch((error) => Effect.succeed(Message.FailedCreateDelegator({ error: errorMessage(error) }))),
-  ),
-})

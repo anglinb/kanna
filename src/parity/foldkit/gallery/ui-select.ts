@@ -5,7 +5,7 @@ import type { Document, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import { Globe, Lock } from "../../../foldkit/ui/icons"
 import * as Select from "../../../foldkit/ui/select"
-import { SELECT_MODES } from "../../react/gallery/support/select-options"
+import { SELECT_MODES } from "../../gallery-support/select-options"
 import { galleryPage } from "../gallery-page"
 
 const NAMES = ["visibility", "mode", "transport", "connection"] as const

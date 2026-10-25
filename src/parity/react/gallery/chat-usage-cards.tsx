@@ -3,7 +3,7 @@
 // (gallery/chat-usage-cards.ts on the Foldkit side).
 import { ProviderCard } from "../../../client/app/settings/UsageSection"
 import { TooltipProvider } from "../../../client/components/ui/tooltip"
-import { USAGE_SNAPSHOTS } from "./support/usage-snapshots"
+import { USAGE_SNAPSHOTS } from "../../gallery-support/usage-snapshots"
 
 export default function ChatUsageCardsGallery() {
   return (

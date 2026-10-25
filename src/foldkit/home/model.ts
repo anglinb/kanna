@@ -34,6 +34,14 @@ export const Model = Schema.Struct({
 
   /** Read when the page mounts: host, port, the Mac app, `?preview=`. */
   environment: PageEnvironment,
+  /** LocalDev is on screen (between MountedPage and LeftPage). */
+  pageMounted: Schema.Boolean,
+  /**
+   * GitHub's sign-in changed on a projects page before the list was up.
+   * React's list was up by then (see `observe`), so the list's mount owes
+   * the request for that change as well as its own.
+   */
+  signInChangedBeforeList: Schema.Boolean,
   /** useConnectionFailed: when attempts started failing, and whether help is showing. */
   failingSince: Schema.NullOr(Schema.Number),
   connectionFailed: Schema.Boolean,
@@ -60,6 +68,12 @@ export const Model = Schema.Struct({
   /** Newly arrived GitHub rows fade in for ARRIVAL_FADE_MS; later renders don't. */
   reposJustArrived: Schema.Boolean,
   reposArrivedAt: Schema.NullOr(Schema.Number),
+  /**
+   * The GitHub sign-in state useGitHubRecentRepos's effect last ran with;
+   * null while the list is off screen. A change while it is on screen
+   * fetches again (`observe`).
+   */
+  reposFetchedFor: Schema.NullOr(Schema.String),
   tooltips: Schema.Record(Schema.String, Tooltip.Model),
   rowMenus: Schema.Record(Schema.String, ContextMenu.Model),
   filterPopover: Popover.Model,
@@ -76,6 +90,8 @@ export function init(): Model {
     commandCopy: CopyButton.init({ id: "home-start-command" }),
     archive: null,
     archiveDialog: Dialog.init({ id: "home-archived-chats" }),
+    pageMounted: false,
+    signInChangedBeforeList: false,
     ...initProjectsHome(),
   }
 }
@@ -91,6 +107,7 @@ export function initProjectsHome() {
     reposRequestVersion: 0,
     reposJustArrived: false,
     reposArrivedAt: null,
+    reposFetchedFor: null,
     tooltips: {},
     rowMenus: {},
     filterPopover: Popover.init({ id: "home-projects-filter" }),
@@ -102,8 +119,8 @@ export const Message = defineMessageUnion({
   /** The page is on screen; its surroundings as read then. */
   MountedPage: { environment: PageEnvironment },
   LeftPage: {},
-  /** The list is on screen, or GitHub's sign-in changed under it: fetch the recent repos. */
-  MountedProjectsList: { ghStatus: Schema.String },
+  /** The list is on screen: fetch the recent repos (again on a sign-in change: `observe`). */
+  MountedProjectsList: {},
   LeftProjectsList: {},
   ChangedSocketStatus: { status: ConnectionStatus, at: Schema.Number },
   GotConnectionMessage: { message: Connection.Message },

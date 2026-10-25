@@ -1,4 +1,4 @@
-import type { ProviderUsageSnapshot } from "../../../../shared/types"
+import type { ProviderUsageSnapshot } from "../../shared/types"
 
 // Shared by the React and Foldkit usage card galleries, against the parity
 // clock (2026-06-01T12:00Z): resets and "Updated" stamps read relative to it.

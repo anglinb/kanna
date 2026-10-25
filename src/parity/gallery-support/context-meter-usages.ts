@@ -1,4 +1,4 @@
-import type { ContextWindowSnapshot } from "../../../../client/lib/contextWindow"
+import type { ContextWindowSnapshot } from "../../client/lib/contextWindow"
 
 // Shared by the React and Foldkit context meter galleries.
 const updatedAt = "2026-06-01T11:59:00.000Z"

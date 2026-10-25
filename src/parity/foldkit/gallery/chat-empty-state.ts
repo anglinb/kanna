@@ -10,7 +10,7 @@ import { projectPickerView } from "../../../foldkit/chat/emptyState"
 import { projectChatsView } from "../../../foldkit/chat/emptyStateProject"
 import { Message } from "../../../foldkit/chat/message"
 import { init, Model } from "../../../foldkit/chat/model"
-import { EMPTY_STATE_PROJECT_ID, EMPTY_STATE_PROJECT_PATH, EMPTY_STATE_SIDEBAR } from "../../react/gallery/support/empty-state-sidebar"
+import { EMPTY_STATE_PROJECT_ID, EMPTY_STATE_PROJECT_PATH, EMPTY_STATE_SIDEBAR } from "../../gallery-support/empty-state-sidebar"
 import { galleryPage } from "../gallery-page"
 
 // The page's view reads the root's stores; this is as much of them as the

@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { defineTaggedUnion } from "foldkit/schema"
 import type { ProjectRequest } from "../../client/app/kannaStateHelpers"
-import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
+import type { OpenLocalLinkTarget } from "../core/localLink"
 import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import type { ClientCommand, EditorOpenSettings, OpenExternalAction, TerminalPreset } from "../../shared/protocol"
 import type { AppSettingsPatch, FaveModel, LlmProviderSnapshot } from "../../shared/types"
@@ -47,6 +47,11 @@ export const AppAction = defineTaggedUnion({
   DeleteChat: { chatId: Schema.String, title: Schema.String },
   SetupGit: { chatId: Schema.String },
   SetDelegator: { chatId: Schema.String, delegator: Schema.Boolean },
+  /**
+   * New Delegator (chat-ui/create-delegator.ts): asks for its name, creates
+   * it empty, and picks it as what the project's new chat page delegates to.
+   */
+  CreateDelegator: { projectId: Schema.String },
 
   // Projects
   OpenLocalProject: { localPath: Schema.String },

@@ -1,6 +1,6 @@
 // src/client/components/ui/project-icon.tsx (gallery/ui-project-icon.ts on the Foldkit side).
 import { ProjectIcon } from "../../../client/components/ui/project-icon"
-import { PROJECT_NAMES } from "./support/project-names"
+import { PROJECT_NAMES } from "../../gallery-support/project-names"
 
 export default function ProjectIconGallery() {
   return (

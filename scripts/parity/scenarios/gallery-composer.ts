@@ -3,7 +3,7 @@ import { click, composer, hover, parkPointer, press, rest, typeIntoComposer } fr
 
 // The chat composer on its own (src/foldkit/composer against ChatInput), on
 // a gallery page docked at the foot of the window, in the states
-// src/parity/react/gallery/support/composer-states.ts names: what it shows
+// src/parity/gallery-support/composer-states.ts names: what it shows
 // with nothing, a draft, staged files, a turn running, no project, a
 // context meter, signed-out harnesses, two accounts, a delegator; and the
 // "/" and "@" menus, the pickers, Arrow Up, Escape held. Away from the chat
