@@ -276,12 +276,15 @@ export class ViewportController {
     // What the view patches in: the feed, and the rows.
     const mutations = new MutationObserver((records) => {
       const rowsChanged = records.some((record) => record.type === "childList")
+      const previous = this.feed
       this.feed = readFeed(viewport) ?? this.feed
-      this.pageAtEnd = this.feed.atEnd
+      // The page moved its own isAtEnd (the scroll-to-bottom button): take it.
+      // Otherwise the last one reported here stands, the feed being a render behind.
+      if (this.feed.atEnd !== previous.atEnd) this.pageAtEnd = this.feed.atEnd
       this.layoutEffects()
       if (rowsChanged) scroller.handleContentChange()
       const count = rowItems(content).length
-      if (count !== this.rowCount) {
+      if (count !== this.rowCount || this.feed.minimap !== previous.minimap) {
         this.rowCount = count
         this.remeasureRows()
       }
