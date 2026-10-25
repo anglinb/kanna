@@ -102,8 +102,6 @@ export const Message = defineMessageUnion({
   /** The page is on screen; its surroundings as read then. */
   MountedPage: { environment: PageEnvironment },
   LeftPage: {},
-  /** The mobile back button (KannaSidebar's, on /home). */
-  ClickedBack: {},
   /** The list is on screen, or GitHub's sign-in changed under it: fetch the recent repos. */
   MountedProjectsList: { ghStatus: Schema.String },
   LeftProjectsList: {},

@@ -238,7 +238,6 @@ export function update(model: Model, message: Message, app: AppModel): Return {
         : { model: next }
     },
     LeftPage: () => ({ model: { ...model, ...closeArchiveNow(model), failingSince: null, connectionFailed: false, waitingSince: null, revealChildren: false } }),
-    ClickedBack: () => requestAction(model, AppAction.Navigate({ path: "/", replace: false })),
     MountedProjectsList: () => {
       const version = model.reposRequestVersion + 1
       return { model: { ...model, reposRequestVersion: version }, commands: [FetchRecentRepos({ version })] }

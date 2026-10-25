@@ -21,7 +21,6 @@ import * as Dialog from "../ui/dialog"
 import type { Icon } from "../ui/icon"
 import {
   Archive,
-  ArrowLeft,
   Building2,
   Check,
   ChevronRight,
@@ -86,25 +85,10 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
 
 // LOCAL PROJECTS PAGE
 
+// The mobile back button on /home is KannaSidebar's (App.tsx's
+// showMobileBackButton), so it is the sidebar slice's too, rendered before
+// the sidebar as React does; this page has none of its own.
 function pageView(model: Model, app: AppModel, h: H): Html {
-  // `contents`: the page and the back button sit in the layout's row as
-  // React's siblings do (the button is KannaSidebar's, outside the page).
-  return h.div([h.Class("contents")], [
-    // KannaSidebar's floating back button: pages with no header of their own
-    // get one on mobile, and /home is one of them.
-    app.route._tag === "Home"
-      ? button({
-        variant: "ghost",
-        size: "icon",
-        class: "fixed top-3 left-3 z-50 md:hidden",
-        attributes: [h.OnClick(Message.ClickedBack()), h.Title("Back")],
-      }, [ArrowLeft({ class: "h-5 w-5" }, h)], h)
-      : h.empty,
-    localProjectsPage(model, app, h),
-  ])
-}
-
-function localProjectsPage(model: Model, app: AppModel, h: H): Html {
   return h.div([h.Class("flex-1 flex flex-col min-w-0 relative"), h.OnMount(MountPage()), h.OnUnmount(Message.LeftPage())], [
     // The Mac app's title bar across the projects page: it drags the window,
     // as on the settings page. The page starts with pt-16 of empty space, so

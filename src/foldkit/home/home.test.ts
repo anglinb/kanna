@@ -138,15 +138,6 @@ describe("home: search and rows", () => {
     expect(second.outMessage).toBeUndefined()
   })
 
-  test("the back button goes to /", () => {
-    Story.story(
-      updateWith(connectedApp()),
-      Story.given(mounted),
-      Story.message(Message.ClickedBack()),
-      Story.expectOutMessage(requested(AppAction.Navigate({ path: "/", replace: false }))),
-    )
-  })
-
   test("Show Archived stamps the time and opens the dialog; opening a chat closes it", () => {
     const opened = update(mounted, Message.OpenedArchive({ localPath: "/Users/you/Projects/tidepool", nowMs: 5 }), connectedApp())
     expect(opened.model.archive).toEqual({ localPath: "/Users/you/Projects/tidepool", nowMs: 5 })
