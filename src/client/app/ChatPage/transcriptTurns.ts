@@ -1,4 +1,4 @@
-import type { ResolvedTranscriptRow } from "../KannaTranscript"
+import type { ResolvedTranscriptRow } from "../transcriptRowTypes"
 
 /**
  * Pure helpers backing the transcript overview minimap. Kept out of the

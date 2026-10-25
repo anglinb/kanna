@@ -2,9 +2,9 @@ import { Schema } from "effect"
 import type { PairSessionState } from "../../client/lib/pairSession"
 import { SIDEBAR_WIDTH_STORAGE_KEY } from "../../client/lib/storageKeys"
 import { SIDEBAR_MAX_WIDTH_PX } from "../../client/lib/sidebarWidth"
-import type { ChatPreview, ChatTouchedFilesResult } from "../../shared/types"
 import { opaque } from "../core/schema"
 import { readStorageItem } from "../core/storage"
+import * as ChatCard from "../ui/chat-hover-card"
 import * as ContextMenu from "../ui/context-menu"
 import * as Dialog from "../ui/dialog"
 import * as Popover from "../ui/popover"
@@ -116,15 +116,8 @@ export const Model = Schema.Struct({
   hovered: HoverKeys,
   /** The channel whose card is pinned open ("Show more"). */
   pinnedChannelId: Schema.NullOr(Schema.String),
-  /** Fetched card bodies, by `getPreviewCacheKey` / `getTouchedFilesCacheKey`. */
-  previewCache: Schema.Record(Schema.String, opaque<ChatPreview>("ChatPreview")),
-  touchedFilesCache: Schema.Record(Schema.String, opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult")),
-  /** What the open card holds while a newer one loads, and for which chat. */
-  heldPreview: Schema.NullOr(Schema.Struct({ chatId: Schema.String, preview: opaque<ChatPreview>("ChatPreview") })),
-  heldTouchedFiles: Schema.NullOr(Schema.Struct({ chatId: Schema.String, result: opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult") })),
-  /** The keys the open card last asked for: an answer for any other lands in the cache only (React's `cancelled`). */
-  cardFilesKey: Schema.NullOr(Schema.String),
-  cardPreviewKey: Schema.NullOr(Schema.String),
+  /** The chat card's fetches and what the open card holds (ui/chat-hover-card.ts), for both of its lists. */
+  card: ChatCard.CardData,
   /** A Cmd/Ctrl-click on a chat, heard before the row's own click. */
   backgroundClickChatId: Schema.NullOr(Schema.String),
   projectDrag: Schema.NullOr(ProjectDrag),
@@ -180,12 +173,7 @@ export function init(storage?: Storage): Model {
     tooltips: {},
     hovered: { chats: null, channels: null, peek: null },
     pinnedChannelId: null,
-    previewCache: {},
-    touchedFilesCache: {},
-    heldPreview: null,
-    heldTouchedFiles: null,
-    cardFilesKey: null,
-    cardPreviewKey: null,
+    card: ChatCard.initCardData(),
     backgroundClickChatId: null,
     projectDrag: null,
   }

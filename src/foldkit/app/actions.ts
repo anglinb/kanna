@@ -32,6 +32,7 @@ import { errorMessage, sendCommand, type KannaSocketService } from "../core/sock
 import * as AppSettings from "../core/stores/appSettings"
 import * as ChatInput from "../core/stores/chatInput"
 import * as ChatPreferences from "../core/stores/chatPreferences"
+import * as Delegate from "../core/stores/delegate"
 import * as RightSidebar from "../core/stores/rightSidebar"
 import * as Sidebar from "../core/stores/sidebar"
 import * as TerminalLayout from "../core/stores/terminalLayout"
@@ -39,7 +40,7 @@ import { getDefaultEditorCommandTemplate } from "../core/stores/terminalPreferen
 import * as AppDialog from "../ui/app-dialog"
 import { AppAction } from "./action"
 import { resolveTheme, themePreference } from "./theme"
-import type * as Stores from "./stores"
+import * as Stores from "./stores"
 
 // The root's half of AppAction: what each request does. Port of the
 // handlers in useKannaState, useChatCommands (project/external ones),
@@ -67,6 +68,7 @@ export const DialogContinuation = defineTaggedUnion({
   DownloadTranscript: { fileName: Schema.String, json: Schema.String },
   InstallNightly: {},
   InstallStable: {},
+  CreateDelegator: { projectId: Schema.String },
 })
 export type DialogContinuation = typeof DialogContinuation.Type
 
@@ -148,6 +150,8 @@ export const ActionMessage = defineMessageUnion({
   FailedReorderProjectGroups: { error: Schema.String },
   ReceivedInstallResult: { result: opaque<UpdateInstallResult>("UpdateInstallResult"), failureTitle: Schema.String, failureMessage: Schema.String },
   FailedInstall: { error: Schema.String },
+  SucceededCreateDelegator: { projectId: Schema.String, chatId: Schema.String },
+  FailedCreateDelegator: { error: Schema.String },
   /** A command whose ack clears the command error. */
   SucceededCommand: {},
   FailedCommand: { error: Schema.String },
@@ -320,6 +324,19 @@ const SetDelegator = Command.define("SetDelegator", {
   execute: ({ chatId, delegator }) => sendCommand({ type: "chat.setDelegator", chatId, delegator }).pipe(
     Effect.catch((error) => Effect.sync(() => console.warn("[kanna] could not change whether the chat delegates:", error))),
     Effect.as(ActionMessage.CompletedSideEffect()),
+  ),
+})
+
+/** createDelegator after its prompt: create it empty, then name it (left blank, it is "New Chat" until its first message names it). */
+const CreateDelegator = Command.define("CreateDelegator", {
+  args: { projectId: Schema.String, name: Schema.String },
+  messages: [ActionMessage.SucceededCreateDelegator, ActionMessage.FailedCreateDelegator],
+  execute: ({ projectId, name }) => Effect.gen(function* () {
+    const { chatId } = yield* sendCommand<{ chatId: string }>({ type: "chat.create", projectId, delegator: true })
+    if (name) yield* sendCommand({ type: "chat.rename", chatId, title: name })
+    return ActionMessage.SucceededCreateDelegator({ projectId, chatId })
+  }).pipe(
+    Effect.catch((error) => Effect.succeed(ActionMessage.FailedCreateDelegator({ error: errorMessage(error) }))),
   ),
 })
 
@@ -625,6 +642,18 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       SetupGit: ({ chatId }) => openDialog(host, { kind: "confirm", options: { title: "Initialize Git?", description: "Initialize a local git repository in this project?", confirmLabel: "Init Git", cancelLabel: "Cancel" } },
             DialogContinuation.SetupGit({ chatId }),),
       SetDelegator: ({ chatId, delegator }) => ({ model: host, commands: commands(SetDelegator({ chatId, delegator })) }),
+      // A delegator is kept and come back to, so it is named for what it
+      // looks after, here, before it exists.
+      CreateDelegator: ({ projectId }) => openDialog(host, {
+        kind: "prompt",
+        options: {
+          title: "New Delegator",
+          description: "A chat that hands work to the chats under it instead of doing it. Name it for what it looks after.",
+          placeholder: "Name (optional)",
+          allowEmpty: true,
+          confirmLabel: "Create",
+        },
+      }, DialogContinuation.CreateDelegator({ projectId })),
 
       OpenLocalProject: ({ localPath }) => startChatFromIntent(host, { kind: "local_path", localPath }),
       CreateProject: ({ project }) => startChatFromIntent(host, { kind: "project_request", project: project as ProjectRequest }),
@@ -745,6 +774,7 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       DownloadTranscript: ({ fileName, json }) => ({ model: closed, commands: commands(DownloadTextFile({ fileName, contents: json })) }),
       InstallNightly: () => runInstall(closed, "update.installNightly", "Nightly update failed", "Kanna could not build the nightly version. Try again later."),
       InstallStable: () => runInstall(closed, "update.installStable", "Update failed", "Kanna could not reinstall the latest release. Try again later."),
+      CreateDelegator: ({ projectId }) => ({ model: closed, commands: commands(CreateDelegator({ projectId, name: value })) }),
     })
   }
 
@@ -891,6 +921,10 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
         }
       },
       FailedInstall: ({ error }) => ({ model: withError(host, error), commands: commands(SetRestartPhase({ phase: null })) }),
+      SucceededCreateDelegator: ({ projectId, chatId }) => stores(Stores.Message.GotDelegateMessage({
+        message: Delegate.Message.ChangedPreference({ projectId, preference: { on: true, chatId } }),
+      }))(host),
+      FailedCreateDelegator: ({ error }) => alert(host, { title: "Could not create the delegator", description: error, closeLabel: "OK" }),
       SucceededCommand: () => ({ model: withError(host, null) }),
       FailedCommand: ({ error }) => ({ model: withError(host, error) }),
       CompletedSideEffect: () => ({ model: host }),

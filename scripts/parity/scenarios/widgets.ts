@@ -435,7 +435,7 @@ export const scenarios: Scenario[] = [
       await quickClick(context, column(page).getByRole("button", { name: /^bun test/ }).first())
       await quickClick(context, page.locator(REGIONS.navbar).getByRole("button", { name: "Hide widgets" }))
       // The command goes in once the new terminal's shell is up.
-      await page.locator(REGIONS.terminal).getByText("bun: not available in the demo", { exact: false }).waitFor()
+      await page.locator(REGIONS.terminal).getByText("bun: not available in the demo", { exact: false }).first().waitFor()
       await parkPointer(context)
       await context.capture("ran")
     },

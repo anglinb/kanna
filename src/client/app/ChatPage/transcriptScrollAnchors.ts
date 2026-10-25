@@ -1,6 +1,6 @@
 import type { HydratedTranscriptMessage, ResolvedChatReadAnchor } from "../../../shared/types"
 import type { ChatJumpTarget } from "../../lib/chat-navigation"
-import type { ResolvedTranscriptRow } from "../KannaTranscript"
+import type { ResolvedTranscriptRow } from "../transcriptRowTypes"
 import { getUserPromptSignature } from "../kannaStateHelpers"
 
 /**

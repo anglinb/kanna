@@ -1,4 +1,4 @@
-import type { ChatBrowserNotificationPreference } from "../stores/chatSoundPreferencesStore"
+import type { ChatBrowserNotificationPreference } from "../../shared/types"
 import { isBrowserUnfocused } from "./chatSounds"
 
 // Past this the OS truncates anyway, and a longer body only delays the toast.

@@ -3,6 +3,7 @@ import { Option } from "effect"
 import { fromString } from "foldkit/url"
 import * as AppDialog from "../ui/app-dialog"
 import { AppAction } from "./action"
+import { ActionMessage } from "./actions"
 import { Message } from "./message"
 import type { Flags } from "./model"
 import * as Stores from "./stores"
@@ -50,6 +51,35 @@ describe("root actions", () => {
     expect(confirmed.commands?.map((command) => command.name)).toContain("SendActionCommand")
     const unchanged = update(asked.model, Message.GotAppDialogMessage({ message: AppDialog.Message.ClickedConfirm() }))
     expect(unchanged.commands?.map((command) => command.name) ?? []).not.toContain("SendActionCommand")
+  })
+
+  test("New Delegator asks for a name; Create makes it, a dismissal makes nothing", () => {
+    const asked = update(boot(), Message.RequestedAppAction({ action: AppAction.CreateDelegator({ projectId: "p1" }) }))
+    const request = Option.getOrThrow(asked.model.appDialog.request)
+    expect(request._tag).toBe("Prompt")
+    expect(request.title).toBe("New Delegator")
+    expect(asked.commands?.map((command) => command.name) ?? []).not.toContain("CreateDelegator")
+
+    const typed = update(asked.model, Message.GotAppDialogMessage({ message: AppDialog.Message.ChangedInput({ value: "Release captain" }) }))
+    const created = update(typed.model, Message.GotAppDialogMessage({ message: AppDialog.Message.ClickedConfirm() }))
+    const create = created.commands?.find((command) => command.name === "CreateDelegator")
+    expect(create?.args).toEqual({ projectId: "p1", name: "Release captain" })
+    // Blank is allowed: it is "New Chat" until its first message names it.
+    const blank = update(asked.model, Message.GotAppDialogMessage({ message: AppDialog.Message.ClickedConfirm() }))
+    expect(blank.commands?.find((command) => command.name === "CreateDelegator")?.args).toEqual({ projectId: "p1", name: "" })
+
+    const dismissed = update(asked.model, Message.GotAppDialogMessage({ message: AppDialog.Message.ClickedCancel() }))
+    expect(dismissed.commands?.map((command) => command.name) ?? []).not.toContain("CreateDelegator")
+  })
+
+  test("a new delegator becomes the project's; a failure says so in a dialog", () => {
+    const made = update(boot(), Message.GotActionMessage({ message: ActionMessage.SucceededCreateDelegator({ projectId: "p1", chatId: "d1" }) }))
+    expect(made.model.stores.delegate.projects["p1"]).toEqual({ on: true, chatId: "d1" })
+    const failed = update(boot(), Message.GotActionMessage({ message: ActionMessage.FailedCreateDelegator({ error: "No such project" }) }))
+    const alert = Option.getOrThrow(failed.model.appDialog.request)
+    expect(alert._tag).toBe("Alert")
+    expect(alert.title).toBe("Could not create the delegator")
+    expect(alert.description).toBe("No such project")
   })
 
   test("creating a chat makes an id first, then creates and navigates", () => {
