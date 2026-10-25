@@ -18,7 +18,9 @@ import type {
   TranscriptOutlineEntry,
   WaitingOn,
 } from "../../shared/types"
+import type { EditorPreset, TerminalPreset } from "../../shared/protocol"
 import type { AppModel } from "../app/slice"
+import { getOpenAppItems } from "../chat/openExternal"
 import { routeChatId } from "../app/route"
 import * as ChatSession from "../core/chatSession"
 import * as Sidebar from "../core/stores/sidebar"
@@ -71,6 +73,40 @@ export interface TranscriptSource {
   } | null
   /** Where the viewport is found by the slice's Commands. */
   viewportKey: string
+  /** A local link's right-click menu (OpenExternalContextMenuContent): where it can open the file. */
+  linkMenu: LinkMenuSource | null
+}
+
+export interface LinkMenuSource {
+  isMac: boolean
+  editorPreset: EditorPreset
+  editorCommandTemplate: string | undefined
+  installedEditors: EditorPreset[] | null
+  installedTerminals: TerminalPreset[] | null
+}
+
+/** The menu's destinations: React's OpenAppMenuItems with Finder, Preview and the default app. */
+export function linkMenuItems(menu: LinkMenuSource) {
+  return getOpenAppItems({
+    editorPreset: menu.editorPreset,
+    isMac: menu.isMac,
+    installedEditors: menu.installedEditors,
+    installedTerminals: menu.installedTerminals,
+    includeFinder: true,
+    includePreview: true,
+    includeDefault: true,
+  })
+}
+
+export function pageLinkMenu(app: AppModel): LinkMenuSource {
+  const settings = app.stores.appSettings.settings
+  return {
+    isMac: (app.localProjects?.machine.platform ?? "darwin") === "darwin",
+    editorPreset: app.stores.terminalPreferences.editorPreset,
+    editorCommandTemplate: app.stores.terminalPreferences.editorCommandTemplate,
+    installedEditors: settings?.installedEditors ?? null,
+    installedTerminals: settings?.installedTerminals ?? null,
+  }
 }
 
 const EMPTY_QUEUED: QueuedChatMessage[] = []
@@ -128,6 +164,7 @@ export function pageSource(app: AppModel, page: ChatPageContext | undefined, mod
       schedules: chatSchedules(app),
     },
     viewportKey: viewportKey(chatId),
+    linkMenu: pageLinkMenu(app),
   }
 }
 

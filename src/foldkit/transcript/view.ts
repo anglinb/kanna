@@ -1,4 +1,6 @@
-import type { Html, HtmlBuilder } from "foldkit/html"
+import type { ChildAttribute, Html, HtmlBuilder } from "foldkit/html"
+import { openAppMenuEntries, renderOpenAppMenuValue } from "../chat/openExternal"
+import * as ContextMenu from "../ui/context-menu"
 import { TRANSCRIPT_PADDING_BOTTOM_OFFSET } from "../../client/app/kannaStateHelpers"
 import { TRANSCRIPT_ROW_CLASS } from "../../client/components/messages/transcript-row"
 import { cn } from "../../client/lib/utils"
@@ -8,7 +10,7 @@ import { messageNamingParent } from "./messages"
 import { Message } from "./message"
 import { minimapView } from "./minimap"
 import type { Model } from "./model"
-import { feedOf, rowsOf, turnsOf, type TranscriptSource } from "./source"
+import { feedOf, linkMenuItems, rowsOf, turnsOf, type LinkMenuSource, type TranscriptSource } from "./source"
 import { ControlViewport, FEED_ATTRIBUTE, VIEWPORT_KEY_ATTRIBUTE } from "./viewport"
 
 // ChatTranscriptViewport's DOM (src/client/app/ChatPage/ChatTranscriptViewport.tsx)
@@ -52,6 +54,32 @@ function messagesItem(model: Model, slotId: string, source: TranscriptSource, it
         : {}),
     },
     toParentMessage: (message: Messages.Message) => Message.GotMessagesMessage({ message }),
+  })
+}
+
+/**
+ * The local link's right-click menu (OpenExternalContextMenuContent): where
+ * to open the file. Opened by update at the link, as React re-dispatched the
+ * contextmenu event on its trigger.
+ */
+function linkMenuSubmodel(
+  model: Model,
+  menu: LinkMenuSource,
+  trigger: (attributes: ReadonlyArray<ChildAttribute>, portal: Html | null) => Html,
+  h: H,
+): Html {
+  const items = linkMenuItems(menu)
+  return h.submodel({
+    slotId: "link-menu",
+    model: model.linkMenu,
+    view: ContextMenu.view,
+    viewInputs: {
+      items: model.linkMenuTarget ? openAppMenuEntries(items) : [],
+      className: "rounded-lg p-1",
+      renderItem: (value: string) => renderOpenAppMenuValue(value, items, menu.isMac, h) ?? [],
+      toView: ({ trigger: attributes, portal }: ContextMenu.RenderInfo) => trigger(attributes, model.linkMenuTarget ? portal : null),
+    },
+    toParentMessage: (message: ContextMenu.Message) => Message.GotLinkMenuMessage({ message }),
   })
 }
 
@@ -167,11 +195,16 @@ export function transcriptView(model: Model, source: TranscriptSource, options: 
   }, h)
 
   // The local-link menu's trigger: a 1px point the menu opens at.
-  const linkMenuTrigger = h.span([
+  const linkMenuTrigger = (trigger: ReadonlyArray<ChildAttribute>, portal: Html | null) => h.span([
+    ...trigger,
     h.AriaHidden(true),
     h.Class("pointer-events-none fixed size-px opacity-0"),
     h.Style({ left: `${model.linkMenuTarget?.clientX ?? 0}px`, top: `${model.linkMenuTarget?.clientY ?? 0}px` }),
-  ], [])
+  ], portal ? [portal] : [])
+  const linkMenu = source.linkMenu
+  const linkMenuView = linkMenu
+    ? linkMenuSubmodel(model, linkMenu, linkMenuTrigger, h)
+    : linkMenuTrigger([], null)
 
   const dropOverlay = source.isPageFileDragActive
     ? h.div([h.Class("pointer-events-none absolute inset-0 z-30")], [
@@ -208,7 +241,7 @@ export function transcriptView(model: Model, source: TranscriptSource, options: 
   return h.keyed("div")(`transcript:${source.chatId ?? "none"}`, [h.Class("contents")], [
     scroller,
     minimap,
-    linkMenuTrigger,
+    linkMenuView,
     source.showEmptyState && options.emptyState ? options.emptyState() : null,
     dropOverlay,
     scrollButton,

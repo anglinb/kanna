@@ -13,7 +13,9 @@ import * as Messages from "./messages"
 import { Message } from "./message"
 import { minimapResetKey } from "./minimap"
 import type { Model } from "./model"
-import { pageChat, viewportKey } from "./source"
+import { pageChat, pageLinkMenu, viewportKey } from "./source"
+import { openAppValueOfMenuValue, openAppValueRequest } from "../chat/openExternal"
+import * as ContextMenu from "../ui/context-menu"
 import { DriveViewport, JumpViewportToRow } from "./viewport"
 import { RESUME_KEY } from "./view"
 import { routeChatId } from "../app/route"
@@ -203,7 +205,35 @@ function openLocalLink(model: Model, target: OpenLocalLinkTarget): Step {
     const action = shouldOpenLocalFileLinkInEditor(target.path) ? "open_editor" : "open_default"
     return done(model, [], [AppAction.OpenLocalLink({ target, action, editor: null })])
   }
-  return done(modifyFields(model, { linkMenuTarget: () => target }))
+  // The menu opens at the link, as the contextmenu event React re-dispatched
+  // on its trigger did (Chromium truncates that event's coordinates).
+  const x = Math.trunc(target.clientX ?? 0)
+  const y = Math.trunc(target.clientY ?? 0)
+  const pressed = ContextMenu.update(model.linkMenu, ContextMenu.Message.PressedTrigger({ pointerType: "mouse", button: 2, x, y }))
+  const opened = ContextMenu.update(pressed.model, ContextMenu.Message.RequestedContextMenu())
+  return done(
+    modifyFields(model, { linkMenuTarget: () => target, linkMenu: () => opened.model }),
+    liftLinkMenu([...(pressed.commands ?? []), ...(opened.commands ?? [])]),
+  )
+}
+
+const liftLinkMenu = (commands: ReadonlyArray<Command.Command<ContextMenu.Message>> | undefined) =>
+  Command.mapMessages(commands ?? [], (message: ContextMenu.Message) => Message.GotLinkMenuMessage({ message })) as unknown as ReadonlyArray<AnyCommand>
+
+/** The link menu: a destination opens the link there; any close drops the link. */
+function linkMenuStep(model: Model, message: ContextMenu.Message, app: AppModel): Step {
+  const result = ContextMenu.update(model.linkMenu, message)
+  const next = modifyFields(model, { linkMenu: () => result.model })
+  const commands = liftLinkMenu(result.commands)
+  const out = result.outMessage
+  if (!out || out._tag === "Opened") return done(next, commands)
+  const target = model.linkMenuTarget
+  const cleared = modifyFields(next, { linkMenuTarget: () => null })
+  if (out._tag === "Closed" || !target) return done(cleared, commands)
+  const value = openAppValueOfMenuValue(out.value)
+  const request = value ? openAppValueRequest({ value, editorCommandTemplate: pageLinkMenu(app).editorCommandTemplate }) : null
+  if (request?._tag !== "Action" || request.action._tag !== "OpenExternal") return done(cleared, commands)
+  return done(cleared, commands, [AppAction.OpenLocalLink({ target, action: request.action.action, editor: request.action.editor })])
 }
 
 function rowsStep(model: Model, message: Messages.Message, app: AppModel, chatId: string | null): Step {
@@ -265,14 +295,14 @@ export function update(model: Model, message: Message, app: AppModel): SliceRetu
       if (message.chatId !== model.chatId) return { model }
       return { model: modifyFields(model, { messages: (messages) => Messages.failedToolEntries(messages, message.entryIds) }) }
     case "ReceivedDebugRaw":
-      if (message.chatId !== model.chatId) return { model }
-      return {
-        model: modifyFields(model, {
-          messages: (messages) => Messages.receivedDebugRaw(messages, message.entryId, message.failed ? Option.none() : Option.some(message.body)),
-        }),
-      }
-    case "GotLinkMenuMessage":
+      // Matches React, which never shows it: RawMessageSection's effect
+      // re-runs on its own `setState("loading")` (state is a dep), and that
+      // cleanup marks the request cancelled, so the answer (or the error) is
+      // dropped and the section says "Loading…" for good. A React bug, to
+      // be filed; `Messages.receivedDebugRaw` is what fixing it takes.
       return { model }
+    case "GotLinkMenuMessage":
+      return toReturn(linkMenuStep(model, message.message, app))
     default:
       return { model }
   }
