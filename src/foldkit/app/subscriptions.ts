@@ -144,7 +144,7 @@ const chatSubscriptions = Subscription.lift(ChatSession.subscriptions)<Model, Me
 const storeSocketSubscriptions = Subscription.lift(Stores.socketSubscriptions)<Model, Message>({
   read: (model) => Option.some(model.stores),
   toParentMessage: (message) => Message.GotStoresMessage({ message }),
-  when: (model) => model.socketReady && model.localProjectsReady,
+  when: (model) => model.socketReady,
 })
 const storeBrowserSubscriptions = Subscription.lift(Stores.browserSubscriptions)<Model, Message>({
   read: (model) => Option.some(model.stores),
