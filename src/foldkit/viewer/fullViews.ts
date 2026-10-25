@@ -96,13 +96,18 @@ export function encodableTypes(): VisualizationImageType[] {
   return (Object.keys(VISUALIZATION_IMAGE_TYPES) as VisualizationImageType[]).filter(canEncodeImageType)
 }
 
-export function initialSaveDialog(title: string, captureId: string): VisualizationDialog {
-  const types = encodableTypes()
+/** The type the dialog opens on: the last one saved, if this browser can write it. Asks the canvas, so a Command's. */
+export function initialImageType(): VisualizationImageType {
+  return encodableTypes().includes(lastImageType) ? lastImageType : "png"
+}
+
+export function initialSaveDialog(title: string, captureId: string, type: string, types: ReadonlyArray<string>): VisualizationDialog {
   return {
     kind: "save",
     captureId,
     name: visualizationImageName(title),
-    type: types.includes(lastImageType) ? lastImageType : "png",
+    type,
+    types,
     saving: false,
     error: null,
   }
@@ -126,7 +131,7 @@ export const SaveImage = Command.define("SaveVisualizationImage", {
 })
 
 function saveDialog(model: Model, title: string, dialog: VisualizationDialog, h: H): Html {
-  const types = encodableTypes()
+  const types = dialog.types as VisualizationImageType[]
   const type = dialog.type as VisualizationImageType
   return h.submodel({
     slotId: "viewer-visualization-save",

@@ -33,7 +33,7 @@ import {
   SaveReviewState,
 } from "./diff"
 import { sortByPath, type DiffFile } from "./git"
-import { initialSaveDialog, SaveImage } from "./fullViews"
+import { encodableTypes, initialImageType, initialSaveDialog, SaveImage } from "./fullViews"
 import { AttachMarkup, commitText, initialMarkup, LoadMarkupSource, markupUpdate, releaseMarkupSource } from "./markup"
 import { Message } from "./message"
 import { init, type DiffState, type Model } from "./model"
@@ -91,7 +91,7 @@ export const OpenInNewTab = Command.define("ViewerOpenInNewTab", {
 export const StartCapture = Command.define("ViewerStartCapture", {
   args: { kind: Schema.Literals(["save", "markup"]) },
   messages: [Message.StartedCapture],
-  execute: ({ kind }) => Effect.sync(() => Message.StartedCapture({ kind, captureId: startCapture() })),
+  execute: ({ kind }) => Effect.sync(() => Message.StartedCapture({ kind, captureId: startCapture(), imageType: initialImageType(), imageTypes: encodableTypes() })),
 })
 
 /** The frame handed Escape back: the pane closes on it unless something nearer is open. */
@@ -525,7 +525,8 @@ function step(model: Model, message: Message, app: AppModel): Step {
       const item = ViewerStore.chatViewer({ viewer: app.stores.viewer, rightSidebar: app.stores.rightSidebar })?.item
       const title = item?.kind === "visualization" ? item.artifact.title : ""
       const opened = Dialog.open(model.dialog)
-      const dialog = message.kind === "save" ? initialSaveDialog(title, message.captureId) : { ...initialSaveDialog(title, message.captureId), kind: "markup" as const }
+      const saved = initialSaveDialog(title, message.captureId, message.imageType, message.imageTypes)
+      const dialog = message.kind === "save" ? saved : { ...saved, kind: "markup" as const }
       const next = modifyFields(model, {
         visualizationDialog: () => dialog,
         dialog: () => opened.model,

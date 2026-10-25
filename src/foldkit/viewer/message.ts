@@ -111,7 +111,7 @@ export const Message = defineMessageUnion({
   ClickedDownloadImage: {},
   ClickedMarkup: {},
   /** The capture is drawing (it starts on the click), and its dialog opens. */
-  StartedCapture: { kind: Schema.Literals(["save", "markup"]), captureId: Schema.String },
+  StartedCapture: { kind: Schema.Literals(["save", "markup"]), captureId: Schema.String, imageType: Schema.String, imageTypes: Schema.Array(Schema.String) },
   /** Escape the full-size frame handed back: `close` when it is the pane's to answer. */
   CheckedFrameEscape: { close: Schema.Boolean },
   ChangedImageName: { value: Schema.String },

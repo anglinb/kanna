@@ -190,3 +190,28 @@ describe("viewer: the chat previewer", () => {
     expect(stale.model.preview?.dockHeight).toBe(0)
   })
 })
+
+describe("viewer: Mark up", () => {
+  const app = withViewer({ kind: "visualization", artifact: { type: "visualization", version: 1, title: "Swell", url: "/api/chats/c1/media/visualization-a.html", height: 200 } })
+  const opened = () => {
+    const started = update(init(), Message.StartedCapture({ kind: "markup", captureId: "cap-1", imageType: "png", imageTypes: ["png"] }), app)
+    expect(names(started)).toEqual(["ViewerLoadMarkupSource"])
+    return started.model
+  }
+
+  test("a label typed on the canvas goes in when anything else happens, and Undo takes it back", () => {
+    const placed = update(opened(), Message.PlacedTextDraft({ at: { x: 10, y: 20 }, size: 36 }), app).model
+    expect(placed.markup?.textDraft).toEqual({ id: 1, at: { x: 10, y: 20 }, color: "#ef4444", size: 36, value: "" })
+    const typed = update(placed, Message.ChangedTextDraft({ value: "  peak " }), app).model
+    const committed = update(typed, Message.CommittedTextDraft({ id: 1 }), app).model
+    expect(committed.markup?.textDraft).toBeNull()
+    expect(committed.markup?.markup.marks).toEqual([{ kind: "text", color: "#ef4444", size: 36, at: { x: 10, y: 20 }, text: "peak" }])
+    expect(update(committed, Message.ClickedUndoMarkup(), app).model.markup?.markup.marks).toEqual([])
+  })
+
+  test("a blur from a label already committed changes nothing", () => {
+    const placed = update(opened(), Message.PlacedTextDraft({ at: { x: 1, y: 1 }, size: 18 }), app).model
+    const committed = update(update(placed, Message.ChangedTextDraft({ value: "a" }), app).model, Message.CommittedTextDraft({ id: null }), app).model
+    expect(update(committed, Message.CommittedTextDraft({ id: 1 }), app).model.markup?.markup.marks).toHaveLength(1)
+  })
+})

@@ -80,6 +80,8 @@ export interface VisualizationDialog {
   /** The save dialog's fields. */
   name: string
   type: string
+  /** What this browser can save as (`canEncodeImageType`), asked when the dialog opened. */
+  types: ReadonlyArray<string>
   saving: boolean
   error: string | null
 }
