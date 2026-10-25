@@ -676,35 +676,46 @@ function touchedFileList(localPath: string, result: ChatTouchedFilesResult, h: C
 
 const FILES_KEY_ATTRIBUTE = "data-card-files-key"
 const PREVIEW_KEY_ATTRIBUTE = "data-card-preview-key"
+/** A digest of the row the card shows: a new one is a new `row` to React's effects. */
+const ROW_ATTRIBUTE = "data-card-row"
+
+function rowDigest(row: SidebarChatRow): string {
+  const text = JSON.stringify(row)
+  let hash = 5381
+  for (let index = 0; index < text.length; index++) hash = ((hash << 5) + hash + text.charCodeAt(index)) | 0
+  return (hash >>> 0).toString(36)
+}
 
 /**
  * On a chat card's body, one per chat: React's two effects on the card's
- * cache keys (`useChatTouchedFiles`, then `useChatPreview`). It asks when the
- * card comes up for a chat, and again for whichever key moves while it is up
- * (the row's turn count, last turn or messages), files before preview.
+ * row (`useChatTouchedFiles`, then `useChatPreview`, each on its cache key
+ * and the row). It asks when the card comes up for a chat, and again, files
+ * before preview, whenever the row changes while it is up: a key that moved
+ * (the row's turn count, last turn or messages) is a new fetch, and a row
+ * that changed while its answer is still on the way asks again, as the
+ * effect re-ran with nothing cached yet.
  */
 export const ChatCardLoader = Mount.defineStream("ChatCardLoader", {
   args: { chatId: Schema.String },
   messages: [CardMessage.RequestedCardLoad],
   execute: ({ element, chatId }) =>
     domStream<typeof CardMessage.RequestedCardLoad.Type>((emit) => {
-      let filesKey = element.getAttribute(FILES_KEY_ATTRIBUTE) ?? ""
-      let previewKey = element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? ""
-      emit(CardMessage.RequestedCardLoad({ chatId, kind: "files", cacheKey: filesKey }))
-      emit(CardMessage.RequestedCardLoad({ chatId, kind: "preview", cacheKey: previewKey }))
-      const observer = new MutationObserver(() => {
-        const nextFiles = element.getAttribute(FILES_KEY_ATTRIBUTE) ?? ""
-        const nextPreview = element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? ""
-        if (nextFiles !== filesKey) {
-          filesKey = nextFiles
-          emit(CardMessage.RequestedCardLoad({ chatId, kind: "files", cacheKey: filesKey }))
-        }
-        if (nextPreview !== previewKey) {
-          previewKey = nextPreview
-          emit(CardMessage.RequestedCardLoad({ chatId, kind: "preview", cacheKey: previewKey }))
-        }
+      const read = () => ({
+        files: element.getAttribute(FILES_KEY_ATTRIBUTE) ?? "",
+        preview: element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? "",
+        row: element.getAttribute(ROW_ATTRIBUTE) ?? "",
       })
-      observer.observe(element, { attributes: true, attributeFilter: [FILES_KEY_ATTRIBUTE, PREVIEW_KEY_ATTRIBUTE] })
+      let last = read()
+      emit(CardMessage.RequestedCardLoad({ chatId, kind: "files", cacheKey: last.files }))
+      emit(CardMessage.RequestedCardLoad({ chatId, kind: "preview", cacheKey: last.preview }))
+      const observer = new MutationObserver(() => {
+        const next = read()
+        const rowChanged = next.row !== last.row
+        if (rowChanged || next.files !== last.files) emit(CardMessage.RequestedCardLoad({ chatId, kind: "files", cacheKey: next.files }))
+        if (rowChanged || next.preview !== last.preview) emit(CardMessage.RequestedCardLoad({ chatId, kind: "preview", cacheKey: next.preview }))
+        last = next
+      })
+      observer.observe(element, { attributes: true, attributeFilter: [FILES_KEY_ATTRIBUTE, PREVIEW_KEY_ATTRIBUTE, ROW_ATTRIBUTE] })
       return () => observer.disconnect()
     }),
 })
@@ -749,6 +760,7 @@ export function chatCardBody(data: CardData, inputs: CardBodyInputs, h: CardH): 
     ...(touchedFiles?.files.length ? [h.Class("-mb-0.5")] : []),
     h.Attribute(FILES_KEY_ATTRIBUTE, filesKey),
     h.Attribute(PREVIEW_KEY_ATTRIBUTE, previewKey),
+    h.Attribute(ROW_ATTRIBUTE, rowDigest(row)),
     h.OnMount(ChatCardLoader({ chatId: row.chatId })),
   ], [
     turnCardMetaRow({}, [
