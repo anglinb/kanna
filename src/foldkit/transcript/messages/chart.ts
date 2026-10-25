@@ -540,9 +540,14 @@ function cartesianLayout(model: ChartModel, chart: ChartState, width: number, he
   const yTicks = niceTicks(dataMin, dataMax, 5)
   const domain: [number, number] = [yTicks[0] ?? 0, yTicks[yTicks.length - 1] ?? 0]
   const bottom = offset.top + offset.height
-  const y = (value: number) => (domain[1] === domain[0]
-    ? bottom - offset.height / 2
-    : bottom + ((value - domain[0]) / (domain[1] - domain[0])) * (offset.top - bottom))
+  // d3's linear scale: normalize into the domain, interpolate the range as
+  // d3-interpolate does (a(1 - t) + bt), which rounds the last bit the way
+  // recharts' numbers show.
+  const y = (value: number) => {
+    const span = domain[1] - domain[0]
+    const t = span ? (value - domain[0]) / span : 0.5
+    return bottom * (1 - t) + offset.top * t
+  }
   const count = data.length
   const band = payload.type === "bar"
   const bandSize = band ? offset.width / Math.max(1, count) : count > 1 ? offset.width / (count - 1) : 0
@@ -629,7 +634,7 @@ function tooltipTranslate(coordinate: number, size: number, viewStart: number, v
  * the pointer over the chart, relative to it and rounded
  * (getRelativeCoordinate). On the tooltip, its box once drawn.
  */
-const ChartArea = Mount.defineStream("ChartArea", {
+export const ChartArea = Mount.defineStream("ChartArea", {
   args: { key: Schema.String },
   messages: [Message.MeasuredChart, Message.MovedOverChart, Message.MeasuredChartTooltip],
   execute: ({ element, key }) =>

@@ -549,7 +549,12 @@ export const CHARTS: ReadonlyArray<ChartToolPayload> = [
 /** Display tools: attachments in their shapes, charts. */
 export function displaySections(origin: string): GallerySection[] {
   restart()
-  const attachment = (name: string, kind: "image" | "video" | "file", path: string, mimeType: string) => ({ type: "attachment", url: `${origin}${path}`, name, kind, mimeType, size: 1024 })
+  // A link's address is in the accessibility tree, and the two apps are served
+  // from different ports: an absolute URL would differ between them. An
+  // export's relative form is a display URL too; the parity server decodes the
+  // escaped slashes and serves the file from public/ (".." out of /__gallery/attachments/).
+  void origin
+  const attachment = (name: string, kind: "image" | "video" | "file", path: string, mimeType: string) => ({ type: "attachment", url: `./attachments/..%2F..${path.replace(/\//g, "%2F")}`, name, kind, mimeType, size: 1024 })
   const display = (id: string, toolName: string, payload: Record<string, unknown>): Draft => call(id, { kind: "tool", toolKind: "display", toolName, toolId: `t-${id}`, input: { payload } })
   const m = hydrate([
     display("att-one", "send_attachments", {}),
