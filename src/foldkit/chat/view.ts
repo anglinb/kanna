@@ -132,7 +132,6 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
       action.id,
       childAttributes([h.OnClick(Message.RanQuickAction({ command: action.command }))]),
     ])),
-    terminalKeys: childAttributes([h.OnKeyDown((key) => (key === "Enter" ? Message.SentTerminalCommand() : Message.CompletedSideEffect()))]),
   }
   const inputs: ChatPageSliceInputs = { app, page, requests }
   const transcriptInputs: ChatPageSliceInputs = { app, page, requests, emptyState: () => emptyStateView(model, app, facts, page, h) }
@@ -323,8 +322,13 @@ function terminalWorkspaceView(model: Model, facts: PageFacts, content: Html, pa
           ], [])
           : null,
         facts.shouldRenderTerminalLayout
-          // TerminalWorkspaceShell
-          ? h.div(page.terminal.fixedHeight > 0 ? [h.Style({ height: `${page.terminal.fixedHeight}px` })] : [], [
+          // TerminalWorkspaceShell. Enter in a terminal is a command sent
+          // (`onTerminalCommandSent`): it bubbles here from xterm's textarea,
+          // and the open column's diffs refresh a second after the last one.
+          ? h.div([
+            ...(page.terminal.fixedHeight > 0 ? [h.Style({ height: `${page.terminal.fixedHeight}px` })] : []),
+            h.OnKeyDown((key) => (key === "Enter" ? Message.SentTerminalCommand() : Message.CompletedSideEffect())),
+          ], [
             h.submodel({ slotId: "terminal", model: model.terminal, view: Terminal.view, viewInputs: inputs, toParentMessage: (message) => Message.GotTerminalMessage({ message }) }),
           ])
           : null,
