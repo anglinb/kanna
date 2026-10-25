@@ -55,7 +55,7 @@ const OpenCommandPalette = Command.define("SidebarOpenCommandPalette", {
   }),
 })
 
-const SaveSidebarWidth = Command.define("SaveSidebarWidth", {
+export const SaveSidebarWidth = Command.define("SaveSidebarWidth", {
   args: { width: Schema.Number },
   messages: [Message.CompletedSideEffect],
   execute: ({ width }) => writeStorageItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clampSidebarWidth(width))).pipe(Effect.as(done())),
@@ -110,7 +110,7 @@ const MeasureMoreButton = Command.define("SidebarMeasureMoreButton", {
   }),
 })
 
-const LoadTouchedFiles = Command.define("SidebarLoadTouchedFiles", {
+export const LoadTouchedFiles = Command.define("SidebarLoadTouchedFiles", {
   args: { chatId: Schema.String, cacheKey: Schema.String },
   messages: [Message.SucceededLoadTouchedFiles, Message.FailedLoadCard],
   execute: ({ chatId, cacheKey }) => sendCommand<ChatTouchedFilesResult>({ type: "chat.touchedFiles", chatId }).pipe(
