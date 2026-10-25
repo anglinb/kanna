@@ -42,7 +42,7 @@ import { pageView } from "./view"
 //                         whatever shows another chat inside this one
 
 export { Message, Model, init }
-export { update } from "./update"
+export { update, observe } from "./update"
 export { subscriptions } from "./subscriptions"
 export type { ChatPageContext, ChatPageSliceInputs } from "./pageInputs"
 
