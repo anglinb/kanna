@@ -152,7 +152,13 @@ function closeArchive(model: Model): { model: Model; commands: Commands } {
 }
 
 function foldRowMenu(model: Model, localPath: string, message: ContextMenu.Message, app: AppModel): Return {
-  const result = ContextMenu.update(rowMenuFor(model, localPath), message)
+  const menu = rowMenuFor(model, localPath)
+  // OpenRepoMenuItem's onSelect called preventDefault, which keeps a Radix
+  // menu open: the choice never reaches the menu, so it stays as it was.
+  if (message._tag === "ChoseItem" && message.value === "open-repo" && ContextMenu.isOpen(menu)) {
+    return chooseMenuItem(model, localPath, message.value, app)
+  }
+  const result = ContextMenu.update(menu, message)
   const next = { ...model, rowMenus: { ...model.rowMenus, [localPath]: result.model } }
   const commands = Command.mapMessages(result.commands, (child) => Message.GotRowMenuMessage({ localPath, message: child }))
   const outMessage = result.outMessage

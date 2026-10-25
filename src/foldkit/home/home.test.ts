@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
 import { Scene, Story } from "foldkit/test"
 import { fromString } from "foldkit/url"
-import type { GitHubRecentReposResult, LocalProjectsSnapshot } from "../../shared/types"
+import type { GitHubRecentReposResult, LocalProjectsSnapshot, SidebarProjectGroup } from "../../shared/types"
 import { AppAction } from "../app/action"
 import type { Flags, Model as AppModel } from "../app/model"
 import { SliceOutMessage } from "../app/slice"
 import * as Stores from "../app/stores"
 import * as Connection from "../core/stores/connection"
+import * as ContextMenu from "../ui/context-menu"
 import { init as initApp } from "../app/update"
 import { FetchRecentRepos, MountPage, MountProjectsList, OpenArchive, OpenCommandPalette, WaitArrivalFade } from "./commands"
 import { defaultEnvironment } from "./environment"
@@ -136,6 +137,27 @@ describe("home: search and rows", () => {
     const cloning = { ...app, actions: { ...app.actions, startingLocalPath: action.project.localPath } }
     const second = update(first.model, Message.ClickedRepo({ nameWithOwner: "you/other" }), cloning)
     expect(second.outMessage).toBeUndefined()
+  })
+
+  test("the row menu: a choice closes it and asks the root; Open on GitHub leaves it open", () => {
+    const tidepool = "/Users/you/Projects/tidepool"
+    const base = connectedApp()
+    const group = { groupKey: "p1", localPath: tidepool, repoUrl: "https://github.com/you/tidepool" } as unknown as SidebarProjectGroup
+    const app = { ...base, stores: { ...base.stores, sidebar: { ...base.stores.sidebar, data: { ...base.stores.sidebar.data, projectGroups: [group] } } } }
+    const menu = (message: ContextMenu.Message) => Message.GotRowMenuMessage({ localPath: tidepool, message })
+    const open = update(mounted, menu(ContextMenu.Message.RequestedContextMenu()), app).model
+    expect(ContextMenu.isOpen(open.rowMenus[tidepool]!)).toBe(true)
+
+    const repo = update(open, menu(ContextMenu.Message.ChoseItem({ value: "open-repo" })), app)
+    expect(ContextMenu.isOpen(repo.model.rowMenus[tidepool]!)).toBe(true)
+    expect(repo.commands?.map((command) => command.name)).toEqual(["OpenWindow"])
+
+    const finder = update(open, menu(ContextMenu.Message.ChoseItem({ value: "open-finder" })), app)
+    expect(ContextMenu.isOpen(finder.model.rowMenus[tidepool]!)).toBe(false)
+    expect(finder.outMessage).toEqual(requested(AppAction.OpenExternalPath({ action: "open_finder", localPath: tidepool })))
+
+    const archived = update(open, menu(ContextMenu.Message.ChoseItem({ value: "show-archived" })), app)
+    expect(archived.commands?.map((command) => command.name)).toContain("OpenArchivedChats")
   })
 
   test("Show Archived stamps the time and opens the dialog; opening a chat closes it", () => {
