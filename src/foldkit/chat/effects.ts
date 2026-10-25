@@ -414,9 +414,16 @@ export const KeepChatFocus = Mount.defineStream("ChatStickyFocus", {
       cancelAnimationFrame(rafId)
       pointerStartTarget = event.target instanceof Element ? event.target : null
     }
+    // A frame after the click's own render, as React's check ran: React
+    // rendered the click synchronously, Foldkit renders on the next frame,
+    // which is queued behind this pointerup's. Checked a frame sooner, a
+    // button the click takes away (an answered question's Submit) is still
+    // there and focused, and focus would go to the composer.
     const handlePointerUp = (event: PointerEvent) => {
       cancelAnimationFrame(rafId)
-      rafId = window.requestAnimationFrame(() => restoreFocusIfNeeded(event.target))
+      rafId = window.requestAnimationFrame(() => {
+        rafId = window.requestAnimationFrame(() => restoreFocusIfNeeded(event.target))
+      })
     }
     const handleRestoreFocus = () => {
       pointerStartTarget = null
