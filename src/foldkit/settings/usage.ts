@@ -233,7 +233,7 @@ export function update(model: Model, message: Message, _app: AppModel): Return {
  * re-checks.
  */
 export const subscriptions = Subscription.make<Model, Message, KannaSocketService>()(() => ({
-  usageLimits: Subscription.persistentEntry(
+  settingsUsageLimits: Subscription.persistentEntry(
     topicStream<UsageLimitsSnapshot>({ type: "usage-limits" }).pipe(
       Stream.map((snapshot) => Message.ReceivedUsageLimits({ snapshot })),
     ),

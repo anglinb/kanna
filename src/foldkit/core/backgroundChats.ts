@@ -7,7 +7,7 @@ import {
   rememberWindow,
 } from "../../client/app/chatTranscriptCache"
 import { isProcessingStatus } from "../../client/app/derived"
-import { applyIncrementalChatSnapshot } from "../../client/app/snapshotEquality"
+import { applyIncrementalChatSnapshot } from "./snapshotEquality"
 import type { SubscriptionTopic } from "../../shared/protocol"
 import { trimTranscriptWindow } from "../../shared/transcript-window"
 import type { ChatSnapshot } from "../../shared/types"
