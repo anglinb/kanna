@@ -1,6 +1,6 @@
 import { PNG } from "pngjs"
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, click, composer, openPalette, parkPointer, press, REGIONS, regions, rest, typeIntoComposer } from "./_lib/helpers"
+import { CHATS, click, composer, openPalette, parkPointer, press, reduceMotion, REGIONS, regions, rest, typeIntoComposer } from "./_lib/helpers"
 
 // The chat composer: typing, sending (the optimistic prompt, then the
 // scripted turn as the clock advances), the harness / model / effort /
@@ -423,10 +423,8 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    // A sent image opens in the viewer from the transcript. With reduced
-    // motion the pane opens at once: sliding in, it narrows the transcript
-    // over a few frames, and each frame's width rides on a chat.setReadAnchor,
-    // so how many went out depended on the machine's speed.
+    // A sent image opens in the viewer from the transcript (reduced motion:
+    // see reduceMotion in _lib/helpers.ts).
     name: "composer-attachment-open",
     route: CHATS.units,
     ...desktop,
@@ -434,7 +432,7 @@ export const scenarios: Scenario[] = [
     covers: { commands: ["chat.send"] },
     async run(context) {
       const { page } = context
-      await page.emulateMedia({ reducedMotion: "reduce" })
+      await reduceMotion(context)
       await openPalette(context)
       const chooser = page.waitForEvent("filechooser")
       await page.getByRole("dialog", { name: "Command Palette" }).getByRole("option", { name: /^Attach Files/ }).first().click()

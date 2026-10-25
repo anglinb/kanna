@@ -1,5 +1,5 @@
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, click, composer, parkPointer, REGIONS, regions, rest, sidebarChatRow, typeIntoComposer } from "./_lib/helpers"
+import { CHATS, click, composer, parkPointer, reduceMotion, REGIONS, regions, rest, sidebarChatRow, typeIntoComposer } from "./_lib/helpers"
 
 // The transcript: each seeded chat as it opens (finished, waiting on a
 // question, streaming, another harness), tool groups and single tools
@@ -197,16 +197,17 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    // A local file link in a reply opens in the editor, which needs the real machine.
+    // A local file link in a reply opens the file beside the transcript
+    // (reduced motion: see reduceMotion in _lib/helpers.ts).
     name: "transcript-file-link-click",
     route: CHATS.rateLimit,
     ...desktop,
-    regions: regions("transcript"),
-    covers: { commands: ["system.openExternal"] },
+    regions: regions("transcript", "viewer"),
     async run(context) {
+      await reduceMotion(context)
       await click(context, transcript(context).getByRole("link", { name: "src/middleware/rateLimit.ts" }))
       await parkPointer(context)
-      await context.capture("needs-machine")
+      await context.capture("opened")
     },
   }),
 ]

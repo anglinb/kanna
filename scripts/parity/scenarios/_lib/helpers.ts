@@ -189,6 +189,18 @@ export async function countUuids(context: ScenarioContext) {
   })
 }
 
+/**
+ * Asks for reduced motion from here on, so panes open and close at once.
+ * For a scenario that opens the viewer beside the transcript: sliding in,
+ * the pane narrows the transcript over a few frames, and each frame's width
+ * rides on a chat.setReadAnchor, so how many go out (and with which widths)
+ * depends on the machine's speed. Both apps honor the media query, so this
+ * also checks that the port does.
+ */
+export async function reduceMotion(context: ScenarioContext) {
+  await context.page.emulateMedia({ reducedMotion: "reduce" })
+}
+
 /** Opens the command palette with its keybinding (cmd+k). */
 export async function openPalette(context: ScenarioContext) {
   await context.page.keyboard.press("Meta+k")
