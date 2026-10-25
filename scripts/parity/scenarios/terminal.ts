@@ -69,7 +69,7 @@ export const scenarios: Scenario[] = [
     route: CHATS.units,
     ...desktop,
     regions: regions("terminal"),
-    covers: { commands: ["terminal.create", "terminal.close", "terminal.resize"] },
+    covers: { commands: ["terminal.create", "terminal.close"] },
     async run(context) {
       const { page } = context
       await openTerminalFromNavbar(context)

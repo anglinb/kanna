@@ -527,15 +527,16 @@ export const scenarios: Scenario[] = [
     },
   }),
   defineScenario({
-    // Projects can be dragged into another order in the Projects view.
+    // The old sidebar (Labs → New Sidebar off) lets projects be dragged into another order.
     name: "sidebar-reorder-projects",
-    route: "/",
+    route: "/settings/labs",
     ...desktop,
     regions: regions("sidebar"),
-    covers: { commands: ["sidebar.reorderProjectGroups"] },
+    covers: { commands: ["sidebar.reorderProjectGroups", "settings.writeAppSettingsPatch"] },
     async run(context) {
       const { page } = context
-      await switchSidebarView(context, "Projects")
+      await click(context, page.getByRole("switch", { name: "New Sidebar" }))
+      await parkPointer(context)
       const sidebar = page.locator(REGIONS.sidebar)
       const from = (await sidebar.getByText("portfolio", { exact: true }).first().boundingBox())!
       const to = (await sidebar.getByText("ledger-api", { exact: true }).first().boundingBox())!

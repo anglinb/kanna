@@ -68,13 +68,15 @@ export const scenarios: Scenario[] = [
     name: "widgets-ignore-file",
     route: CHATS.units,
     ...desktop,
-    regions: regions("widgets"),
+    regions: regions("widgets", "dialog"),
     covers: { commands: ["chat.ignoreDiffFile"] },
     async run(context) {
       const { page } = context
       await openWidgets(context)
       await quickClick(context, column(page).getByRole("button", { name: "Actions for src/lib/units.test.ts", exact: true }))
       await quickClick(context, page.getByRole("menuitem", { name: "Ignore File" }))
+      await context.capture("confirm")
+      await quickClick(context, page.getByRole("dialog").getByRole("button", { name: /Ignore/ }).last())
       await context.capture("ignored")
     },
   }),
@@ -329,7 +331,7 @@ export const scenarios: Scenario[] = [
     regions: regions("popover"),
     async run(context) {
       await openWidgets(context)
-      await column(context.page).getByText("Watch the dev server for errors").first().hover()
+      await column(context.page).getByText("bun run dev").first().hover()
       await context.page.waitForTimeout(800)
       await context.settle()
       await context.capture("card")
