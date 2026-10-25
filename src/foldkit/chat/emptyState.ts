@@ -42,7 +42,7 @@ const HEADER_OFFSET_PX = 72
  * it would move the chevron out from under the pointer. Pressing it opens the
  * palette's "New Chat in…" page.
  */
-function projectPickerView(model: Model, localPath: string, h: H): Html {
+export function projectPickerView(model: Model, localPath: string, h: H): Html {
   return h.submodel({
     slotId: "tooltip-picker",
     model: model.tooltips.picker,
