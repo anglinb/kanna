@@ -118,6 +118,8 @@ export interface PageFacts {
   viewerExpanded: boolean
   viewerPaneAvailable: boolean
   viewerDocked: boolean
+  /** What the viewer shows, as the width a docked pane takes for it. */
+  viewerWidthClass: Viewer.ViewerWidthClass | null
   isDelegator: boolean
   diffs: ChatDiffSnapshot | null
   keybindings: KeybindingsSnapshot
@@ -255,6 +257,7 @@ export function pageFacts(app: AppModel, viewportWidth: number, settledShowEmpty
     viewerExpanded,
     viewerPaneAvailable,
     viewerDocked: viewerPaneAvailable && viewerOpen && !viewerExpanded,
+    viewerWidthClass: chatViewer ? Viewer.viewerWidthClass(chatViewer.item) : null,
     isDelegator: Sidebar.chatIsDelegator(sidebarStore, chatId),
     diffs: projectId ? app.projectDiffs[projectId] ?? null : null,
     keybindings,

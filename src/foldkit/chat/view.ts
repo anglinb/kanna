@@ -12,7 +12,7 @@ import * as Transcript from "../transcript"
 import * as Viewer from "../viewer"
 import * as Widgets from "../widgets"
 import { card, cardContent } from "../ui/card"
-import { AnimateTerminalSplit, DragSeparator, HoldArrivalFocus, KeepChatFocus, PageFileDrop, HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
+import { AnimateTerminalSplit, AnimateViewerSplit, DragSeparator, HoldArrivalFocus, KeepChatFocus, PageFileDrop, HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
 import { Message, type Watch } from "./message"
 import type { Model } from "./model"
 import { delegatedListButtonView, editableTitleView, navbarTitleView, navbarView, washView } from "./navbar"
@@ -39,6 +39,7 @@ export function watchOf(facts: PageFacts): Watch {
     showEmptyState: facts.showEmptyState,
     viewerOpen: facts.viewerOpen,
     viewerExpanded: facts.viewerExpanded,
+    viewerWidthClass: facts.viewerWidthClass,
     showTerminalPane: facts.showTerminalPane,
     isMobile: facts.isMobile,
     sidebarReady: facts.sidebarReady,
@@ -238,6 +239,16 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
       facts.isMobile && facts.showRightSidebar ? h.keyed("span")("mobile-sheet", [h.OnMount(HoldMobileSheet())], []) : null,
       facts.projectId && facts.showRightSidebar ? h.keyed("span")(`diff-refresh-${facts.projectId}`, [h.OnMount(KeepDiffsFresh())], []) : null,
       model.widgetsColumn.dragWidthPx !== null ? h.keyed("span")("column-drag", [h.OnMount(HoldColumnDragCursor())], []) : null,
+      model.viewerPane.animation
+        ? h.keyed("span")(`viewer-split-${model.viewerPane.animation.token}`, [h.OnMount(AnimateViewerSplit({
+          token: model.viewerPane.animation.token,
+          fromChat: model.viewerPane.animation.from[0],
+          fromViewer: model.viewerPane.animation.from[1],
+          toChat: model.viewerPane.animation.to[0],
+          toViewer: model.viewerPane.animation.to[1],
+          durationMs: model.viewerPane.animation.durationMs,
+        }))], [])
+        : null,
     ]),
   ])
 }

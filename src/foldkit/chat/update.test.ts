@@ -161,6 +161,43 @@ describe("chat page: tabs", () => {
   })
 })
 
+describe("chat page: the viewer's split", () => {
+  function withViewer(app: AppModel, open: boolean): AppModel {
+    const viewers = open ? { c1: { item: { kind: "file", projectId: "p1", path: "src/units.ts" }, expanded: false } } : {}
+    return {
+      ...app,
+      stores: {
+        ...app.stores,
+        viewer: { ...app.stores.viewer, chatKey: "c1" },
+        rightSidebar: { ...app.stores.rightSidebar, chatViewers: viewers as never },
+      },
+    }
+  }
+
+  test("opening the pane slides it to its docked width; closing slides it shut; another chat snaps", () => {
+    const closed = withViewer(boot("/chat/c1"), false)
+    const measured = { ...init(), viewportWidth: 1440, layoutWidth: 1157, layoutHeight: 900 }
+    const start = update(measured, Message.ObservedPage({ watch: watch(closed), fresh: true }), closed).model
+    expect(start.viewerSplit).toEqual([100, 0])
+
+    const opened = withViewer(boot("/chat/c1"), true)
+    const opening = update(start, Message.ObservedPage({ watch: watch(opened), fresh: false }), opened).model
+    const slide = opening.viewerPane.animation!
+    expect(slide.from).toEqual([100, 0])
+    expect(slide.to[1]).toBeGreaterThan(0)
+    const landed = update(opening, Message.SteppedViewerSplit({ token: slide.token, chat: slide.to[0], viewer: slide.to[1], done: true }), opened).model
+    expect(landed.viewerPane.animation).toBeNull()
+
+    const closing = update(landed, Message.ObservedPage({ watch: watch(closed), fresh: false }), closed).model
+    expect(closing.viewerPane.animation?.to).toEqual([100, 0])
+
+    // A fresh page (another chat's arrival) takes its layout in one step.
+    const elsewhere = update(measured, Message.ObservedPage({ watch: watch(opened), fresh: true }), opened).model
+    expect(elsewhere.viewerPane.animation).toBeNull()
+    expect(elsewhere.viewerSplit[1]).toBeGreaterThan(0)
+  })
+})
+
 describe("chat page: file links", () => {
   const openLink = (path: string, trigger: "click" | "contextmenu" = "click") => ({
     model: init(),

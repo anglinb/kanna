@@ -309,6 +309,28 @@ export const DragSeparator = Mount.defineStream("DragChatSeparator", {
     })),
 })
 
+/** The viewer's pane sliding open or shut on the pane clock, one Message a frame. */
+export const AnimateViewerSplit = Mount.defineStream("AnimateViewerSplit", {
+  args: { token: Schema.Number, fromChat: Schema.Number, fromViewer: Schema.Number, toChat: Schema.Number, toViewer: Schema.Number, durationMs: Schema.Number },
+  messages: [Message.SteppedViewerSplit],
+  execute: ({ token, fromChat, fromViewer, toChat, toViewer, durationMs }) => domStream<typeof Message.SteppedViewerSplit.Type>((emit) => {
+    if (prefersReducedMotion()) {
+      emit(Message.SteppedViewerSplit({ token, chat: toChat, viewer: toViewer, done: true }))
+      return () => {}
+    }
+    const startTime = performance.now()
+    let frame = 0
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - startTime) / durationMs)
+      const next = interpolateLayout([fromChat, fromViewer], [toChat, toViewer], progress)
+      emit(Message.SteppedViewerSplit({ token, chat: next[0], viewer: next[1], done: progress >= 1 }))
+      if (progress < 1) frame = window.requestAnimationFrame(step)
+    }
+    frame = window.requestAnimationFrame(step)
+    return () => window.cancelAnimationFrame(frame)
+  }),
+})
+
 // FOCUS (useStickyChatFocus)
 
 /** The page's own composer: the chat card's, not a previewed chat's in the viewer. */

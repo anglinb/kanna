@@ -4,7 +4,7 @@ import { modifyFields } from "foldkit/struct"
 import { getNextMeasuredInputHeight } from "../../client/app/kannaStateHelpers"
 import { paneDurationMs } from "../../client/app/paneAnimation"
 import { EMPTY_STATE_TEXT } from "../../client/app/ChatPage/utils"
-import { dockedViewerPaneWidthPx } from "../../client/lib/viewer-split"
+import { dockedViewerPaneWidthPx, resolveViewerSplitMove, viewerPaneState } from "../../client/lib/viewer-split"
 import { opensInViewer, projectRelativePath } from "../../client/components/viewer/localLinks"
 import { AppAction } from "../app/action"
 import { SliceOutMessage, type AppModel, type SliceReturn } from "../app/slice"
@@ -44,7 +44,7 @@ import {
   RenameChat,
 } from "./effects"
 import { Message, type MenuId, type ShortcutAction, type TerminalPurpose, type TooltipId, type WashId, type Watch } from "./message"
-import { initialTerminalPane, type Model } from "./model"
+import { initialTerminalPane, initialViewerPane, type Model } from "./model"
 import { resolveTerminalAnimationState, shouldRequestTerminalFocus } from "./terminalPane"
 import { shouldCloseTerminalPane } from "../../client/app/terminalLayoutResize"
 import { shownTitle, titleMenuContext } from "./navbar"
@@ -186,15 +186,14 @@ function hideWidgets(model: Model, facts: PageFacts): Return {
   return withActions(followed, [rightSidebar(RightSidebar.Message.HidWidgets({ projectId: facts.projectId, chatKey: facts.widgetsChatKey }))])
 }
 
-/** The split a docked pane takes for what's open (`dockedViewerPaneWidthPx`). */
-function viewerSplitFor(model: Model, app: AppModel, facts: PageFacts): [number, number] {
-  if (!facts.viewerPaneAvailable || !facts.viewerOpen || facts.viewerExpanded) {
-    // Expanded over the chat, the split is left alone.
-    return facts.viewerOpen && facts.viewerExpanded ? model.viewerSplit as [number, number] : [100, 0]
-  }
+/**
+ * The split a docked pane takes for what's open (`dockedViewerPaneWidthPx`),
+ * or null before the page has a width to work it out from.
+ */
+function dockedViewerSplit(model: Model, app: AppModel, facts: PageFacts): [number, number] | null {
   const columnWidth = facts.showRightSidebar ? getWidgetsColumnWidthPx(app.stores.rightSidebar.size, model.layoutWidth) : 0
   const splitWidth = model.layoutWidth - columnWidth
-  if (splitWidth <= 0) return [100, 0]
+  if (model.layoutWidth <= 0 || splitWidth <= 0) return null
   const chatMinPx = model.layoutWidth * (CHAT_MIN_WORKSPACE_SIZE_PERCENT / 100)
   const viewer = ViewerStore.chatViewer({ viewer: app.stores.viewer, rightSidebar: app.stores.rightSidebar })
   const panePercent = (dockedViewerPaneWidthPx({
@@ -204,6 +203,46 @@ function viewerSplitFor(model: Model, app: AppModel, facts: PageFacts): [number,
     widthClass: viewer ? ViewerStore.viewerWidthClass(viewer.item) : null,
   }) / splitWidth) * 100
   return [100 - panePercent, panePercent]
+}
+
+/**
+ * The viewer's split (ChatPage's layout effect on it): opening slides the
+ * pane in, closing slides it shut; another chat, or a split that's new
+ * (another project, a phone turned desktop) takes its layout without the
+ * slide. While the pane stays open the split holds, whatever comes to be
+ * shown in it; expanded over the chat it is left alone.
+ */
+function followViewerSplit(model: Model, app: AppModel, facts: PageFacts, previous: Watch | null, watch: Watch, fresh: boolean): Model {
+  const prior = fresh ? initialViewerPane : model.viewerPane
+  const changed = !previous
+    || previous.projectId !== watch.projectId
+    || previous.isMobile !== watch.isMobile
+    || previous.chatId !== watch.chatId
+    || previous.viewerExpanded !== watch.viewerExpanded
+    || previous.viewerOpen !== watch.viewerOpen
+    || previous.viewerWidthClass !== watch.viewerWidthClass
+  if (!changed) return fresh ? modifyFields(model, { viewerPane: () => prior }) : model
+  const group = facts.viewerPaneAvailable ? watch.projectId ?? "" : null
+  const paneOpen = facts.viewerPaneAvailable && facts.viewerOpen
+  const state = viewerPaneState(paneOpen, facts.viewerExpanded)
+  const chatKey = watch.chatId ?? ""
+  const recorded = { ...prior, state, chatKey, group }
+  if (group === null) return modifyFields(model, { viewerPane: () => ({ ...recorded, animation: null, pendingDock: false }) })
+  const move = resolveViewerSplitMove(prior.state, state, { samePane: prior.group === group && prior.chatKey === chatKey, reducedMotion: false })
+  // A slide already under way goes on to where it was headed.
+  if (move.to === "hold") return modifyFields(model, { viewerPane: () => recorded })
+  const docked = move.to === "docked" ? dockedViewerSplit(model, app, facts) : null
+  const target: [number, number] = move.to === "docked" ? docked ?? [100, 0] : [100, 0]
+  const pendingDock = move.to === "docked" && docked === null
+  if (!move.animate || pendingDock) {
+    return modifyFields(model, { viewerSplit: () => target, viewerPane: () => ({ ...recorded, animation: null, pendingDock }) })
+  }
+  const from: [number, number] = prior.state === "docked" ? [model.viewerSplit[0], model.viewerSplit[1]] : [100, 0]
+  const token = prior.tokens + 1
+  return modifyFields(model, {
+    viewerSplit: () => from,
+    viewerPane: () => ({ ...recorded, pendingDock: false, tokens: token, animation: { token, from, to: target, durationMs: paneDurationMs(paneOpen) } }),
+  })
 }
 
 // OPEN IN…
@@ -353,7 +392,7 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
     actions.push(rightSidebar(RightSidebar.Message.HidWidgets({ projectId: watch.projectId, chatKey: facts.widgetsChatKey })))
   }
 
-  next = modifyFields(next, { viewerSplit: () => viewerSplitFor(next, app, facts) })
+  next = followViewerSplit(next, app, facts, previous, watch, fresh)
   return withActions({ model: next, commands }, actions)
 }
 
@@ -487,7 +526,12 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       const nextHeight = Math.abs(model.layoutHeight - height) < 1 ? model.layoutHeight : height
       if (nextWidth === model.layoutWidth && nextHeight === model.layoutHeight) return { model }
       const next = modifyFields(model, { layoutWidth: () => nextWidth, layoutHeight: () => nextHeight })
-      return { model: modifyFields(next, { viewerSplit: () => viewerSplitFor(next, app, facts()) }) }
+      // A pane that opened docked before the page had a width takes it now.
+      if (!next.viewerPane.pendingDock) return { model: next }
+      const docked = dockedViewerSplit(next, app, facts())
+      return docked
+        ? { model: modifyFields(next, { viewerSplit: () => docked, viewerPane: (pane) => ({ ...pane, pendingDock: false }) }) }
+        : { model: next }
     },
     MeasuredNavbar: ({ height }) => (height === model.navbarHeight ? { model } : { model: modifyFields(model, { navbarHeight: () => height }) }),
     MeasuredDock: ({ height }) => {
@@ -631,6 +675,9 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     DraggedSeparator: ({ split, first, groupSizePx, done }) => (split === "terminal"
       ? dragTerminalSplit(model, facts(), first, done)
       : dragViewerSplit(model, facts(), first, groupSizePx, done)),
+    SteppedViewerSplit: ({ token, chat, viewer, done }) => model.viewerPane.animation?.token === token
+      ? { model: modifyFields(model, { viewerSplit: () => [chat, viewer] as const, viewerPane: (pane) => ({ ...pane, animation: done ? null : pane.animation }) }) }
+      : { model },
     SteppedTerminalSplit: ({ token, chat, terminal, done }) => model.terminalPane.animation?.token === token
       ? { model: modifyFields(model, { terminalPane: (pane) => ({ ...pane, split: [chat, terminal] as const, animation: done ? null : pane.animation }) }) }
       : { model },

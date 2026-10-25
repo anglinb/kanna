@@ -131,6 +131,26 @@ export const Model = Schema.Struct({
     focusRequest: Schema.Struct({ key: Schema.NullOr(Schema.String), version: Schema.Number }),
   }),
 
+  /**
+   * The viewer's split as last laid out (ChatPage's `viewerSplitStateRef`):
+   * the pane's state, the chat and the split it was for (a split is new per
+   * project, and none on a phone), and a slide under way.
+   */
+  viewerPane: Schema.Struct({
+    state: Schema.Literals(["closed", "docked", "expanded"]),
+    chatKey: Schema.String,
+    group: Schema.NullOr(Schema.String),
+    /** Opened docked before the page had a width: it takes its width once measured. */
+    pendingDock: Schema.Boolean,
+    animation: Schema.NullOr(Schema.Struct({
+      token: Schema.Number,
+      from: Schema.Tuple([Schema.Number, Schema.Number]),
+      to: Schema.Tuple([Schema.Number, Schema.Number]),
+      durationMs: Schema.Number,
+    })),
+    tokens: Schema.Number,
+  }),
+
   /** The chat column and the viewer's pane, in percent (the split's layout). */
   viewerSplit: Schema.Tuple([Schema.Number, Schema.Number]),
 
@@ -168,6 +188,15 @@ export const Model = Schema.Struct({
 export type Model = typeof Model.Type
 
 const wash = { scrolled: false, settling: true, token: 0 }
+
+export const initialViewerPane: Model["viewerPane"] = {
+  state: "closed",
+  chatKey: "",
+  group: null,
+  pendingDock: false,
+  animation: null,
+  tokens: 0,
+}
 
 export const initialTerminalPane: Model["terminalPane"] = {
   split: null,
@@ -209,6 +238,7 @@ export function init(): Model {
     title: { draft: null, submitted: null, submittedOver: null },
     widgetsColumn: { open: false, switchKey: null, sliding: false, slideToken: 0, dragWidthPx: null, dragStart: null, peekRequested: false },
     terminalPane: initialTerminalPane,
+    viewerPane: initialViewerPane,
     viewerSplit: [100, 0],
     quickActions: {},
     quickActionsError: null,

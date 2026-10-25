@@ -36,6 +36,8 @@ export const Watch = Schema.Struct({
   isMobile: Schema.Boolean,
   sidebarReady: Schema.Boolean,
   isDelegator: Schema.Boolean,
+  /** What the viewer shows decides a docked pane's width (`viewerWidthClass`). */
+  viewerWidthClass: Schema.NullOr(Schema.String),
   /** The resolved keybindings the page's shortcuts answer to, as JSON. */
   bindings: Schema.String,
   /** What the terminal's toggle animation reads as a switch: the chat, when the pane is per chat; else the project. */
@@ -182,6 +184,8 @@ export const Message = defineMessageUnion({
    * panel's share, in percent, as it moves, and once more as it's let go.
    */
   DraggedSeparator: { split: Schema.Literals(["terminal", "viewer"]), first: Schema.Number, groupSizePx: Schema.Number, done: Schema.Boolean },
+  /** A frame of the viewer's pane sliding open or shut. */
+  SteppedViewerSplit: { token: Schema.Number, chat: Schema.Number, viewer: Schema.Number, done: Schema.Boolean },
   /** A frame of the terminal pane opening or closing (useTerminalToggleAnimation). */
   SteppedTerminalSplit: { token: Schema.Number, chat: Schema.Number, terminal: Schema.Number, done: Schema.Boolean },
   TickedDiffRefresh: {},
