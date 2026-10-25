@@ -73,8 +73,13 @@ export const scenarios: Scenario[] = [
     // Choosing one sends `system.openExternal`, which the demo backend
     // doesn't answer: the list itself, then.
     async run({ page, capture }) {
+      // Past the provider's open delay, so the tooltip is all the way in.
       await page.getByRole("button", { name: "Open in Cursor" }).hover()
+      await page.waitForTimeout(900)
       await capture("primary-tooltip")
+      await page.mouse.move(700, 600)
+      await page.waitForTimeout(100)
+      await page.mouse.move(720, 620)
       await page.getByRole("combobox", { name: "Choose open destination" }).click()
       await capture("open")
       await page.keyboard.press("ArrowDown")
@@ -121,8 +126,10 @@ export const scenarios: Scenario[] = [
         }
       }
       await toggleTerminal()
-      // The first terminal sizes itself once its pane has opened, then
-      // creates its session: wait that out, so the capture has it.
+      // The first terminal loads xterm, sizes itself once its pane has
+      // opened, then creates its session: wait that out, so the capture has
+      // it (an app with no terminal yet just waits the timeout).
+      await page.locator(".xterm").first().waitFor({ timeout: 5000 }).catch(() => {})
       await page.waitForTimeout(800)
       await capture("terminal-open")
       await toggleTerminal()

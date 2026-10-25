@@ -102,6 +102,30 @@ export const Model = Schema.Struct({
     dragStart: Schema.NullOr(Schema.Struct({ pointerX: Schema.Number, widthPx: Schema.Number })),
   }),
 
+  /**
+   * The terminal's split under the panes (useTerminalToggleAnimation): its
+   * live layout, which a toggle slides to the new one, and what the React
+   * hook wrote on the DOM imperatively (`data-terminal-open` on the panel,
+   * `data-terminal-animated` on the pane, which stays "true" once a slide
+   * has run until a snap sets it back).
+   */
+  terminalPane: Schema.Struct({
+    split: Schema.NullOr(Schema.Tuple([Schema.Number, Schema.Number])),
+    panelOpen: Schema.NullOr(Schema.Literals(["true", "false"])),
+    animated: Schema.Boolean,
+    animation: Schema.NullOr(Schema.Struct({
+      token: Schema.Number,
+      from: Schema.Tuple([Schema.Number, Schema.Number]),
+      to: Schema.Tuple([Schema.Number, Schema.Number]),
+      durationMs: Schema.Number,
+    })),
+    tokens: Schema.Number,
+    previousShouldRender: Schema.Boolean,
+    previousShow: Schema.Boolean,
+    /** Bumped when the pane opens by a toggle: the terminal takes focus. Per switch key. */
+    focusRequest: Schema.Struct({ key: Schema.NullOr(Schema.String), version: Schema.Number }),
+  }),
+
   /** The chat column and the viewer's pane, in percent (the split's layout). */
   viewerSplit: Schema.Tuple([Schema.Number, Schema.Number]),
 
@@ -135,6 +159,17 @@ export type Model = typeof Model.Type
 
 const wash = { scrolled: false, settling: true, token: 0 }
 
+export const initialTerminalPane: Model["terminalPane"] = {
+  split: null,
+  panelOpen: null,
+  animated: false,
+  animation: null,
+  tokens: 0,
+  previousShouldRender: false,
+  previousShow: false,
+  focusRequest: { key: null, version: 0 },
+}
+
 export function init(): Model {
   return {
     transcript: Transcript.init(),
@@ -162,6 +197,7 @@ export function init(): Model {
     washTokens: 0,
     title: { draft: null, submitted: null, submittedOver: null },
     widgetsColumn: { open: false, switchKey: null, sliding: false, slideToken: 0, dragWidthPx: null, dragStart: null },
+    terminalPane: initialTerminalPane,
     viewerSplit: [100, 0],
     quickActions: {},
     quickActionsError: null,

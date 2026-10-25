@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { Command, Mount } from "foldkit"
 import { domStream } from "../ui/overlay/stream"
+import { interpolateLayout, prefersReducedMotion } from "../../client/app/paneAnimation"
 import { DIFF_REFRESH_INTERVAL_MS, EMPTY_STATE_TEXT, EMPTY_STATE_TYPING_INTERVAL_MS } from "../../client/app/ChatPage/utils"
 import { Message, ShortcutAction, TerminalPurpose, Watch, WashId, type MenuId } from "./message"
 import { actionMatchesEvent } from "../../client/lib/keybindings"
@@ -240,6 +241,36 @@ export const HoldColumnDragCursor = Mount.defineStream("WidgetsColumnDragCursor"
       document.body.style.cursor = previousCursor
       document.body.style.userSelect = previousUserSelect
     }
+  }),
+})
+
+/**
+ * The terminal's split sliding from one layout to another on the pane clock
+ * (useTerminalToggleAnimation's rAF loop), one Message a frame. Under
+ * reduced motion it lands at once.
+ */
+export const AnimateTerminalSplit = Mount.defineStream("AnimateTerminalSplit", {
+  args: { token: Schema.Number, fromChat: Schema.Number, fromTerminal: Schema.Number, toChat: Schema.Number, toTerminal: Schema.Number, durationMs: Schema.Number },
+  messages: [Message.SteppedTerminalSplit],
+  execute: ({ token, fromChat, fromTerminal, toChat, toTerminal, durationMs }) => domStream<typeof Message.SteppedTerminalSplit.Type>((emit) => {
+    if (prefersReducedMotion()) {
+      emit(Message.SteppedTerminalSplit({ token, chat: toChat, terminal: toTerminal, done: true }))
+      return () => {}
+    }
+    const startTime = performance.now()
+    let frame = 0
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - startTime) / durationMs)
+      const next = interpolateLayout([fromChat, fromTerminal], [toChat, toTerminal], progress)
+      if (progress < 1) {
+        emit(Message.SteppedTerminalSplit({ token, chat: next[0], terminal: next[1], done: false }))
+        frame = window.requestAnimationFrame(step)
+        return
+      }
+      emit(Message.SteppedTerminalSplit({ token, chat: toChat, terminal: toTerminal, done: true }))
+    }
+    frame = window.requestAnimationFrame(step)
+    return () => window.cancelAnimationFrame(frame)
   }),
 })
 

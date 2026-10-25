@@ -38,6 +38,11 @@ export const Watch = Schema.Struct({
   isDelegator: Schema.Boolean,
   /** The resolved keybindings the page's shortcuts answer to, as JSON. */
   bindings: Schema.String,
+  /** What the terminal's toggle animation reads as a switch: the chat, when the pane is per chat; else the project. */
+  terminalSwitchKey: Schema.NullOr(Schema.String),
+  shouldRenderTerminalLayout: Schema.Boolean,
+  /** The project's terminal split, as JSON. */
+  terminalMainSizes: Schema.String,
   /** The Chat Tabs setting: the bar's effects run while it is on. */
   chatTabsEnabled: Schema.Boolean,
   tabsCount: Schema.Number,
@@ -166,6 +171,8 @@ export const Message = defineMessageUnion({
 
   // Terminals and diffs
   MadeTerminalId: { purpose: TerminalPurpose, projectId: Schema.String, chatKey: Schema.NullOr(Schema.String), terminalId: Schema.String },
+  /** A frame of the terminal pane opening or closing (useTerminalToggleAnimation). */
+  SteppedTerminalSplit: { token: Schema.Number, chat: Schema.Number, terminal: Schema.Number, done: Schema.Boolean },
   TickedDiffRefresh: {},
 
   // Sending to a delegator from the new chat page (newChatDelegate.ts)

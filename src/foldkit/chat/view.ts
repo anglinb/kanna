@@ -10,7 +10,7 @@ import * as Transcript from "../transcript"
 import * as Viewer from "../viewer"
 import * as Widgets from "../widgets"
 import { card, cardContent } from "../ui/card"
-import { HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
+import { AnimateTerminalSplit, HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
 import { Message, type Watch } from "./message"
 import type { Model } from "./model"
 import { delegatedListButtonView, editableTitleView, navbarTitleView, navbarView, washView } from "./navbar"
@@ -42,6 +42,9 @@ export function watchOf(facts: PageFacts): Watch {
     sidebarReady: facts.sidebarReady,
     isDelegator: facts.isDelegator,
     bindings: JSON.stringify(facts.keybindings.bindings),
+    terminalSwitchKey: facts.terminalChatKey ?? facts.projectId,
+    shouldRenderTerminalLayout: facts.shouldRenderTerminalLayout,
+    terminalMainSizes: JSON.stringify(facts.terminalLayout.mainSizes),
     chatTabsEnabled: facts.chatTabsEnabled,
     tabsCount: facts.tabsCount,
     pruneTabs: facts.pruneTabs,
@@ -89,7 +92,7 @@ export function pageContext(model: Model, app: AppModel, facts: PageFacts): Chat
     terminal: {
       layout: facts.terminalLayout,
       fixedHeight: fixedTerminalHeight(model, facts),
-      focusRequestVersion: 0,
+      focusRequestVersion: model.terminalPane.focusRequest.key === (facts.terminalChatKey ?? facts.projectId) ? model.terminalPane.focusRequest.version : 0,
       pendingCommandsByTerminalId: model.pendingTerminalCommands,
       chatKey: facts.terminalChatKey,
     },
@@ -230,7 +233,9 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
  */
 function terminalWorkspaceView(model: Model, facts: PageFacts, content: Html, page: ChatPageContext, inputs: ChatPageSliceInputs, h: H): Html {
   const clampTerminalToMaxHeight = facts.isMobile
-  const sizes = getTerminalPanelDefaultSizes(facts.showTerminalPane, facts.terminalLayout.mainSizes)
+  const pane = model.terminalPane
+  const sizes = pane.split ?? getTerminalPanelDefaultSizes(facts.showTerminalPane, facts.terminalLayout.mainSizes)
+  const animation = pane.animation
   return h.keyed("div")(`terminal-split-${facts.projectId}`, [
     h.Class(cn("flex h-full w-full", "flex-1 min-h-0")),
     h.DataAttribute("group", "true"),
@@ -249,14 +254,34 @@ function terminalWorkspaceView(model: Model, facts: PageFacts, content: Html, pa
       class: cn(!facts.showTerminalPane && "pointer-events-none opacity-0"),
       value: { controls: "chat", now: sizes[0], min: CHAT_MIN_SIZE_PERCENT, max: 100 },
     }, h),
-    panel({ id: "terminal", orientation: "vertical", size: sizes[1], class: "min-h-0" }, [
+    panel({
+      id: "terminal",
+      orientation: "vertical",
+      size: sizes[1],
+      class: "min-h-0",
+      // What the toggle animation writes on the panel (`terminalPanelRef`).
+      attributes: pane.panelOpen ? [h.DataAttribute("terminal-open", pane.panelOpen)] : [],
+    }, [
       h.div([
         h.Class("h-full min-h-0 overflow-hidden relative"),
         h.DataAttribute("terminal-open", facts.showTerminalPane ? "true" : "false"),
-        h.DataAttribute("terminal-animated", "false"),
+        h.DataAttribute("terminal-animated", pane.animated ? "true" : "false"),
         h.DataAttribute("terminal-visual", "true"),
         h.Style({ "--pane-duration": `${paneDurationMs(facts.showTerminalPane)}ms` }),
       ], [
+        animation
+          ? h.keyed("span")(`terminal-split-${animation.token}`, [
+            h.Hidden(true),
+            h.OnMount(AnimateTerminalSplit({
+              token: animation.token,
+              fromChat: animation.from[0],
+              fromTerminal: animation.from[1],
+              toChat: animation.to[0],
+              toTerminal: animation.to[1],
+              durationMs: animation.durationMs,
+            })),
+          ], [])
+          : null,
         facts.shouldRenderTerminalLayout
           // TerminalWorkspaceShell
           ? h.div(page.terminal.fixedHeight > 0 ? [h.Style({ height: `${page.terminal.fixedHeight}px` })] : [], [

@@ -42,10 +42,11 @@ import {
   RenameChat,
 } from "./effects"
 import { Message, type MenuId, type ShortcutAction, type TerminalPurpose, type TooltipId, type WashId, type Watch } from "./message"
-import type { Model } from "./model"
+import { initialTerminalPane, type Model } from "./model"
+import { resolveTerminalAnimationState, shouldRequestTerminalFocus } from "./terminalPane"
 import { shownTitle, titleMenuContext } from "./navbar"
 import { openAppValueOfMenuValue, openAppValueRequest, type OpenAppValue } from "./openExternal"
-import { pageFacts, type PageFacts } from "./page"
+import { getTerminalPanelDefaultSizes, pageFacts, type PageFacts } from "./page"
 import { CHAT_MIN_WORKSPACE_SIZE_PERCENT, getWidgetsColumnWidthPx, widthForHandleKey } from "./widgetsColumn"
 import { DEFAULT_RIGHT_SIDEBAR_SIZE } from "../core/stores/rightSidebar"
 
@@ -333,7 +334,8 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
   // Focus goes back to the composer when the viewer closes, and when the
   // terminal hides in the same project.
   if (previous?.viewerOpen && !watch.viewerOpen) commands.push(FocusChatInput())
-  if (previous && previous.projectId !== null && previous.projectId === watch.projectId && previous.showTerminalPane && !watch.showTerminalPane) {
+  next = followTerminalPane(next, previous, watch, fresh)
+  if (previous && previous.terminalSwitchKey !== null && previous.terminalSwitchKey === watch.terminalSwitchKey && previous.showTerminalPane && !watch.showTerminalPane) {
     commands.push(FocusChatInput())
   }
 
@@ -350,6 +352,73 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
 
   next = modifyFields(next, { viewerSplit: () => viewerSplitFor(next, app, facts) })
   return withActions({ model: next, commands }, actions)
+}
+
+/**
+ * useTerminalToggleAnimation: the terminal's split slides to its new layout
+ * when the pane is toggled in place, and snaps on a switch (another chat or
+ * project), on the first render, or when there is nothing to move. A pane
+ * opened by a toggle asks the terminal for focus.
+ */
+function followTerminalPane(model: Model, previous: Watch | null, watch: Watch, fresh: boolean): Model {
+  let pane = fresh ? initialTerminalPane : model.terminalPane
+  // A new project is a new split (React keyed the group by project): what
+  // the hook wrote on the old one's elements is gone with them.
+  if (previous && previous.projectId !== watch.projectId) {
+    pane = { ...pane, split: null, panelOpen: null, animated: false, animation: null }
+  }
+  const previousKey = previous?.terminalSwitchKey ?? null
+
+  if (shouldRequestTerminalFocus({
+    previousProjectId: previousKey,
+    projectId: watch.terminalSwitchKey,
+    showTerminalPane: watch.showTerminalPane,
+    wasTerminalVisible: previous?.showTerminalPane ?? false,
+  })) {
+    const current = pane.focusRequest
+    pane = { ...pane, focusRequest: { key: watch.terminalSwitchKey, version: (current.key === watch.terminalSwitchKey ? current.version : 0) + 1 } }
+  }
+
+  const changed = !previous
+    || previous.terminalSwitchKey !== watch.terminalSwitchKey
+    || previous.shouldRenderTerminalLayout !== watch.shouldRenderTerminalLayout
+    || previous.showTerminalPane !== watch.showTerminalPane
+    || previous.terminalMainSizes !== watch.terminalMainSizes
+  if (!changed) return modifyFields(model, { terminalPane: () => pane })
+
+  if (!watch.shouldRenderTerminalLayout) {
+    // The split stays mounted without terminals; the terminal's share goes
+    // back to what's above it.
+    return modifyFields(model, { terminalPane: () => ({ ...pane, split: [100, 0] as const, animation: null, previousShouldRender: false, previousShow: false }) })
+  }
+
+  const mainSizes = JSON.parse(watch.terminalMainSizes) as [number, number]
+  const live = (pane.split ?? getTerminalPanelDefaultSizes(watch.showTerminalPane, mainSizes)) as [number, number]
+  const { currentLayout, shouldSkipAnimation, targetLayout } = resolveTerminalAnimationState({
+    previousProjectId: previousKey,
+    projectId: watch.terminalSwitchKey,
+    previousShouldRenderTerminalLayout: pane.previousShouldRender,
+    previousShowTerminalPane: pane.previousShow,
+    showTerminalPane: watch.showTerminalPane,
+    mainSizes,
+    liveLayout: live,
+  })
+  const panelOpen = watch.showTerminalPane ? "true" as const : "false" as const
+  const settled = { ...pane, panelOpen, previousShouldRender: true, previousShow: watch.showTerminalPane }
+  const still = Math.abs(currentLayout[0] - targetLayout[0]) < 0.1 && Math.abs(currentLayout[1] - targetLayout[1]) < 0.1
+  if (shouldSkipAnimation || still) {
+    return modifyFields(model, { terminalPane: () => ({ ...settled, split: targetLayout, animated: false, animation: null }) })
+  }
+  const token = pane.tokens + 1
+  return modifyFields(model, {
+    terminalPane: () => ({
+      ...settled,
+      split: currentLayout,
+      animated: true,
+      tokens: token,
+      animation: { token, from: currentLayout, to: targetLayout, durationMs: paneDurationMs(watch.showTerminalPane) },
+    }),
+  })
 }
 
 /** `useDelegateStore.markViewed`: stamped with now, which update can't read. */
@@ -541,6 +610,9 @@ export function update(model: Model, message: Message, app: AppModel): Return {
         : model
       return withActions({ model: next }, [terminalLayout(TerminalLayout.Message.AddedTerminal({ projectId, terminalId, afterTerminalId: null, chatKey }))])
     },
+    SteppedTerminalSplit: ({ token, chat, terminal, done }) => model.terminalPane.animation?.token === token
+      ? { model: modifyFields(model, { terminalPane: (pane) => ({ ...pane, split: [chat, terminal] as const, animation: done ? null : pane.animation }) }) }
+      : { model },
     TickedDiffRefresh: () => {
       const current = facts()
       return current.chatId && current.showRightSidebar ? { model, commands: [RefreshDiffs({ chatId: current.chatId })] } : { model }

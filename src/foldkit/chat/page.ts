@@ -1,6 +1,6 @@
 import { getProjectIdForChat } from "../../client/app/kannaStateHelpers"
 import { getResolvedKeybindings } from "../../client/lib/keybindings"
-import { paneChatKey } from "../../client/lib/paneVisibility"
+import type { PaneVisibilityScope } from "../../shared/types"
 import { getEditorPresetLabel } from "../../shared/editor-presets"
 import type { ChatDiffSnapshot, ChatSnapshot, KeybindingsSnapshot, SidebarData } from "../../shared/types"
 import type { AppModel } from "../app/slice"
@@ -24,6 +24,11 @@ const MOBILE_BREAKPOINT_PX = 768
 /** The chat pane never shrinks past this, so it also fixes the terminal's ceiling. */
 export const CHAT_MIN_SIZE_PERCENT = 25
 export const MAX_TERMINAL_MAIN_SIZES: [number, number] = [CHAT_MIN_SIZE_PERCENT, 100 - CHAT_MIN_SIZE_PERCENT]
+
+/** lib/paneVisibility's paneChatKey (that module pulls a React store): the chat, when the pane is per chat. */
+export function paneChatKey(scope: PaneVisibilityScope, chatId: string | null | undefined) {
+  return scope === "chat" ? chatId ?? null : null
+}
 
 export function shouldUseMobileRightSidebarOverlay(viewportWidth: number) {
   return viewportWidth > 0 && viewportWidth < MOBILE_BREAKPOINT_PX
