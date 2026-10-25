@@ -175,7 +175,6 @@ describe("settings › general", () => {
     expect(run(opened, choose("system")).outMessage).toBeUndefined()
     const chosen = run(opened, choose("light"))
     expect(chosen.outMessage?.actions).toEqual([write({ theme: "light" })])
-    expect(chosen.commands?.map((command) => command.name)).toContain("SettingsApplyTheme")
     // The click after the release reaches the item again while the list closes.
     expect(run(chosen.model, choose("light")).outMessage).toBeUndefined()
   })

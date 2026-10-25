@@ -27,7 +27,7 @@ import {
   reconcileOptimisticUserPrompts,
   type OptimisticUserPrompt,
 } from "../../client/app/kannaStateHelpers"
-import { foldChatSnapshot } from "../../client/app/snapshotEquality"
+import { foldChatSnapshot } from "./snapshotEquality"
 import { processTranscriptMessages } from "../../client/lib/parseTranscript"
 import { generateUUID } from "../../client/lib/utils"
 import type { SubscriptionTopic } from "../../shared/protocol"

@@ -123,13 +123,19 @@ into this):
 | Terminal | `terminal/` | 2 | merged (workspace gallery 24/24; page matches but for home's boot command) |
 | Command palette | `palette/` | 2 | in progress |
 | Composer | `composer/` | 2 | in progress |
-| Transcript viewport (+ export viewer) | `transcript/` | 3 | in progress |
+| Transcript viewport (+ export viewer) | `transcript/` | 3 | merged (export viewer 12/12; chat captures wait on the composer) |
 | Right sidebar widgets | `widgets/` | 3 | to do |
 | Viewer / previewer | `viewer/` | 3 | to do |
 | Setup wizard | `setup/` | 3 | to do |
 | Workflows gallery | `workflows/` | 3 | to do |
 | Demo entry, export viewer | `src/demo`, `src/export-viewer` | 4 | to do |
 | Switch entries, delete React | — | 4 | to do |
+
+## React-free check
+
+`bun run react-free` walks the Foldkit app's imports and fails on any
+path into React or a React library, printing the chain. It must stay
+clean; it is also what proves React can be deleted.
 
 ## Integration follow-ups
 
@@ -152,6 +158,11 @@ into this):
   copy for the skills menu heading) can go.
 - `ui/select`: report a choice only for a new value, as Radix does;
   `settings/shared.ts` `updateSettingsSelect` filters it meanwhile.
+- React bugs matched, to file: RawMessageSection never shows the raw
+  message (its effect cancels its own request); Escape doesn't close the
+  local-link menu.
+- Live schedule card in transcript rows (widgets slice) and the
+  export viewer's ViewerLayer (viewer slice).
 - `@foldkit/vite-plugin` peers on Vite 8; we run Vite 6 (works so far).
 - `app/action.ts` imports types from React files
   (`components/messages/shared`, `lib/chat-navigation` is fine); move
