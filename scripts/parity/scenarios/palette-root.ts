@@ -11,6 +11,9 @@ const PALETTE = "[role=dialog]:has([cmdk-root])"
 export const scenarios: Scenario[] = [
   defineScenario({
     name: "palette-root-keys",
+    // The running chat's spinner rasterizes a few pixels differently run to
+    // run, React against React (28 px at a highlight move).
+    pixelTolerance: 0.0003,
     route: "/home",
     regions: { palette: PALETTE },
     covers: { keybindings: ["openCommandPalette"] },
