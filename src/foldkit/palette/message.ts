@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { defineMessageUnion } from "foldkit/message"
-import type { MacSetupState } from "../../client/lib/macApp"
+import type { MacSetupState } from "../core/macApp"
 import type { ChatBrowserNotificationPreference, FsListResult, GitHubRecentReposResult } from "../../shared/types"
 import { opaque } from "../core/schema"
 import type { RepoMeta } from "./model"

@@ -25,7 +25,7 @@ if (!container) {
   throw new Error("Missing #root")
 }
 
-// As in src/demo/main.tsx: start on the fixture's theme, not "system".
+// As the demo entry (src/demo/main.ts) does: start on the fixture's theme, not "system".
 useAppSettingsStore.getState().setFromServer(createDemoAppSettings(readThemeParam()))
 
 const gallery = galleryName(window.location.pathname)

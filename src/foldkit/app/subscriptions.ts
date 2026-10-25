@@ -8,7 +8,9 @@ import type {
   UpdateSnapshot,
 } from "../../shared/types"
 import { isNightlyVersion } from "../../shared/types"
+import { fromString as urlFromString } from "foldkit/url"
 import { forgetAllFollowed } from "../core/backgroundChats"
+import { memoryUrlChanges } from "../core/navigation"
 import { updateCheckInterval } from "./maintenance"
 import * as ChatSession from "../core/chatSession"
 import * as SidebarSlice from "../sidebar"
@@ -25,13 +27,15 @@ import { Message } from "./message"
 import type { Model } from "./model"
 import { activeProjectId } from "./update"
 
-// The socket lives while the auth check says the app may load (KannaLayout
-// mounted only then). Every snapshot subscription waits for it.
+// The socket lives while the auth check says the app may load and a page of
+// the layout is open (KannaLayout mounted only then). Every snapshot subscription waits for it.
 
 export const managedResources = ManagedResource.make<Model, Message>()((entry) => ({
   socket: entry(Schema.Option(Schema.Null), {
     resource: KannaSocketResource,
-    modelToMaybeRequirements: (model) => (model.auth._tag === "Ready" ? Option.some(null) : Option.none()),
+    // The OpenRouter callback renders outside KannaLayout (a bare OAuth
+    // popup): no socket there, as App.tsx routed it, until it moves on.
+    modelToMaybeRequirements: (model) => (model.auth._tag === "Ready" && model.route._tag !== "OpenRouterCallback" ? Option.some(null) : Option.none()),
     acquire: () => acquireSocket(),
     release: (socket) => Effect.andThen(releaseSocket(socket), forgetAllFollowed()),
     onAcquired: () => Message.AcquiredSocket(),
@@ -117,6 +121,16 @@ const rootSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
 
   // App.tsx: pagehide puts the bare app name in the title (for the
   // bfcache), pageshow the chat's again.
+  // The demo's memory history (core/navigation.ts): its moves are the
+  // route changes the browser's popstate would be.
+  memoryUrl: Subscription.persistentEntry(
+    memoryUrlChanges().pipe(
+      Stream.map((href) => urlFromString(href)),
+      Stream.filter(Option.isSome),
+      Stream.map((url) => Message.ChangedUrl({ url: url.value })),
+    ),
+  ),
+
   pageVisibility: Subscription.persistentEntry(
     Stream.merge(
       Dom.streamFromEvent({ target: () => window, type: "pageshow", mapEvent: () => Message.ChangedPageVisibility({ shown: true }) }),

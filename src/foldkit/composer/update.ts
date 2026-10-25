@@ -72,6 +72,8 @@ interface Step {
   actions?: ReadonlyArray<AppAction>
   /** The step saw to the draft store itself (a send): `finish` writes nothing there. */
   draftHandled?: boolean
+  /** A keystroke's time: `finish` writes the draft in this same update, not through ChangeDraft. */
+  draftAt?: number
 }
 
 const store = (message: Stores.Message) => AppAction.Store({ message })
@@ -203,7 +205,14 @@ function finish(before: Model, step: Step, ctx: Context): Step {
   const menus = menusOf(model, ctx, view.selectedProvider)
 
   if (model.value !== before.value) {
-    if (draftId && !step.draftHandled) commands.push(Commands.changeDraft(draftId, model.value))
+    if (draftId && !step.draftHandled) {
+      if (step.draftAt !== undefined) {
+        actions.push(chatInputAction(ChatInput.Message.ChangedDraft({ chatId: draftId, value: model.value, at: step.draftAt })))
+        model = { ...model, writtenDraft: model.value }
+      } else {
+        commands.push(Commands.changeDraft(draftId, model.value))
+      }
+    }
     commands.push(Commands.AutoResize({ domId }))
   }
 
@@ -467,7 +476,7 @@ function step(model: Model, message: Message, ctx: Context): Step {
         ? [preferencesAction(ChatPreferences.Message.InitializedComposerForChat({ chatId: view.composerChatId, sourceState: null }))]
         : [],
     }),
-    ChangedInput: ({ value, caret }) => ({ model: { ...model, value, caret } }),
+    ChangedInput: ({ value, caret, at }) => ({ model: { ...model, value, caret }, draftAt: at }),
     MovedCaret: ({ caret }) => ({ model: caret === model.caret ? model : { ...model, caret } }),
     Pasted: ({ files, text }) => {
       const enqueued = files.length > 0 ? enqueueFiles(model, files, ctx) : { model }

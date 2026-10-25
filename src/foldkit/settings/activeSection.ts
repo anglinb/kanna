@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Mount } from "foldkit"
+import { currentHash } from "../core/navigation"
 
 // A React section ran its effects while it was mounted: Providers read the
 // LLM provider, Skills listed what's installed, Usage subscribed to its topic
@@ -15,7 +16,7 @@ import { Mount } from "foldkit"
  * the row renders.
  */
 function scrollToHashRow(): () => void {
-  const hash = window.location.hash
+  const hash = currentHash()
   const rowId = hash.startsWith("#") ? hash.slice(1) : hash
   if (!rowId) return () => {}
 
