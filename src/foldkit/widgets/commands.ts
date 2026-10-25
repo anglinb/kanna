@@ -378,16 +378,29 @@ export const FocusById = Command.define("WidgetsFocusById", {
   }),
 })
 
-/** After a prefill: the composer takes focus with the caret at the end (ChatInput's `prefill`). */
-export const FocusComposerAtEnd = Command.define("WidgetsFocusComposerAtEnd", {
+/**
+ * ChatInput's `prefill` (the chat page's handleEditSchedule): the text after
+ * whatever is written, on a line of its own, then the composer focused with
+ * the caret at the end. No AppAction reaches the composer yet (see the slice
+ * report: the page should send the composer's `RequestedPrefill`), so the
+ * text goes in as typing would: the field's value and an input event, which
+ * the composer takes as an edit.
+ */
+export const PrefillComposer = Command.define("WidgetsPrefillComposer", {
+  args: { text: Schema.String },
   messages: [Message.CompletedSideEffect],
-  execute: Effect.sync(() => {
+  execute: ({ text }) => Effect.sync(() => {
+    const element = document.querySelector<HTMLTextAreaElement>("textarea[data-chat-input]")
+    if (!element) return done()
+    const existing = element.value.trimEnd()
+    const next = existing ? `${existing}\n\n${text}` : text
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
+    setValue?.call(element, next)
+    element.dispatchEvent(new Event("input", { bubbles: true }))
     requestAnimationFrame(() => {
-      const element = document.querySelector<HTMLTextAreaElement>("textarea[data-chat-input]")
-      if (!element) return
       element.focus()
-      element.selectionStart = element.value.length
-      element.selectionEnd = element.value.length
+      element.selectionStart = next.length
+      element.selectionEnd = next.length
     })
     return done()
   }),

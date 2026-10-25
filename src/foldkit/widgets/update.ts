@@ -8,7 +8,6 @@ import { SliceOutMessage, type AppModel, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
 import { chooseChatOpenMenuItem, openChatActions } from "../chat/chatReference"
 import type { KannaSocketService } from "../core/socket"
-import * as ChatInput from "../core/stores/chatInput"
 import * as DiffCommit from "../core/stores/diffCommit"
 import * as RightSidebar from "../core/stores/rightSidebar"
 import * as ViewerStore from "../core/stores/viewer"
@@ -30,7 +29,7 @@ import {
   ExpireRanQuickAction,
   ExposePort,
   FocusById,
-  FocusComposerAtEnd,
+  PrefillComposer,
   GenerateCommitMessage,
   GetPublishInfo,
   InitGit,
@@ -498,20 +497,7 @@ function jumpToToolCall(model: Model, facts: Facts, toolId: string): Return {
 function editSchedule(model: Model, app: AppModel, facts: Facts, scheduleId: string): Return {
   const schedule = chatFacts(app, facts.chatId).schedules.find((candidate) => candidate.id === scheduleId)
   if (!schedule || !facts.chatId) return { model }
-  const prefill = prefillComposer(app, facts.chatId, scheduleEditPrompt(schedule))
-  return withActions({ model, commands: [FocusComposerAtEnd()] }, [prefill])
-}
-
-/**
- * The composer's prefill (ChatInput's `prefill`): the text after whatever is
- * already written, as the chat's draft, which the composer shows; the
- * composer then takes focus with the caret at the end. There is no
- * AppAction for it (see the slice report).
- */
-function prefillComposer(app: AppModel, chatId: string, text: string): AppAction {
-  const existing = ChatInput.chatDraft(app.stores.chatInput, chatId).trimEnd()
-  const value = existing ? `${existing}\n\n${text}` : text
-  return store(Stores.Message.GotChatInputMessage({ message: ChatInput.Message.ChangedDraft({ chatId, value, at: Date.now() }) }))
+  return { model, commands: [PrefillComposer({ text: scheduleEditPrompt(schedule) })] }
 }
 
 // PORTS
