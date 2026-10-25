@@ -222,7 +222,7 @@ export function minimapView(state: MinimapState, inputs: MinimapInputs, h: H): H
 }
 
 /** The wrapper's height, and whether the device has a hover-capable, precise pointer. */
-const MeasureMinimap = Mount.defineStream("MeasureTranscriptMinimap", {
+export const MeasureMinimap = Mount.defineStream("MeasureTranscriptMinimap", {
   messages: [Message.MeasuredMinimap, Message.ChangedFinePointer],
   execute: ({ element }) => domStream<Extract<Message, { _tag: "MeasuredMinimap" | "ChangedFinePointer" }>>((emit) => {
     let height = -1
