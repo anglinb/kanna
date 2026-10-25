@@ -601,6 +601,9 @@ export function update(model: Model, message: Message, app: AppModel): Return {
         onSome: (next) => commitColumnWidth(model, app, next),
       })
     },
+    ChangedWidgetsPeek: ({ peeking }) => (model.widgetsColumn.peekRequested === peeking
+      ? { model }
+      : { model: modifyFields(model, { widgetsColumn: (column) => ({ ...column, peekRequested: peeking }) }) }),
     ElapsedColumnSlide: ({ token }) => model.widgetsColumn.slideToken === token && model.widgetsColumn.sliding
       ? { model: modifyFields(model, { widgetsColumn: (column) => ({ ...column, sliding: false }) }) }
       : { model },

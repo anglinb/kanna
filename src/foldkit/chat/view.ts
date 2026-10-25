@@ -18,7 +18,7 @@ import { chatTabsView } from "./chatTabs"
 import { pageFacts, getTerminalPanelDefaultSizes, CHAT_MIN_SIZE_PERCENT, type PageFacts } from "./page"
 import type { ChatPageContext, ChatPageSliceInputs } from "./pageInputs"
 import { panel, panelGroup, separator } from "./resizable"
-import { getWidgetsColumnWidthPx, widgetsColumnView } from "./widgetsColumn"
+import { getWidgetsColumnWidthPx, widgetsColumnView, widgetsPeeking } from "./widgetsColumn"
 import { emptyStateView } from "./emptyState"
 import { newChatDelegate } from "./newChatDelegate"
 
@@ -73,7 +73,9 @@ export function pageContext(model: Model, app: AppModel, facts: PageFacts): Chat
     transcriptPaddingBottom: getTranscriptPaddingBottom(model.dockHeight),
     isPageFileDragActive: model.pageFileDragActive,
     projectPath: facts.navbarLocalPath,
-    widgetsActive: facts.showRightSidebar,
+    // The closed column shown over the chat: its widgets are on screen then,
+    // so they load as they do when it is open.
+    widgetsActive: facts.showRightSidebar || (!facts.isMobile && widgetsPeeking(model, { open: facts.showRightSidebar, peekEnabled: facts.widgetsPeekEnabled })),
     isNewChat: facts.showEmptyState,
     widgetsData: {
       quickActions: facts.projectId ? model.quickActions[facts.projectId] ?? null : null,
@@ -181,6 +183,7 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
         widthPx: getWidgetsColumnWidthPx(model.widgetsColumn.dragWidthPx ?? app.stores.rightSidebar.size, model.layoutWidth),
         content: widgets,
         wash: washView(model, { wash: "widgets", resetKey: null, stopAtTranscriptScrollbar: false, opaqueBar: false }, h),
+        peekEnabled: facts.widgetsPeekEnabled,
       }, h)
       : []),
   ])

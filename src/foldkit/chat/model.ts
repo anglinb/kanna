@@ -103,6 +103,8 @@ export const Model = Schema.Struct({
     slideToken: Schema.Number,
     dragWidthPx: Schema.NullOr(Schema.Number),
     dragStart: Schema.NullOr(Schema.Struct({ pointerX: Schema.Number, widthPx: Schema.Number })),
+    /** The closed column asked to be shown over the chat (useEdgePeek's `requested`). */
+    peekRequested: Schema.Boolean,
   }),
 
   /**
@@ -200,7 +202,7 @@ export function init(): Model {
     washes: { transcript: wash, widgets: wash },
     washTokens: 0,
     title: { draft: null, submitted: null, submittedOver: null },
-    widgetsColumn: { open: false, switchKey: null, sliding: false, slideToken: 0, dragWidthPx: null, dragStart: null },
+    widgetsColumn: { open: false, switchKey: null, sliding: false, slideToken: 0, dragWidthPx: null, dragStart: null, peekRequested: false },
     terminalPane: initialTerminalPane,
     viewerSplit: [100, 0],
     quickActions: {},

@@ -100,6 +100,8 @@ export interface PageFacts {
   showEmptyState: boolean
   isMobile: boolean
   chatTabsEnabled: boolean
+  /** The widget column's peek setting (General). */
+  widgetsPeekEnabled: boolean
   /** The open chat's name where the navbar shows it: its tab's (the sidebar's) with tabs on, the snapshot's without. */
   activeTitle: string | undefined
   tabsCount: number
@@ -238,6 +240,7 @@ export function pageFacts(app: AppModel, viewportWidth: number, settledShowEmpty
     showEmptyState,
     isMobile,
     chatTabsEnabled,
+    widgetsPeekEnabled: settings?.widgetsPeekEnabled === true,
     activeTitle: chatTabsEnabled ? (chatId ? threadTitle(app, chatId) ?? "New Chat" : undefined) : runtime?.title,
     tabsCount: app.stores.chatTabs.tabs.length,
     pruneTabs: chatTabsEnabled ? keepJson(tabsToKeep(app, chatId)) : null,

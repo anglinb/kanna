@@ -170,6 +170,8 @@ export const Message = defineMessageUnion({
   DoubleClickedColumnHandle: {},
   PressedColumnHandleKey: { key: Schema.String },
   ElapsedColumnSlide: { token: Schema.Number },
+  /** The peek: the closed column shown over the chat while the mouse is at the window's right edge. */
+  ChangedWidgetsPeek: { peeking: Schema.Boolean },
 
   // Terminals and diffs
   MadeTerminalId: { purpose: TerminalPurpose, projectId: Schema.String, chatKey: Schema.NullOr(Schema.String), terminalId: Schema.String },

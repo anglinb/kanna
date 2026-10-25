@@ -9,6 +9,7 @@ import {
   RIGHT_SIDEBAR_MIN_WIDTH_PX,
 } from "../core/stores/rightSidebar"
 import { domStream } from "../ui/overlay/stream"
+import { watchEdgePeek } from "./edgePeek"
 import { Message } from "./message"
 import type { Model } from "./model"
 
@@ -83,16 +84,34 @@ const ColumnHandle = Mount.defineStream("WidgetsColumnHandle", {
   }),
 })
 
+/** Whether the closed column is being shown over the chat (`enabled && requested`). */
+export function widgetsPeeking(model: Model, options: { open: boolean; peekEnabled: boolean }) {
+  return options.peekEnabled && !options.open && model.widgetsColumn.peekRequested
+}
+
+/** The peek's listeners, on the column's content (the panel as it is laid out). */
+const WatchWidgetsPeek = Mount.defineStream("WatchWidgetsPeek", {
+  messages: [Message.ChangedWidgetsPeek],
+  execute: ({ element }) => domStream<typeof Message.ChangedWidgetsPeek.Type>((emit) => {
+    const panel = element.parentElement
+    if (!panel) return () => {}
+    return watchEdgePeek({ side: "right", panel, edgePx: 2, report: (peeking) => emit(Message.ChangedWidgetsPeek({ peeking })) })
+  }),
+})
+
 export function widgetsColumnView(
   model: Model,
-  options: { open: boolean; widthPx: number; content: Html | null; wash: Html },
+  options: { open: boolean; widthPx: number; content: Html | null; wash: Html; peekEnabled: boolean },
   h: HtmlBuilder<Message>,
 ): ReadonlyArray<Html> {
   const { open, widthPx } = options
   const sliding = model.widgetsColumn.sliding
-  // The peek (useEdgePeek) is a setting, off unless turned on: not ported yet,
-  // so the closed column is never shown over the chat.
-  const peeking = false
+  // The peek (useEdgePeek): the closed column shown over the chat while the
+  // mouse is at the window's right edge. Only the last 2px open it, where the
+  // left sidebar takes 8: the transcript's scrollbar lives along this edge.
+  // A setting, and off unless turned on (General).
+  const peekWatched = options.peekEnabled && !open
+  const peeking = widgetsPeeking(model, options)
   // Over the chat rather than beside it: in a peek, and while a column kept
   // from a peek is still making its room.
   const floating = !open || sliding
@@ -137,7 +156,11 @@ export function widgetsColumnView(
         // Closed counts as animated: the peek comes and goes from there.
         h.DataAttribute("right-sidebar-animated", sliding || !open ? "true" : "false"),
         h.DataAttribute("right-sidebar-visual", "true"),
-      ], [options.content, options.wash]),
+      ], [
+        options.content,
+        options.wash,
+        peekWatched ? h.keyed("span")("widgets-peek", [h.Hidden(true), h.OnMount(WatchWidgetsPeek())], []) : null,
+      ]),
     ]),
   ]
 }
