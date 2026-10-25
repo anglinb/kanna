@@ -42,8 +42,11 @@ import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
 import * as AppDialog from "../ui/app-dialog"
+import { isNightlyVersion } from "../../shared/types"
+import * as OpenRouterCallback from "./openRouterCallback"
+import { FollowRestart, HandleReloadRequest, MigrateChannelPins, MigrateLegacyBrowserSettings, MigrateLegacySetupFlags, updateCheckInterval } from "./maintenance"
 import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
-import { SliceOutMessage, type AppModel, type SliceReturn } from "./slice"
+import { SliceOutMessage, type AppModel, type SliceObserve, type SliceReturn } from "./slice"
 import type { AppAction } from "./action"
 import * as Stores from "./stores"
 import { resolveTheme, themePreference } from "./theme"
@@ -87,6 +90,9 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     stores,
     actions: initialActionsModel,
     appDialog: AppDialog.init(),
+    openRouterCallback: OpenRouterCallback.init(Option.getOrElse(url.search, () => "")),
+    legacySettingsMigrationStarted: false,
+    pageHidden: false,
     sidebar: SidebarSlice.init(),
     home: HomeSlice.init(),
     settings: SettingsSlice.init(),
@@ -232,8 +238,17 @@ function themeCommands(before: Model, after: Model): Commands {
 /** useAppSettingsSync: the snapshot fans out to the stores; the theme follows. */
 function receiveAppSettings(model: Model, snapshot: AppSettingsSnapshot): UpdateReturn {
   const fanned = onStores(Stores.receivedAppSettings(snapshot))(model)
-  const next = commandError(fanned.model, null)
-  return { model: next, commands: [...(fanned.commands ?? []), ...themeCommands(model, next)] }
+  let next = commandError(fanned.model, null)
+  const migrations: AppCommand[] = []
+  if (next.connectionStatus === "connected") {
+    // useAppSettingsSync's legacy migrations, once connected.
+    if (snapshot.browserSettingsMigrated === false && !next.legacySettingsMigrationStarted) {
+      next = modifyFields(next, { legacySettingsMigrationStarted: () => true })
+      migrations.push(MigrateLegacyBrowserSettings())
+    }
+    migrations.push(MigrateLegacySetupFlags({ snapshot }))
+  }
+  return { model: next, commands: [...(fanned.commands ?? []), ...themeCommands(model, next), ...migrations] }
 }
 
 /** App.tsx's sidebar store subscription: chime and notify on what changed. */
@@ -268,7 +283,9 @@ function appliedSidebarSnapshot(before: Model): Step {
     // The first snapshot has nothing to compare against, and treating the
     // empty starting state as "previous" would chime once per unread chat on
     // every page load.
-    const notifications = before.stores.sidebar.ready ? notificationCommands(next, sidebarData(before), sidebarData(next)) : []
+    const notifications: AppCommand[] = before.stores.sidebar.ready ? [...notificationCommands(next, sidebarData(before), sidebarData(next))] : []
+    // useMigrateChannelPins: once the sidebar is in.
+    if (!before.stores.sidebar.ready) notifications.push(MigrateChannelPins({ projectGroups: sidebarData(next).projectGroups }))
     const background = reconcileBackgroundChats(next)
     return { model: background.model, commands: [...(bounced.commands ?? []), ...notifications, ...(background.commands ?? [])] }
   }
@@ -434,6 +451,10 @@ const foldAppDialog = Update.foldChild({
 /** Runs a slice's request. Sidebar collapse and the page's chat are the root's own. */
 export function performAction(model: Model, action: AppAction): UpdateReturn {
   switch (action._tag) {
+    case "Batch":
+      return Update.combine(model, (action.actions as ReadonlyArray<AppAction>).map((each) => (step: Model) => performAction(step, each)))
+    case "OpenCommandPalette":
+      return foldPaletteResult(model, PaletteSlice.requestOpen(model.palette, action.page, model))
     case "CollapseSidebar":
       return update(model, Message.ClickedCollapseSidebar())
     case "ExpandSidebar":
@@ -491,9 +512,52 @@ const foldSetup = sliceFold("setup", SetupSlice.update, (message: SetupSlice.Mes
 const foldWorkflows = sliceFold("workflows", WorkflowsSlice.update, (message: WorkflowsSlice.Message) => Message.GotWorkflowsMessage({ message }))
 const foldTerminalPage = sliceFold("terminalPage", TerminalPageSlice.update, (message: TerminalPageSlice.Message) => Message.GotTerminalPageMessage({ message }))
 
+/** A palette result the root started (requestOpen), folded as a palette message would be. */
+function foldPaletteResult(model: Model, result: SliceReturn<PaletteSlice.Model, PaletteSlice.Message>): UpdateReturn {
+  const next = modifyFields(model, { palette: () => result.model })
+  const commands = Command.mapMessages(result.commands, (message: PaletteSlice.Message) => Message.GotPaletteMessage({ message }))
+  if (!result.outMessage) return { model: next, commands }
+  const acted = performAction(next, result.outMessage.action)
+  return { model: acted.model, commands: [...commands, ...(acted.commands ?? [])] }
+}
+
+// SLICE OBSERVERS (app/slice.ts `observe`)
+
+type AnySliceModule = { observe?: SliceObserve<unknown, unknown> }
+const observers: ReadonlyArray<[keyof Model, AnySliceModule, (message: never) => Message]> = [
+  ["sidebar", SidebarSlice as AnySliceModule, (message: SidebarSlice.Message) => Message.GotSidebarMessage({ message })],
+  ["home", HomeSlice as AnySliceModule, (message: HomeSlice.Message) => Message.GotHomeMessage({ message })],
+  ["settings", SettingsSlice as AnySliceModule, (message: SettingsSlice.Message) => Message.GotSettingsMessage({ message })],
+  ["chatPage", ChatPageSlice as AnySliceModule, (message: ChatPageSlice.Message) => Message.GotChatPageMessage({ message })],
+  ["palette", PaletteSlice as AnySliceModule, (message: PaletteSlice.Message) => Message.GotPaletteMessage({ message })],
+  ["setup", SetupSlice as AnySliceModule, (message: SetupSlice.Message) => Message.GotSetupMessage({ message })],
+  ["workflows", WorkflowsSlice as AnySliceModule, (message: WorkflowsSlice.Message) => Message.GotWorkflowsMessage({ message })],
+  ["terminalPage", TerminalPageSlice as AnySliceModule, (message: TerminalPageSlice.Message) => Message.GotTerminalPageMessage({ message })],
+]
+
+function observeSlices(previous: Model, result: UpdateReturn): UpdateReturn {
+  if (result.model === previous) return result
+  let model = result.model
+  const commands: AppCommand[] = [...(result.commands ?? [])]
+  for (const [key, module, wrap] of observers) {
+    if (!module.observe) continue
+    const observed = module.observe(model[key], previous, model)
+    if (observed.model !== model[key]) model = { ...model, [key]: observed.model }
+    commands.push(...Command.mapMessages(observed.commands, wrap as (message: unknown) => Message) as AppCommand[])
+    if (observed.outMessage) {
+      const acted = performAction(model, observed.outMessage.action)
+      model = acted.model
+      commands.push(...(acted.commands ?? []))
+    }
+  }
+  return { model, commands }
+}
+
 // UPDATE
 
-export const update = (model: Model, message: Message): UpdateReturn =>
+export const update = (model: Model, message: Message): UpdateReturn => observeSlices(model, updateRoot(model, message))
+
+const updateRoot = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     ClickedLink: ({ request }) =>
       Navigation.UrlRequest.match<UpdateReturn>(request, {
@@ -531,12 +595,21 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
 
-    AcquiredSocket: () => ({ model: modifyFields(model, { socketReady: () => true }) }),
+    AcquiredSocket: () => {
+      const next = modifyFields(model, { socketReady: () => true })
+      if (next.route._tag !== "OpenRouterCallback") return { model: next }
+      const started = OpenRouterCallback.start(next.openRouterCallback)
+      return {
+        model: modifyFields(next, { openRouterCallback: () => started.model }),
+        commands: Command.mapMessages(started.commands, (message: OpenRouterCallback.Message) => Message.GotOpenRouterCallbackMessage({ message })),
+      }
+    },
     ReleasedSocket: () => ({ model: modifyFields(model, { socketReady: () => false, backgroundChats: () => ({}) }) }),
     FailedAcquireSocket: ({ error }) => ({ model: commandError(model, error) }),
     ChangedConnectionStatus: ({ status }) => {
       const next = modifyFields(model, { connectionStatus: () => status })
-      if (status !== "connected" || model.connectionStatus === "connected") return { model: next }
+      const restart = FollowRestart({ connectionStatus: status })
+      if (status !== "connected" || model.connectionStatus === "connected") return { model: next, commands: [restart] }
       // In the order React's effects ran on connect: draft protection
       // (useKannaState), the forced update check (useUpdateRestart), then
       // settings and the LLM provider (useAppSettingsSync).
@@ -547,6 +620,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           SendCommand({ command: { type: "update.check", force: true } }),
           ReadAppSettings(),
           ReadLlmProvider(),
+          restart,
         ],
       }
     },
@@ -554,7 +628,18 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ReceivedLocalProjects: ({ snapshot }) => ({
       model: modifyFields(model, { localProjects: () => snapshot, localProjectsReady: () => true, commandError: () => null }),
     }),
-    ReceivedUpdate: ({ snapshot }) => ({ model: modifyFields(model, { updateSnapshot: () => snapshot, commandError: () => null }) }),
+    ReceivedUpdate: ({ snapshot }) => ({
+      model: modifyFields(model, { updateSnapshot: () => snapshot, commandError: () => null }),
+      commands: snapshot.reloadRequestedAt ? [HandleReloadRequest({ reloadRequestedAt: snapshot.reloadRequestedAt })] : [],
+    }),
+    ReachedUpdateCheckPoint: ({ at, visible }) => {
+      if (model.connectionStatus !== "connected" || !visible) return { model }
+      const lastCheckedAt = model.updateSnapshot?.lastCheckedAt
+      const interval = updateCheckInterval(isNightlyVersion(model.updateSnapshot?.currentVersion ?? ""))
+      if (lastCheckedAt && at - lastCheckedAt < interval) return { model }
+      return { model, commands: [SendCommand({ command: { type: "update.check" } })] }
+    },
+    ChangedPageVisibility: ({ shown }) => ({ model: modifyFields(model, { pageHidden: () => !shown }) }),
     ReceivedKeybindings: ({ snapshot }) => ({ model: modifyFields(model, { keybindings: () => snapshot, commandError: () => null }) }),
     ReceivedAppSettings: ({ snapshot }) => receiveAppSettings(model, snapshot),
     SucceededReadAppSettings: ({ snapshot }) => receiveAppSettings(model, snapshot),
@@ -624,6 +709,13 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     GotWorkflowsMessage: ({ message: child }) => foldWorkflows(model, child),
     GotTerminalPageMessage: ({ message: child }) => foldTerminalPage(model, child),
     GotAppDialogMessage: ({ message: dialogMessage }) => foldAppDialog(model, dialogMessage),
+    GotOpenRouterCallbackMessage: ({ message: callbackMessage }) => {
+      const result = OpenRouterCallback.update(model.openRouterCallback, callbackMessage)
+      return {
+        model: modifyFields(model, { openRouterCallback: () => result.model }),
+        commands: Command.mapMessages(result.commands, (message: OpenRouterCallback.Message) => Message.GotOpenRouterCallbackMessage({ message })),
+      }
+    },
     GotActionMessage: ({ message: actionMessage }) => withDraftProtection(model, actions.handleActionMessage(model, actionMessage) as UpdateReturn),
   })
 
