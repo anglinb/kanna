@@ -102,7 +102,7 @@ at the pointer, drag data, wheel deltas), use one of:
 - The harness, scenarios and the fixture are protected: never change one
   to make a difference go away. Only the agent asked to write scenarios, or
   to build gallery pages, edits them.
-- `node_modules/.bin/tsc --noEmit` must stay clean (the `tsconfig.json`
+- `bun run typecheck` must stay clean (tsc, one at a time machine-wide; the `tsconfig.json`
   includes `src/foldkit/**`).
 
 ## Worktrees
