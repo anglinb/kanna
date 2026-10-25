@@ -21,6 +21,7 @@ import { pageView } from "./view"
 //   view.ts              the layout: panes, terminal split, composer dock
 //   navbar.ts            ChatNavbar, its wash, title, menus, a delegator's list button
 //   chatTabs.ts          ChatTabs: the open chats as tabs (the Chat Tabs setting)
+//   tabHoverCard.ts      the sidebar's chat card beneath the tab under the pointer
 //   chatRowMenu.ts       a chat's right-click menu (ThreadRowMenu), as data
 //   openExternal.ts      "Open in…": the split button, its list, the menu rows
 //   editorIcons.ts       the editors', terminals' and Finder's app icons
