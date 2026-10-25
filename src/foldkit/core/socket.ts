@@ -1,7 +1,7 @@
 import { Effect, Queue, Stream } from "effect"
 import { ManagedResource } from "foldkit"
 import { KannaSocket, type SocketStatus, type WsUrlSource } from "../../client/app/socket"
-import { getServerCapabilities } from "../../client/stores/serverCapabilitiesStore"
+import { getServerCapabilities } from "./stores/serverCapabilities"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import type { ClientCommand, SubscriptionTopic, TerminalEvent, TerminalSnapshot } from "../../shared/protocol"
 
