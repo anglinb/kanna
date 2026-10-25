@@ -123,6 +123,23 @@ export const Message = defineMessageUnion({
   GotDialogMessage: { message: Dialog.Message },
   /** Mark up: the image came back attached to the composer, or the markup was cancelled. */
   ClosedMarkup: { attached: Schema.Boolean },
+  LoadedMarkupSource: { captureId: Schema.String, width: Schema.Number, height: Schema.Number },
+  FailedMarkupSource: { captureId: Schema.String, error: Schema.String },
+  MeasuredMarkupStage: { width: Schema.Number, height: Schema.Number },
+  ChoseMarkupTool: { tool: Schema.String },
+  ChoseMarkupColor: { color: Schema.String },
+  /** A stroke, arrow or box finished on the canvas. */
+  AddedMark: { mark: Schema.Unknown },
+  PlacedTextDraft: { at: Schema.Struct({ x: Schema.Number, y: Schema.Number }), size: Schema.Number },
+  ChangedTextDraft: { value: Schema.String },
+  /** The label goes in: `id` names the one to commit (its field's blur), null for whichever is open. */
+  CommittedTextDraft: { id: Schema.NullOr(Schema.Number) },
+  CancelledTextDraft: {},
+  ClickedUndoMarkup: {},
+  ClickedClearMarkup: {},
+  ClickedAttachMarkup: {},
+  SucceededAttachMarkup: {},
+  FailedAttachMarkup: { error: Schema.String },
 
   // THE CHAT PREVIEWER
 

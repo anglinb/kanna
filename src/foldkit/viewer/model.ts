@@ -6,6 +6,7 @@ import * as Messages from "../transcript/messages/model"
 import * as Tooltip from "../ui/tooltip"
 import * as Select from "../ui/select"
 import * as Dialog from "../ui/dialog"
+import type { MarkupModel } from "./markup"
 import { PreviewModel } from "./previewModel"
 
 // The viewer layer's Model: what ViewerLayer, ViewerSurface and the views it
@@ -119,6 +120,8 @@ export const Model = Schema.Struct({
   /** The transcript rows' state the chart and visualization bodies are drawn with (`chartFullViewBody`, `visualizationFrame`). */
   rows: Messages.Model,
   visualizationDialog: Schema.NullOr(opaque<VisualizationDialog>("VisualizationDialog")),
+  /** Mark up's state while it is open (markup.ts). */
+  markup: Schema.NullOr(opaque<MarkupModel>("MarkupModel")),
   dialog: Dialog.Model,
 
   /** The chat previewer: a second chat, live, while a chat is the card. */
@@ -148,6 +151,7 @@ export function init(): Model {
     wrapLines: false,
     rows: Messages.init(),
     visualizationDialog: null,
+    markup: null,
     dialog: Dialog.init({ id: SAVE_DIALOG_ID }),
     preview: null,
     hostRegistered: false,

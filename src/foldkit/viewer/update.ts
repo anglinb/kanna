@@ -34,6 +34,7 @@ import {
 } from "./diff"
 import { sortByPath, type DiffFile } from "./git"
 import { initialSaveDialog, SaveImage } from "./fullViews"
+import { AttachMarkup, commitText, initialMarkup, LoadMarkupSource, markupUpdate, releaseMarkupSource } from "./markup"
 import { Message } from "./message"
 import { init, type DiffState, type Model } from "./model"
 import { selectOf, selectTarget } from "./openFileSelect"
@@ -147,6 +148,7 @@ function mountedCard(model: Model, app: AppModel, key: string, cardEnters: boole
     tables: () => ({}),
     rows: () => fresh.rows,
     visualizationDialog: () => null,
+    markup: () => null,
     dialog: () => fresh.dialog,
   })
   return leaveCard(done(reset), app, key)
@@ -524,8 +526,44 @@ function step(model: Model, message: Message, app: AppModel): Step {
       const title = item?.kind === "visualization" ? item.artifact.title : ""
       const opened = Dialog.open(model.dialog)
       const dialog = message.kind === "save" ? initialSaveDialog(title, message.captureId) : { ...initialSaveDialog(title, message.captureId), kind: "markup" as const }
-      return done(modifyFields(model, { visualizationDialog: () => dialog, dialog: () => opened.model }))
+      const next = modifyFields(model, {
+        visualizationDialog: () => dialog,
+        dialog: () => opened.model,
+        markup: () => (message.kind === "markup" ? initialMarkup(message.captureId) : null),
+      })
+      return done(next, message.kind === "markup" ? [LoadMarkupSource({ captureId: message.captureId }) as AnyCommand] : [])
     }
+    case "LoadedMarkupSource":
+    case "FailedMarkupSource":
+    case "MeasuredMarkupStage":
+    case "ChoseMarkupTool":
+    case "ChoseMarkupColor":
+    case "AddedMark":
+    case "PlacedTextDraft":
+    case "ChangedTextDraft":
+    case "CommittedTextDraft":
+    case "CancelledTextDraft":
+    case "ClickedUndoMarkup":
+    case "ClickedClearMarkup":
+      return done(modifyFields(model, { markup: (markup) => (markup ? markupUpdate(markup, message) : markup) }))
+    case "ClickedAttachMarkup": {
+      const markup = model.markup
+      if (!markup?.source || markup.attaching) return done(model)
+      const committed = commitText(markup)
+      const item = ViewerStore.chatViewer({ viewer: app.stores.viewer, rightSidebar: app.stores.rightSidebar })?.item
+      const title = item?.kind === "visualization" ? item.artifact.title : ""
+      return done(
+        modifyFields(model, { markup: () => ({ ...committed, attaching: true, attachError: null }) }),
+        [AttachMarkup({ captureId: markup.captureId, title, marks: committed.markup.marks }) as AnyCommand],
+      )
+    }
+    case "SucceededAttachMarkup": {
+      // Back to the chat, where the image now waits in the composer for the words to go with it.
+      const closed = closeDialog(model)
+      return { ...closed, actions: [...closed.actions, viewerStore(ViewerStore.Message.ClosedViewer({ byKey: false }))] }
+    }
+    case "FailedAttachMarkup":
+      return done(modifyFields(model, { markup: (markup) => (markup ? { ...markup, attaching: false, attachError: message.error } : markup) }))
     case "ChangedImageName":
       return done(modifyFields(model, { visualizationDialog: (dialog) => (dialog ? { ...dialog, name: message.value } : dialog) }))
     case "ChoseImageType":
@@ -597,10 +635,13 @@ function step(model: Model, message: Message, app: AppModel): Step {
 
 function closeDialog(model: Model): Step {
   const dialog = model.visualizationDialog
-  if (dialog) dropCapture(dialog.captureId)
+  if (dialog) {
+    dropCapture(dialog.captureId)
+    releaseMarkupSource(dialog.captureId)
+  }
   const closed = Dialog.close(model.dialog)
   return done(
-    modifyFields(model, { visualizationDialog: () => null, dialog: () => closed.model }),
+    modifyFields(model, { visualizationDialog: () => null, markup: () => null, dialog: () => closed.model }),
     Command.mapMessages(closed.commands ?? [], (inner: Dialog.Message) => Message.GotDialogMessage({ message: inner })) as unknown as AnyCommand[],
   )
 }
