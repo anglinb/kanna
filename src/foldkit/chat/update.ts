@@ -641,9 +641,6 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     },
     ChangedTabCardRow: () => tabCardStep(model, message, app),
     GotTabCardMessage: () => tabCardStep(model, message, app),
-    SucceededLoadTabCardFiles: () => tabCardStep(model, message, app),
-    SucceededLoadTabCardPreview: () => tabCardStep(model, message, app),
-    FailedLoadTabCard: () => ({ model }),
 
     ClickedTitle: () => beginTitleEdit(model, facts()),
     PressedTitleKey: () => beginTitleEdit(model, facts()),

@@ -18,7 +18,8 @@ import { Message } from "./message"
 import { init, type Model } from "./model"
 import { CaptureOutgoingPage } from "./motion"
 import { SyncHoverTracker } from "./hoverCard"
-import { LoadTouchedFiles, SaveSidebarWidth, update } from "./update"
+import { SaveSidebarWidth, update } from "./update"
+import * as ChatCard from "../ui/chat-hover-card"
 
 function row(chatId: string, overrides: Partial<SidebarChatRow> = {}): SidebarChatRow {
   return {
@@ -294,7 +295,7 @@ describe("sidebar: hover cards", () => {
     Story.story(
       updateFor(appAt("/chat/c2")),
       Story.given(hovered),
-      Story.message(Message.ClickedCardMessage({ list: "chats", chatId: "c1", role: "reply" })),
+      Story.message(Message.GotCardMessage({ list: "chats", message: ChatCard.CardMessage.ClickedCardMessage({ chatId: "c1", role: "reply" }) })),
       Story.expectOutMessage(asks(AppAction.OpenChatAt({ chatId: "c1", jump: "reply" }))),
       Story.model((model) => expect(model.hovered.chats).toBeNull()),
       Story.Command.resolve(SyncHoverTracker, Message.CompletedSideEffect()),
@@ -302,19 +303,42 @@ describe("sidebar: hover cards", () => {
   })
 
   test("a card asks for what the cache lacks, and keeps the answer", () => {
+    const card = (message: ChatCard.CardMessage) => Message.GotCardMessage({ list: "chats", message })
     Story.story(
       updateFor(appAt("/home")),
       Story.given(sidebar),
-      Story.message(Message.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" })),
-      Story.Command.expectHas(LoadTouchedFiles),
-      Story.Command.resolve(LoadTouchedFiles, Message.SucceededLoadTouchedFiles({ chatId: "c1", cacheKey: "k1", result: { files: [], totalCount: 0 } })),
+      Story.message(card(ChatCard.CardMessage.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" }))),
+      Story.Command.expectHas(ChatCard.LoadTouchedFiles),
+      Story.Command.resolve(ChatCard.LoadTouchedFiles, ChatCard.CardMessage.SucceededLoadTouchedFiles({ chatId: "c1", cacheKey: "k1", result: { files: [], totalCount: 0 } })),
       Story.model((model) => {
-        expect(model.touchedFilesCache["k1"]).toEqual({ files: [], totalCount: 0 })
-        expect(model.heldTouchedFiles?.chatId).toBe("c1")
+        expect(model.card.touchedFilesCache["k1"]).toEqual({ files: [], totalCount: 0 })
+        expect(model.card.heldTouchedFiles?.chatId).toBe("c1")
       }),
-      Story.message(Message.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" })),
+      Story.message(card(ChatCard.CardMessage.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" }))),
       Story.Command.expectNone(),
     )
+  })
+
+  test("what the tab card or a transcript card fetched serves the sidebar's card", () => {
+    const base = appAt("/home")
+    const preview = { lastUserMessagePreview: "Deploy it", lastAgentMessagePreview: null } as never
+    const app: AppModel = { ...base, chatPage: { ...base.chatPage, tabCard: { ...base.chatPage.tabCard, card: { ...base.chatPage.tabCard.card, previewCache: { k2: preview } } } } }
+    const asked = update(sidebar, Message.GotCardMessage({ list: "chats", message: ChatCard.CardMessage.RequestedCardLoad({ chatId: "c1", kind: "preview", cacheKey: "k2" }) }), app)
+    expect(asked.commands ?? []).toEqual([])
+    expect(asked.model.card.heldPreview).toEqual({ chatId: "c1", preview })
+  })
+
+  test("the card's other actions dismiss it and ask the root; the repo opens here", () => {
+    const app = appAt("/home")
+    const via = (message: ChatCard.CardMessage) => update(sidebar, Message.GotCardMessage({ list: "chats", message }), app)
+    expect(via(ChatCard.CardMessage.ClickedCardChat({ chatId: "c1", archived: true })).outMessage).toEqual(asks(AppAction.OpenArchivedChat({ chatId: "c1" })))
+    expect(via(ChatCard.CardMessage.ClickedCardChat({ chatId: "c1", archived: false })).outMessage).toEqual(asks(AppAction.Navigate({ path: "/chat/c1", replace: false })))
+    expect(via(ChatCard.CardMessage.ClickedCardSetupGit({ chatId: "c1" })).outMessage).toEqual(asks(AppAction.SetupGit({ chatId: "c1" })))
+    expect(via(ChatCard.CardMessage.ClickedCardFile({ localPath: "/repo/p1", filePath: "src/a.ts" })).outMessage)
+      .toEqual(asks(AppAction.OpenExternalPath({ action: "open_editor", localPath: "/repo/p1/src/a.ts" })))
+    const repo = via(ChatCard.CardMessage.ClickedCardRepo({ url: "https://github.com/you/p1" }))
+    expect(repo.outMessage).toBeUndefined()
+    expect(repo.commands?.map((command) => command.name)).toEqual(["SyncHoverTracker", "ChatCardOpenRepo"])
   })
 
   test("a channel click opens its new chat with a mouse, and its page on touch", () => {

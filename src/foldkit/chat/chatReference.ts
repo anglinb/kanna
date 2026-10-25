@@ -1,4 +1,5 @@
 import type { HtmlBuilder } from "foldkit/html"
+import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import { resolveChatOpen } from "../../client/lib/chat-open"
 import { flattenSidebarThreads, type SidebarThread } from "../../client/lib/thread-sections"
 import type { ChatSchedule } from "../../shared/types"
@@ -49,9 +50,26 @@ const navigate = (chatId: string) => AppAction.Navigate({ path: `/chat/${chatId}
  * useOpenChat: a chat opened from inside this one goes to the previewer
  * beside it, whatever it is to it; `target: "tab"` skips the previewer;
  * `newTab` (Cmd/Ctrl or the middle button) gives it a tab instead. A jump to
- * a message is the router's (see the slice report): not carried here.
+ * a message is `openChatAtActions`.
  */
 export function openChatActions(app: AppModel, chatId: string, options: { from?: "page" | "preview"; target?: "tab"; newTab?: boolean } = {}): AppAction[] {
+  return openChat(app, chatId, options, null).actions
+}
+
+/**
+ * useOpenChat with `jump`, as a hover card's clickable previews open a chat:
+ * the main view lands on the message (AppAction.OpenChatAt, React's
+ * location-state jump) wherever it goes there; in the previewer the jump is
+ * the viewer store's (`setChatJump`), which wants a fresh request id, so the
+ * caller makes it (`ViewerStore.JumpInPreviewedChat`) when `jumpInPreview`.
+ */
+export function openChatAtActions(app: AppModel, chatId: string, jump: ChatJumpTarget, options: { from?: "page" | "preview"; newTab?: boolean } = {}): { actions: AppAction[]; jumpInPreview: boolean } {
+  return openChat(app, chatId, options, jump)
+}
+
+function openChat(app: AppModel, chatId: string, options: { from?: "page" | "preview"; target?: "tab"; newTab?: boolean }, jump: ChatJumpTarget | null): { actions: AppAction[]; jumpInPreview: boolean } {
+  const goTo = () => (jump ? AppAction.OpenChatAt({ chatId, jump }) : navigate(chatId))
+  const only = (actions: AppAction[]) => ({ actions, jumpInPreview: false })
   const store = app.stores.viewer
   const pageChatId = store.chatKey || null
   const current = ViewerStore.chatViewer({ viewer: store, rightSidebar: app.stores.rightSidebar })
@@ -59,10 +77,11 @@ export function openChatActions(app: AppModel, chatId: string, options: { from?:
   const preview = item?.kind === "chat" ? { chatId: item.chatId, back: item.back ?? [] } : null
 
   if (options.target === "tab") {
-    return [
+    return only([
       ...(preview?.chatId === chatId ? [viewer(ViewerStore.Message.ClosedViewer({ byKey: false }))] : []),
-      ...(!isChatInMainView(app, chatId) ? [navigate(chatId)] : []),
-    ]
+      // Already there: going to it again would only add a step to Back.
+      ...(!isChatInMainView(app, chatId) || jump ? [goTo()] : []),
+    ])
   }
 
   const action = resolveChatOpen({
@@ -77,22 +96,28 @@ export function openChatActions(app: AppModel, chatId: string, options: { from?:
   })
   switch (action.kind) {
     case "background-tab":
-      return [AppAction.Store({ message: Stores.Message.GotChatTabsMessage({ message: ChatTabs.Message.OpenedTab({ chatId, afterChatId: pageChatId }) }) })]
+      return only([AppAction.Store({ message: Stores.Message.GotChatTabsMessage({ message: ChatTabs.Message.OpenedTab({ chatId, afterChatId: pageChatId }) }) })])
+    // The chat is the one in the main view. Shown by clearing the previewer
+    // from over it; and when a message in it was asked for, by scrolling
+    // there, which is the same one-shot jump the sidebar's card sends.
     case "close-preview":
-      return [viewer(ViewerStore.Message.ClosedViewer({ byKey: false }))]
+      return only([viewer(ViewerStore.Message.ClosedViewer({ byKey: false })), ...(jump ? [goTo()] : [])])
     case "stay":
-      return []
+      return only(jump ? [goTo()] : [])
     case "preview": {
       const inPane = options.from === "preview"
       const delegated = !inPane ? undefined : item?.kind === "delegated" ? item.chatId : item?.kind === "chat" ? item.delegated : undefined
-      return [viewer(ViewerStore.Message.OpenedItem({
-        item: { kind: "chat", chatId, ...(action.back.length > 0 ? { back: action.back } : {}), ...(delegated ? { delegated } : {}) },
-        expanded: false,
-        byKey: false,
-      }))]
+      return {
+        actions: [viewer(ViewerStore.Message.OpenedItem({
+          item: { kind: "chat", chatId, ...(action.back.length > 0 ? { back: action.back } : {}), ...(delegated ? { delegated } : {}) },
+          expanded: false,
+          byKey: false,
+        }))],
+        jumpInPreview: jump !== null,
+      }
     }
     case "navigate":
-      return [navigate(chatId)]
+      return only([goTo()])
   }
 }
 

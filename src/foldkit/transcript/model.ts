@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
 import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import { opaque } from "../core/schema"
+import * as ChatCard from "../ui/chat-hover-card"
 import * as ContextMenu from "../ui/context-menu"
 import * as Messages from "./messages/model"
 
@@ -55,6 +56,13 @@ export const Model = Schema.Struct({
   linkMenuTarget: Schema.NullOr(opaque<OpenLocalLinkTarget>("OpenLocalLinkTarget")),
   /** Live chat cards' right-click menus (ThreadRowMenu), by chat; made on first use. */
   cardMenus: Schema.Record(Schema.String, ContextMenu.Model),
+  /**
+   * The live chat card whose hover card is up (SidebarChatHoverCard beneath
+   * it): which card, by the id its tracker gave it, and the chat it is on.
+   */
+  chatCardHover: Schema.NullOr(Schema.Struct({ instance: Schema.String, chatId: Schema.String, key: Schema.String })),
+  /** That hover card's fetches and what it holds (ui/chat-hover-card.ts). */
+  chatCard: ChatCard.CardData,
 })
 export type Model = typeof Model.Type
 
@@ -77,5 +85,7 @@ export function init(): Model {
     linkMenu: ContextMenu.init({ id: LINK_MENU_ID }),
     linkMenuTarget: null,
     cardMenus: {},
+    chatCardHover: null,
+    chatCard: ChatCard.initCardData(),
   }
 }

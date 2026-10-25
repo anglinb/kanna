@@ -1,11 +1,11 @@
 import { Schema } from "effect"
 import { defineMessageUnion } from "foldkit/message"
-import type { ChatPreview, ChatTouchedFilesResult } from "../../shared/types"
 import type { PairSessionState } from "../../client/lib/pairSession"
 import { AppAction } from "../app/action"
 import { opaque } from "../core/schema"
 import * as Connection from "../core/stores/connection"
 import { SidebarView } from "../core/stores/sidebarView"
+import * as ChatCard from "../ui/chat-hover-card"
 import * as ContextMenu from "../ui/context-menu"
 import * as Dialog from "../ui/dialog"
 import * as Popover from "../ui/popover"
@@ -77,17 +77,8 @@ export const Message = defineMessageUnion({
 
   // Hover cards (ListHoverCard)
   ChangedHoveredRow: { list: HoverList, key: Schema.NullOr(Schema.String) },
-  /** A card is up for a chat, or its row's key moved: fetch what the cache lacks (React's two effects). */
-  RequestedCardLoad: { chatId: Schema.String, kind: Schema.Literals(["files", "preview"]), cacheKey: Schema.String },
-  SucceededLoadPreview: { chatId: Schema.String, cacheKey: Schema.String, preview: opaque<ChatPreview>("ChatPreview") },
-  SucceededLoadTouchedFiles: { chatId: Schema.String, cacheKey: Schema.String, result: opaque<ChatTouchedFilesResult>("ChatTouchedFilesResult") },
-  /** A card's fetch failed: it stays without, quietly (the card is a peek). */
-  FailedLoadCard: {},
-  ClickedCardMessage: { list: HoverList, chatId: Schema.String, role: Schema.Literals(["prompt", "reply"]) },
-  ClickedCardChat: { list: HoverList, chatId: Schema.String, archived: Schema.Boolean },
-  ClickedCardSetupGit: { list: HoverList, chatId: Schema.String },
-  ClickedCardRepo: { list: HoverList, url: Schema.String },
-  ClickedCardFile: { list: HoverList, localPath: Schema.String, filePath: Schema.String },
+  /** From a chat card's body (ui/chat-hover-card.ts), up beside `list`: its fetches and its actions. */
+  GotCardMessage: { list: HoverList, message: ChatCard.CardMessage },
   /** The channel card asked to close: Escape, a click outside. */
   DismissedChannelCard: {},
 

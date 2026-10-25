@@ -3,6 +3,8 @@ import { defineMessageUnion } from "foldkit/message"
 import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import type { TranscriptEntry } from "../../shared/types"
 import { opaque } from "../core/schema"
+import * as ViewerStore from "../core/stores/viewer"
+import * as ChatCard from "../ui/chat-hover-card"
 import * as ContextMenu from "../ui/context-menu"
 import * as Messages from "./messages/model"
 
@@ -62,5 +64,11 @@ export const Message = defineMessageUnion({
   ClickedChatCard: { chatId: Schema.String },
   GotCardMenuMessage: { chatId: Schema.String, message: ContextMenu.Message },
   CompletedOpenUrl: {},
+  /** A live card's tracker: the chat its hover card is on, or none (`instance` names the card). */
+  ChangedChatCardHover: { instance: Schema.String, chatId: Schema.String, key: Schema.NullOr(Schema.String) },
+  /** From the hover card (ui/chat-hover-card.ts): its fetches and its actions. */
+  GotChatCardMessage: { message: ChatCard.CardMessage },
+  /** A jump for the chat just opened in the previewer, with its request id (`setChatJump`). */
+  MadePreviewJump: { message: ViewerStore.Message },
 })
 export type Message = typeof Message.Type

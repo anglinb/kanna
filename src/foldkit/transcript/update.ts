@@ -6,9 +6,12 @@ import { shouldOpenLocalFileLinkInEditor } from "../../client/lib/pathUtils"
 import type { TranscriptEntry } from "../../shared/types"
 import { AppAction, batch } from "../app/action"
 import { requestAction, type AppModel, type SliceReturn } from "../app/slice"
-import { chooseChatOpenMenuItem, openChatActions, sidebarThread } from "../chat/chatReference"
+import { chooseChatOpenMenuItem, openChatActions, openChatAtActions, sidebarThread } from "../chat/chatReference"
 import { chooseChatRowMenuItem } from "../chat/chatRowMenu"
-import { cardMenuContext, cardMenuOf } from "./chatCard"
+import { cardMenuContext, cardMenuOf, DismissChatCardHover, sharedCardData } from "./chatCard"
+import * as Stores from "../app/stores"
+import * as ViewerStore from "../core/stores/viewer"
+import * as ChatCard from "../ui/chat-hover-card"
 import * as ChatSession from "../core/chatSession"
 import { errorMessage, sendCommand, type KannaSocketService } from "../core/socket"
 import * as Messages from "./messages"
@@ -118,6 +121,8 @@ export function step(model: Model, message: Message, env: { key: string }): Step
         minimap: (minimap) => ({ ...minimap, pointerY: null, heldTurnId: null }),
         linkMenuTarget: () => null,
         cardMenus: () => ({}),
+        chatCardHover: () => null,
+        chatCard: ChatCard.closedCard,
       }))
 
     case "ChangedAtEnd": {
@@ -323,6 +328,17 @@ export function update(model: Model, message: Message, app: AppModel): SliceRetu
       return toReturn(done(model, [], openChatActions(app, message.chatId)))
     case "GotCardMenuMessage":
       return toReturn(cardMenuStep(model, message.chatId, message.message, app))
+    case "ChangedChatCardHover": {
+      const { instance, chatId: cardChatId, key } = message
+      if (key !== null) return { model: modifyFields(model, { chatCardHover: () => ({ instance, chatId: cardChatId, key }) }) }
+      // A card that leaves stops waiting on its answers.
+      if (model.chatCardHover?.instance !== instance) return { model }
+      return { model: modifyFields(model, { chatCardHover: () => null, chatCard: ChatCard.closedCard }) }
+    }
+    case "GotChatCardMessage":
+      return toReturn(chatCardStep(model, message.message, app))
+    case "MadePreviewJump":
+      return toReturn(done(model, [], [AppAction.Store({ message: Stores.Message.GotViewerMessage({ message: message.message }) })]))
     default:
       return { model }
   }
@@ -336,6 +352,39 @@ const OpenUrl = Command.define("OpenTranscriptChatCardUrl", {
     return Message.CompletedOpenUrl()
   }),
 })
+
+/**
+ * The hover card beneath a live chat card (ChatPage's chat reference card
+ * actions): every way it opens its chat is `openChat`, the previewer beside
+ * this one; a preview's jump lands where it opens. Each dismisses the card first.
+ */
+function chatCardStep(model: Model, message: ChatCard.CardMessage, app: AppModel): Step {
+  const step = ChatCard.updateCard(model.chatCard, message, sharedCardData(app))
+  const next = step.data === model.chatCard ? model : modifyFields(model, { chatCard: () => step.data })
+  const own = Command.mapMessages(step.commands, (inner: ChatCard.CardMessage) => Message.GotChatCardMessage({ message: inner })) as unknown as ReadonlyArray<AnyCommand>
+  const intent = step.intent
+  const hover = model.chatCardHover
+  if (!intent) return done(next, own)
+  const commands = [...(hover ? [DismissChatCardHover({ instance: hover.instance })] : []), ...own]
+  switch (intent.kind) {
+    case "openAt": {
+      const opened = openChatAtActions(app, intent.chatId, intent.role)
+      const jump = opened.jumpInPreview
+        ? [Command.mapMessage(ViewerStore.JumpInPreviewedChat({ chatId: intent.chatId, target: intent.role }), (inner: ViewerStore.Message) => Message.MadePreviewJump({ message: inner })) as unknown as AnyCommand]
+        : []
+      return done(next, [...commands, ...jump], opened.actions)
+    }
+    // Archived ones too: reading one unarchives nothing.
+    case "open":
+      return done(next, commands, openChatActions(app, intent.chatId))
+    case "setupGit":
+      return done(next, commands, [AppAction.SetupGit({ chatId: intent.chatId })])
+    case "openFile":
+      return done(next, commands, [AppAction.OpenExternalPath({ action: "open_editor", localPath: intent.localPath })])
+    case "dismiss":
+      return done(next, commands)
+  }
+}
 
 /** A live chat card's menu: the open-in items, then the chat's (ThreadRowMenu). */
 function cardMenuStep(model: Model, chatId: string, message: ContextMenu.Message, app: AppModel): Step {

@@ -8,7 +8,7 @@ import { ArrowDown, Upload } from "../ui/icons"
 import * as Messages from "./messages"
 import { messageNamingParent } from "./messages"
 import { Message } from "./message"
-import { liveChatCard } from "./chatCard"
+import { chatCardHoverCard, liveChatCard } from "./chatCard"
 import { minimapView } from "./minimap"
 import type { Model } from "./model"
 import { feedOf, linkMenuItems, rowsOf, turnsOf, type LinkMenuSource, type TranscriptSource } from "./source"
@@ -247,5 +247,7 @@ export function transcriptView(model: Model, source: TranscriptSource, options: 
     source.showEmptyState && options.emptyState ? options.emptyState() : null,
     dropOverlay,
     scrollButton,
+    // Beneath the live chat card the pointer is on; moves itself to <body>.
+    source.references ? chatCardHoverCard(model, source.references.app, Date.now(), h) : null,
   ])
 }

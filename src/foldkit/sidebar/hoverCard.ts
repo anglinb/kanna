@@ -1,31 +1,27 @@
-import { autoUpdate, computePosition, flip, limitShift, offset, shift, size, type Middleware, type Placement, type VirtualElement } from "@floating-ui/dom"
+import type { VirtualElement } from "@floating-ui/dom"
 import { Effect, Schema } from "effect"
 import { Command, Mount } from "foldkit"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { SidebarThread } from "../../client/lib/thread-sections"
-import { cn, normalizeChatId } from "../../client/lib/utils"
-import { waitingOnLabel } from "../../client/lib/waiting-on"
-import { getRepoUrlLabel } from "../../shared/git-url"
-import { toMessagePreview } from "../../shared/message-preview"
-import { PROVIDERS, type ChatPreview, type ChatTouchedFilesResult, type SidebarChatRow } from "../../shared/types"
+import { normalizeChatId } from "../../client/lib/utils"
 import type { AppModel } from "../app/slice"
 import * as ChatInput from "../core/stores/chatInput"
 import type { Child } from "../ui/attributes"
-import { GitBranch, PencilLine } from "../ui/icons"
+import * as ChatCard from "../ui/chat-hover-card"
 import { registerLayer } from "../ui/overlay/layer"
-import { getSideAndAlignFromPlacement, POPPER_WRAPPER_INITIAL_STYLE } from "../ui/overlay/popper"
 import { portalToBody } from "../ui/overlay/portal"
 import { domStream } from "../ui/overlay/stream"
-import { TURN_CARD_ROW_INSET, turnCardMessage, turnCardMetaRow, turnCardTimingRow } from "../ui/turn-card"
 import { threadByRowId } from "./derived"
-import { PROVIDER_ICONS } from "./icons"
 import { Message } from "./message"
 import { HoverList, type Model } from "./model"
 
 type H = HtmlBuilder<Message>
 
-// The list hover card (components/ui/list-hover-card.tsx) and the chat card
-// it shows beside the sidebar's rows (chat-ui/sidebar/ChatHoverCard.tsx).
+// The sidebar's list hover cards (components/ui/list-hover-card.tsx): the
+// chat card beside its chat rows (SidebarChatHoverCard, whose body and
+// fetches are ui/chat-hover-card.ts, shared with the chat tabs and the
+// transcript's chat cards) and the channel card. The sidebar's tracker is its
+// own: a channel's card can be pinned open, and holds the chats' own card.
 //
 // One card per list, anchored to whichever row is under the pointer. The
 // pointer tracking (the safe triangle, the dismissal held while the pointer
@@ -37,8 +33,7 @@ type H = HtmlBuilder<Message>
 
 /** On a list that carries a card: its name (`HoverList`). */
 export const LIST_HOVER_ATTRIBUTE = "data-list-hover"
-/** On every card's element, with its list's name. */
-const LIST_HOVER_CARD_ATTRIBUTE = "data-list-hover-card"
+const { LIST_HOVER_CARD_ATTRIBUTE, LIST_HOVER_CARD_ROOM_BELOW, OPEN_MENU_SELECTOR, SAFE_TRIANGLE_REST_MS, COLLISION_PADDING_PX, FINE_POINTER_QUERY } = ChatCard
 const SYNC_EVENT = "kanna:list-hover-sync"
 
 /** The attribute a list's rows carry their key in. */
@@ -48,36 +43,7 @@ export const ROW_ATTRIBUTES: Record<HoverList, string> = {
   peek: "data-chat-id",
 }
 
-/**
- * The surface every hover card shares. Enters with an animation, leaves with
- * none: a card that fades out is still on screen over the row you moved to.
- */
-export const HOVER_CARD_SURFACE_CLASSNAME =
-  "z-50 w-80 rounded-lg border border-border bg-popover/95 px-1.5 py-2 text-xs text-popover-foreground shadow-xl outline-none backdrop-blur-sm animate-in fade-in-0 zoom-in-95 data-[side=right]:slide-in-from-left-2 data-[side=left]:slide-in-from-right-2 data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:hidden"
-
-/** The height from a card's top, level with its row, to the window's bottom. */
-export const LIST_HOVER_CARD_ROOM_BELOW = "--list-hover-card-room-below"
-
-const SAFE_TRIANGLE_APEX_BACKSET_PX = 6
-const SAFE_TRIANGLE_REST_MS = 300
-const COLLISION_PADDING_PX = 12
-const OPEN_MENU_SELECTOR = "[data-radix-menu-content][data-state='open']"
-const FINE_POINTER_QUERY = "(hover: hover) and (pointer: fine)"
-
-interface Point {
-  x: number
-  y: number
-}
-
-function isInsideTriangle(point: Point, a: Point, b: Point, c: Point) {
-  const side = (p: Point, q: Point, r: Point) => (p.x - r.x) * (q.y - r.y) - (q.x - r.x) * (p.y - r.y)
-  const first = side(point, a, b)
-  const second = side(point, b, c)
-  const third = side(point, c, a)
-  const hasNegative = first < 0 || second < 0 || third < 0
-  const hasPositive = first > 0 || second > 0 || third > 0
-  return !(hasNegative && hasPositive)
-}
+export { HOVER_CARD_SURFACE_CLASSNAME, LIST_HOVER_CARD_ROOM_BELOW } from "../ui/chat-hover-card"
 
 function findContainer(list: HoverList) {
   return document.querySelector<HTMLElement>(`[${LIST_HOVER_ATTRIBUTE}="${list}"]`)
@@ -121,8 +87,8 @@ export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
       const finePointer = window.matchMedia(FINE_POINTER_QUERY)
       let hovered: string | null = null
       let dismissed: string | null = null
-      let apex: Point | null = null
-      let pointer: Point | null = null
+      let apex: ChatCard.Point | null = null
+      let pointer: ChatCard.Point | null = null
       let restTimer: number | null = null
       const pinned = () => container.getAttribute("data-hover-pinned") || null
 
@@ -145,23 +111,8 @@ export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
         const row = target instanceof Element ? target.closest(`[${rowAttribute}]`) : null
         return row && container.contains(row) ? row.getAttribute(rowAttribute) : null
       }
-      const safeTriangle = (): [Point, Point, Point] | null => {
-        const content = findCard(list)
-        if (!content || !apex) return null
-        const rect = content.getBoundingClientRect()
-        const placed = content.dataset.side
-        if (placed === "bottom" || placed === "top") {
-          const opensDown = placed === "bottom"
-          const nearY = opensDown ? rect.top : rect.bottom
-          const apexY = apex.y + (opensDown ? -SAFE_TRIANGLE_APEX_BACKSET_PX : SAFE_TRIANGLE_APEX_BACKSET_PX)
-          return [{ x: apex.x, y: apexY }, { x: rect.left, y: nearY }, { x: rect.right, y: nearY }]
-        }
-        const opensRight = placed !== "left"
-        const nearX = opensRight ? rect.left : rect.right
-        const apexX = apex.x + (opensRight ? -SAFE_TRIANGLE_APEX_BACKSET_PX : SAFE_TRIANGLE_APEX_BACKSET_PX)
-        return [{ x: apexX, y: apex.y }, { x: nearX, y: rect.top }, { x: nearX, y: rect.bottom }]
-      }
-      const settle = (key: string | null, point: Point) => {
+      const safeTriangle = () => ChatCard.safeTriangle(findCard(list), apex)
+      const settle = (key: string | null, point: ChatCard.Point) => {
         clearRestTimer()
         if (key != null && key === dismissed) return
         apex = key === null ? null : point
@@ -194,7 +145,7 @@ export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
           return
         }
         const triangle = hovered === null ? null : safeTriangle()
-        if (triangle && isInsideTriangle(point, ...triangle)) {
+        if (triangle && ChatCard.isInsideTriangle(point, ...triangle)) {
           clearRestTimer()
           restTimer = window.setTimeout(() => {
             restTimer = null
@@ -216,7 +167,7 @@ export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
         const point = { x: event.clientX, y: event.clientY }
         pointer = point
         const triangle = safeTriangle()
-        if (!triangle || !isInsideTriangle(point, ...triangle)) {
+        if (!triangle || !ChatCard.isInsideTriangle(point, ...triangle)) {
           stopTrackingOutside()
           setHovered(null)
           return
@@ -238,7 +189,7 @@ export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
         const next = event.relatedTarget
         if (next instanceof Node && findCard(list)?.contains(next)) return
         const triangle = hovered === null ? null : safeTriangle()
-        if (triangle && isInsideTriangle({ x: event.clientX, y: event.clientY }, ...triangle)) {
+        if (triangle && ChatCard.isInsideTriangle({ x: event.clientX, y: event.clientY }, ...triangle)) {
           window.addEventListener("pointermove", trackOutside)
           return
         }
@@ -280,76 +231,6 @@ export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
     }),
 })
 
-// PLACEMENT
-
-/**
- * Radix's popper placement (ui/overlay/popper.ts's `placePopper`), with the
- * update exposed: the card is one element that moves from row to row, and
- * each move has to place it again without remounting it (which would replay
- * its entrance).
- */
-function placeCard(wrapper: HTMLElement, content: HTMLElement, reference: VirtualElement, options: { side: "right" | "left" | "bottom"; sideOffset: number; alignOffset: number }) {
-  const placement = `${options.side}-start` as Placement
-  const detectOverflowOptions = { padding: COLLISION_PADDING_PX, boundary: [] as Element[], altBoundary: false }
-  const middleware: Middleware[] = [
-    offset({ mainAxis: options.sideOffset, alignmentAxis: options.alignOffset }),
-    shift({ mainAxis: true, crossAxis: false, limiter: limitShift(), ...detectOverflowOptions }),
-    flip({ ...detectOverflowOptions }),
-    size({
-      ...detectOverflowOptions,
-      apply: ({ elements, rects, availableWidth, availableHeight }) => {
-        const style = elements.floating.style
-        style.setProperty("--radix-popper-available-width", `${availableWidth}px`)
-        style.setProperty("--radix-popper-available-height", `${availableHeight}px`)
-        style.setProperty("--radix-popper-anchor-width", `${rects.reference.width}px`)
-        style.setProperty("--radix-popper-anchor-height", `${rects.reference.height}px`)
-      },
-    }),
-    {
-      name: "transformOrigin",
-      fn(data) {
-        const [placedSide, placedAlign] = getSideAndAlignFromPlacement(data.placement)
-        const noArrowAlign = { start: "0%", center: "50%", end: "100%" }[placedAlign]
-        let x = ""
-        let y = ""
-        if (placedSide === "bottom") [x, y] = [noArrowAlign, "0px"]
-        else if (placedSide === "top") [x, y] = [noArrowAlign, `${data.rects.floating.height}px`]
-        else if (placedSide === "right") [x, y] = ["0px", noArrowAlign]
-        else [x, y] = [`${data.rects.floating.width}px`, noArrowAlign]
-        return { data: { x, y } }
-      },
-    },
-  ]
-  wrapper.style.zIndex = getComputedStyle(content).zIndex
-  content.style.animation = "none"
-  let active = true
-  let placed = false
-  const dpr = window.devicePixelRatio || 1
-  const update = () => {
-    void computePosition(reference, wrapper, { strategy: "fixed", placement, middleware }).then((data) => {
-      if (!active) return
-      wrapper.style.transform = `translate(${Math.round(data.x * dpr) / dpr}px, ${Math.round(data.y * dpr) / dpr}px)`
-      const origin = data.middlewareData.transformOrigin as { x?: string; y?: string } | undefined
-      wrapper.style.setProperty("--radix-popper-transform-origin", [origin?.x, origin?.y].join(" "))
-      const [side, align] = getSideAndAlignFromPlacement(data.placement)
-      content.setAttribute("data-side", side)
-      content.setAttribute("data-align", align)
-      if (!placed) {
-        placed = true
-        content.style.removeProperty("animation")
-      }
-    })
-  }
-  const stop = autoUpdate(reference, wrapper, update, { animationFrame: false })
-  return {
-    update,
-    cleanup: () => {
-      active = false
-      stop()
-    },
-  }
-}
-
 // CARD
 
 /**
@@ -387,7 +268,7 @@ export const ListHoverCardContent = Mount.defineStream("ListHoverCardContent", {
 
       cleanups.push(portalToBody(wrapper))
       setRoom()
-      const placement = placeCard(wrapper, content, reference, { side, sideOffset, alignOffset })
+      const placement = ChatCard.placeCard(wrapper, content, reference, { side, sideOffset, alignOffset })
       cleanups.push(placement.cleanup)
       const observer = new MutationObserver(() => {
         setRoom()
@@ -471,270 +352,45 @@ export function listHoverCard(
   const side = options.side ?? "right"
   const sideOffset = options.sideOffset ?? 15
   const alignOffset = options.alignOffset ?? 0
-  const bridgeOverlap = side === "bottom" ? 1 : 5
-  return h.keyed("div")(`list-hover-card-${options.list}`, [
-    h.DataAttribute("radix-popper-content-wrapper", ""),
-    h.Style(POPPER_WRAPPER_INITIAL_STYLE),
-    h.OnMount(ListHoverCardContent({ list: options.list, side, sideOffset, alignOffset })),
-  ], [
-    h.div([
+  return ChatCard.hoverCardSurface({
+    key: `list-hover-card-${options.list}`,
+    mount: h.OnMount(ListHoverCardContent({ list: options.list, side, sideOffset, alignOffset })),
+    markers: [
       h.Attribute(LIST_HOVER_CARD_ATTRIBUTE, options.list),
       ...(options.parentList ? [h.DataAttribute("parent-list", options.parentList)] : []),
-      h.DataAttribute("row-key", options.rowKey),
-      h.DataAttribute("side", side),
-      h.DataAttribute("align", "start"),
-      h.DataAttribute("state", "open"),
-      h.Role("dialog"),
-      h.Id(`radix-list-hover-card-${options.list}`),
-      h.Tabindex(-1),
-      h.Style({
-        "--bridge": `${Math.max(0, sideOffset) + bridgeOverlap}px`,
-        "--radix-popover-content-transform-origin": "var(--radix-popper-transform-origin)",
-        "--radix-popover-content-available-width": "var(--radix-popper-available-width)",
-        "--radix-popover-content-available-height": "var(--radix-popper-available-height)",
-        "--radix-popover-trigger-width": "var(--radix-popper-anchor-width)",
-        "--radix-popover-trigger-height": "var(--radix-popper-anchor-height)",
-      }),
-      h.Class(cn(
-        HOVER_CARD_SURFACE_CLASSNAME,
-        "relative before:absolute before:content-['']",
-        "data-[side=right]:before:inset-y-0 data-[side=right]:before:left-[calc(var(--bridge)*-1)] data-[side=right]:before:w-(--bridge)",
-        "data-[side=left]:before:inset-y-0 data-[side=left]:before:right-[calc(var(--bridge)*-1)] data-[side=left]:before:w-(--bridge)",
-        "data-[side=bottom]:before:inset-x-0 data-[side=bottom]:before:top-[calc(var(--bridge)*-1)] data-[side=bottom]:before:h-(--bridge)",
-        "data-[side=top]:before:inset-x-0 data-[side=top]:before:bottom-[calc(var(--bridge)*-1)] data-[side=top]:before:h-(--bridge)",
-        "origin-(--radix-popover-content-transform-origin)",
-        options.className,
-      )),
-    ], content),
-  ])
+    ],
+    id: `radix-list-hover-card-${options.list}`,
+    rowKey: options.rowKey,
+    side,
+    sideOffset,
+    className: options.className,
+  }, content, h)
 }
 
-// THE CHAT CARD (ChatHoverCard.tsx)
-
-const PROVIDER_LABELS = new Map(PROVIDERS.map((provider) => [provider.id, provider.label]))
-
-function getActiveTurnStartedAt(row: SidebarChatRow): number | null {
-  if (row.lastTurnStartedAt == null) return null
-  if (row.lastTurnEndedAt != null && row.lastTurnEndedAt >= row.lastTurnStartedAt) return null
-  return row.lastTurnStartedAt
-}
-
-/** The agent's last words, only if they answer the prompt shown above them. */
-function getCurrentTurnReply(row: SidebarChatRow, preview: ChatPreview): string | null {
-  if (!preview.lastAgentMessagePreview) return null
-  const repliedAt = preview.lastAgentMessagePreviewAt ?? row.lastAgentMessageAt
-  if (repliedAt == null) return null
-  return repliedAt >= (row.lastMessageAt ?? 0) ? preview.lastAgentMessagePreview : null
-}
-
-function formatTurnCount(row: SidebarChatRow): string | null {
-  if (!row.turnCount) return null
-  return `${row.turnCount} turn${row.turnCount === 1 ? "" : "s"}`
-}
-
-export function getTouchedFilesCacheKey(row: SidebarChatRow) {
-  return [row.chatId, row.turnCount ?? 0, row.lastTurnEndedAt ?? 0, row.uncommittedWork ? 1 : 0].join(" ")
-}
-
-export function getPreviewCacheKey(row: SidebarChatRow) {
-  return [row.chatId, row.lastMessageAt ?? 0, row.lastAgentMessageAt ?? 0].join("^")
-}
-
-/** Enough for a long hover session; the point is to survive re-hovers, not to persist. */
-export const CARD_CACHE_LIMIT = 64
-
-const DAY_MS = 24 * 60 * 60 * 1000
-
-function startOfDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-}
-
-/** The transcript's prompt timestamp (messages/ResultMessage.tsx's `formatPromptTimestamp`). */
-export function formatPromptTimestamp(timestamp: string, now: Date): string {
-  const date = new Date(timestamp)
-  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-  const dayDelta = Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS)
-  if (dayDelta <= 0) return time
-  if (dayDelta === 1) return `Yesterday ${time}`
-  if (dayDelta < 7) {
-    const weekday = date.toLocaleDateString(undefined, { weekday: "short" })
-    return `${weekday} ${time}`
-  }
-  const fullDate = date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
-  return `${fullDate} at ${time}`
-}
-
-function diffFileStat(additions: number | undefined, deletions: number | undefined, className: string, h: H): Html {
-  const hasAdditions = (additions ?? 0) > 0
-  const hasDeletions = (deletions ?? 0) > 0
-  if (!hasAdditions && !hasDeletions) return null
-  return h.span([h.Class(cn("whitespace-nowrap text-xs font-mono", className))], [
-    hasAdditions ? h.span([h.Class("text-emerald-600 dark:text-emerald-400")], [`+${additions}`]) : null,
-    hasDeletions ? h.span([h.Class(cn("text-red-600 dark:text-red-400", hasAdditions && "ml-2"))], [`-${deletions}`]) : null,
-  ])
-}
-
-function touchedFileList(list: HoverList, localPath: string, result: ChatTouchedFilesResult, h: H): ReadonlyArray<Html> {
-  if (result.files.length === 0) return []
-  const hidden = result.totalCount - result.files.length
-  return [
-    h.div([h.Class("-mx-1.5 mt-2 border-t border-border/60"), h.AriaHidden(true)]),
-    h.div([h.Class("mt-1.5")], [
-      ...result.files.map((file) => h.keyed("button")(file.path, [
-        h.Type("button"),
-        h.AriaLabel(`Open ${file.path}`),
-        h.OnClick(Message.ClickedCardFile({ list, localPath, filePath: file.path })),
-        h.Class(cn(
-          "flex w-full items-center gap-2 rounded text-left text-[12px] text-muted-foreground",
-          TURN_CARD_ROW_INSET,
-          "cursor-pointer transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        )),
-      ], [
-        h.span([h.Class("min-w-0 flex-1 truncate"), h.Title(file.path)], [file.path]),
-        diffFileStat(file.additions, file.deletions, "shrink-0", h),
-      ])),
-      hidden > 0
-        ? h.div([h.Class(cn("text-[12px] text-muted-foreground/70", TURN_CARD_ROW_INSET))], [`${hidden} more file${hidden === 1 ? "" : "s"}`])
-        : null,
-    ]),
-  ]
-}
-
-/** The card's fetched parts for a row: cached for its current key, else what the card held for the same chat. */
-export function cardPreview(model: Model, row: SidebarChatRow): ChatPreview | null {
-  return model.previewCache[getPreviewCacheKey(row)]
-    ?? (model.heldPreview?.chatId === row.chatId ? model.heldPreview.preview : null)
-}
-
-export function cardTouchedFiles(model: Model, row: SidebarChatRow): ChatTouchedFilesResult | null {
-  return model.touchedFilesCache[getTouchedFilesCacheKey(row)]
-    ?? (model.heldTouchedFiles?.chatId === row.chatId ? model.heldTouchedFiles.result : null)
-}
-
-const FILES_KEY_ATTRIBUTE = "data-card-files-key"
-const PREVIEW_KEY_ATTRIBUTE = "data-card-preview-key"
+// THE CHAT CARD (SidebarChatHoverCard)
 
 /**
- * On a chat card's body, one per chat: React's two effects on the card's
- * cache keys (`useChatTouchedFiles`, then `useChatPreview`). It asks when the
- * card comes up for a chat, and again for whichever key moves while it is up
- * (the row's turn count, last turn or messages), files before preview.
+ * The other surfaces' card data, whose fetches serve the sidebar's card too
+ * (React's caches were one, module-wide).
  */
-export const ChatCardLoader = Mount.defineStream("ChatCardLoader", {
-  args: { chatId: Schema.String },
-  messages: [Message.RequestedCardLoad],
-  execute: ({ element, chatId }) =>
-    domStream<typeof Message.RequestedCardLoad.Type>((emit) => {
-      let filesKey = element.getAttribute(FILES_KEY_ATTRIBUTE) ?? ""
-      let previewKey = element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? ""
-      emit(Message.RequestedCardLoad({ chatId, kind: "files", cacheKey: filesKey }))
-      emit(Message.RequestedCardLoad({ chatId, kind: "preview", cacheKey: previewKey }))
-      const observer = new MutationObserver(() => {
-        const nextFiles = element.getAttribute(FILES_KEY_ATTRIBUTE) ?? ""
-        const nextPreview = element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? ""
-        if (nextFiles !== filesKey) {
-          filesKey = nextFiles
-          emit(Message.RequestedCardLoad({ chatId, kind: "files", cacheKey: filesKey }))
-        }
-        if (nextPreview !== previewKey) {
-          previewKey = nextPreview
-          emit(Message.RequestedCardLoad({ chatId, kind: "preview", cacheKey: previewKey }))
-        }
-      })
-      observer.observe(element, { attributes: true, attributeFilter: [FILES_KEY_ATTRIBUTE, PREVIEW_KEY_ATTRIBUTE] })
-      return () => observer.disconnect()
-    }),
-})
+export function sharedCardData(app: AppModel): ReadonlyArray<ChatCard.CardData> {
+  return [app.chatPage.tabCard.card, app.chatPage.transcript.chatCard]
+}
 
-/** ChatHoverCardContent inside SidebarChatCard's wrapper. */
+/** The card's body (ui/chat-hover-card.ts), its Messages lifted into the list's. */
 export function chatCardBody(thread: SidebarThread, list: HoverList, app: AppModel, model: Model, h: H): Html {
-  const row = thread.row
-  const label = thread.projectLabel
-  const archived = thread.archived
-  const draft = ChatInput.chatDraft(app.stores.chatInput, row.chatId)
-  const touchedFiles = cardTouchedFiles(model, row)
-  const preview = cardPreview(model, row)
-  const effectivePreview: ChatPreview = preview ?? row
-  const reply = getCurrentTurnReply(row, effectivePreview)
-  const turns = formatTurnCount(row)
-  const endedAt = getActiveTurnStartedAt(row) != null || row.lastTurnEndedAt == null
-    ? null
-    : row.status === "waiting_on_subagent"
-      ? waitingOnLabel(row.waitingOn)
-      : formatPromptTimestamp(new Date(row.lastTurnEndedAt).toISOString(), new Date(model.nowMs))
-  const canJump = !archived
-  const HarnessIcon = row.provider ? PROVIDER_ICONS[row.provider] : null
-  const previewKey = getPreviewCacheKey(row)
-  const filesKey = getTouchedFilesCacheKey(row)
-
-  return h.keyed("div")(`card-${row.chatId}`, [
-    ...(touchedFiles?.files.length ? [h.Class("-mb-0.5")] : []),
-    h.Attribute(FILES_KEY_ATTRIBUTE, filesKey),
-    h.Attribute(PREVIEW_KEY_ATTRIBUTE, previewKey),
-    h.OnMount(ChatCardLoader({ chatId: row.chatId })),
-  ], [
-    turnCardMetaRow({}, [
-      label.currentBranch
-        ? h.span([h.Class("flex min-w-0 items-center gap-1")], [
-          GitBranch({ class: "size-2.5 shrink-0", strokeWidth: 2.5 }, h),
-          h.span([h.Class("truncate")], [label.currentBranch]),
-        ])
-        : label.hasGitRepo === false && !archived
-          ? h.button([
-            h.Type("button"),
-            h.OnClick(Message.ClickedCardSetupGit({ list, chatId: row.chatId })),
-            h.Class("flex min-w-0 cursor-pointer items-center gap-1 rounded-sm transition-colors hover:text-foreground hover:underline underline-offset-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"),
-          ], [
-            GitBranch({ class: "size-2.5 shrink-0", strokeWidth: 2.5 }, h),
-            h.span([h.Class("truncate")], ["Setup Git"]),
-          ])
-          : null,
-      h.span([h.Class("ml-auto flex min-w-0 items-center gap-1 pl-2")], [
-        label.repoUrl
-          ? h.button([
-            h.Type("button"),
-            h.AriaLabel(`Open on ${getRepoUrlLabel(label.repoUrl)}`),
-            h.OnClick(Message.ClickedCardRepo({ list, url: label.repoUrl })),
-            h.Class("truncate cursor-pointer rounded-sm transition-colors hover:text-foreground hover:underline underline-offset-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"),
-          ], [label.repoPath ?? label.name])
-          : h.span([h.Class("truncate")], [label.repoPath ?? label.name]),
-      ]),
-    ], h),
-    h.div([h.Class("mt-1 space-y-1")], [
-      draft
-        ? null
-        : turnCardMessage({
-          class: "line-clamp-2 text-sm font-medium text-popover-foreground",
-          label: "Jump to this prompt",
-          onSelect: canJump ? Message.ClickedCardMessage({ list, chatId: row.chatId, role: "prompt" }) : undefined,
-        }, [toMessagePreview(effectivePreview.lastUserMessagePreview || thread.title)], h),
-      reply
-        ? turnCardMessage({
-          class: cn("text-sm text-muted-foreground", draft ? "line-clamp-1" : "line-clamp-3"),
-          label: "Jump to this reply",
-          onSelect: canJump ? Message.ClickedCardMessage({ list, chatId: row.chatId, role: "reply" }) : undefined,
-        }, [toMessagePreview(reply)], h)
-        : null,
-      draft
-        ? turnCardMessage({
-          class: "line-clamp-2 text-sm font-medium italic text-popover-foreground",
-          label: "Open this chat",
-          onSelect: Message.ClickedCardChat({ list, chatId: row.chatId, archived }),
-        }, [PencilLine({ class: "mr-1 inline size-3 shrink-0 -translate-y-px", strokeWidth: 2.5 }, h), toMessagePreview(draft)], h)
-        : null,
-    ]),
-    turnCardTimingRow({
-      detail: turns,
-      timestamp: endedAt,
-      leading: row.provider
-        ? [
-          HarnessIcon ? HarnessIcon({ class: "size-3 shrink-0" }, h) : null,
-          h.span([h.Class("truncate")], [PROVIDER_LABELS.get(row.provider) ?? row.provider]),
-        ].filter((child): child is Html => child !== null)
-        : null,
-    }, h),
-    ...(touchedFiles ? touchedFileList(list, row.localPath, touchedFiles, h) : []),
-  ])
+  return h.submodel({
+    slotId: `sidebar-chat-card-${list}`,
+    model: model.card,
+    view: ChatCard.CardBody,
+    viewInputs: {
+      thread,
+      draft: ChatInput.chatDraft(app.stores.chatInput, thread.row.chatId) || null,
+      nowMs: model.nowMs,
+      shared: sharedCardData(app),
+    },
+    toParentMessage: (message: ChatCard.CardMessage) => Message.GotCardMessage({ list, message }),
+  })
 }
 
 /**
