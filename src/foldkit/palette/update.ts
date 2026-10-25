@@ -1,16 +1,13 @@
 import { Number, Option } from "effect"
-import { Command, Update } from "foldkit"
+import { Command } from "foldkit"
 import { modifyFields } from "foldkit/struct"
 import { AppAction } from "../app/action"
 import { requestAction, type AppModel, type SliceObserve } from "../app/slice"
 import * as Stores from "../app/stores"
-import type { KannaSocketService } from "../core/socket"
-import * as Delegate from "../core/stores/delegate"
 import * as TerminalLayout from "../core/stores/terminalLayout"
-import * as AppDialog from "../ui/app-dialog"
 import { effectiveSelection, findItem, navigate as navigateSelection } from "./cmdk"
 import * as Commands from "./commands"
-import { derive, dialogCommands, type PaletteData } from "./derive"
+import { derive, type PaletteData } from "./derive"
 import { Message } from "./message"
 import { currentPage, isLocked, pageKey, PAGES, type Model, type PalettePage } from "./model"
 import * as Usage from "./usage"
@@ -29,30 +26,7 @@ function open(model: Model, page: PalettePage | null, at: number): Return {
   return { model: openPalette(model, page, at), commands: [Commands.RefreshMacSetup()] }
 }
 
-const toDialogMessage = (message: AppDialog.Message) => Message.GotDialogMessage({ message })
 const toUsageMessage = (message: Usage.Message) => Message.GotUsageMessage({ message })
-
-const foldDialog = (model: Model, message: AppDialog.Message): Return => Update.foldChild({
-  update: AppDialog.update,
-  read: (parent: Model) => Option.some(parent.dialog),
-  write: (parent: Model, dialog: AppDialog.Model): Model => modifyFields(parent, { dialog: () => dialog }),
-  toParentMessage: toDialogMessage,
-  foldOutMessage: AppDialog.OutMessage.match<Update.Step<Model, Message, KannaSocketService>>({
-    // createDelegator: `name === null` (dismissed) does nothing.
-    Answered: ({ requestId, answer }) => (parent) => {
-      const request = parent.delegatorRequest
-      if (!request || request.requestId !== requestId) return { model: parent }
-      const next = modifyFields(parent, { delegatorRequest: () => null })
-      if (answer._tag !== "Prompt" || Option.isNone(answer.value)) return { model: next }
-      return { model: next, commands: [Commands.CreateDelegator({ projectId: request.projectId, name: answer.value.value })] }
-    },
-  }),
-})(model, message) as Return
-
-function openDialog(model: Model, request: AppDialog.Request): Return {
-  const opened = AppDialog.open(model.dialog, request)
-  return { model: { ...model, dialog: opened.model }, commands: dialogCommands(opened.commands) }
-}
 
 /**
  * useDirectoryBrowser's `load` for the browse page on top: a cache hit
@@ -329,22 +303,6 @@ function handle(model: Model, message: Message, app: AppModel): Return {
       const result = Usage.update(model.usage, child)
       return { model: { ...model, usage: result.model }, commands: Command.mapMessages(result.commands, toUsageMessage) }
     },
-    GotDialogMessage: ({ message: child }) => foldDialog(model, child),
-    SucceededCreateDelegator: ({ projectId, chatId }) => requestAction(model, AppAction.Store({
-      message: Stores.Message.GotDelegateMessage({
-        message: Delegate.Message.ChangedPreference({ projectId, preference: { on: true, chatId } }),
-      }),
-    })),
-    FailedCreateDelegator: ({ error }) => {
-      const requestId = `palette-delegator-error-${model.dialogSeq + 1}`
-      return openDialog({ ...model, dialogSeq: model.dialogSeq + 1 }, AppDialog.alert({
-        requestId,
-        title: "Could not create the delegator",
-        description: error,
-        closeLabel: "OK",
-      }))
-    },
-
     CompletedSideEffect: () => ({ model }),
   })
 }

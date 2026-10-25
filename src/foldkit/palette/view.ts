@@ -3,7 +3,6 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import { FOCUS_FALLBACK_IGNORE_ATTRIBUTE } from "../../client/app/chatFocusPolicy"
 import { cn } from "../../client/lib/utils"
 import type { AppModel, SliceViewInputs } from "../app/slice"
-import * as AppDialog from "../ui/app-dialog"
 import { ArrowLeft, Search } from "../ui/icons"
 import { block, inputView, listView, rootView } from "./cmdk"
 import { CONTENT_ID } from "./commands"
@@ -109,15 +108,8 @@ function paletteView(model: Model, app: AppModel, h: HtmlBuilder<Message>): Html
 }
 
 export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model, { app }, h) =>
-  // `contents`: no box of its own. The palette and the New Delegator prompt
-  // both move themselves to <body>.
+  // `contents`: no box of its own. The palette moves itself to <body>.
   h.div([h.Class("contents")], [
     model.phase === "Closed" ? null : paletteView(model, app, h),
-    h.submodel({
-      slotId: "palette-dialog",
-      model: model.dialog,
-      view: AppDialog.view,
-      toParentMessage: (message) => Message.GotDialogMessage({ message }),
-    }),
   ]),
 )

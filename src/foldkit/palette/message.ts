@@ -3,7 +3,6 @@ import { defineMessageUnion } from "foldkit/message"
 import type { MacSetupState } from "../../client/lib/macApp"
 import type { ChatBrowserNotificationPreference, FsListResult, GitHubRecentReposResult } from "../../shared/types"
 import { opaque } from "../core/schema"
-import * as AppDialog from "../ui/app-dialog"
 import type { RepoMeta } from "./model"
 import * as Usage from "./usage"
 
@@ -57,11 +56,6 @@ export const Message = defineMessageUnion({
   GeneratedTerminalId: { projectId: Schema.String, terminalId: Schema.String, chatKey: Schema.NullOr(Schema.String) },
 
   GotUsageMessage: { message: Usage.Message },
-
-  // New Delegator (chat-ui/create-delegator.ts)
-  GotDialogMessage: { message: AppDialog.Message },
-  SucceededCreateDelegator: { projectId: Schema.String, chatId: Schema.String },
-  FailedCreateDelegator: { error: Schema.String },
 
   CompletedSideEffect: {},
 })

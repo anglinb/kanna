@@ -42,6 +42,11 @@ export const AppAction = defineTaggedUnion({
   DeleteChat: { chatId: Schema.String, title: Schema.String },
   SetupGit: { chatId: Schema.String },
   SetDelegator: { chatId: Schema.String, delegator: Schema.Boolean },
+  /**
+   * New Delegator (chat-ui/create-delegator.ts): asks for its name, creates
+   * it empty, and picks it as what the project's new chat page delegates to.
+   */
+  CreateDelegator: { projectId: Schema.String },
 
   // Projects
   OpenLocalProject: { localPath: Schema.String },
