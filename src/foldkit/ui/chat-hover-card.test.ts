@@ -10,6 +10,8 @@ import {
   getPreviewCacheKey,
   getTouchedFilesCacheKey,
   initCardData,
+  refreshForRow,
+  rowChanged,
   updateCard,
   type CardData,
 } from "./chat-hover-card"
@@ -77,6 +79,19 @@ describe("chat hover card: fetches", () => {
     const held: CardData = { ...initCardData(), heldPreview: { chatId: "c1", preview: PREVIEW } }
     expect(updateCard(held, CardMessage.RequestedCardLoad({ chatId: "c1", kind: "preview", cacheKey: "p2" }), []).data.heldPreview?.chatId).toBe("c1")
     expect(updateCard(held, CardMessage.RequestedCardLoad({ chatId: "c2", kind: "preview", cacheKey: "p3" }), []).data.heldPreview).toBeNull()
+  })
+})
+
+describe("chat hover card: a row changing under the card", () => {
+  test("only a change of contents counts; files are asked for before the preview, each unless cached", () => {
+    const chat = row()
+    expect(rowChanged(chat, { ...chat })).toBe(false)
+    expect(rowChanged(chat, { ...chat, status: "running" })).toBe(true)
+    expect(rowChanged(null, chat)).toBe(false)
+    const fresh = refreshForRow(initCardData(), chat, [])
+    expect(fresh.commands.map((command) => command.name)).toEqual(["ChatCardLoadTouchedFiles", "ChatCardLoadPreview"])
+    const cached: CardData = { ...initCardData(), touchedFilesCache: { [getTouchedFilesCacheKey(chat)]: FILES } }
+    expect(refreshForRow(cached, chat, []).commands.map((command) => command.name)).toEqual(["ChatCardLoadPreview"])
   })
 })
 

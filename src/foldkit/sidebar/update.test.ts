@@ -18,7 +18,7 @@ import { Message } from "./message"
 import { init, type Model } from "./model"
 import { CaptureOutgoingPage } from "./motion"
 import { SyncHoverTracker } from "./hoverCard"
-import { SaveSidebarWidth, update } from "./update"
+import { observe, SaveSidebarWidth, update } from "./update"
 import * as ChatCard from "../ui/chat-hover-card"
 
 function row(chatId: string, overrides: Partial<SidebarChatRow> = {}): SidebarChatRow {
@@ -317,6 +317,23 @@ describe("sidebar: hover cards", () => {
       Story.message(card(ChatCard.CardMessage.RequestedCardLoad({ chatId: "c1", kind: "files", cacheKey: "k1" }))),
       Story.Command.expectNone(),
     )
+  })
+
+  test("a push that changes the open card's row asks again for what isn't in yet (React's effects on `row`)", () => {
+    const before = appAt("/home")
+    const open: Model = { ...sidebar, hasFinePointer: true, hovered: { ...sidebar.hovered, chats: "c1" } }
+    const changedData = { projectGroups: [group("p1", [row("c1", { status: "running" }), row("c2", { pinnedAt: 5 })]), DATA.projectGroups[1]!] }
+    const after: AppModel = { ...before, stores: { ...before.stores, sidebar: { ...before.stores.sidebar, data: changedData } } }
+    const asked = observe(open, before, after)
+    expect(asked.commands?.map((command) => command.name)).toEqual(["ChatCardLoadTouchedFiles", "ChatCardLoadPreview"])
+    // Answers in: the same change asks for nothing.
+    const filesKey = asked.model.card.cardFilesKey!
+    const previewKey = asked.model.card.cardPreviewKey!
+    const cached: Model = { ...asked.model, card: { ...asked.model.card, touchedFilesCache: { [filesKey]: { files: [], totalCount: 0 } }, previewCache: { [previewKey]: {} as never } } }
+    expect(observe(cached, before, after).commands ?? []).toEqual([])
+    // No card up, or the row the same: nothing.
+    expect(observe(sidebar, before, after).commands ?? []).toEqual([])
+    expect(observe(open, before, before).model).toBe(open)
   })
 
   test("what the tab card or a transcript card fetched serves the sidebar's card", () => {

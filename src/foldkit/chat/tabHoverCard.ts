@@ -7,6 +7,7 @@ import { normalizeChatId } from "../../client/lib/utils"
 import { AppAction } from "../app/action"
 import type { AppModel } from "../app/slice"
 import * as ChatInput from "../core/stores/chatInput"
+import { sidebarThread } from "./chatReference"
 import * as ChatCard from "../ui/chat-hover-card"
 import { Message } from "./message"
 import type { Model } from "./model"
@@ -128,6 +129,24 @@ function cardBodyMessage(model: Model, message: ChatCard.CardMessage, app: AppMo
       return { model: next, commands, action: AppAction.OpenExternalPath({ action: "open_editor", localPath: intent.localPath }) }
     case "dismiss":
       return { model: next, commands, action: null }
+  }
+}
+
+/**
+ * A sidebar push that changed the row the open card shows reruns the card's
+ * fetch effects (React's ran on `row`); for the chat page's `observe`.
+ */
+export function refreshTabCard(model: Model, previousApp: AppModel, app: AppModel): { model: Model; commands: ReadonlyArray<TabCardCommand> } {
+  const key = model.tabCard.hovered
+  if (!key || !app.sidebar.hasFinePointer || previousApp.stores.sidebar.data === app.stores.sidebar.data) return { model, commands: [] }
+  const chatId = app.stores.chatTabs.tabs.find((tab) => normalizeChatId(tab.chatId) === key)?.chatId
+  if (!chatId) return { model, commands: [] }
+  const row = sidebarThread(app, chatId)?.row
+  if (!ChatCard.rowChanged(sidebarThread(previousApp, chatId)?.row, row)) return { model, commands: [] }
+  const refreshed = ChatCard.refreshForRow(model.tabCard.card, row, sharedCardData(model, app))
+  return {
+    model: modifyFields(model, { tabCard: (card) => ({ ...card, card: refreshed.data }) }),
+    commands: Command.mapMessages(refreshed.commands, (child: ChatCard.CardMessage) => Message.GotTabCardMessage({ message: child })) as ReadonlyArray<TabCardCommand>,
   }
 }
 

@@ -676,49 +676,44 @@ function touchedFileList(localPath: string, result: ChatTouchedFilesResult, h: C
 
 const FILES_KEY_ATTRIBUTE = "data-card-files-key"
 const PREVIEW_KEY_ATTRIBUTE = "data-card-preview-key"
-/** A digest of the row the card shows: a new one is a new `row` to React's effects. */
-const ROW_ATTRIBUTE = "data-card-row"
-
-function rowDigest(row: SidebarChatRow): string {
-  const text = JSON.stringify(row)
-  let hash = 5381
-  for (let index = 0; index < text.length; index++) hash = ((hash << 5) + hash + text.charCodeAt(index)) | 0
-  return (hash >>> 0).toString(36)
-}
 
 /**
- * On a chat card's body, one per chat: React's two effects on the card's
- * row (`useChatTouchedFiles`, then `useChatPreview`, each on its cache key
- * and the row). It asks when the card comes up for a chat, and again, files
- * before preview, whenever the row changes while it is up: a key that moved
- * (the row's turn count, last turn or messages) is a new fetch, and a row
- * that changed while its answer is still on the way asks again, as the
- * effect re-ran with nothing cached yet.
+ * On a chat card's body, one per chat: React's two effects
+ * (`useChatTouchedFiles`, then `useChatPreview`) as the card comes up for a
+ * chat. Their reruns on a changed row are the surface's (`refreshForRow`,
+ * from its `observe`), at the snapshot that changed it, as React's ran.
  */
 export const ChatCardLoader = Mount.defineStream("ChatCardLoader", {
   args: { chatId: Schema.String },
   messages: [CardMessage.RequestedCardLoad],
   execute: ({ element, chatId }) =>
     domStream<typeof CardMessage.RequestedCardLoad.Type>((emit) => {
-      const read = () => ({
-        files: element.getAttribute(FILES_KEY_ATTRIBUTE) ?? "",
-        preview: element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? "",
-        row: element.getAttribute(ROW_ATTRIBUTE) ?? "",
-      })
-      let last = read()
-      emit(CardMessage.RequestedCardLoad({ chatId, kind: "files", cacheKey: last.files }))
-      emit(CardMessage.RequestedCardLoad({ chatId, kind: "preview", cacheKey: last.preview }))
-      const observer = new MutationObserver(() => {
-        const next = read()
-        const rowChanged = next.row !== last.row
-        if (rowChanged || next.files !== last.files) emit(CardMessage.RequestedCardLoad({ chatId, kind: "files", cacheKey: next.files }))
-        if (rowChanged || next.preview !== last.preview) emit(CardMessage.RequestedCardLoad({ chatId, kind: "preview", cacheKey: next.preview }))
-        last = next
-      })
-      observer.observe(element, { attributes: true, attributeFilter: [FILES_KEY_ATTRIBUTE, PREVIEW_KEY_ATTRIBUTE, ROW_ATTRIBUTE] })
-      return () => observer.disconnect()
+      emit(CardMessage.RequestedCardLoad({ chatId, kind: "files", cacheKey: element.getAttribute(FILES_KEY_ATTRIBUTE) ?? "" }))
+      emit(CardMessage.RequestedCardLoad({ chatId, kind: "preview", cacheKey: element.getAttribute(PREVIEW_KEY_ATTRIBUTE) ?? "" }))
+      return () => {}
     }),
 })
+
+/**
+ * Whether the row an open card shows changed under it (a sidebar push).
+ * React's effects ran on `row`, an object the sidebar keeps while the chat's
+ * row is unchanged; here, its contents.
+ */
+export function rowChanged(previous: SidebarChatRow | null | undefined, next: SidebarChatRow | null | undefined): next is SidebarChatRow {
+  return previous != null && next != null && previous !== next && JSON.stringify(previous) !== JSON.stringify(next)
+}
+
+/**
+ * React's two effects rerunning on a changed row, files before preview: a
+ * key that moved (the turn count, the last turn, the messages) is a new
+ * fetch, and an answer still on the way is asked for again, as the effect
+ * re-ran with nothing cached yet.
+ */
+export function refreshForRow(data: CardData, row: SidebarChatRow, shared: ReadonlyArray<CardData>): { data: CardData; commands: CardStep["commands"] } {
+  const files = updateCard(data, CardMessage.RequestedCardLoad({ chatId: row.chatId, kind: "files", cacheKey: getTouchedFilesCacheKey(row) }), shared)
+  const preview = updateCard(files.data, CardMessage.RequestedCardLoad({ chatId: row.chatId, kind: "preview", cacheKey: getPreviewCacheKey(row) }), shared)
+  return { data: preview.data, commands: [...files.commands, ...preview.commands] }
+}
 
 export interface CardBodyInputs {
   thread: SidebarThread
@@ -760,7 +755,6 @@ export function chatCardBody(data: CardData, inputs: CardBodyInputs, h: CardH): 
     ...(touchedFiles?.files.length ? [h.Class("-mb-0.5")] : []),
     h.Attribute(FILES_KEY_ATTRIBUTE, filesKey),
     h.Attribute(PREVIEW_KEY_ATTRIBUTE, previewKey),
-    h.Attribute(ROW_ATTRIBUTE, rowDigest(row)),
     h.OnMount(ChatCardLoader({ chatId: row.chatId })),
   ], [
     turnCardMetaRow({}, [

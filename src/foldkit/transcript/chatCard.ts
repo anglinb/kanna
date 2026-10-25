@@ -78,6 +78,22 @@ export function sharedCardData(app: AppModel): ReadonlyArray<ChatCard.CardData> 
 }
 
 /**
+ * A sidebar push that changed the row the open hover card shows reruns the
+ * card's fetch effects (React's ran on `row`); for the chat page's `observe`.
+ */
+export function refreshChatCardHover(model: Model, previousApp: AppModel, app: AppModel): { model: Model; commands: ReadonlyArray<Command.Command<Message, never, unknown>> } {
+  const hover = model.chatCardHover
+  if (!hover || !app.sidebar.hasFinePointer || previousApp.stores.sidebar.data === app.stores.sidebar.data) return { model, commands: [] }
+  const row = sidebarThread(app, hover.chatId)?.row
+  if (!ChatCard.rowChanged(sidebarThread(previousApp, hover.chatId)?.row, row)) return { model, commands: [] }
+  const refreshed = ChatCard.refreshForRow(model.chatCard, row, sharedCardData(app))
+  return {
+    model: { ...model, chatCard: refreshed.data },
+    commands: Command.mapMessages(refreshed.commands, (child: ChatCard.CardMessage) => Message.GotChatCardMessage({ message: child })),
+  }
+}
+
+/**
  * The hover card beneath the live card the pointer is on, if the sidebar
  * still knows its chat. Desktop only.
  */

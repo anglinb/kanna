@@ -6,7 +6,7 @@ import { copyTextToClipboard } from "../../client/lib/clipboard"
 import { getPathBasename } from "../../client/lib/formatters"
 import { fetchPairSession, startPairSession } from "../../client/lib/pairSession"
 import { AppAction, batch } from "../app/action"
-import { requestAction, type AppModel, type SliceOutMessage, type SliceReturn } from "../app/slice"
+import { requestAction, type AppModel, type SliceObserve, type SliceOutMessage, type SliceReturn } from "../app/slice"
 import * as Stores from "../app/stores"
 import * as ChatInput from "../core/stores/chatInput"
 import * as ChatTabs from "../core/stores/chatTabs"
@@ -18,7 +18,7 @@ import * as ContextMenu from "../ui/context-menu"
 import * as Dialog from "../ui/dialog"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
-import { activeChatId, appSettings, currentProjectId, isProjectCollapsed, routeProjectId, sidebarData, visibleProjectGroups, newSidebarEnabled } from "./derived"
+import { activeChatId, appSettings, currentProjectId, isProjectCollapsed, routeProjectId, sidebarData, threadByRowId, visibleProjectGroups, newSidebarEnabled } from "./derived"
 import * as ChatCard from "../ui/chat-hover-card"
 import { sharedCardData, SyncHoverTracker } from "./hoverCard"
 import { FLEET_URL } from "./machine"
@@ -629,6 +629,29 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ContinuedActions: ({ actions }) => requestActions(model, actions),
     CompletedSideEffect: () => ({ model }),
   })
+}
+
+/**
+ * The slice contract's `observe`: a sidebar push that changed the row an
+ * open chat card shows reruns the card's fetch effects (React's ran on `row`).
+ */
+export const observe: SliceObserve<Model, Message> = (model, previousApp, app) => {
+  if (previousApp.stores.sidebar.data === app.stores.sidebar.data || !model.hasFinePointer) return { model }
+  const lists = (["chats", "peek"] as const).filter((list) => model.hovered[list] !== null)
+  if (lists.length === 0) return { model }
+  const before = threadByRowId(previousApp)
+  const after = threadByRowId(app)
+  let card = model.card
+  const commands: Cmd[] = []
+  for (const list of lists) {
+    const key = model.hovered[list]!
+    const row = after.get(key)?.row
+    if (!ChatCard.rowChanged(before.get(key)?.row, row)) continue
+    const refreshed = ChatCard.refreshForRow(card, row, sharedCardData(app))
+    card = refreshed.data
+    commands.push(...(Command.mapMessages(refreshed.commands, (child: ChatCard.CardMessage) => Message.GotCardMessage({ list, message: child })) as Cmd[]))
+  }
+  return card === model.card ? { model, commands } : { model: modifyFields(model, { card: () => card }), commands }
 }
 
 export type { SliceOutMessage }

@@ -31,7 +31,9 @@ import * as ContextMenu from "../ui/context-menu"
 import * as Select from "../ui/select"
 import * as Tooltip from "../ui/tooltip"
 import { chooseChatRowMenuItem } from "./chatRowMenu"
-import { updateTabCard } from "./tabHoverCard"
+import { refreshTabCard, updateTabCard } from "./tabHoverCard"
+import { refreshChatCardHover } from "../transcript/chatCard"
+import type { Message as TranscriptMessage } from "../transcript/message"
 import {
   ElapseColumnSlide,
   ElapseTerminalDiffRefresh,
@@ -530,11 +532,20 @@ function tabCardStep(model: Model, message: Message, app: AppModel): Return {
 /**
  * The slice contract's `observe`: the composer's store effects (a switch
  * waiting on sign-in, a draft cleared from the sidebar), run through the
- * page's own fold so the composer has its page inputs.
+ * page's own fold so the composer has its page inputs; and the chat hover
+ * cards' fetches rerun on a changed row (the tab bar's, a transcript card's).
  */
 export function observe(model: Model, previousApp: AppModel, app: AppModel): Return {
-  if (!Composer.observes(model.composer, previousApp, app)) return { model }
-  return update(model, Message.GotComposerMessage({ message: Composer.Message.ObservedApp() }), app)
+  const tabCard = refreshTabCard(model, previousApp, app)
+  const transcriptCard = refreshChatCardHover(tabCard.model.transcript, previousApp, app)
+  const carded = transcriptCard.model === tabCard.model.transcript ? tabCard.model : modifyFields(tabCard.model, { transcript: () => transcriptCard.model })
+  const cardCommands = [
+    ...tabCard.commands,
+    ...Command.mapMessages(transcriptCard.commands, (inner: TranscriptMessage) => Message.GotTranscriptMessage({ message: inner })),
+  ] as Return["commands"] & object
+  if (!Composer.observes(carded.composer, previousApp, app)) return { model: carded, commands: cardCommands }
+  const observed = update(carded, Message.GotComposerMessage({ message: Composer.Message.ObservedApp() }), app)
+  return { ...observed, commands: [...cardCommands, ...(observed.commands ?? [])] }
 }
 
 // UPDATE
