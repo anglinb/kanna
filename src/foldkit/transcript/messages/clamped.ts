@@ -84,7 +84,7 @@ const ClampMeasure = Mount.defineStream("ClampMeasure", {
   args: { key: Schema.String, lines: Schema.Number, scope: ClampScope },
   messages: [Message.MeasuredClamp, Message.PressedClampControl, Message.PressedFoldSurface],
   execute: ({ element, key, lines, scope }) =>
-    domStream<Message>((emit) => {
+    domStream<typeof Message.MeasuredClamp.Type | typeof Message.PressedClampControl.Type | typeof Message.PressedFoldSurface.Type>((emit) => {
       const clip = element as HTMLElement
       const content = clip.firstElementChild as HTMLElement | null
       const cleanups: Array<() => void> = []

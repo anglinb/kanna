@@ -458,10 +458,6 @@ export function frameOf(model: Model, key: string, url: string): FrameState {
   return model.frames[key] ?? { document: null, failed: false, width: null, measured: null, known: rememberedHeights(url), loaded: false }
 }
 
-function withFrame(model: Model, key: string, url: string, change: (frame: FrameState) => FrameState): Model {
-  return { ...model, frames: { ...model.frames, [key]: change(frameOf(model, key, url)) } }
-}
-
 // Visualization heights remembered in this browser (lib/visualization-heights).
 function rememberedHeights(url: string) {
   return rememberedVisualizationHeights(url) as ReadonlyArray<readonly [number, number]>

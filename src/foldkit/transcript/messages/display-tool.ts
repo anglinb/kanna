@@ -62,7 +62,7 @@ const AttachmentStrip = Mount.defineStream("AttachmentStrip", {
   args: { key: Schema.String, attachments: Schema.Array(opaque<DisplayAttachment>("DisplayAttachment")) },
   messages: [Message.ClickedAttachment, Message.FailedAttachmentPreview, Message.MeasuredStrip],
   execute: ({ element, key, attachments }) =>
-    domStream<Message>((emit) => {
+    domStream<typeof Message.ClickedAttachment.Type | typeof Message.FailedAttachmentPreview.Type | typeof Message.MeasuredStrip.Type>((emit) => {
       const card = element as HTMLElement
       const onClick = (event: MouseEvent) => {
         const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a") : null

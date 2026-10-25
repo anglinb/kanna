@@ -29,7 +29,7 @@ const PlanDraftKeys = Mount.defineStream("PlanDraftKeys", {
   args: { toolId: Schema.String },
   messages: [Message.ConfirmedPlan, Message.CancelledPlanEdit],
   execute: ({ element, toolId }) =>
-    domStream<Message>((emit) => {
+    domStream<typeof Message.ConfirmedPlan.Type | typeof Message.CancelledPlanEdit.Type>((emit) => {
       const textarea = element as HTMLTextAreaElement
       const onKeyDown = (event: KeyboardEvent) => {
         const draft = textarea.value.trim()
@@ -108,7 +108,7 @@ export function exitPlanModeMessage(message: PlanCall, isLatest: boolean, contex
             h.Placeholder("Describe what you'd like to change..."),
             h.Rows(3),
             h.Class("w-full rounded-2xl border border-border bg-muted dark:bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none"),
-          ], []),
+          ]),
           h.div([h.Class("flex items-center justify-end gap-2 mx-2")], [
             h.button([
               h.Class(buttonClass({ size: "sm", variant: "ghost", class: "rounded-full text-muted-foreground" })),
