@@ -78,32 +78,38 @@ function parseArgs(argv: string[]): Options {
   return options
 }
 
-// One run at a time on this machine: two browsers plus two builds would
-// starve a 2-core box and make timings (and settling) flaky.
+// A few runs at a time on this machine, not unlimited: each is a build and a
+// browser, and too many at once starve a 2-core box and make settling flaky.
+// PARITY_SLOTS (default 2) runs share it; the rest wait for a free slot.
+const PARITY_SLOTS = Math.max(1, Number(process.env.PARITY_SLOTS ?? 2))
+
 async function acquireLock(): Promise<() => void> {
   mkdirSync(PARITY_DIR, { recursive: true })
   for (let attempt = 0; ; attempt++) {
-    try {
-      const handle = await open(LOCK_PATH, "wx")
-      await handle.writeFile(String(process.pid))
-      await handle.close()
-      const release = () => rmSync(LOCK_PATH, { force: true })
-      process.on("exit", release)
-      return release
-    } catch {
-      const holder = Number(readFileSync(LOCK_PATH, "utf8"))
-      let alive = false
+    for (let slot = 0; slot < PARITY_SLOTS; slot++) {
+      const lockPath = slot === 0 ? LOCK_PATH : `${LOCK_PATH}.${slot}`
       try {
-        process.kill(holder, 0)
-        alive = true
-      } catch {}
-      if (!alive) {
-        rmSync(LOCK_PATH, { force: true })
-        continue
+        const handle = await open(lockPath, "wx")
+        await handle.writeFile(String(process.pid))
+        await handle.close()
+        const release = () => rmSync(lockPath, { force: true })
+        process.on("exit", release)
+        return release
+      } catch {
+        let holder = 0
+        try {
+          holder = Number(readFileSync(lockPath, "utf8"))
+        } catch {}
+        let alive = false
+        try {
+          process.kill(holder, 0)
+          alive = true
+        } catch {}
+        if (!alive) rmSync(lockPath, { force: true })
       }
-      if (attempt === 0) console.log(`waiting for parity run ${holder} to finish…`)
-      await Bun.sleep(2000)
     }
+    if (attempt === 0) console.log("waiting for a free parity slot…")
+    await Bun.sleep(2000)
   }
 }
 
@@ -128,7 +134,7 @@ async function build(app: AppName) {
     return outDir
   }
   console.log(`building ${app}…`)
-  const proc = Bun.spawn(["bunx", "vite", "build", "--config", "vite.parity.config.ts", "--logLevel", "warn"], {
+  const proc = Bun.spawn(["bunx", "vite", "build", "--config", "vite.parity.config.ts", "--logLevel", "error"], {
     cwd: ROOT,
     env: { ...process.env, PARITY_APP: app },
     stdout: "inherit",

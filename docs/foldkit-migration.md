@@ -98,9 +98,48 @@ check for anyway.
    streaming, stick-to-bottom, under the parity runner's timing.
 5. **Imperative widgets.** xterm and `@pierre/diffs` through `Mount`.
 
+## Status
+
+The architecture (decided by building it; spikes 2–5 above were folded
+into this):
+
+- `app/`: the root program. Auth gate, the socket (a ManagedResource opened
+  once auth is ready), every app-wide snapshot, routes, the stores
+  (`app/stores.ts`), the page's chat session, root actions (`app/actions.ts`,
+  what slices ask for via `AppAction`), the app dialog, housekeeping.
+- `core/`: socket helpers, the chat session Submodel, the ported stores,
+  storage in the React client's formats.
+- `ui/`: Radix/shadcn replacements (overlays rebuilt on Floating UI and
+  Mounts), lucide icons, provider icons. `markdown/`: react-markdown's.
+- Slices (`app/slice.ts` contract), one folder and one agent each:
+
+| Slice | Folder | Wave | Status |
+|---|---|---|---|
+| Sidebar | `sidebar/` | 1 | in progress |
+| Projects page | `home/` | 1 | in progress |
+| Settings page | `settings/` | 1 | in progress |
+| Chat page shell | `chat/` | 1 | in progress |
+| Transcript rows | `transcript/messages/` | 1 | in progress |
+| Terminal | `terminal/` | 2 | in progress |
+| Command palette | `palette/` | 2 | in progress |
+| Composer | `composer/` | 2 | in progress |
+| Transcript viewport | `transcript/` | 3 | to do |
+| Right sidebar widgets | `widgets/` | 3 | to do |
+| Viewer / previewer | `viewer/` | 3 | to do |
+| Setup wizard | `setup/` | 3 | to do |
+| Workflows gallery | `workflows/` | 3 | to do |
+| Demo entry, export viewer | `src/demo`, `src/export-viewer` | 4 | to do |
+| Switch entries, delete React | — | 4 | to do |
+
 ## Loops
 
-Not started until the spikes are decided and the scenario list is written.
+- **Port**: one agent per slice in its own worktree (briefs in
+  `/home/dev/foldkit-briefs/`), against its scenarios and regions.
+- **Integrate**: the integrator merges a slice when it reports, reruns
+  typecheck, `bun test src/foldkit scripts/parity` and the parity suite.
+- **Coverage / review**: the scenario suite and coverage audit
+  (`scripts/parity/coverage.ts`), then reviews for what screenshots can't
+  show.
 
 - **Port loop**: one agent per slice in its own worktree, reruns
   `bun run parity <scenarios>` until the slice is done (above).
