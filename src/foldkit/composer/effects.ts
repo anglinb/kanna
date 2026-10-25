@@ -51,7 +51,7 @@ export const BridgeComposerEvents = Mount.defineStream("BridgeComposerEvents", {
 // The bridged events, declared the way a custom element's are: that is the
 // typed way Foldkit offers to listen for a CustomEvent on an element. No
 // element of this tag is ever drawn; only its event factories are used.
-const Bridge = CustomElement.define({
+export const Bridge = CustomElement.define({
   tag: "kanna-composer-bridge",
   properties: {},
   events: {

@@ -510,8 +510,11 @@ function step(model: Model, message: Message, ctx: Context): Step {
     },
     TranscribedRecording: ({ text }) => {
       if (!text) return { model: { ...model, transcribing: false, recorderError: "Didn't catch that. Try recording again." } }
+      // React's spinner stayed for the send's round trip too (`await
+      // onSubmit`); the session doesn't report back here yet, so it stops
+      // as the send goes.
       return {
-        model: { ...model, pendingSubmit: { kind: "voice", value: text, attachments: [], uploadError: null } },
+        model: { ...model, transcribing: false, pendingSubmit: { kind: "voice", value: text, attachments: [], uploadError: null } },
         actions: [AppAction.Chat({ message: ChatSession.Message.SubmittedMessage({ content: text, options: buildSubmitOptions(model, ctx, [], false) }) })],
       }
     },

@@ -209,7 +209,7 @@ function composerView(model: Model, ctx: Context, editModels: ReadonlyArray<Chil
       return Message.RecalledPreviousPrompt()
     }
 
-    const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0
+    const isTouchDevice = typeof window !== "undefined" && ("ontouchstart" in window || navigator.maxTouchPoints > 0)
     const sendableNow = value.trim().length > 0 || uploadedAttachments(model).length > 0
     if (event.key === "Enter" && !event.shiftKey && !isTouchDevice && !props.disabled && sendableNow && !pendingUploads) {
       event.preventDefault()
