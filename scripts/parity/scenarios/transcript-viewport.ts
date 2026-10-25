@@ -1,6 +1,6 @@
 import type { Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { CHATS, click, hover, parkPointer, quietReadAnchor, reduceMotion, REGIONS, regions, sidebarChatRow } from "./_lib/helpers"
+import { CHATS, click, hover, parkPointer, quietReadAnchor, reduceMotion, REGIONS, regions } from "./_lib/helpers"
 
 // The transcript viewport around its rows: the minimap (a tick's card, a
 // jump from it), the scroll-to-bottom button, a local link's right-click
@@ -83,12 +83,11 @@ export const scenarios: Scenario[] = [
       })
       await quietReadAnchor(context)
       await context.capture("scrolled")
-      // Away and back through the sidebar, the pointer leaving each row at
-      // once: a row's hover card is the sidebar's to compare, not this.
-      await sidebarChatRow(page, "demo-chat-deploy").click()
-      await parkPointer(context)
+      // Away to Settings and back through history: not through the sidebar's
+      // chat rows, whose hover cards load previews as the pointer passes.
+      await click(context, page.locator(REGIONS.sidebar).getByRole("button", { name: "Settings Connected" }))
       await quietReadAnchor(context)
-      await sidebarChatRow(page, "demo-chat-units").click()
+      await page.goBack()
       await parkPointer(context)
       await quietReadAnchor(context)
       await context.capture("restored")
