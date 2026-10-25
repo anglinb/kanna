@@ -174,7 +174,12 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       disabled || model.triggerPointerType === "mouse" ? { model } : open(model, Option.none()),
     PressedOpenKey: () => open(model, Option.none()),
     PressedItem: ({ pointerType }) => ({ model: modifyFields(model, { itemPointerType: () => pointerType }) }),
-    ChoseItem: ({ value }) => ({ ...close(model), outMessage: OutMessage.Selected({ value }) }),
+    // Once per opening. A mouse chooses on the release, and the click that
+    // follows can still find the click handler a touch would choose by: the
+    // view that drops it renders after the press, and press, release and
+    // click can all land before that. Radix reads the press's pointer type
+    // from a ref, at once.
+    ChoseItem: ({ value }) => (model.phase === "Open" ? { ...close(model), outMessage: OutMessage.Selected({ value }) } : { model }),
     FocusedItem: ({ value }) => ({ model: modifyFields(model, { highlighted: () => Option.some(value) }) }),
     BlurredItem: ({ value }) =>
       Option.contains(model.highlighted, value)

@@ -42,6 +42,9 @@ bun run parity                       # every scenario, React vs Foldkit
 bun run parity chat-featured         # one scenario
 bun run parity:selfcheck             # React vs React must pass, and a
                                      # one-rule CSS change must be caught
+bun run parity:coverage              # what no scenario covers, and why
+bun run parity:coverage --verify     # also: each scenario sent what its
+                                     # `covers` names (.parity/latest)
 ```
 
 - `src/parity/fixture.ts` puts the demo's in-browser backend (`src/demo`)
@@ -95,9 +98,74 @@ check for anyway.
    streaming, stick-to-bottom, under the parity runner's timing.
 5. **Imperative widgets.** xterm and `@pierre/diffs` through `Mount`.
 
+## Status
+
+The architecture (decided by building it; spikes 2–5 above were folded
+into this):
+
+- `app/`: the root program. Auth gate, the socket (a ManagedResource opened
+  once auth is ready), every app-wide snapshot, routes, the stores
+  (`app/stores.ts`), the page's chat session, root actions (`app/actions.ts`,
+  what slices ask for via `AppAction`), the app dialog, housekeeping.
+- `core/`: socket helpers, the chat session Submodel, the ported stores,
+  storage in the React client's formats.
+- `ui/`: Radix/shadcn replacements (overlays rebuilt on Floating UI and
+  Mounts), lucide icons, provider icons. `markdown/`: react-markdown's.
+- Slices (`app/slice.ts` contract), one folder and one agent each:
+
+| Slice | Folder | Wave | Status |
+|---|---|---|---|
+| Sidebar | `sidebar/` | 1 | merged (route regions pass; page-owned commands pending) |
+| Projects page | `home/` | 1 | merged (154/160 with sidebar) |
+| Settings page | `settings/` | 1 | merged (612/620) |
+| Chat page shell | `chat/` | 1 | merged (own regions pass; selfcheck 156/156) |
+| Transcript rows | `transcript/messages/` | 1 | merged (316/316 gallery) |
+| Terminal | `terminal/` | 2 | merged (workspace gallery 24/24; page matches but for home's boot command) |
+| Command palette | `palette/` | 2 | in progress |
+| Composer | `composer/` | 2 | in progress |
+| Transcript viewport (+ export viewer) | `transcript/` | 3 | in progress |
+| Right sidebar widgets | `widgets/` | 3 | to do |
+| Viewer / previewer | `viewer/` | 3 | to do |
+| Setup wizard | `setup/` | 3 | to do |
+| Workflows gallery | `workflows/` | 3 | to do |
+| Demo entry, export viewer | `src/demo`, `src/export-viewer` | 4 | to do |
+| Switch entries, delete React | — | 4 | to do |
+
+## Integration follow-ups
+
+- Sidebar: use `AppAction.Batch` (Archive All, Restore), `OpenChatAt`
+  (hover card jumps), `OpenCommandPalette` instead of the window event.
+- Projects page: refetch GitHub repos on a sign-in change via `observe`
+  (React sends `github.listRecentRepos` twice at boot); use
+  `OpenCommandPalette` instead of the window event.
+- Create chat from the projects page: the demo backend returns its own
+  chat id instead of the client's, so React ends up back at `/`; decide
+  whether the fixture should honor the client id (the real server does).
+- `scripts/parity/scenarios/terminal.ts`: React sometimes sends
+  `terminal.create` twice (a race with the demo's "no shell yet" reply);
+  handle it as `terminal-page.ts` does, so the scenarios are deterministic.
+- `ui/`: opening a modal Select shouldn't close a tooltip already up
+  (Radix registers the new layer before its outside-click check).
+- Sidebar and chat tabs share the chat hover card; move it to one module
+  (the tab card imports the sidebar's `chatCardBody`).
+- `ui/context-menu`: a plain label entry, so `settings/menu.ts` (a local
+  copy for the skills menu heading) can go.
+- `ui/select`: report a choice only for a new value, as Radix does;
+  `settings/shared.ts` `updateSettingsSelect` filters it meanwhile.
+- `@foldkit/vite-plugin` peers on Vite 8; we run Vite 6 (works so far).
+- `app/action.ts` imports types from React files
+  (`components/messages/shared`, `lib/chat-navigation` is fine); move
+  those types before React is deleted.
+
 ## Loops
 
-Not started until the spikes are decided and the scenario list is written.
+- **Port**: one agent per slice in its own worktree (briefs in
+  `/home/dev/foldkit-briefs/`), against its scenarios and regions.
+- **Integrate**: the integrator merges a slice when it reports, reruns
+  typecheck, `bun test src/foldkit scripts/parity` and the parity suite.
+- **Coverage / review**: the scenario suite and coverage audit
+  (`scripts/parity/coverage.ts`), then reviews for what screenshots can't
+  show.
 
 - **Port loop**: one agent per slice in its own worktree, reruns
   `bun run parity <scenarios>` until the slice is done (above).

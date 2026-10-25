@@ -21,6 +21,8 @@ import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
 import * as AppDialog from "../ui/app-dialog"
+import * as ShareDialog from "../chat/shareDialog"
+import * as OpenRouterCallback from "./openRouterCallback"
 import { ActionsModel } from "./actions"
 import * as Stores from "./stores"
 
@@ -65,6 +67,14 @@ export const Model = Schema.Struct({
   stores: Stores.Model,
   /** What the root's actions keep: chats being started, the share and app dialogs. */
   actions: ActionsModel,
+  /** Started the one-time legacy browser settings migration this session. */
+  legacySettingsMigrationStarted: Schema.Boolean,
+  /** pagehide puts the bare app name in the title, for the bfcache; pageshow brings it back. */
+  pageHidden: Schema.Boolean,
+  /** /oauth/openrouter/callback, outside the layout. */
+  openRouterCallback: OpenRouterCallback.Model,
+  /** StandaloneShareDialog: open while `actions.standaloneShareUrl` is set. */
+  shareDialog: ShareDialog.Model,
   /** The app's confirm/prompt/alert dialog (React's AppDialogProvider). */
   appDialog: AppDialog.Model,
   // The slices (app/slice.ts): each a Submodel in its own folder.

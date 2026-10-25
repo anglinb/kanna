@@ -19,6 +19,14 @@ const sceneView = Scene.withViewInputs(Select.view, {
 })
 
 describe("Select", () => {
+  test("an item is chosen once per opening: the click after a mouse release chooses nothing more", () => {
+    const opened = Select.update(closed, Select.Message.PressedTrigger({ pointerType: "mouse", button: 0, x: 10, y: 12, disabled: false })).model
+    const chosen = Select.update(opened, Select.Message.ChoseItem({ value: "steer", pointerType: "mouse" }))
+    expect(chosen.outMessage).toEqual(Select.OutMessage.Selected({ value: "steer" }))
+    const again = Select.update(chosen.model, Select.Message.ChoseItem({ value: "steer", pointerType: "touch" }))
+    expect(again.outMessage).toBeUndefined()
+  })
+
   test("a mouse press opens it; a touch press waits for the click", () => {
     Story.story(
       Select.update,
