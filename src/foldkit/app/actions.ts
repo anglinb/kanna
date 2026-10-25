@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Command, Navigation, Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
@@ -34,6 +34,7 @@ import * as RightSidebar from "../core/stores/rightSidebar"
 import * as Sidebar from "../core/stores/sidebar"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import { getDefaultEditorCommandTemplate } from "../core/stores/terminalPreferences"
+import * as AppDialog from "../ui/app-dialog"
 import { AppAction } from "./action"
 import { resolveTheme, themePreference } from "./theme"
 import type * as Stores from "./stores"
@@ -46,38 +47,13 @@ import type * as Stores from "./stores"
 // This module is a set of Steps over a minimal view of the root Model
 // (`ActionsHost`), so it doesn't import the root and the root wires it.
 
-// THE APP DIALOG
+// THE APP DIALOG (ui/app-dialog.ts holds it; the root embeds it once)
 
-export interface ConfirmDialogOptions {
-  title: string
-  description?: string
-  confirmLabel?: string
-  cancelLabel?: string
-  confirmVariant?: "default" | "destructive" | "secondary"
-}
-
-export interface PromptDialogOptions {
-  title: string
-  description?: string
-  placeholder?: string
-  initialValue?: string
-  allowEmpty?: boolean
-  resetLabel?: string
-  resetValue?: string
-  confirmLabel?: string
-  cancelLabel?: string
-}
-
-export interface AlertDialogOptions {
-  title: string
-  description?: string
-  closeLabel?: string
-}
-
-export type AppDialogRequest =
-  | { kind: "confirm"; options: ConfirmDialogOptions }
-  | { kind: "prompt"; options: PromptDialogOptions }
-  | { kind: "alert"; options: AlertDialogOptions }
+/** A request as the React call sites wrote it; `openDialog` adds the id. */
+export type DialogRequest =
+  | { kind: "confirm"; options: Omit<Parameters<typeof AppDialog.confirm>[0], "requestId"> }
+  | { kind: "prompt"; options: Omit<Parameters<typeof AppDialog.prompt>[0], "requestId"> }
+  | { kind: "alert"; options: Omit<Parameters<typeof AppDialog.alert>[0], "requestId"> }
 
 /** What answering the dialog goes on to do. */
 export const DialogContinuation = defineTaggedUnion({
@@ -92,18 +68,6 @@ export const DialogContinuation = defineTaggedUnion({
 })
 export type DialogContinuation = typeof DialogContinuation.Type
 
-export const AppDialogState = Schema.Struct({
-  request: opaque<AppDialogRequest>("AppDialogRequest"),
-  /** The prompt's input. */
-  value: Schema.String,
-  then: DialogContinuation,
-})
-export type AppDialogState = typeof AppDialogState.Type
-
-export function openDialog(request: AppDialogRequest, then: DialogContinuation = DialogContinuation.None()): AppDialogState {
-  return { request, value: request.kind === "prompt" ? request.options.initialValue ?? "" : "", then }
-}
-
 // THE STATE THESE ACTIONS KEEP (a part of the root Model)
 
 export const ActionsModel = Schema.Struct({
@@ -117,7 +81,9 @@ export const ActionsModel = Schema.Struct({
   isExportingStandalone: Schema.Boolean,
   standaloneShareUrl: Schema.NullOr(Schema.String),
   standaloneShareComplete: Schema.Boolean,
-  dialog: Schema.NullOr(AppDialogState),
+  /** What answering the open app dialog goes on to do, by its request id. */
+  pendingDialog: Schema.NullOr(Schema.Struct({ requestId: Schema.String, then: DialogContinuation })),
+  dialogSeq: Schema.Number,
   /** The failure of the last project request, for the palette's inline error. */
   projectRequestError: Schema.NullOr(Schema.String),
 })
@@ -131,13 +97,15 @@ export const initialActionsModel: ActionsModel = {
   isExportingStandalone: false,
   standaloneShareUrl: null,
   standaloneShareComplete: false,
-  dialog: null,
+  pendingDialog: null,
+  dialogSeq: 0,
   projectRequestError: null,
 }
 
 /** What actions read and write of the root Model. */
 export interface ActionsHost {
   actions: ActionsModel
+  appDialog: AppDialog.Model
   stores: Stores.Model
   selectedProjectId: string | null
   commandError: string | null
@@ -178,11 +146,6 @@ export const ActionMessage = defineMessageUnion({
   FailedCommand: { error: Schema.String },
   CompletedSideEffect: {},
 
-  // The app dialog
-  ChangedDialogValue: { value: Schema.String },
-  ConfirmedDialog: {},
-  CancelledDialog: {},
-
   // The share dialog (StandaloneShareDialog)
   ClosedShareDialog: {},
   ClickedOpenShareLink: {},
@@ -216,6 +179,7 @@ export interface RootEffects<Host> {
     appSettings: (message: AppSettings.Message) => Stores.Message
   }
   toMessage: (message: ActionMessage) => unknown
+  toAppDialogMessage: (message: AppDialog.Message) => unknown
 }
 
 // COMMANDS
@@ -500,6 +464,16 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
   const seq = (host: Host, steps: Step[]): Return<Host> => Update.combine(host, steps as never) as Return<Host>
   const stores = (message: Stores.Message): Step => root.sendStores(message) as Step
 
+  /** Shows the app dialog; `then` runs when it is answered (React awaited the promise). */
+  function openDialog(host: Host, request: DialogRequest, then: DialogContinuation = DialogContinuation.None()): Return<Host> {
+    const requestId = `app-dialog-${host.actions.dialogSeq + 1}`
+    const opened = AppDialog.open(host.appDialog, { _tag: request.kind === "confirm" ? "Confirm" : request.kind === "prompt" ? "Prompt" : "Alert", ...request.options, requestId } as AppDialog.Request)
+    return {
+      model: { ...withActions(host, (actions) => ({ ...actions, dialogSeq: actions.dialogSeq + 1, pendingDialog: { requestId, then } })), appDialog: opened.model },
+      commands: Command.mapMessages(opened.commands, root.toAppDialogMessage) as unknown as Command.Command<unknown, never, KannaSocketService>[],
+    }
+  }
+
   const resolvedTheme = (host: Host) => resolveTheme(themePreference(host.stores.appSettings.settings), host.systemTheme)
 
   function editorFor(host: Host) {
@@ -622,12 +596,7 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
         return intent ? startChatFromIntent(host, intent) : root.navigate("/")(host) as Return<Host>
       },
       ForkChat: ({ chatId }) => ({ model: host, commands: commands(ForkChat({ chatId })) }),
-      RenameChat: ({ chatId, title }) => ({
-        model: withActions(host, (actions) => ({
-          ...actions,
-          dialog: openDialog({ kind: "prompt", options: { title: "Rename Chat", initialValue: title, confirmLabel: "Rename" } }, DialogContinuation.RenameChat({ chatId, currentTitle: title })),
-        })),
-      }),
+      RenameChat: ({ chatId, title }) => openDialog(host, { kind: "prompt", options: { title: "Rename Chat", initialValue: title, confirmLabel: "Rename" } }, DialogContinuation.RenameChat({ chatId, currentTitle: title })),
       ShareChat: ({ chatId }) => {
         const target = chatId ?? root.activeChatId(host)
         if (!target || host.actions.isExportingStandalone) return { model: host }
@@ -641,33 +610,15 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       // Viewing an archived chat is read-only navigation: it stays archived.
       OpenArchivedChat: ({ chatId }) => root.navigate(`/chat/${chatId}`)(host) as Return<Host>,
       RestoreChat: ({ chatId }) => ({ model: host, commands: commands(Send({ command: { type: "chat.unarchive", chatId } })) }),
-      DeleteChat: ({ chatId, title }) => ({
-        model: withActions(host, (actions) => ({
-          ...actions,
-          dialog: openDialog(
-            { kind: "confirm", options: { title: "Delete Chat", description: `Delete "${title}"? This cannot be undone.`, confirmLabel: "Delete", confirmVariant: "destructive" } },
-            DialogContinuation.DeleteChat({ chatId }),
-          ),
-        })),
-      }),
-      SetupGit: ({ chatId }) => ({
-        model: withActions(host, (actions) => ({
-          ...actions,
-          dialog: openDialog(
-            { kind: "confirm", options: { title: "Initialize Git?", description: "Initialize a local git repository in this project?", confirmLabel: "Init Git", cancelLabel: "Cancel" } },
-            DialogContinuation.SetupGit({ chatId }),
-          ),
-        })),
-      }),
+      DeleteChat: ({ chatId, title }) => openDialog(host, { kind: "confirm", options: { title: "Delete Chat", description: `Delete "${title}"? This cannot be undone.`, confirmLabel: "Delete", confirmVariant: "destructive" } },
+            DialogContinuation.DeleteChat({ chatId }),),
+      SetupGit: ({ chatId }) => openDialog(host, { kind: "confirm", options: { title: "Initialize Git?", description: "Initialize a local git repository in this project?", confirmLabel: "Init Git", cancelLabel: "Cancel" } },
+            DialogContinuation.SetupGit({ chatId }),),
       SetDelegator: ({ chatId, delegator }) => ({ model: host, commands: commands(SetDelegator({ chatId, delegator })) }),
 
       OpenLocalProject: ({ localPath }) => startChatFromIntent(host, { kind: "local_path", localPath }),
       CreateProject: ({ project }) => startChatFromIntent(host, { kind: "project_request", project: project as ProjectRequest }),
-      RenameProject: ({ target, sidebarTitle, realTitle }) => ({
-        model: withActions(host, (actions) => ({
-          ...actions,
-          dialog: openDialog(
-            {
+      RenameProject: ({ target, sidebarTitle, realTitle }) => openDialog(host, {
               kind: "prompt",
               options: {
                 title: "Rename Project",
@@ -680,10 +631,7 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
                 confirmLabel: "Rename",
               },
             },
-            DialogContinuation.RenameProject({ target, currentTitle: sidebarTitle ?? "" }),
-          ),
-        })),
-      }),
+            DialogContinuation.RenameProject({ target, currentTitle: sidebarTitle ?? "" }),),
       HideProject: ({ target }) => ({ model: host, commands: commands(HideProject({ target })) }),
       ReorderProjectGroups: ({ projectIds }) => {
         const ordered = stores(root.storesMessage.sidebar(Sidebar.Message.ChangedOptimisticProjectOrder({ projectIds })))(host)
@@ -723,10 +671,7 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       },
       CheckForUpdates: ({ force }) => ({ model: host, commands: commands(Send({ command: { type: "update.check", force } })) }),
       InstallUpdate: () => runInstall(host, "update.install", "Update failed", "Kanna could not install the update. Try again later."),
-      InstallNightly: () => ({
-        model: withActions(host, (actions) => ({
-          ...actions,
-          dialog: openDialog({
+      InstallNightly: () => openDialog(host, {
             kind: "confirm",
             options: {
               title: "Update to nightly?",
@@ -734,17 +679,10 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
               confirmLabel: "Build nightly",
             },
           }, DialogContinuation.InstallNightly()),
-        })),
-      }),
-      InstallStable: () => ({
-        model: withActions(host, (actions) => ({
-          ...actions,
-          dialog: openDialog({
+      InstallStable: () => openDialog(host, {
             kind: "confirm",
             options: { title: "Back to stable?", description: "Kanna will reinstall the latest published release and restart into it.", confirmLabel: "Reinstall stable" },
           }, DialogContinuation.InstallStable()),
-        })),
-      }),
       SignOut: () => ({ model: host, commands: commands(SignOut()) }),
 
       SendCommand: ({ command }) => ({ model: host, commands: commands(Send({ command })) }),
@@ -754,11 +692,19 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
   }
 
   /** The dialog's answer, as the awaited `dialog.confirm/prompt` call continued. */
-  function continueDialog(host: Host, dialog: AppDialogState, confirmed: boolean): Return<Host> {
-    const closed = withActions(host, (actions) => ({ ...actions, dialog: null }))
+  /**
+   * The app dialog answered `requestId` (ui/app-dialog's Answered): the
+   * action that opened it carries on, as the awaited React promise did.
+   * A request replaced before it was answered is never answered, as in React.
+   */
+  function answeredDialog(host: Host, requestId: string, answer: AppDialog.Answer): Return<Host> {
+    const pending = host.actions.pendingDialog
+    if (!pending || pending.requestId !== requestId) return { model: host }
+    const closed = withActions(host, (actions) => ({ ...actions, pendingDialog: null }))
+    const confirmed = answer._tag === "Confirm" ? answer.confirmed : answer._tag === "Prompt" ? Option.isSome(answer.value) : true
     if (!confirmed) return { model: closed }
-    const value = dialog.value
-    return DialogContinuation.match<Return<Host>>(dialog.then, {
+    const value = answer._tag === "Prompt" ? Option.getOrElse(answer.value, () => "") : ""
+    return DialogContinuation.match<Return<Host>>(pending.then, {
       None: () => ({ model: closed }),
       DeleteChat: ({ chatId }) => ({ model: closed, commands: commands(DeleteChat({ chatId })) }),
       SetupGit: ({ chatId }) => ({ model: closed, commands: commands(InitGit({ chatId })) }),
@@ -777,8 +723,8 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
     })
   }
 
-  function alert(host: Host, options: AlertDialogOptions): Host {
-    return withActions(host, (actions) => ({ ...actions, dialog: openDialog({ kind: "alert", options }) }))
+  function alert(host: Host, options: DialogRequest["options"] & { title: string }, then?: DialogContinuation): Return<Host> {
+    return openDialog(host, { kind: "alert", options } as DialogRequest, then)
   }
 
   function handleActionMessage(host: Host, message: ActionMessage): Return<Host> {
@@ -884,23 +830,19 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       },
       ReceivedInitGitResult: ({ result }) => result.ok
         ? { model: host }
-        : { model: alert(host, { title: result.title, description: `${result.message}${result.detail ? `\n\n${result.detail}` : ""}`, closeLabel: "OK" }) },
-      FailedInitGit: ({ error }) => ({ model: alert(host, { title: "Initialize git failed", description: error, closeLabel: "OK" }) }),
+        : alert(host, { title: result.title, description: `${result.message}${result.detail ? `\n\n${result.detail}` : ""}`, closeLabel: "OK" }),
+      FailedInitGit: ({ error }) => alert(host, { title: "Initialize git failed", description: error, closeLabel: "OK" }),
       ReceivedExportResult: ({ result }) => {
         const exported = withError(withActions(host, (actions) => ({ ...actions, isExportingStandalone: false })), null)
         if (result.ok && result.shareUrl) {
           return { model: withActions(exported, (actions) => ({ ...actions, standaloneShareUrl: result.shareUrl ?? null, standaloneShareComplete: true })) }
         }
         if (!result.ok) {
-          return {
-            model: withActions(exported, (actions) => ({
-              ...actions,
-              dialog: openDialog(
-                { kind: "confirm", options: { title: "Share failed", description: result.error, confirmLabel: "Download transcript JSON", cancelLabel: "Close", confirmVariant: "secondary" } },
-                DialogContinuation.DownloadTranscript({ fileName: result.transcriptFileName, json: result.transcriptJson }),
-              ),
-            })),
-          }
+          return openDialog(
+            exported,
+            { kind: "confirm", options: { title: "Share failed", description: result.error, confirmLabel: "Download transcript JSON", cancelLabel: "Close", confirmVariant: "secondary" } },
+            DialogContinuation.DownloadTranscript({ fileName: result.transcriptFileName, json: result.transcriptJson }),
+          )
         }
         return { model: exported }
       },
@@ -914,10 +856,8 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       },
       ReceivedInstallResult: ({ result, failureTitle, failureMessage }) => {
         if (!result.ok) {
-          return {
-            model: alert(withError(host, null), { title: result.userTitle ?? failureTitle, description: result.userMessage ?? failureMessage, closeLabel: "OK" }),
-            commands: commands(SetRestartPhase({ phase: null })),
-          }
+          const alerted = alert(withError(host, null), { title: result.userTitle ?? failureTitle, description: result.userMessage ?? failureMessage, closeLabel: "OK" })
+          return { model: alerted.model, commands: [...(alerted.commands ?? []), ...commands(SetRestartPhase({ phase: null }))] }
         }
         if (result.action === "reload") return { model: host, commands: commands(ReloadPage()) }
         return {
@@ -930,11 +870,6 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       FailedCommand: ({ error }) => ({ model: withError(host, error) }),
       CompletedSideEffect: () => ({ model: host }),
 
-      ChangedDialogValue: ({ value }) => host.actions.dialog
-        ? { model: withActions(host, (actions) => ({ ...actions, dialog: actions.dialog ? { ...actions.dialog, value } : null })) }
-        : { model: host },
-      ConfirmedDialog: () => (host.actions.dialog ? continueDialog(host, host.actions.dialog, true) : { model: host }),
-      CancelledDialog: () => (host.actions.dialog ? continueDialog(host, host.actions.dialog, false) : { model: host }),
 
       ClosedShareDialog: () => ({ model: withActions(host, (actions) => ({ ...actions, standaloneShareUrl: null, standaloneShareComplete: false })) }),
       ClickedOpenShareLink: () => host.actions.standaloneShareUrl
@@ -946,9 +881,9 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
       ClickedCopyShareLink: () => host.actions.standaloneShareUrl
         ? { model: host, commands: commands(CopyText({ text: host.actions.standaloneShareUrl, onFailure: "alert" })) }
         : { model: host },
-      FailedCopyShareLink: ({ error }) => ({ model: alert(host, { title: "Copy failed", description: error, closeLabel: "Close" }) }),
+      FailedCopyShareLink: ({ error }) => alert(host, { title: "Copy failed", description: error, closeLabel: "Close" }),
     })
   }
 
-  return { performAction, handleActionMessage }
+  return { performAction, handleActionMessage, answeredDialog }
 }
