@@ -51,8 +51,10 @@ const pageSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
   ),
 
   /** useUsageLimits' live subscription: the cached snapshot at once, then each push. */
-  usageLimits: entry({ shown: Schema.Boolean }, {
-    modelToDependencies: (model) => ({ shown: usageShown(model) }),
+  // Per project: UsageWidgets mounts with the project's widget column, so
+  // another project subscribes anew.
+  usageLimits: entry({ shown: Schema.Boolean, projectId: Schema.NullOr(Schema.String) }, {
+    modelToDependencies: (model) => ({ shown: usageShown(model), projectId: model.watch?.projectId ?? null }),
     dependenciesToStream: ({ shown }) =>
       Stream.when(
         topicStream<UsageLimitsSnapshot>({ type: "usage-limits" }).pipe(Stream.map((snapshot) => Message.ReceivedUsageLimits({ snapshot }))),

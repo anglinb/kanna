@@ -337,7 +337,7 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
   // effect, so ahead of the page's diff refresh below. (The minute ticks
   // after it are a subscription.)
   const usageActive = (w: Watch | null | undefined) => Boolean(w?.projectId && w.showRightSidebar)
-  if (usageActive(watch) && !usageActive(previous)) {
+  if (usageActive(watch) && (!usageActive(previous) || previous?.projectId !== watch.projectId)) {
     next = modifyFields(next, { usageRefreshing: () => true })
     commands.push(RefreshUsage({ force: false }))
   }
