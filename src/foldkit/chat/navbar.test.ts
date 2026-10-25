@@ -5,6 +5,8 @@ import { Scene } from "foldkit/test"
 import { fromString } from "foldkit/url"
 import type { SidebarChatRow, SidebarData, SidebarProjectGroup } from "../../shared/types"
 import { AppAction } from "../app/action"
+import { SliceOutMessage } from "../app/slice"
+import * as ChatTabs from "../core/stores/chatTabs"
 import type { Flags, Model as AppModel } from "../app/model"
 import * as Stores from "../app/stores"
 import { init as initApp } from "../app/update"
@@ -94,7 +96,9 @@ describe("chat tabs", () => {
       Scene.expect(Scene.role("tab", { name: /Fix the tide chart/ })).toHaveAttr("aria-selected", "true"),
       Scene.Mount.resolve(TabListMount, Message.DroppedTab()),
       Scene.click(Scene.role("button", { name: "Close Deploys" })),
-      Scene.expectOutMessage({ _tag: "RequestedAppAction", action: AppAction.Store({ message: Stores.Message.GotChatTabsMessage({ message: { _tag: "ClosedTab", chatId: "c2" } as never }) }) }),
+      Scene.expectOutMessage(SliceOutMessage.RequestedAppAction({
+        action: AppAction.Store({ message: Stores.Message.GotChatTabsMessage({ message: ChatTabs.Message.ClosedTab({ chatId: "c2" }) }) }),
+      })),
     )
   })
 })
