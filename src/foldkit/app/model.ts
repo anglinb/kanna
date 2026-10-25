@@ -9,6 +9,7 @@ import type {
 } from "../../shared/types"
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../../client/lib/storageKeys"
 import { opaque } from "../core/schema"
+import { currentHref, isMemoryHistory } from "../core/navigation"
 import { readStorageItem } from "../core/storage"
 import * as ChatSession from "../core/chatSession"
 import { AppRoute } from "./route"
@@ -97,6 +98,8 @@ export const Flags = Schema.Struct({
   /** Seeded by the demo and the parity fixture, as their React entries seed the store. */
   initialAppSettings: Schema.NullOr(opaque<AppSettingsSnapshot>("AppSettingsSnapshot")),
   stores: Stores.Model,
+  /** The demo's memory history (core/navigation.ts): where it starts, in place of the frame's own address. */
+  memoryUrl: Schema.optional(Schema.NullOr(Schema.String)),
 })
 export type Flags = typeof Flags.Type
 
@@ -108,5 +111,6 @@ export function readFlags(options: { initialAppSettings?: AppSettingsSnapshot | 
     systemTheme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" as const : "light" as const,
     initialAppSettings: options.initialAppSettings ?? null,
     stores: Stores.load(),
+    memoryUrl: isMemoryHistory() ? currentHref() : null,
   }))
 }

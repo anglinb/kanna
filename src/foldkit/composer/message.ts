@@ -16,7 +16,12 @@ export const Message = defineMessageUnion({
   // THE TEXTAREA
   /** Inserted (a new chat, or back from recording): it has focused itself, as autoFocus did. */
   CompletedMountTextarea: {},
-  ChangedInput: { value: Schema.String, caret: Schema.Number },
+  /**
+   * A keystroke. `at` is when it happened, so the draft store takes the text
+   * in the same update (zustand's set ran inside the input handler): a page
+   * left a moment after typing keeps what was typed.
+   */
+  ChangedInput: { value: Schema.String, caret: Schema.Number, at: Schema.Number },
   /** The selection moved without the text changing (React's onSelect). */
   MovedCaret: { caret: Schema.Number },
   /**

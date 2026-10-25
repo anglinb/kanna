@@ -1,5 +1,6 @@
 import { Effect, Option, Schema } from "effect"
-import { Command, Navigation, Update } from "foldkit"
+import { Command, Update } from "foldkit"
+import * as AppNavigation from "../core/navigation"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
 import {
@@ -210,7 +211,7 @@ const PrepareCreateChat = Command.define("PrepareCreateChat", {
     chatId: generateUUID(),
     carryDraftFrom,
     background,
-    cameFrom: `${window.location.pathname}${window.location.search}`,
+    cameFrom: AppNavigation.currentPathAndSearch(),
     at: Date.now(),
   })),
 })
@@ -449,9 +450,8 @@ const SignOut = Command.define("SignOut", {
 const OpenSidebar = Command.define("OpenSidebar", {
   messages: [ActionMessage.CompletedSideEffect],
   execute: Effect.gen(function* () {
-    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
-    if (idx > 0) yield* Navigation.back()
-    else yield* Navigation.pushUrl("/")
+    if (AppNavigation.historyIndex() > 0) yield* AppNavigation.back()
+    else yield* AppNavigation.pushUrl("/")
     return ActionMessage.CompletedSideEffect()
   }),
 })

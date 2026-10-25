@@ -1,46 +1,14 @@
 import { Schema } from "effect"
 import type { Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
-import { mergeProviderDefaultsPatch } from "../../../shared/provider-preferences"
+import { mergeAppSettingsPatch } from "../../../shared/app-settings-merge"
 import type { AppSettingsPatch, AppSettingsSnapshot } from "../../../shared/types"
 import { opaque } from "../schema"
 
 // Port of src/client/stores/appSettingsStore.ts: the `app-settings` snapshot,
 // with a patch applied ahead of the server's ack. Not persisted.
 
-/**
- * Copied from appSettingsStore.ts, which imports zustand, and kept identical:
- * src/demo/backend.ts uses the React copy, and the server's ack must match
- * what either client showed optimistically.
- */
-export function mergeAppSettingsPatch(
-  settings: AppSettingsSnapshot,
-  patch: AppSettingsPatch
-): AppSettingsSnapshot {
-  return {
-    ...settings,
-    ...patch,
-    terminal: {
-      ...settings.terminal,
-      ...patch.terminal,
-    },
-    editor: {
-      ...settings.editor,
-      ...patch.editor,
-    },
-    transcript: {
-      ...settings.transcript,
-      ...patch.transcript,
-    },
-    paneVisibility: {
-      ...settings.paneVisibility,
-      ...patch.paneVisibility,
-    },
-    // Same deep-merge the server applies in app-settings.ts applyPatch, so the
-    // optimistic snapshot matches what the ack will confirm.
-    providerDefaults: mergeProviderDefaultsPatch(settings.providerDefaults, patch.providerDefaults),
-  }
-}
+export { mergeAppSettingsPatch }
 
 const AppSettings = opaque<AppSettingsSnapshot>("AppSettingsSnapshot")
 

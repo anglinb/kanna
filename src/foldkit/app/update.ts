@@ -1,7 +1,7 @@
 import { Option } from "effect"
 import { Command, Navigation, Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
-import { toString as urlToString, type Url } from "foldkit/url"
+import { fromString as urlFromString, toString as urlToString, type Url } from "foldkit/url"
 import { getChatNotificationEvents, getChatSoundBurstCount } from "../../client/app/chatNotifications"
 import { isProcessingStatus } from "../../client/app/derived"
 import { getMostRecentlyActiveProjectId, getProjectIdForChat } from "../../client/app/kannaStateHelpers"
@@ -66,7 +66,9 @@ const liftStores = (commands: Update.Return<Stores.Model, Stores.Message, AppSer
 
 // INIT
 
-export function init(flags: Flags, url: Url): UpdateReturn {
+export function init(flags: Flags, frameUrl: Url): UpdateReturn {
+  // The demo starts where its memory history does, not at the frame's address.
+  const url = flags.memoryUrl ? Option.getOrElse(urlFromString(flags.memoryUrl), () => frameUrl) : frameUrl
   const route = urlToAppRoute(url)
   // The demo and the parity fixture seed settings before the first render,
   // as their React entries seed the store.

@@ -25,7 +25,7 @@ import type {
   SubmitWhileRunning,
 } from "../../shared/types"
 import { SETTINGS_ROWS, type SettingsRowDef } from "../settings/registry"
-import type { MacSetupState } from "../../client/lib/macApp"
+import type { MacSetupState } from "../core/macApp"
 
 // Copied from components/command-palette/settings-commands.ts, unchanged but
 // for the icons (the Foldkit ones) and the settings registry (its Foldkit

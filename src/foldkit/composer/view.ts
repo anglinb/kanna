@@ -278,7 +278,7 @@ function composerView(model: Model, ctx: Context, editModels: ReadonlyArray<Chil
         ...([
           onBridged(h, "input", (event) => {
             const element = event.target as HTMLTextAreaElement
-            return Message.ChangedInput({ value: element.value, caret: element.selectionStart ?? element.value.length })
+            return Message.ChangedInput({ value: element.value, caret: element.selectionStart ?? element.value.length, at: Date.now() })
           }),
           onBridged(h, "keydown", handleKeyDown),
           onBridged(h, "paste", handlePaste),

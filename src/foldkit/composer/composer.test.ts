@@ -87,20 +87,21 @@ const chatInputStore = (message: ChatInput.Message) => asks(AppAction.Store({ me
 const fresh = (ctx: Context) => reconcile(init(), ctx).model
 
 describe("composer: typing", () => {
-  test("a keystroke saves the draft, stamped, and resizes the box", () => {
+  test("a keystroke saves the draft in the same update, stamped with its time, and resizes the box", () => {
     const ctx = context()
     Story.story(
       updateFor(ctx),
       Story.given(fresh(ctx)),
-      Story.message(Message.ChangedInput({ value: "Show the swell", caret: 14 })),
-      Story.Command.expectHas(Commands.AutoResize, ChatInput.ChangeDraft),
-      Story.Command.resolve(Commands.AutoResize, Message.CompletedSideEffect()),
-      Story.Command.resolve(ChatInput.ChangeDraft, ChatInput.Message.ChangedDraft({ chatId: "c1", value: "Show the swell", at: 5 })),
+      Story.message(Message.ChangedInput({ value: "Show the swell", caret: 14, at: 5 })),
       Story.expectOutMessage(chatInputStore(ChatInput.Message.ChangedDraft({ chatId: "c1", value: "Show the swell", at: 5 }))),
+      Story.Command.expectExact(Commands.AutoResize),
+      // (The root applies that write in this same update; this test's store
+      // is fixed, so look before another message reconciles against it.)
       Story.model((model) => {
         expect(model.value).toBe("Show the swell")
         expect(model.writtenDraft).toBe("Show the swell")
       }),
+      Story.Command.resolve(Commands.AutoResize, Message.CompletedSideEffect()),
     )
   })
 
