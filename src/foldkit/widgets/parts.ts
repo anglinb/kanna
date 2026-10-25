@@ -121,6 +121,12 @@ export interface WidgetSectionOptions<M> {
   collapsedBody?: ReadonlyArray<Child> | null
   /** Off when the body draws its own dividers. */
   bodyDivider?: boolean
+  /**
+   * The open body's divider stays even with nothing in it: React's children
+   * were a list of conditionals, and a list is truthy (Quick Actions after
+   * its last action is deleted).
+   */
+  bodyAlways?: boolean
   /** Always visible below the body, even while a disclosure is collapsed. */
   footer?: Html | null
   /** Keyed by this among its card's sections. */
@@ -161,7 +167,7 @@ export function widgetSection<M>(options: WidgetSectionOptions<M>, h: HtmlBuilde
       hasContent(actions) ? h.div([h.Class("flex shrink-0 items-center gap-1")], actions!) : null,
     ]),
     // Uncapped: a widget is as tall as its content and the column scrolls.
-    hasContent(body)
+    hasContent(body) || (open && options.bodyAlways && body)
       ? h.keyed("div")(open ? "open" : "closed", [...(bodyDivider ? [h.Class("border-t border-border")] : [])], body!)
       : null,
     options.footer ? h.div([h.Class("border-t border-border")], [options.footer]) : null,

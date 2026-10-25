@@ -56,6 +56,7 @@ export function quickActionsWidget(context: ColumnContext, h: H): Html {
             h.OnClick(Message.ClickedAddQuickAction()),
           ], [Plus({ class: "size-4" }, h)]),
         ],
+        bodyAlways: true,
         body: [
           // The add form is a Strip over the saved actions, not a row among them.
           state.isAdding

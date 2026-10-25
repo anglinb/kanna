@@ -44,7 +44,17 @@ export const SyncBranch = Command.define("WidgetsSyncBranch", {
   execute: ({ chatId, action }) => sendCommand<ChatSyncResult>({ type: "chat.syncBranch", chatId, action }).pipe(
     Effect.map((result) => Message.SucceededSync({ result })),
     Effect.catch((error) => Effect.succeed(Message.FailedSync({ error: asText(error) }))),
+    // React painted the disabled button before a fast answer could land (and
+    // a focused button that goes disabled loses focus); the frame keeps that.
+    Effect.tap(() => nextFrame),
   ),
+})
+
+/** Waits out the next frame, which renders whatever the update before it set. */
+const nextFrame = Effect.callback<void>((resume) => {
+  if (typeof requestAnimationFrame === "undefined") return resume(Effect.void)
+  const frame = requestAnimationFrame(() => resume(Effect.void))
+  return Effect.sync(() => cancelAnimationFrame(frame))
 })
 
 export const GenerateCommitMessage = Command.define("WidgetsGenerateCommitMessage", {
@@ -359,6 +369,8 @@ export const RefreshUsage = Command.define("WidgetsRefreshUsage", {
   execute: ({ basis }) => sendCommand<UsageLimitsSnapshot>({ type: "usage.refresh", force: true }).pipe(
     Effect.map((result) => Message.CompletedRefreshUsage({ basis, snapshot: result && Array.isArray(result.providers) ? result : null })),
     Effect.catch(() => Effect.succeed(Message.CompletedRefreshUsage({ basis, snapshot: null }))),
+    // The disabled button paints before a fast answer lands, as in React.
+    Effect.tap(() => nextFrame),
   ),
 })
 
