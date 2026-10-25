@@ -208,6 +208,30 @@ describe("DemoBackend", () => {
       .toThrow(DEMO_UNAVAILABLE_MESSAGE)
   })
 
+  test("a project made in the demo has no GitHub remote, and publishing stops at gh sign-in", () => {
+    const { subscribe, latest, command } = createHarness()
+    const { projectId } = command({ type: "project.create", localPath: "/Users/you/surf-log", title: "surf-log" }) as { projectId: string }
+    const git = latest<ChatDiffSnapshot>(subscribe({ type: "project-git", projectId }))
+    expect(git).toMatchObject({ status: "ready", hasOriginRemote: false, hasUpstream: false })
+    expect(git.originRepoSlug).toBeUndefined()
+
+    const { chatId } = command({ type: "chat.create", projectId }) as { chatId: string }
+    expect(command({ type: "chat.getGitHubPublishInfo", chatId })).toEqual({
+      ghInstalled: true,
+      authenticated: false,
+      owners: [],
+      suggestedRepoName: "surf-log",
+    })
+  })
+
+  test("the rate-limit chat's agent left a schedule behind", () => {
+    const { subscribe, latest } = createHarness()
+    const chat = latest<ChatSnapshot>(subscribe({ type: "chat", chatId: "demo-chat-rate-limit" }))
+    expect(chat.runtime.schedules?.map((schedule) => [schedule.name, schedule.trigger])).toEqual([
+      ["Watch the charge limiter", { kind: "interval", everyMs: 6 * 60 * 60_000 }],
+    ])
+  })
+
   test("snapshots only go out when they change", () => {
     const { sent, subscribe, command } = createHarness()
     const sidebarId = subscribe({ type: "sidebar" })
