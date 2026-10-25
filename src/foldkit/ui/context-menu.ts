@@ -361,7 +361,9 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inpu
       : [
         h.OnContextMenu(Message.RequestedContextMenu()),
         h.OnPointerDown((pointerType, button, _screenX, _screenY, _timeStamp, clientX, clientY) =>
-          Option.some(Message.PressedTrigger({ pointerType, button, x: clientX, y: clientY }))),
+          // Radix positions from the contextmenu event, whose coordinates
+          // Chromium truncates to whole pixels; pointerdown's are fractional.
+          Option.some(Message.PressedTrigger({ pointerType, button, x: Math.trunc(clientX), y: Math.trunc(clientY) }))),
         h.OnPointerMove((_x, _y, pointerType) =>
           pointerType !== "mouse" && Option.isSome(model.longPressVersion) ? Option.some(Message.CancelledLongPress()) : Option.none()),
         h.OnPointerUp((_x, _y, pointerType) =>
