@@ -7,15 +7,11 @@ import { Message } from "./message"
 import type { Model } from "./model"
 import * as Usage from "./usage"
 
-/** Window event that opens the command palette from anywhere (CommandPalette's OPEN_COMMAND_PALETTE_EVENT). */
-export const OPEN_COMMAND_PALETTE_EVENT = "kanna:open-command-palette" as const
-
 /** The phone layout, where the sidebar is a page and not a column (KannaSidebar's `isPhoneLayout`). */
 const PHONE_LAYOUT_QUERY = "(max-width: 767px)"
 
 /** The window, with the app's own events it hears. */
 const appWindow = () => window as Dom.TypedEventTarget<{
-  "kanna:open-command-palette": CustomEvent<{ page?: string } | undefined>
   "kanna:mac-setup": CustomEvent<MacSetupState>
 }>
 
@@ -33,18 +29,8 @@ export const subscriptions = Subscription.make<Model, Message, KannaSocketServic
       },
     }),
   }),
-  // Programmatic open (the mobile nav's search button, the sidebar's "New
-  // chat in…"). An optional `detail.page` deep-links to a sub-page.
-  paletteOpenRequests: Subscription.persistentEntry(
-    Dom.streamFromEvent({
-      target: appWindow,
-      type: OPEN_COMMAND_PALETTE_EVENT,
-      mapEvent: (event) => Message.ReceivedOpenRequest({
-        page: event.detail?.page ?? null,
-        at: Date.now(),
-      }),
-    }),
-  ),
+  // A programmatic open (React's `kanna:open-command-palette` window event)
+  // is AppAction.OpenCommandPalette: the root calls `requestOpen`.
   // This Mac's switches, as Kanna for Mac reports them (useMacSetupStore).
   paletteMacSetup: Subscription.persistentEntry(
     Dom.streamFromEvent({

@@ -131,6 +131,15 @@ describe("chat page: navbar", () => {
     expect(shared.outMessage?.action).toEqual(AppAction.ShareChat({ chatId: "c1" }))
   })
 
+  test("Search and the empty page's project picker open the palette through the root", () => {
+    const app = boot("/chat/c1")
+    const searched = update(init(), Message.ClickedSearch(), app)
+    expect(searched.outMessage?.action).toEqual(AppAction.OpenCommandPalette({ page: null }))
+    expect(searched.commands ?? []).toEqual([])
+    const picked = update(init(), Message.ClickedProjectPicker(), app)
+    expect(picked.outMessage?.action).toEqual(AppAction.OpenCommandPalette({ page: "new-thread" }))
+  })
+
   test("renaming in place: Enter renames once, Escape drops the draft", () => {
     const base = boot("/chat/c1")
     const session = ChatSession.init("c1", { windowSize: 50, starting: false }).model

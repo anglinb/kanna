@@ -12,9 +12,8 @@ export const Message = defineMessageUnion({
   /** The openCommandPalette keybinding, anywhere on the page. */
   PressedPaletteShortcut: { at: Schema.Number },
   /**
-   * An open on a page: AppAction.OpenCommandPalette (through `requestOpen`),
-   * or `kanna:open-command-palette`, which pages not yet moved to the action
-   * still dispatch. `at` snaps the age labels' clock.
+   * An open, optionally on a page: AppAction.OpenCommandPalette, through
+   * `requestOpen`. `at` snaps the age labels' clock.
    */
   ReceivedOpenRequest: { page: Schema.NullOr(Schema.String), at: Schema.Number },
   /** Escape at the root, or a pointerdown outside (Radix's onOpenChange(false)). */

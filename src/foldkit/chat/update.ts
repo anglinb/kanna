@@ -39,7 +39,6 @@ import {
   MakeTerminalId,
   MeasureMenuButton,
   MeasureTabMenuButton,
-  OpenCommandPalette,
   OpenWindow,
   ReadQuickActions,
   RefreshDiffs,
@@ -589,7 +588,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
 
     ClickedBack: () => withActions({ model }, [AppAction.OpenSidebar()]),
     ClickedExpandSidebar: () => withActions({ model }, [AppAction.ExpandSidebar()]),
-    ClickedSearch: () => ({ model, commands: [OpenCommandPalette({ page: null })] }),
+    ClickedSearch: () => withActions({ model }, [AppAction.OpenCommandPalette({ page: null })]),
     ClickedToggleTerminal: () => toggleTerminal(model, facts()),
     ClickedToggleWidgets: () => toggleWidgets(model, facts()),
     ClickedShareChat: () => {
@@ -656,7 +655,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     ClickedProjectName: () => withActions({ model }, [AppAction.OpenExternal({ action: "open_finder", editor: null, terminal: null })]),
     ClickedBranch: ({ url }) => ({ model, commands: [OpenWindow({ url })] }),
 
-    ClickedProjectPicker: () => ({ model, commands: [OpenCommandPalette({ page: "new-thread" })] }),
+    ClickedProjectPicker: () => withActions({ model }, [AppAction.OpenCommandPalette({ page: "new-thread" })]),
     ClickedSetup: () => withActions({ model }, [store(Stores.Message.GotProviderAuthMessage({ message: ProviderAuth.Message.OpenedSetupWizard() }))]),
     StartedProjectChats: ({ nowMs }) => ({ model: modifyFields(model, { projectChats: () => ({ query: "", cascadeDone: false, nowMs, stuck: false }) }) }),
     ElapsedProjectChatsCascade: () => ({ model: modifyFields(model, { projectChats: (state) => ({ ...state, cascadeDone: true }) }) }),
