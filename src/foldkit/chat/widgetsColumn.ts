@@ -50,7 +50,7 @@ export function widthForHandleKey(key: string, widthPx: number): Option.Option<n
  */
 const ColumnHandle = Mount.defineStream("WidgetsColumnHandle", {
   messages: [Message.PressedColumnHandle, Message.MovedColumnHandle, Message.ReleasedColumnHandle],
-  execute: ({ element }) => domStream<Message>((emit) => {
+  execute: ({ element }) => domStream<typeof Message.PressedColumnHandle.Type | typeof Message.MovedColumnHandle.Type | typeof Message.ReleasedColumnHandle.Type>((emit) => {
     const handle = element as HTMLElement
     let dragging = false
     const down = (event: PointerEvent) => {

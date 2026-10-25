@@ -41,7 +41,7 @@ import { CHAT_MIN_WORKSPACE_SIZE_PERCENT, getWidgetsColumnWidthPx, widthForHandl
 import { DEFAULT_RIGHT_SIDEBAR_SIZE } from "../core/stores/rightSidebar"
 
 type Return = SliceReturn<Model, Message>
-type AppCommand = Command.Command<Message, never, never>
+type AppCommand = NonNullable<Return["commands"]>[number]
 
 // ASKING THE ROOT
 

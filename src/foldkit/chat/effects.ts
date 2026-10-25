@@ -90,7 +90,7 @@ const WASH_SETTLE_MS = 400
 export const WatchWash = Mount.defineStream("WatchNavbarWash", {
   args: { wash: WashId, token: Schema.Number },
   messages: [Message.ChangedWashScroll, Message.StartedWash, Message.SettledWash],
-  execute: ({ element, wash, token }) => domStream<Message>((emit) => {
+  execute: ({ element, wash, token }) => domStream<typeof Message.ChangedWashScroll.Type | typeof Message.StartedWash.Type | typeof Message.SettledWash.Type>((emit) => {
     const host = element.parentElement
     emit(Message.StartedWash({ wash, token }))
     const settled = window.setTimeout(() => emit(Message.SettledWash({ wash, token })), WASH_SETTLE_MS)
@@ -138,7 +138,7 @@ const SHORTCUT_ACTIONS: ReadonlyArray<ShortcutAction> = ["toggleEmbeddedTerminal
  * The page's shortcuts, on window: the first binding that matches is
  * prevented at once (it must be, in the listener) and reported.
  */
-export function shortcutListener(bindings: KeybindingsSnapshot, emit: (message: Message) => void) {
+export function shortcutListener(bindings: KeybindingsSnapshot, emit: (message: typeof Message.PressedShortcut.Type) => void) {
   return (event: KeyboardEvent) => {
     for (const action of SHORTCUT_ACTIONS) {
       if (actionMatchesEvent(bindings, action, event)) {
@@ -154,7 +154,7 @@ export function shortcutListener(bindings: KeybindingsSnapshot, emit: (message: 
 export const ListenForShortcuts = Mount.defineStream("ChatPageShortcuts", {
   args: { bindings: Schema.String },
   messages: [Message.PressedShortcut],
-  execute: ({ bindings }) => domStream<Message>((emit) => {
+  execute: ({ bindings }) => domStream<typeof Message.PressedShortcut.Type>((emit) => {
     const listener = shortcutListener({ bindings: JSON.parse(bindings), warning: null, filePathDisplay: "" } as KeybindingsSnapshot, emit)
     window.addEventListener("keydown", listener)
     return () => window.removeEventListener("keydown", listener)
@@ -164,7 +164,7 @@ export const ListenForShortcuts = Mount.defineStream("ChatPageShortcuts", {
 /** The widget sheet on a phone: Escape closes it, and the page under it doesn't scroll. */
 export const HoldMobileSheet = Mount.defineStream("ChatMobileWidgetSheet", {
   messages: [Message.PressedEscapeOnSheet],
-  execute: () => domStream<Message>((emit) => {
+  execute: () => domStream<typeof Message.PressedEscapeOnSheet.Type>((emit) => {
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = "hidden"
     const handleEscape = (event: KeyboardEvent) => {
@@ -187,7 +187,7 @@ export const HoldMobileSheet = Mount.defineStream("ChatMobileWidgetSheet", {
  */
 export const KeepDiffsFresh = Mount.defineStream("ChatDiffRefresh", {
   messages: [Message.TickedDiffRefresh],
-  execute: () => domStream<Message>((emit) => {
+  execute: () => domStream<typeof Message.TickedDiffRefresh.Type>((emit) => {
     const interval = window.setInterval(() => {
       if (document.visibilityState !== "visible") return
       emit(Message.TickedDiffRefresh())
@@ -209,7 +209,7 @@ export const KeepDiffsFresh = Mount.defineStream("ChatDiffRefresh", {
 /** The resize cursor, and no text selected, wherever the pointer strays mid-drag. */
 export const HoldColumnDragCursor = Mount.defineStream("WidgetsColumnDragCursor", {
   messages: [Message.CompletedSideEffect],
-  execute: () => domStream<Message>(() => {
+  execute: () => domStream<typeof Message.CompletedSideEffect.Type>(() => {
     const previousCursor = document.body.style.cursor
     const previousUserSelect = document.body.style.userSelect
     document.body.style.cursor = "col-resize"
