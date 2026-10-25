@@ -43,3 +43,4 @@ macos/build/
 
 # Parity harness runs (scripts/parity)
 /.parity/
+/.e2e/
