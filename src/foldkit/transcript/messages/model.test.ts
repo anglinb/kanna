@@ -233,7 +233,10 @@ describe("chart tables", () => {
     Story.story(
       update,
       Story.given(init()),
+      // A Select chooses once per opening, so it opens first.
+      Story.message(Message.GotAggregateSelectMessage({ key: "viewer", which: "row", message: Select.Message.PressedOpenKey() })),
       Story.message(Message.GotAggregateSelectMessage({ key: "viewer", which: "row", message: Select.Message.ChoseItem({ value: "median", pointerType: "mouse" }) })),
+      Story.Command.resolve(Select.WaitForExitAnimation, Select.Message.CompletedExitAnimation({ version: 2 })),
       Story.model((model) => expect(model.charts.viewer?.rowAggregate).toBe("median")),
       Story.message(Message.ResizedChartColumn({ key: "viewer", width: 40 })),
       Story.model((model) => expect(model.charts.viewer?.firstColumnWidth).toBe(128)),
