@@ -90,7 +90,13 @@ const STATUS_MARK_SLOT_CLASS = "flex size-4 shrink-0 items-center justify-center
 function statusMark(kind: "working" | "waiting_on_subagent" | "waiting" | "unread", label: string | undefined, h: H): Html {
   if (kind === "working" || kind === "waiting_on_subagent") {
     return h.span([h.Class(STATUS_MARK_SLOT_CLASS)], [
-      Loader2({ class: cn("size-3.5 animate-spin", kind === "working" ? "text-logo" : "text-muted-foreground"), ...(label ? { attributes: [h.AriaLabel(label)] } : {}) }, h),
+      Loader2({
+        class: cn("size-3.5 animate-spin", kind === "working" ? "text-logo" : "text-muted-foreground"),
+        // React passed `aria-label={label}` even when undefined, and
+        // lucide-react drops its aria-hidden for any aria-* prop: the
+        // spinner is an unnamed image. An empty label keeps that.
+        attributes: [h.Attribute("aria-label", label ?? "")],
+      }, h),
     ])
   }
   const blue = kind === "waiting"
