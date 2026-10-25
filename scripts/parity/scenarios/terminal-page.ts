@@ -10,6 +10,14 @@ import { defineScenario, type Scenario } from "../scenario"
 // (the frames only; the backend is untouched), the page is reloaded, and the
 // sidebar's Terminal button opens it as a person would. (Not a dev box,
 // /terminal sends you home: routes.ts's terminal-page-redirect.)
+//
+// A new pane subscribes to its terminal, then sends terminal.create two
+// frames later. The demo answers the subscription with a null snapshot (no
+// shell yet), and a pane that hears "no shell" after its create went out
+// sends a second create; whether it does is a race between the fake socket's
+// round trip and two animation frames, so React against React disagreed run
+// to run. Those null snapshots are addressed to no subscription here (the
+// frames only), which leaves one create per pane, every run.
 
 /** The TerminalPage's own element. */
 const PAGE = "div.md\\:pt-0:has(.kanna-terminal)"
@@ -21,7 +29,9 @@ async function openAsDevbox(page: Page, settle: () => Promise<void>) {
       configurable: true,
       get(this: MessageEvent) {
         const value = data.get!.call(this) as unknown
-        return typeof value === "string" && value.includes("\"devbox\":false") ? value.replaceAll("\"devbox\":false", "\"devbox\":true") : value
+        if (typeof value !== "string") return value
+        if (value.includes("\"snapshot\":{\"type\":\"terminal\",\"data\":null}")) return value.replace("\"id\":\"", "\"id\":\"parity-dropped-")
+        return value.includes("\"devbox\":false") ? value.replaceAll("\"devbox\":false", "\"devbox\":true") : value
       },
     })
   })
@@ -108,8 +118,9 @@ export const scenarios: Scenario[] = [
       await page.keyboard.type("pwd")
       await page.keyboard.press("Enter")
       await settle()
+      // Clear resets the xterm and closes the shell; the demo pushes nothing
+      // after a close, so the pane stays empty.
       await page.getByRole("button", { name: "Clear terminal" }).click()
-      await page.getByText("This terminal is simulated.").first().waitFor()
       await blur(page)
       await settle()
       await capture("cleared")
