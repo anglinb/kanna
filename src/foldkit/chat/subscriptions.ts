@@ -60,18 +60,19 @@ const pageSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
       ),
   }),
 
-  /** While the column is open (UsageWidgets' `active`): a refresh at once, then every minute the tab is visible. */
+  /**
+   * While the column is open (UsageWidgets' `active`): every minute the tab
+   * is visible. The refresh as it opens is the page's (observePage), so it
+   * goes out in React's order.
+   */
   usageRefresh: entry({ active: Schema.Boolean }, {
     modelToDependencies: (model) => ({ active: usageShown(model) && model.watch?.projectId !== null && Boolean(model.watch?.showRightSidebar) }),
     dependenciesToStream: ({ active }) =>
       Stream.when(
-        Stream.concat(
-          Stream.make(Message.TickedUsageRefresh()),
-          Stream.tick(`${USAGE_POLL_MS} millis`).pipe(
-            Stream.drop(1),
-            Stream.filter(() => typeof document === "undefined" || document.visibilityState === "visible"),
-            Stream.map(() => Message.TickedUsageRefresh()),
-          ),
+        Stream.tick(`${USAGE_POLL_MS} millis`).pipe(
+          Stream.drop(1),
+          Stream.filter(() => typeof document === "undefined" || document.visibilityState === "visible"),
+          Stream.map(() => Message.TickedUsageRefresh()),
         ),
         Effect.sync(() => active),
       ),

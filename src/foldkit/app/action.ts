@@ -32,6 +32,11 @@ export const AppAction = defineTaggedUnion({
   OpenProjectNewChat: { projectId: Schema.String },
   /** The sidebar's New Chat: a chat in the project you're looking at. */
   Compose: {},
+  /**
+   * Text into the open chat's composer, after what is already typed
+   * (ChatPage's handleEditSchedule: the composer's RequestedPrefill).
+   */
+  PrefillComposer: { text: Schema.String },
   ForkChat: { chatId: Schema.String },
   RenameChat: { chatId: Schema.String, title: Schema.String },
   ShareChat: { chatId: Schema.NullOr(Schema.String) },

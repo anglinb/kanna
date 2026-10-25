@@ -4,6 +4,7 @@ import type { ChatJumpTarget } from "../../client/lib/chat-navigation"
 import { opaque } from "../core/schema"
 import * as ContextMenu from "../ui/context-menu"
 import * as Messages from "./messages/model"
+import * as ScheduleCard from "../widgets/scheduleCard"
 
 // The transcript viewport's Model: what ChatTranscriptViewport and the
 // minimap kept in state (and, for the scroll-to-bottom button, what ChatPage
@@ -55,6 +56,8 @@ export const Model = Schema.Struct({
   linkMenuTarget: Schema.NullOr(opaque<OpenLocalLinkTarget>("OpenLocalLinkTarget")),
   /** Live chat cards' right-click menus (ThreadRowMenu), by chat; made on first use. */
   cardMenus: Schema.Record(Schema.String, ContextMenu.Model),
+  /** Live schedule cards (the Schedules widget's row, menu and hover card), by schedule; made on first use. */
+  scheduleCards: Schema.Record(Schema.String, ScheduleCard.Model),
 })
 export type Model = typeof Model.Type
 
@@ -77,5 +80,6 @@ export function init(): Model {
     linkMenu: ContextMenu.init({ id: LINK_MENU_ID }),
     linkMenuTarget: null,
     cardMenus: {},
+    scheduleCards: {},
   }
 }

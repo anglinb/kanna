@@ -9,6 +9,7 @@ import * as Messages from "./messages"
 import { messageNamingParent } from "./messages"
 import { Message } from "./message"
 import { liveChatCard } from "./chatCard"
+import * as ScheduleCard from "../widgets/scheduleCard"
 import { minimapView } from "./minimap"
 import type { Model } from "./model"
 import { feedOf, linkMenuItems, rowsOf, turnsOf, type LinkMenuSource, type TranscriptSource } from "./source"
@@ -52,6 +53,19 @@ function messagesItem(model: Model, slotId: string, source: TranscriptSource, it
           currentProjectId: source.currentProjectId,
           schedules: references.schedules,
           renderChatCard: (card: Messages.LiveChatCard) => liveChatCard(model, references.app, card, Date.now(), h),
+          renderScheduleCard: (card: Messages.LiveScheduleCard) => h.submodel({
+            slotId: `schedule-card-${card.schedule.id}`,
+            model: model.scheduleCards[card.schedule.id] ?? ScheduleCard.init(card.schedule.id),
+            view: ScheduleCard.view,
+            viewInputs: {
+              card,
+              currentChatId: references.schedules.chatId,
+              now: Date.now(),
+              chatTitle: (chatId: string) => references.sidebarThread(chatId)?.title,
+              canOpenChats: true,
+            },
+            toParentMessage: (message: ScheduleCard.Message) => Message.GotScheduleCardMessage({ scheduleId: card.schedule.id, message }),
+          }),
         }
         : {}),
     },

@@ -339,6 +339,15 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
     commands.push(ReadQuickActions({ projectId: watch.projectId }))
   }
 
+  // UsageWidgets refreshes as it mounts with the open column: a child's
+  // effect, so ahead of the page's diff refresh below. (The minute ticks
+  // after it are a subscription.)
+  const usageActive = (w: Watch | null | undefined) => Boolean(w?.projectId && w.showRightSidebar)
+  if (usageActive(watch) && !usageActive(previous)) {
+    next = modifyFields(next, { usageRefreshing: () => true })
+    commands.push(RefreshUsage({ force: false }))
+  }
+
   // useChatPageSidebarActions: diffs refresh when the column opens, and the
   // project's git snapshot once per project.
   if (watch.projectId && watch.showRightSidebar && watch.chatId

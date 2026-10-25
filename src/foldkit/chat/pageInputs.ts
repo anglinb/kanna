@@ -103,7 +103,12 @@ export interface ChatPageContext {
 export interface ChatPageRequests {
   /** The model picker's "Add models…" (`onEditModels`): opens the Default Models dialog. */
   editModels: ReadonlyArray<ChildAttribute>
-  /** A quick action's row, by its id (`onRunQuickAction`): runs its command in a new terminal. */
+  /**
+   * A quick action's row, by its id (`onRunQuickAction`): runs its command in
+   * a new terminal. Covers what the widgets wrote a moment ago too. (A
+   * record, not a function: Foldkit scopes only top-level view-input
+   * functions to the page's boundary.)
+   */
   runQuickAction: Readonly<Record<string, ReadonlyArray<ChildAttribute>>>
 }
 
