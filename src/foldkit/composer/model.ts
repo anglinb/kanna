@@ -3,6 +3,7 @@ import type { UploadErrorReport } from "../../client/lib/uploadError"
 import type { ChatAttachment, HarnessSkill } from "../../shared/types"
 import { opaque } from "../core/schema"
 import { initSignInDialog, SignInDialogModel } from "../settings/auth-cards"
+import * as AppDialog from "../ui/app-dialog"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
 
@@ -111,6 +112,8 @@ export const Model = Schema.Struct({
 
   /** useIsStandalone: an installed web app. */
   isStandalone: Schema.Boolean,
+  /** createDelegator's prompt and its alert (useAppDialog). */
+  appDialog: AppDialog.Model,
 
   pendingSubmit: Schema.NullOr(PendingSubmit),
 })
@@ -168,6 +171,7 @@ export function init(): Model {
     modelQuery: "",
     tooltips: tooltipsFor("composer"),
     isStandalone: isStandaloneNow(),
+    appDialog: AppDialog.init(),
     pendingSubmit: null,
   }
 }

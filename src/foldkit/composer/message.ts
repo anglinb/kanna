@@ -5,6 +5,7 @@ import { AppAction } from "../app/action"
 import { opaque } from "../core/schema"
 import * as ChatInput from "../core/stores/chatInput"
 import { SignInDialogMessage } from "../settings/auth-cards"
+import * as AppDialog from "../ui/app-dialog"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
 import { AgentProviderSchema, FileSchema, PopoverName, TooltipName, UploadErrorReportSchema } from "./model"
@@ -87,6 +88,9 @@ export const Message = defineMessageUnion({
   PickedMode: { mode: ChatModeSchema },
   PickedDelegator: { chatId: Schema.NullOr(Schema.String) },
   ClickedNewDelegator: {},
+  GotAppDialogMessage: { message: AppDialog.Message },
+  SucceededCreateDelegator: { projectId: Schema.String, chatId: Schema.String },
+  FailedCreateDelegator: { error: Schema.String },
   GotSignInMessage: { message: SignInDialogMessage },
 
   // FROM THE PAGE (ChatInputHandle, the session's answer, page-wide events)

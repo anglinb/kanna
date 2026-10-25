@@ -7,7 +7,10 @@ import * as Stores from "../app/stores"
 import * as ChatSession from "../core/chatSession"
 import * as ChatInput from "../core/stores/chatInput"
 import * as ChatPreferences from "../core/stores/chatPreferences"
+import * as Delegate from "../core/stores/delegate"
 import { memoryStorage } from "../core/stores/testing"
+import * as AppDialog from "../ui/app-dialog"
+import * as Dialog from "../ui/dialog"
 import * as Commands from "./commands"
 import type { ComposerProps, Context } from "./context"
 import { Message } from "./message"
@@ -221,6 +224,34 @@ describe("composer: modes and harnesses", () => {
     expect(result.model.signIn.provider).toBe("codex")
     // The harness doesn't change until the sign-in lands.
     expect(result.outMessage).toBeUndefined()
+  })
+})
+
+describe("composer: a new delegator", () => {
+  test("New Delegator… asks for a name, creates it, and delegates to it", () => {
+    const ctx = context()
+    Story.story(
+      updateFor(ctx),
+      Story.given(fresh(ctx)),
+      Story.message(Message.ClickedNewDelegator()),
+      Story.Command.resolve(AppDialog.FocusInput, AppDialog.Message.CompletedFocusInput()),
+      Story.model((model) => expect(model.appDialog.request._tag).toBe("Some")),
+      Story.message(Message.GotAppDialogMessage({ message: AppDialog.Message.ChangedInput({ value: "Release captain" }) })),
+      Story.message(Message.GotAppDialogMessage({ message: AppDialog.Message.ClickedConfirm() })),
+      Story.Command.resolveAll(
+        [Dialog.WaitForExitAnimation, Dialog.Message.CompletedExitAnimation({ version: 2 })],
+        [Commands.CreateDelegator, Message.SucceededCreateDelegator({ projectId: "p1", chatId: "d1" })],
+      ),
+      Story.expectOutMessage(asks(AppAction.Store({
+        message: Stores.Message.GotDelegateMessage({ message: Delegate.Message.ChangedPreference({ projectId: "p1", preference: { on: true, chatId: "d1" } }) }),
+      }))),
+    )
+  })
+
+  test("a failed create says so", () => {
+    const ctx = context()
+    const result = updateWith(fresh(ctx), Message.FailedCreateDelegator({ error: "The server is gone." }), ctx)
+    expect(result.model.appDialog.request._tag).toBe("Some")
   })
 })
 

@@ -13,6 +13,7 @@ import * as ProviderAuth from "../core/stores/providerAuth"
 import * as Sidebar from "../core/stores/sidebar"
 import { signInDialogView, type SignInDialogMessage } from "../settings/auth-cards"
 import { attachmentFileCard, attachmentImageCard } from "../transcript/messages/attachments"
+import * as AppDialog from "../ui/app-dialog"
 import { button } from "../ui/button"
 import * as Icons from "../ui/icons"
 import type * as Popover from "../ui/popover"
@@ -568,6 +569,12 @@ function composerView(model: Model, ctx: Context, editModels: ReadonlyArray<Chil
       view: signInDialogView,
       viewInputs: { providerAuth: ctx.stores.providerAuth },
       toParentMessage: (message: SignInDialogMessage) => Message.GotSignInMessage({ message }),
+    }),
+    h.submodel({
+      slotId: "app-dialog",
+      model: model.appDialog,
+      view: AppDialog.view,
+      toParentMessage: (message: AppDialog.Message) => Message.GotAppDialogMessage({ message }),
     }),
   ])
 }

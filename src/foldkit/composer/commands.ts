@@ -6,7 +6,7 @@ import { buildUploadErrorReport } from "../../client/lib/uploadError"
 import { generateUUID } from "../../client/lib/utils"
 import type { ChatAttachment, ChatSkillsSnapshot } from "../../shared/types"
 import { opaque } from "../core/schema"
-import { sendCommand } from "../core/socket"
+import { errorMessage, sendCommand } from "../core/socket"
 import * as ChatInput from "../core/stores/chatInput"
 import { Message } from "./message"
 import { AgentProviderSchema, FileSchema } from "./model"
@@ -338,6 +338,24 @@ export const EmptyRing = Command.define("EmptyHoldRing", {
     emptyRing(domId, instant)
     return Message.CompletedSideEffect()
   }),
+})
+
+// DELEGATORS (create-delegator.ts)
+
+/**
+ * Creates the delegator empty, then names it if it was given a name. Left
+ * blank it is "New Chat" until its first message names it, as any chat is.
+ */
+export const CreateDelegator = Command.define("CreateDelegator", {
+  args: { projectId: Schema.String, name: Schema.String },
+  messages: [Message.SucceededCreateDelegator, Message.FailedCreateDelegator],
+  execute: ({ projectId, name }) => Effect.gen(function* () {
+    const { chatId } = yield* sendCommand<{ chatId: string }>({ type: "chat.create", projectId, delegator: true })
+    if (name) yield* sendCommand({ type: "chat.rename", chatId, title: name })
+    return Message.SucceededCreateDelegator({ projectId, chatId })
+  }).pipe(
+    Effect.catch((error) => Effect.succeed(Message.FailedCreateDelegator({ error: errorMessage(error) }))),
+  ),
 })
 
 // SENDING

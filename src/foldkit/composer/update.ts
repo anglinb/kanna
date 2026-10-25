@@ -1,3 +1,4 @@
+import { Option } from "effect"
 import { Command } from "foldkit"
 import { classifyAttachmentPreview } from "../../client/components/messages/attachmentPreview"
 import { applyProjectMention, getActiveProjectMention } from "../../client/lib/project-mention"
@@ -17,6 +18,7 @@ import * as Delegate from "../core/stores/delegate"
 import * as ProviderAuth from "../core/stores/providerAuth"
 import * as Viewer from "../core/stores/viewer"
 import { closeSignInDialog, openSignInDialog, updateSignInDialog, type SignInDialogMessage } from "../settings/auth-cards"
+import * as AppDialog from "../ui/app-dialog"
 import * as Popover from "../ui/popover"
 import * as Tooltip from "../ui/tooltip"
 import * as Commands from "./commands"
@@ -108,6 +110,7 @@ function freshModel(instance: Instance, ctx: Context, previous: Model): Model {
     popovers: popoversFor(instance.domId),
     tooltips: tooltipsFor(instance.domId),
     isStandalone: previous.isStandalone,
+    appDialog: previous.appDialog,
   }
 }
 
@@ -335,6 +338,18 @@ function closePopover(model: Model, name: PopoverName): Step {
 
 function withCommands(step: Step, commands: ReadonlyArray<AnyCommand>, actions: ReadonlyArray<AppAction> = []): Step {
   return { model: step.model, commands: [...(step.commands ?? []), ...commands], actions: [...(step.actions ?? []), ...actions] }
+}
+
+// THE APP DIALOG (createDelegator's prompt and alert)
+
+const CREATE_DELEGATOR_REQUEST = "create-delegator:"
+
+function openAppDialog(step: Step, request: AppDialog.Request): Step {
+  const opened = AppDialog.open(step.model.appDialog, request)
+  return withCommands(
+    { ...step, model: { ...step.model, appDialog: opened.model } },
+    Command.mapMessages(opened.commands ?? [], (message: AppDialog.Message) => Message.GotAppDialogMessage({ message })),
+  )
 }
 
 // ATTACHMENTS
@@ -725,8 +740,45 @@ function step(model: Model, message: Message, ctx: Context): Step {
       const preference = chatId ? { on: true, chatId } : { on: false, chatId: ctx.stores.delegate.projects[projectId]?.chatId }
       return withCommands(closed, [], [store(Stores.Message.GotDelegateMessage({ message: Delegate.Message.ChangedPreference({ projectId, preference }) }))])
     },
-    // createDelegator's prompt and chat.create are the root's (see the report).
-    ClickedNewDelegator: () => closePopover(model, "delegate"),
+    // createDelegator: a delegator is kept and come back to, so it is named
+    // for what it looks after, here, before it exists.
+    ClickedNewDelegator: () => {
+      const closed = closePopover(model, "delegate")
+      const projectId = ctx.props.projectId
+      if (!projectId) return closed
+      return openAppDialog(closed, AppDialog.prompt({
+        requestId: `${CREATE_DELEGATOR_REQUEST}${projectId}`,
+        title: "New Delegator",
+        description: "A chat that hands work to the chats under it instead of doing it. Name it for what it looks after.",
+        placeholder: "Name (optional)",
+        allowEmpty: true,
+        confirmLabel: "Create",
+      }))
+    },
+    GotAppDialogMessage: ({ message: child }) => {
+      const result = AppDialog.update(model.appDialog, child)
+      const stepped: Step = {
+        model: { ...model, appDialog: result.model },
+        commands: Command.mapMessages(result.commands ?? [], (message: AppDialog.Message) => Message.GotAppDialogMessage({ message })),
+      }
+      const answered = result.outMessage
+      if (!answered || !answered.requestId.startsWith(CREATE_DELEGATOR_REQUEST) || answered.answer._tag !== "Prompt") return stepped
+      const answer = answered.answer
+      if (Option.isNone(answer.value)) return stepped
+      const projectId = answered.requestId.slice(CREATE_DELEGATOR_REQUEST.length)
+      return withCommands(stepped, [Commands.CreateDelegator({ projectId, name: answer.value.value })])
+    },
+    // Picked as what the project's new chat page delegates to.
+    SucceededCreateDelegator: ({ projectId, chatId }) => ({
+      model,
+      actions: [store(Stores.Message.GotDelegateMessage({ message: Delegate.Message.ChangedPreference({ projectId, preference: { on: true, chatId } }) }))],
+    }),
+    FailedCreateDelegator: ({ error }) => openAppDialog({ model }, AppDialog.alert({
+      requestId: "create-delegator-failed",
+      title: "Could not create the delegator",
+      description: error,
+      closeLabel: "OK",
+    })),
     GotSignInMessage: ({ message: child }) => {
       const result = updateSignInDialog(model.signIn, child)
       const commands = Command.mapMessages(result.commands ?? [], (message: SignInDialogMessage) => Message.GotSignInMessage({ message }))
