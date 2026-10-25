@@ -104,7 +104,7 @@ type Return = SliceReturn<Model, Message>
 
 // COMMANDS
 
-const FetchAuthStatus = Command.define("FetchSettingsAuthStatus", {
+export const FetchAuthStatus = Command.define("FetchSettingsAuthStatus", {
   messages: [Message.ReceivedAuthStatus],
   execute: Effect.promise(async () => {
     try {
@@ -118,7 +118,7 @@ const FetchAuthStatus = Command.define("FetchSettingsAuthStatus", {
   }),
 })
 
-const ContinueAppActions = Command.define("ContinueSettingsAppActions", {
+export const ContinueAppActions = Command.define("ContinueSettingsAppActions", {
   args: { actions: Schema.Array(AppAction) },
   messages: [Message.ContinuedAppActions],
   execute: ({ actions }) => Effect.succeed(Message.ContinuedAppActions({ actions })),
@@ -223,7 +223,7 @@ export const subscriptions = Subscription.aggregate(
 
 // VIEW
 
-const PageMount = Mount.define("SettingsPage", {
+export const PageMount = Mount.define("SettingsPage", {
   messages: [Message.MountedPage],
   execute: () => Effect.succeed(Message.MountedPage()),
 })

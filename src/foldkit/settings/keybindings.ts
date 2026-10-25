@@ -100,7 +100,7 @@ export type Message = typeof Message.Type
 
 type Return = SectionReturn<Model, Message>
 
-const WriteKeybindings = Command.define("WriteKeybindings", {
+export const WriteKeybindings = Command.define("WriteKeybindings", {
   args: { bindings: Schema.Record(Schema.String, Schema.Array(Schema.String)) },
   messages: [Message.SucceededWriteKeybindings, Message.FailedWriteKeybindings],
   execute: ({ bindings }) => sendCommand({ type: "settings.writeKeybindings", bindings: bindings as Record<KeybindingAction, string[]> }).pipe(

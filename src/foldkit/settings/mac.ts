@@ -114,12 +114,13 @@ export function update(model: Model, message: Message, _app: AppModel): Return {
 
 /** While the section is open (the page gates it): the app's answers, and a refresh every second. */
 export const subscriptions = Subscription.make<Model, Message>()(() => ({
+  // Suspended: `window` is read when the stream starts, not when the module loads.
   state: Subscription.persistentEntry(
-    Dom.streamFromEvent({
+    Stream.suspend(() => Dom.streamFromEvent({
       target: window as Dom.TypedEventTarget<{ "kanna:mac-setup": CustomEvent<MacSetupState> }>,
       type: "kanna:mac-setup",
       mapEvent: (event) => Message.ReceivedMacSetupState({ state: event.detail }),
-    }) as Stream.Stream<Message>,
+    }) as Stream.Stream<Message>),
   ),
   refresh: Subscription.persistentEntry(
     Stream.tick(Duration.seconds(1)).pipe(

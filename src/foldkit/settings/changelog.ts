@@ -135,7 +135,7 @@ export type Message = typeof Message.Type
 
 type Return = SectionReturn<Model, Message>
 
-const LoadChangelog = Command.define("LoadChangelog", {
+export const LoadChangelog = Command.define("LoadChangelog", {
   args: { version: Schema.Number, force: Schema.Boolean },
   messages: [Message.SucceededLoadChangelog, Message.FailedLoadChangelog],
   execute: ({ version, force }) => Effect.tryPromise(() => loadChangelog(force ? { force: true } : undefined)).pipe(

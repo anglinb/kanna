@@ -131,7 +131,7 @@ type Return = SectionReturn<Model, Message>
 
 // COMMANDS
 
-const ListInstalled = Command.define("ListGlobalSkills", {
+export const ListInstalled = Command.define("ListGlobalSkills", {
   messages: [Message.SucceededListInstalled, Message.FailedListInstalled],
   execute: sendCommand<GlobalSkillsSnapshot>({ type: "skills.listGlobal" }).pipe(
     // React read `snapshot.skills.map(...)` inside its try: a reply without
@@ -147,13 +147,13 @@ const ListInstalled = Command.define("ListGlobalSkills", {
   ),
 })
 
-const DelaySearch = Command.define("DelaySkillsSearch", {
+export const DelaySearch = Command.define("DelaySkillsSearch", {
   args: { version: Schema.Number, query: Schema.String },
   messages: [Message.ElapsedSearchDelay],
   execute: ({ version, query }) => Effect.sleep(Duration.millis(SEARCH_DEBOUNCE_MS)).pipe(Effect.as(Message.ElapsedSearchDelay({ version, query }))),
 })
 
-const SearchSkills = Command.define("SearchSkills", {
+export const SearchSkills = Command.define("SearchSkills", {
   args: { version: Schema.Number, query: Schema.String },
   messages: [Message.SucceededSearch, Message.FailedSearch],
   execute: ({ version, query }) => sendCommand<SkillSearchSnapshot>({ type: "skills.search", query, limit: 100 }).pipe(
@@ -162,7 +162,7 @@ const SearchSkills = Command.define("SearchSkills", {
   ),
 })
 
-const InstallSkill = Command.define("InstallSkill", {
+export const InstallSkill = Command.define("InstallSkill", {
   args: { skill: ResultSkill },
   messages: [Message.SucceededInstall, Message.FailedInstall],
   execute: ({ skill }) => sendCommand<SkillInstallResult>({ type: "skills.install", source: skill.source, skillId: skill.skillId }).pipe(
@@ -171,7 +171,7 @@ const InstallSkill = Command.define("InstallSkill", {
   ),
 })
 
-const UninstallSkill = Command.define("UninstallSkill", {
+export const UninstallSkill = Command.define("UninstallSkill", {
   args: { name: Schema.String },
   messages: [Message.SucceededUninstall, Message.FailedUninstall],
   execute: ({ name }) => sendCommand<SkillUninstallResult>({ type: "skills.uninstall", skillId: name }).pipe(

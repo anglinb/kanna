@@ -375,7 +375,7 @@ function updateStatusLabel(app: AppModel) {
               : "Not checked yet"
 }
 
-const SectionMount = makeSectionMount("SettingsGeneralSection", Message.MountedSection, () => Message.MountedSection())
+export const SectionMount = makeSectionMount("SettingsGeneralSection", Message.MountedSection, () => Message.MountedSection())
 
 export const view = Submodel.defineView<Model, Message, SectionViewInputs>((model, { app, appVersion, switched }, h) => {
   const appSettings = app.stores.appSettings.settings

@@ -191,7 +191,7 @@ type Return = SectionReturn<Model, Message>
 /** How often an open usage view re-checks; server-side TTL coalesces the reads. */
 const USAGE_POLL_MS = 60_000
 
-const RefreshUsage = Command.define("RefreshUsage", {
+export const RefreshUsage = Command.define("RefreshUsage", {
   args: { force: Schema.Boolean },
   messages: [Message.CompletedRefresh],
   execute: ({ force }) => sendCommand<UsageLimitsSnapshot>({ type: "usage.refresh", force }).pipe(
