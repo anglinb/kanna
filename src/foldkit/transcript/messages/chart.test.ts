@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import { Submodel } from "foldkit"
 import { Scene } from "foldkit/test"
-import { ChartArea, chartModel, niceTicks } from "./chart"
+import * as Select from "../../ui/select"
+import { ChartArea, chartFullViewBody, chartModel, ChartTable, niceTicks } from "./chart"
+import { rowContext } from "./context"
 import { CHARTS, displaySections } from "./fixture"
 import { view } from "./index"
-import { init, Message, update } from "./model"
+import { init, Message, update, type Model } from "./model"
 
 // The numbers recharts 3.8 drew for the gallery's charts in a 766×511
 // render area (the desktop gallery), read from its DOM.
@@ -61,6 +64,29 @@ describe("the drawn chart", () => {
       )
     })
   }
+
+  test("the full view's table: series down the side, points across, aggregates by row and column", () => {
+    const fullView = Submodel.defineView<Model, Message>((model, h) => chartFullViewBody("viewer", CHARTS[0]!, rowContext(model), h))
+    Scene.scene(
+      { update, view: fullView },
+      Scene.given(init()),
+      Scene.Mount.resolveAll(
+        [ChartArea, Message.MeasuredChart({ key: "viewer", width: 900, height: 460 })],
+        [ChartTable, Message.MeasuredChartTable({ key: "viewer", width: 900 })],
+        [Select.SelectTrigger, Select.Message.CompletedMountTrigger()],
+        [Select.SelectTrigger, Select.Message.CompletedMountTrigger()],
+      ),
+      Scene.expect(Scene.role("columnheader", { name: "Series" })).toExist(),
+      Scene.expect(Scene.role("columnheader", { name: "Jun" })).toExist(),
+      // desktop's average over six months, mobile's, then each month's.
+      Scene.expect(Scene.role("cell", { name: "204" })).toExist(),
+      Scene.expect(Scene.role("cell", { name: "143.33" })).toExist(),
+      Scene.expect(Scene.role("cell", { name: "133" })).toExist(),
+      Scene.expectAll(Scene.all.role("combobox", { name: "Aggregation" })).toHaveCount(2),
+      Scene.click(Scene.role("button", { name: "desktop" })),
+      Scene.expect(Scene.role("button", { name: "desktop" })).toHaveAttr("aria-pressed", "false"),
+    )
+  })
 
   test("a legend click hides its series and rescales the axis", () => {
     const target = chartRow(0)

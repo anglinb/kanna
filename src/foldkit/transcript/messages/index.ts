@@ -80,10 +80,14 @@
  *
  * ── Not here ─────────────────────────────────────────────────────────────
  *
- *   The full-size chart and visualization (ChartFullView with its data
- *   table, VisualizationFullView with Download image and Mark up) are cards
- *   of the viewer (ViewerSurface); the viewer slice draws them, from
- *   `chartFigure` / `chartModel` / `aggregateValues` and `visualizationFrame`.
+ *   The full-size chart and visualization are cards of the viewer
+ *   (ViewerSurface), which the viewer slice draws. For the chart, the card's
+ *   body is here (`chartFullViewBody`: the chart and its data table, with
+ *   the aggregate menus and the resizable first column; its state is this
+ *   Model's, under the key the viewer gives it) and so is its toolbar's
+ *   action (`downloadChartTable`). For the visualization, the frame
+ *   (`visualizationFrame`); Download image and Mark up
+ *   (VisualizationSaveDialog, VisualizationMarkup) are the viewer's.
  *
  * ── Fixtures ─────────────────────────────────────────────────────────────
  *
@@ -159,7 +163,7 @@ export { attachmentsCard, displayToolMessage } from "./display-tool"
 // The chart and the frame are also what the viewer's full-size chart and
 // visualization draw (ChartFullView, VisualizationFullView): `chartFigure`
 // with its own key and class, `visualizationFrame` with its own key.
-export { aggregateValues, AGGREGATE_OPTIONS, chartFigure, chartModel, chartTool, csvCell, formatChartCell, niceTicks, type AggregateMode, type ChartModel, type ChartTableData } from "./chart"
+export { aggregateValues, AGGREGATE_OPTIONS, chartDataTable, chartFigure, chartFullViewBody, chartModel, chartTool, csvCell, downloadChartTable, formatChartCell, niceTicks, type AggregateMode, type ChartModel, type ChartTableData } from "./chart"
 export { visualization, visualizationExpandButton, visualizationFrame, visualizationTheme } from "./visualization"
 export { CLAMP_LINES, clampedMessageText, isFoldClick } from "./clamped"
 export { fileContentView } from "./file-content"

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
 import { Story } from "foldkit/test"
+import * as Select from "../../ui/select"
 import type { AskUserQuestionItem, TranscriptEntry } from "../../../shared/types"
 import {
   AdvanceQuestion,
@@ -227,6 +228,21 @@ describe("queue and resume", () => {
   })
 })
 
+describe("chart tables", () => {
+  test("an aggregate menu's choice is the table's; the first column stays between 128 and 360px", () => {
+    Story.story(
+      update,
+      Story.given(init()),
+      Story.message(Message.GotAggregateSelectMessage({ key: "viewer", which: "row", message: Select.Message.ChoseItem({ value: "median", pointerType: "mouse" }) })),
+      Story.model((model) => expect(model.charts.viewer?.rowAggregate).toBe("median")),
+      Story.message(Message.ResizedChartColumn({ key: "viewer", width: 40 })),
+      Story.model((model) => expect(model.charts.viewer?.firstColumnWidth).toBe(128)),
+      Story.message(Message.ResizedChartColumn({ key: "viewer", width: 900 })),
+      Story.model((model) => expect(model.charts.viewer?.firstColumnWidth).toBe(360)),
+    )
+  })
+})
+
 describe("charts", () => {
   test("the legend hides and mutes series; the pointer and the tooltip's box are kept", () => {
     Story.story(
@@ -237,7 +253,7 @@ describe("charts", () => {
       Story.message(Message.MeasuredChart({ key: "c", width: 766, height: 511 })),
       Story.message(Message.MovedOverChart({ key: "c", pointer: { x: 150, y: 200 } })),
       Story.message(Message.MeasuredChartTooltip({ key: "c", width: 164, height: 70 })),
-      Story.model((model) => expect(model.charts.c).toEqual({
+      Story.model((model) => expect(model.charts.c).toMatchObject({
         hidden: ["desktop"],
         active: "mobile",
         hover: { x: 150, y: 200 },

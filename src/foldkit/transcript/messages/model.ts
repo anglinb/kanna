@@ -11,6 +11,7 @@ import * as Stores from "../../app/stores"
 import * as Viewer from "../../core/stores/viewer"
 import { opaque } from "../../core/schema"
 import { CodeCopy, LocalLinkTarget } from "../../markdown"
+import * as Select from "../../ui/select"
 import * as Tooltip from "../../ui/tooltip"
 
 /**
@@ -77,6 +78,9 @@ export const DebugRawState = Schema.Struct({
 })
 export type DebugRawState = typeof DebugRawState.Type
 
+export const AggregateMode = Schema.Literals(["avg", "bottom_quartile", "median", "top_quartile", "min", "max", "sum", "count"])
+export type AggregateMode = typeof AggregateMode.Type
+
 /** A chart's legend and the point under the pointer (useChartModel and recharts' tooltip). */
 export const ChartState = Schema.Struct({
   hidden: Schema.Array(Schema.String),
@@ -87,10 +91,17 @@ export const ChartState = Schema.Struct({
   size: Schema.NullOr(Schema.Struct({ width: Schema.Number, height: Schema.Number })),
   /** The tooltip's box, once drawn: where it goes depends on it. */
   tooltip: Schema.NullOr(Schema.Struct({ width: Schema.Number, height: Schema.Number })),
+  /** The data table's (full size): how each row and each column is summed up. */
+  rowAggregate: AggregateMode,
+  columnAggregate: AggregateMode,
+  /** The table's first column, as dragged (128-360px). */
+  firstColumnWidth: Schema.Number,
+  /** The table's scroll viewport, measured. */
+  tableViewport: Schema.Number,
 })
 export type ChartState = typeof ChartState.Type
 
-export const EMPTY_CHART: ChartState = { hidden: [], active: null, hover: null, size: null, tooltip: null }
+export const EMPTY_CHART: ChartState = { hidden: [], active: null, hover: null, size: null, tooltip: null, rowAggregate: "avg", columnAggregate: "avg", firstColumnWidth: 176, tableViewport: 0 }
 
 /** An attachments strip's scroll edges (AttachmentsCard's measure). */
 export const StripState = Schema.Struct({ moreLeft: Schema.Boolean, moreRight: Schema.Boolean, scrollbarHeight: Schema.Number })
@@ -134,6 +145,8 @@ export const Model = Schema.Struct({
   frames: Schema.Record(Schema.String, FrameState),
   /** Tooltips rows own (a visualization's Expand), by row key. Absent is closed. */
   tooltips: Schema.Record(Schema.String, Tooltip.Model),
+  /** A chart table's aggregate menus, by `selectKey`. Absent is closed. */
+  selects: Schema.Record(Schema.String, Select.Model),
   /** A queued message's or a resume's press, while its command is out. */
   busy: Flags,
 })
@@ -156,6 +169,7 @@ export function init(): Model {
     broken: {},
     frames: {},
     tooltips: {},
+    selects: {},
     busy: {},
   }
 }
@@ -221,6 +235,10 @@ export const Message = defineMessageUnion({
   ClickedDownloadChartCsv: { csv: Schema.String, filename: Schema.String },
   CompletedDownload: {},
   ClickedExpandChart: { payload: opaque<ChartToolPayload>("ChartToolPayload") },
+  /** The full-size chart's data table. */
+  GotAggregateSelectMessage: { key: Schema.String, which: Schema.Literals(["row", "column"]), message: Select.Message },
+  ResizedChartColumn: { key: Schema.String, width: Schema.Number },
+  MeasuredChartTable: { key: Schema.String, width: Schema.Number },
   MeasuredStrip: { key: Schema.String, strip: StripState },
   FailedAttachmentPreview: { key: Schema.String, url: Schema.String },
   ClickedAttachment: { target: opaque<AttachmentTarget>("AttachmentTarget") },
@@ -465,6 +483,16 @@ export function frameOf(model: Model, key: string): FrameState {
   return model.frames[key] ?? emptyFrame()
 }
 
+/** Where a chart table's aggregate menu keeps its state. */
+export function selectKey(key: string, which: "row" | "column") {
+  return `${key}:${which}-aggregate`
+}
+
+export function selectOf(model: Model, key: string, which: "row" | "column"): Select.Model {
+  const id = selectKey(key, which)
+  return model.selects[id] ?? Select.init({ id: `transcript-select-${id.replace(/[^\w-]/g, "_")}` })
+}
+
 export function tooltipOf(model: Model, key: string): Tooltip.Model {
   return model.tooltips[key] ?? Tooltip.init({ id: `transcript-tooltip-${key.replace(/[^\w-]/g, "_")}`, delayDuration: 0 })
 }
@@ -632,6 +660,26 @@ export const update = (model: Model, message: Message): Return =>
     ClickedDownloadChartCsv: ({ csv, filename }) => ({ model, commands: [DownloadCsv({ csv, filename })] }),
     CompletedDownload: () => ({ model }),
     ClickedExpandChart: ({ payload }) => ({ model, outMessage: viewerAction({ kind: "chart", payload }, false) }),
+    GotAggregateSelectMessage: ({ key, which, message: child }) => {
+      const id = selectKey(key, which)
+      const next = Select.update(selectOf(model, key, which), child)
+      const withSelect = { ...model, selects: { ...model.selects, [id]: next.model } }
+      const chart = chartOf(withSelect, key)
+      const chosen = next.outMessage && Schema.is(AggregateMode)(next.outMessage.value) ? next.outMessage.value : null
+      return {
+        model: chosen ? withChart(withSelect, key, which === "row" ? { ...chart, rowAggregate: chosen } : { ...chart, columnAggregate: chosen }) : withSelect,
+        commands: Command.mapMessages(next.commands, (message: Select.Message) => Message.GotAggregateSelectMessage({ key, which, message })),
+      }
+    },
+    ResizedChartColumn: ({ key, width }) => {
+      const chart = chartOf(model, key)
+      const clamped = Math.min(360, Math.max(128, width))
+      return chart.firstColumnWidth === clamped ? { model } : { model: withChart(model, key, { ...chart, firstColumnWidth: clamped }) }
+    },
+    MeasuredChartTable: ({ key, width }) => {
+      const chart = chartOf(model, key)
+      return chart.tableViewport === width ? { model } : { model: withChart(model, key, { ...chart, tableViewport: width }) }
+    },
     MeasuredStrip: ({ key, strip }) => {
       const current = model.strips[key] ?? EMPTY_STRIP
       if (current.moreLeft === strip.moreLeft && current.moreRight === strip.moreRight && current.scrollbarHeight === strip.scrollbarHeight) return { model }

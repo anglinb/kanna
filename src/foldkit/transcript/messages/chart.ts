@@ -7,7 +7,8 @@ import { buttonClass } from "../../ui/button"
 import { Download, Maximize2 } from "../../ui/icons"
 import { domStream } from "../../ui/overlay/stream"
 import type { RowContext } from "./context"
-import { chartOf, Message, type ChartState } from "./model"
+import * as Select from "../../ui/select"
+import { chartOf, Message, selectOf, type AggregateMode, type ChartState } from "./model"
 
 /**
  * ChartTool.tsx: a `show_chart` call's card, its chart drawn as recharts
@@ -41,7 +42,7 @@ export function formatChartCell(value: string | number | null | undefined) {
 }
 
 type ChartConfigMap = Record<string, { label?: string; color: string }>
-export type AggregateMode = "avg" | "bottom_quartile" | "median" | "top_quartile" | "min" | "max" | "sum" | "count"
+export type { AggregateMode } from "./model"
 export interface ChartTableRow {
   key: string
   color?: string
@@ -1090,4 +1091,158 @@ export function chartTool(key: string, payload: ChartToolPayload, context: RowCo
     ]),
     chartFigure(key, payload, "chart-body", context, h),
   ])
+}
+
+// ── ChartFullView's body ─────────────────────────────────────────────────
+
+/**
+ * On the data table's scroller: kept scrolled to its right end, where the
+ * latest points are (React set `scrollLeft` after every render, the table
+ * being rebuilt each time), its width measured, and the first column's
+ * resizer dragged.
+ */
+export const ChartTable = Mount.defineStream("ChartTable", {
+  args: { key: Schema.String },
+  messages: [Message.MeasuredChartTable, Message.ResizedChartColumn],
+  execute: ({ element, key }) =>
+    domStream<typeof Message.MeasuredChartTable.Type | typeof Message.ResizedChartColumn.Type>((emit) => {
+      const scroller = element as HTMLElement
+      const toEnd = () => { scroller.scrollLeft = scroller.scrollWidth }
+      toEnd()
+      const rendered = new MutationObserver(toEnd)
+      rendered.observe(scroller, { childList: true, subtree: true, characterData: true, attributes: true })
+      emit(Message.MeasuredChartTable({ key, width: scroller.clientWidth }))
+      const resize = typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => emit(Message.MeasuredChartTable({ key, width: scroller.clientWidth })))
+      resize?.observe(scroller)
+
+      const onPointerDown = (event: PointerEvent) => {
+        const resizer = event.target instanceof Element ? event.target.closest(".chart-column-resizer") : null
+        if (!resizer || !scroller.contains(resizer)) return
+        event.preventDefault()
+        const startX = event.clientX
+        const series = resizer.closest<HTMLElement>(".chart-data-series")
+        const startWidth = series ? series.getBoundingClientRect().width : 176
+        const onMove = (move: PointerEvent) => emit(Message.ResizedChartColumn({ key, width: startWidth + move.clientX - startX }))
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove)
+          window.removeEventListener("pointerup", onUp)
+        }
+        window.addEventListener("pointermove", onMove)
+        window.addEventListener("pointerup", onUp)
+      }
+      scroller.addEventListener("pointerdown", onPointerDown)
+      return () => {
+        rendered.disconnect()
+        resize?.disconnect()
+        scroller.removeEventListener("pointerdown", onPointerDown)
+      }
+    }),
+})
+
+function aggregateMenu(key: string, which: "row" | "column", value: AggregateMode, context: RowContext, h: HtmlBuilder<Message>): Html {
+  return h.submodel({
+    slotId: `chart-aggregate-${key}-${which}`,
+    model: selectOf(context.model, key, which),
+    view: Select.view,
+    viewInputs: {
+      value,
+      items: AGGREGATE_OPTIONS.map((option) => ({ value: option.value })),
+      renderItem: (item: string) => [AGGREGATE_OPTIONS.find((option) => option.value === item)?.label ?? item],
+      grouped: true,
+      toView: ({ trigger, value: shown, portal }) => Select.selectTrigger({ attributes: [...trigger, h.AriaLabel("Aggregation")], class: "h-7 w-auto" }, [shown], portal, h),
+    },
+    toParentMessage: (message: Select.Message) => Message.GotAggregateSelectMessage({ key, which, message }),
+  })
+}
+
+function fixedWidth(width: number) {
+  return { width: `${width}px`, "min-width": `${width}px`, "max-width": `${width}px` }
+}
+
+/**
+ * The full-size chart's data table (ChartDataTable): the series down the
+ * side, sticky, with a resizable first column; the points across, scrolled
+ * to the latest; a row and a column of aggregates, each with its menu.
+ */
+export function chartDataTable(key: string, payload: ChartToolPayload, context: RowContext, h: HtmlBuilder<Message>): Html {
+  const { chartTable: table } = chartModel(payload)
+  const chart = chartOf(context.model, key)
+  if (!table.headers.length || !table.rows.length) return null
+  const firstColumnWidth = chart.firstColumnWidth
+  const aggregateCells = table.headers.slice(1).map((_, valueIndex) => aggregateValues(table.rows.map((row) => row.values[valueIndex] ?? null), chart.columnAggregate))
+  const firstColumn = h.Style(fixedWidth(firstColumnWidth))
+  const valueColumnWidth = Math.max(124, Math.floor(Math.max(0, chart.tableViewport - firstColumnWidth) / Math.max(1, table.headers.length)))
+  const valueColumn = () => h.Style(fixedWidth(valueColumnWidth))
+  return h.div([h.Class("chart-data-table")], [
+    h.div([h.Class("chart-data-scroll"), h.OnMount(ChartTable({ key }))], [
+      h.div([h.Class("chart-data-inner")], [
+        h.div([h.Class("chart-data-series"), firstColumn], [
+          h.table([firstColumn], [
+            h.thead([], [h.tr([], [h.th([firstColumn], [table.headers[0]!])])]),
+            h.tbody([], [
+              ...table.rows.map((row) => {
+                const hidden = chart.hidden.includes(row.key)
+                return h.keyed("tr")(row.key, [], [
+                  h.td([firstColumn], [
+                    h.button([
+                      h.Type("button"),
+                      h.AriaPressed(String(!hidden)),
+                      h.OnClick(Message.ToggledChartSeries({ key, series: row.key })),
+                      h.OnMouseEnter(Message.HoveredChartSeries({ key, series: row.key })),
+                      h.OnMouseLeave(Message.HoveredChartSeries({ key, series: null })),
+                      h.Class(hidden ? "muted" : ""),
+                    ], [
+                      row.color ? h.i([h.Style({ "background-color": row.color, opacity: hidden ? "0.45" : "1" })], []) : null,
+                      h.span([h.Title(String(row.cells[0]))], [String(row.cells[0])]),
+                    ]),
+                  ]),
+                ])
+              }),
+              h.tr([], [h.td([h.Class("chart-series-aggregate-cell"), firstColumn], [aggregateMenu(key, "column", chart.columnAggregate, context, h)])]),
+            ]),
+          ]),
+          h.div([h.Class("chart-column-resizer"), h.Role("separator"), h.AriaOrientation("vertical"), h.AriaLabel("Resize first column")], []),
+        ]),
+        h.table([h.Class("chart-data-values")], [
+          h.thead([], [
+            h.tr([], [
+              ...table.headers.slice(1).map((header) => h.th([valueColumn()], [header])),
+              h.th([h.Class("chart-aggregate-column"), valueColumn()], [aggregateMenu(key, "row", chart.rowAggregate, context, h)]),
+            ]),
+          ]),
+          h.tbody([], [
+            ...table.rows.map((row) => h.keyed("tr")(row.key, [], [
+              ...row.cells.slice(1).map((cell) => h.td([valueColumn()], [h.span([], [String(formatChartCell(cell))])])),
+              h.td([h.Class("chart-aggregate-column"), valueColumn()], [h.span([], [String(formatChartCell(aggregateValues(row.values, chart.rowAggregate)))])]),
+            ])),
+            h.tr([], [
+              ...aggregateCells.map((cell) => h.td([h.Class("chart-aggregate-row"), valueColumn()], [h.span([], [String(formatChartCell(cell))])])),
+              h.td([h.Class("chart-aggregate-row chart-aggregate-column"), valueColumn(), h.AriaHidden(true)], []),
+            ]),
+          ]),
+        ]),
+      ]),
+    ]),
+  ])
+}
+
+/**
+ * ChartFullView's body, inside the viewer's surface: the chart at full
+ * width but not full proportion (its render area capped, so the table stays
+ * in view), its legend, and the data table. The viewer draws the surface,
+ * its title and its toolbar's Download table as CSV (`downloadChartTable`).
+ */
+export function chartFullViewBody(key: string, payload: ChartToolPayload, context: RowContext, h: HtmlBuilder<Message>): Html {
+  return h.div([h.Class("flex min-h-full flex-col gap-4 p-4")], [
+    chartFigure(key, payload, "flex shrink-0 flex-col text-xs text-muted-foreground [&_.chart-render-area]:max-h-[min(55vh,460px)] [&_.recharts-text]:fill-muted-foreground [&_.recharts-text]:text-xs", context, h),
+    chartDataTable(key, payload, context, h),
+  ])
+}
+
+/** The viewer toolbar's "Download table as CSV" (useChartModel's downloadTableCsv). */
+export function downloadChartTable(payload: ChartToolPayload): Message {
+  const model = chartModel(payload)
+  return Message.ClickedDownloadChartCsv({ csv: model.tableCsv, filename: model.tableCsvFilename })
 }
