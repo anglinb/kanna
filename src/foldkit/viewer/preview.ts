@@ -299,8 +299,10 @@ export const OpenPreviewInTab = Command.define("ViewerOpenPreviewInTab", {
 
 // VIEW
 
-const PreviewTranscriptSlot = Submodel.defineView<TranscriptModel.Model, TranscriptMessage, { source: TranscriptSource }>((transcript, inputs, h) =>
-  transcriptView(transcript, inputs.source, {}, h))
+// The source is worked out in here: it carries functions (the sidebar's
+// threads), and a submodel's inputs take functions only at their top level.
+const PreviewTranscriptSlot = Submodel.defineView<TranscriptModel.Model, TranscriptMessage, { app: AppModel; preview: PreviewModel }>((transcript, inputs, h) =>
+  transcriptView(transcript, previewSource(inputs.app, inputs.preview, transcript), {}, h))
 
 export function chatPreview(
   model: Model,
@@ -385,7 +387,7 @@ function previewSession(app: AppModel, requests: ChatPageRequests | undefined, c
         slotId: `preview-transcript:${chatId}`,
         model: preview.transcript,
         view: PreviewTranscriptSlot,
-        viewInputs: { source: previewSource(app, preview, preview.transcript) },
+        viewInputs: { app, preview },
         toParentMessage: (message: TranscriptMessage) => Message.GotPreviewTranscriptMessage({ chatId, message }),
       }),
     ]),
