@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright"
 import { defineScenario, type Scenario, type ScenarioContext } from "../scenario"
-import { CHATS, click, composer, parkPointer, press, quietReadAnchor, reduceMotion, REGIONS, regions, rest, typeIntoComposer } from "./_lib/helpers"
+import { CHATS, click, composer, countUuids, parkPointer, press, quietReadAnchor, reduceMotion, REGIONS, regions, rest, typeIntoComposer } from "./_lib/helpers"
 
 // The viewer reached from a chat, without the widget column: links sent in a
 // prompt render in its bubble, so a file link opens the file viewer (and
@@ -26,9 +26,20 @@ function bubbleLink(page: Page, name: string): Locator {
  * the transcript, and so does the pane opening beside it: each rides on a
  * chat.setReadAnchor written on a wall-clock throttle, so every step waits
  * that out (see quietReadAnchor in _lib/helpers.ts).
+ *
+ * On a desktop it is sent from a new chat in tidepool (the project with the
+ * changes). In a long chat the pane narrowing the transcript re-wraps it
+ * while it is scrolled to its end, and React's own read position lands
+ * differently from run to run; a chat shorter than its column doesn't
+ * scroll. On a phone the viewer covers the chat, which doesn't narrow.
  */
 async function sendLinks(context: ScenarioContext) {
   await reduceMotion(context)
+  if (context.viewport === "desktop") {
+    await countUuids(context)
+    await click(context, context.page.locator(REGIONS.sidebar).getByRole("button", { name: "New Chat" }))
+    await parkPointer(context)
+  }
   await quietReadAnchor(context)
   await typeIntoComposer(context, LINKS)
   // On a touch screen Enter is a new line; the send button sends.

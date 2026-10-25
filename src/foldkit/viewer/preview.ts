@@ -350,7 +350,9 @@ export function chatPreview(
     body: [
       previewSession(app, requests, chatId, live, motion.bodyEnters || motion.cardEnters, h),
       // A chat deleted while it is in the previewer: shut the pane past it.
-      app.stores.sidebar.ready && !Sidebar.chatExists(app.stores.sidebar, chatId)
+      // And never the page's own chat beside itself (one stored before the
+      // page came to be on it): two composers on one draft.
+      (app.stores.sidebar.ready && !Sidebar.chatExists(app.stores.sidebar, chatId)) || app.stores.viewer.chatKey === chatId
         ? h.keyed("span")(`preview-lost:${chatId}`, [h.Hidden(true), h.OnMount(ReportLostChat())], [])
         : null,
     ],
