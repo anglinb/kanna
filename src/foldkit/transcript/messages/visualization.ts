@@ -69,7 +69,7 @@ const SETTLED_FOR_GOOD_MS = 5000
  * as React's `live` ref did; it is the only writer of `known` besides the
  * Model's start, so the two agree.
  */
-const VisualizationFrame = Mount.defineStream("VisualizationFrame", {
+export const VisualizationFrame = Mount.defineStream("VisualizationFrame", {
   args: { key: Schema.String, url: Schema.String, declared: Schema.Number },
   messages: [Message.MeasuredFrameWidth, Message.KnewFrameHeights, Message.GotFrameDocument, Message.FailedFrameDocument, Message.ResizedFrame, Message.LoadedFrame],
   execute: ({ element, key, url, declared }) =>

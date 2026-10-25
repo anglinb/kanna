@@ -559,6 +559,11 @@ export function displaySections(origin: string): GallerySection[] {
     display("att-error", "send_attachments", {}),
     result("att-error-r", "t-att-error", [{ type: "text", text: "The file is outside the project." }], { isError: true }),
     display("viz-pending", "show_visualization", {}),
+    // The fixture backend answers /api with a 404: the frame says it could not load.
+    display("viz-missing", "show_visualization", {}),
+    result("viz-missing-r", "t-viz-missing", [{ type: "visualization", version: 1, title: "Flicker timeline", url: "/api/chats/demo/media/visualization-flicker.html", height: 240 }]),
+    display("viz-bad", "show_visualization", {}),
+    result("viz-bad-r", "t-viz-bad", [{ type: "visualization", version: 1, title: "Elsewhere", url: "https://example.com/v.html", height: 240 }]),
     display("chart-pending", "show_chart", {}),
     ...CHARTS.flatMap((chart, index): Draft[] => [
       display(`chart-${index}`, "show_chart", chart as unknown as Record<string, unknown>),
@@ -576,6 +581,8 @@ export function displaySections(origin: string): GallerySection[] {
         single(m.get("att-pending"), { isLoading: true }),
         single(m.get("att-error")),
         single(m.get("viz-pending"), { isLoading: true }),
+        single(m.get("viz-missing")),
+        single(m.get("viz-bad")),
         single(m.get("chart-pending"), { isLoading: true }),
       ],
     },

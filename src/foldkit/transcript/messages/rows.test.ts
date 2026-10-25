@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Scene } from "foldkit/test"
-import { questionSections, textSections, toolSections, type GallerySection } from "./fixture"
+import { displaySections, questionSections, textSections, toolSections, type GallerySection } from "./fixture"
 import { AdvanceQuestion, init, Message, OutMessage, update } from "./model"
 import type { TranscriptRow } from "./rows"
+import { VisualizationFrame } from "./visualization"
+import { AppAction } from "../../app/action"
+import * as Stores from "../../app/stores"
+import * as Viewer from "../../core/stores/viewer"
 import { view, type ViewInputs } from "./index"
 
 function row(sections: ReadonlyArray<GallerySection>, id: string): TranscriptRow {
@@ -155,5 +159,44 @@ describe("session and turn rows", () => {
       Scene.given(init()),
       Scene.expect(Scene.text("Done")).toExist(),
     )).toThrow()
+  })
+})
+
+describe("visualizations", () => {
+  test("the frame holds its declared height while loading, then draws the page, with Expand once loaded", () => {
+    const sections = displaySections("http://localhost")
+    const viz = row(sections, "viz-missing")
+    Scene.scene(
+      { update, view: rowView(viz) },
+      Scene.given(init()),
+      Scene.expect(Scene.text("Loading visualization...")).toExist(),
+      Scene.Mount.resolve(VisualizationFrame, Message.GotFrameDocument({ key: "viz-missing", document: "<html></html>" })),
+      Scene.expect(Scene.selector("iframe[title='Flicker timeline']")).toHaveAttr("sandbox", "allow-scripts"),
+      Scene.expect(Scene.role("button", { name: "Expand" })).not.toExist(),
+    )
+    Scene.scene(
+      { update, view: rowView(viz) },
+      // Measured before at this width: the frame starts there.
+      Scene.given({ ...init(), frames: { "viz-missing": { document: "<html></html>", failed: false, width: 600, measured: null, known: [[608, 320]], loaded: false } } }),
+      Scene.Mount.resolve(VisualizationFrame, Message.LoadedFrame({ key: "viz-missing" })),
+      Scene.click(Scene.role("button", { name: "Expand" })),
+      Scene.expectOutMessage(OutMessage.RequestedAppAction({
+        action: AppAction.Store({ message: Stores.Message.GotViewerMessage({ message: Viewer.Message.OpenedItem({ item: { kind: "visualization", artifact: { type: "visualization", version: 1, title: "Flicker timeline", url: "/api/chats/demo/media/visualization-flicker.html", height: 240 } as never }, expanded: true, byKey: false }) }) }),
+      })),
+    )
+  })
+
+  test("a document that won't load says so; one from elsewhere is unavailable", () => {
+    const sections = displaySections("http://localhost")
+    Scene.scene(
+      { update, view: rowView(row(sections, "viz-missing")) },
+      Scene.given({ ...init(), frames: { "viz-missing": { document: null, failed: true, width: null, measured: null, known: [], loaded: false } } }),
+      Scene.expect(Scene.role("alert")).toHaveText("This visualization could not be loaded."),
+    )
+    Scene.scene(
+      { update, view: rowView(row(sections, "viz-bad")) },
+      Scene.given(init()),
+      Scene.expect(Scene.role("alert")).toHaveText("Visualization unavailable."),
+    )
   })
 })
