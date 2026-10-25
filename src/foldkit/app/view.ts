@@ -20,7 +20,7 @@ import { activeChatId, activeProjectId, sidebarData } from "./update"
 // App.tsx: the auth gate, then KannaLayout (sidebar beside the routed page).
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
-  title: model.auth._tag === "Ready"
+  title: model.auth._tag === "Ready" && !model.pageHidden
     ? getBrowserWindowTitle({
       appName: APP_NAME,
       sidebarData: sidebarData(model),

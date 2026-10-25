@@ -65,6 +65,10 @@ export const Model = Schema.Struct({
   stores: Stores.Model,
   /** What the root's actions keep: chats being started, the share and app dialogs. */
   actions: ActionsModel,
+  /** Started the one-time legacy browser settings migration this session. */
+  legacySettingsMigrationStarted: Schema.Boolean,
+  /** pagehide puts the bare app name in the title, for the bfcache; pageshow brings it back. */
+  pageHidden: Schema.Boolean,
   /** The app's confirm/prompt/alert dialog (React's AppDialogProvider). */
   appDialog: AppDialog.Model,
   // The slices (app/slice.ts): each a Submodel in its own folder.

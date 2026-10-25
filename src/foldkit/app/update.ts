@@ -42,6 +42,8 @@ import * as SetupSlice from "../setup"
 import * as WorkflowsSlice from "../workflows"
 import * as TerminalPageSlice from "../terminal"
 import * as AppDialog from "../ui/app-dialog"
+import { isNightlyVersion } from "../../shared/types"
+import { FollowRestart, HandleReloadRequest, MigrateChannelPins, MigrateLegacyBrowserSettings, MigrateLegacySetupFlags, updateCheckInterval } from "./maintenance"
 import { initialActionsModel, makeActions, type ActionMessage } from "./actions"
 import { SliceOutMessage, type AppModel, type SliceReturn } from "./slice"
 import type { AppAction } from "./action"
@@ -87,6 +89,8 @@ export function init(flags: Flags, url: Url): UpdateReturn {
     stores,
     actions: initialActionsModel,
     appDialog: AppDialog.init(),
+    legacySettingsMigrationStarted: false,
+    pageHidden: false,
     sidebar: SidebarSlice.init(),
     home: HomeSlice.init(),
     settings: SettingsSlice.init(),
@@ -232,8 +236,17 @@ function themeCommands(before: Model, after: Model): Commands {
 /** useAppSettingsSync: the snapshot fans out to the stores; the theme follows. */
 function receiveAppSettings(model: Model, snapshot: AppSettingsSnapshot): UpdateReturn {
   const fanned = onStores(Stores.receivedAppSettings(snapshot))(model)
-  const next = commandError(fanned.model, null)
-  return { model: next, commands: [...(fanned.commands ?? []), ...themeCommands(model, next)] }
+  let next = commandError(fanned.model, null)
+  const migrations: AppCommand[] = []
+  if (next.connectionStatus === "connected") {
+    // useAppSettingsSync's legacy migrations, once connected.
+    if (snapshot.browserSettingsMigrated === false && !next.legacySettingsMigrationStarted) {
+      next = modifyFields(next, { legacySettingsMigrationStarted: () => true })
+      migrations.push(MigrateLegacyBrowserSettings())
+    }
+    migrations.push(MigrateLegacySetupFlags({ snapshot }))
+  }
+  return { model: next, commands: [...(fanned.commands ?? []), ...themeCommands(model, next), ...migrations] }
 }
 
 /** App.tsx's sidebar store subscription: chime and notify on what changed. */
@@ -268,7 +281,9 @@ function appliedSidebarSnapshot(before: Model): Step {
     // The first snapshot has nothing to compare against, and treating the
     // empty starting state as "previous" would chime once per unread chat on
     // every page load.
-    const notifications = before.stores.sidebar.ready ? notificationCommands(next, sidebarData(before), sidebarData(next)) : []
+    const notifications: AppCommand[] = before.stores.sidebar.ready ? [...notificationCommands(next, sidebarData(before), sidebarData(next))] : []
+    // useMigrateChannelPins: once the sidebar is in.
+    if (!before.stores.sidebar.ready) notifications.push(MigrateChannelPins({ projectGroups: sidebarData(next).projectGroups }))
     const background = reconcileBackgroundChats(next)
     return { model: background.model, commands: [...(bounced.commands ?? []), ...notifications, ...(background.commands ?? [])] }
   }
@@ -536,7 +551,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedAcquireSocket: ({ error }) => ({ model: commandError(model, error) }),
     ChangedConnectionStatus: ({ status }) => {
       const next = modifyFields(model, { connectionStatus: () => status })
-      if (status !== "connected" || model.connectionStatus === "connected") return { model: next }
+      const restart = FollowRestart({ connectionStatus: status })
+      if (status !== "connected" || model.connectionStatus === "connected") return { model: next, commands: [restart] }
       // In the order React's effects ran on connect: draft protection
       // (useKannaState), the forced update check (useUpdateRestart), then
       // settings and the LLM provider (useAppSettingsSync).
@@ -547,6 +563,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           SendCommand({ command: { type: "update.check", force: true } }),
           ReadAppSettings(),
           ReadLlmProvider(),
+          restart,
         ],
       }
     },
@@ -554,7 +571,18 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ReceivedLocalProjects: ({ snapshot }) => ({
       model: modifyFields(model, { localProjects: () => snapshot, localProjectsReady: () => true, commandError: () => null }),
     }),
-    ReceivedUpdate: ({ snapshot }) => ({ model: modifyFields(model, { updateSnapshot: () => snapshot, commandError: () => null }) }),
+    ReceivedUpdate: ({ snapshot }) => ({
+      model: modifyFields(model, { updateSnapshot: () => snapshot, commandError: () => null }),
+      commands: snapshot.reloadRequestedAt ? [HandleReloadRequest({ reloadRequestedAt: snapshot.reloadRequestedAt })] : [],
+    }),
+    ReachedUpdateCheckPoint: ({ at, visible }) => {
+      if (model.connectionStatus !== "connected" || !visible) return { model }
+      const lastCheckedAt = model.updateSnapshot?.lastCheckedAt
+      const interval = updateCheckInterval(isNightlyVersion(model.updateSnapshot?.currentVersion ?? ""))
+      if (lastCheckedAt && at - lastCheckedAt < interval) return { model }
+      return { model, commands: [SendCommand({ command: { type: "update.check" } })] }
+    },
+    ChangedPageVisibility: ({ shown }) => ({ model: modifyFields(model, { pageHidden: () => !shown }) }),
     ReceivedKeybindings: ({ snapshot }) => ({ model: modifyFields(model, { keybindings: () => snapshot, commandError: () => null }) }),
     ReceivedAppSettings: ({ snapshot }) => receiveAppSettings(model, snapshot),
     SucceededReadAppSettings: ({ snapshot }) => receiveAppSettings(model, snapshot),

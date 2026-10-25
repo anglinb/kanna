@@ -64,6 +64,11 @@ export const Message = defineMessageUnion({
   ClickedChatNotification: { chatId: Schema.String },
   CompletedSideEffect: {},
 
+  // Housekeeping (app/maintenance.ts)
+  /** A moment an idle client may re-check for updates: focus, visibility, the nightly timer. */
+  ReachedUpdateCheckPoint: { at: Schema.Number, visible: Schema.Boolean },
+  ChangedPageVisibility: { shown: Schema.Boolean },
+
   // Theme
   ChangedSystemTheme: { theme: Schema.Literals(["light", "dark"]) },
 
