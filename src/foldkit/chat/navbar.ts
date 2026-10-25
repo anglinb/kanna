@@ -147,7 +147,7 @@ export function shownTitle(model: Model, serverTitle: string) {
  * shortcuts are not for a title being typed; selecting text in it is not
  * dragging what holds it).
  */
-const TitleInputMount = Mount.define("ChatTitleInput", {
+export const TitleInputMount = Mount.define("ChatTitleInput", {
   messages: [Message.CompletedSideEffect],
   execute: ({ element }) => Effect.gen(function* () {
     const input = element as HTMLInputElement

@@ -108,7 +108,7 @@ type TabListMessage =
   | typeof Message.MiddleClickedTab.Type
   | typeof Message.PressedTabShortcut.Type
 
-const TabListMount = Mount.defineStream("ChatTabList", {
+export const TabListMount = Mount.defineStream("ChatTabList", {
   messages: [Message.PressedTab, Message.StartedTabDrag, Message.MovedTabDrag, Message.DroppedTab, Message.MiddleClickedTab, Message.PressedTabShortcut],
   execute: ({ element }) => domStream<TabListMessage>((emit) => {
     const list = element as HTMLElement
