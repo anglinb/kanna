@@ -109,7 +109,7 @@ const MeasureMoreButton = Command.define("SidebarMeasureMoreButton", {
     if (!rect) return done()
     // Where LocalProjectsSection's `openContextMenuFromButton` dispatched
     // its contextmenu: under the button's middle.
-    return Message.MeasuredMoreButton({ target: target as MenuTarget, x: rect.left + rect.width / 2, y: rect.bottom })
+    return Message.MeasuredMoreButton({ target: target as MenuTarget, x: Math.trunc(rect.left + rect.width / 2), y: Math.trunc(rect.bottom) })
   }),
 })
 

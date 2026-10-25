@@ -166,6 +166,18 @@ export function threadRowContent(thread: SidebarThread, options: ThreadRowConten
 // MENU TRIGGER (Radix's ContextMenuTrigger asChild)
 
 /**
+ * Where the menu opens. A right click opens at the contextmenu event's
+ * point, and a MouseEvent's coordinates are whole pixels, cut down from the
+ * pointer's (Chromium truncates); a long touch press opens at the
+ * PointerEvent's own, fractional point.
+ */
+function menuPoint(pointerType: string, clientX: number, clientY: number) {
+  return pointerType === "mouse"
+    ? { x: Math.trunc(clientX), y: Math.trunc(clientY) }
+    : { x: clientX, y: clientY }
+}
+
+/**
  * What a right-click menu's trigger carries: `data-state`, and the right
  * click (or a long touch press) that opens the sidebar's one menu for
  * `target`.
@@ -175,7 +187,7 @@ export function menuTriggerAttributes(target: MenuTarget, isOpen: boolean, h: H)
     h.DataAttribute("state", isOpen ? "open" : "closed"),
     h.OnContextMenu(Message.RequestedMenu({ target })),
     h.OnPointerDown((pointerType, button, _screenX, _screenY, _timeStamp, clientX, clientY) =>
-      Option.some(Message.PressedMenuTrigger({ target, pointerType, button, x: clientX, y: clientY }))),
+      Option.some(Message.PressedMenuTrigger({ target, pointerType, button, ...menuPoint(pointerType, clientX, clientY) }))),
     h.OnPointerMove((_x, _y, pointerType) =>
       pointerType !== "mouse" ? Option.some(Message.MovedOnMenuTrigger({ pointerType })) : Option.none()),
     h.OnPointerUp((_x, _y, pointerType) =>

@@ -11,7 +11,6 @@ import { ChevronRight, MoreHorizontal, SquarePen } from "../ui/icons"
 import { activeChatId, hasDraft, isProjectCollapsed, threadByChatId } from "./derived"
 import { Message } from "./message"
 import type { MenuTarget, Model } from "./model"
-import { PortalToBody } from "./mounts"
 import { menuTriggerAttributes, projectLabel, threadRow } from "./rows"
 import { menuOpenOn } from "./sections"
 import { tooltip } from "./tooltips"
@@ -77,13 +76,13 @@ export function arrayMove<T>(items: ReadonlyArray<T>, from: number, to: number):
   return next
 }
 
-/** What DndContext puts at the end of <body> for screen readers, whether or not anything drags. */
+/** What DndContext renders after its children for screen readers, whether or not anything drags. */
 const DND_INSTRUCTIONS = "To pick up a draggable item, press the space bar. While dragging, use the arrow keys to move the item. Press space again to drop the item in its new position, or press escape to cancel."
 export const DND_DESCRIBED_BY_ID = "DndDescribedBy-0"
 
 function dndAccessibility(h: H): ReadonlyArray<Html> {
   return [
-    h.keyed("div")(DND_DESCRIBED_BY_ID, [h.Id(DND_DESCRIBED_BY_ID), h.Style({ display: "none" }), h.OnMount(PortalToBody())], [DND_INSTRUCTIONS]),
+    h.keyed("div")(DND_DESCRIBED_BY_ID, [h.Id(DND_DESCRIBED_BY_ID), h.Style({ display: "none" })], [DND_INSTRUCTIONS]),
     h.keyed("div")("DndLiveRegion-0", [
       h.Id("DndLiveRegion-0"),
       h.Role("status"),
@@ -103,7 +102,6 @@ function dndAccessibility(h: H): ReadonlyArray<Html> {
         "clip-path": "inset(100%)",
         "white-space": "nowrap",
       }),
-      h.OnMount(PortalToBody()),
     ]),
   ]
 }
