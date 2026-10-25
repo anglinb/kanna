@@ -201,6 +201,21 @@ export async function reduceMotion(context: ScenarioContext) {
   await context.page.emulateMedia({ reducedMotion: "reduce" })
 }
 
+/**
+ * Waits until chat.setReadAnchor has sent what it holds. The client writes
+ * the read position at most every 1.5s, on a wall-clock timer that starts
+ * at the first scroll after a write (Date.now is frozen under the runner,
+ * so every write waits the full 1.5s). A capture taken inside that window
+ * has the write or not depending on the machine's speed, and one taken
+ * while the transcript still moves has a sample of where it was in passing.
+ * Call it before an action that moves the transcript (so no timer from
+ * earlier is about to fire mid-move) and again before the capture.
+ */
+export async function quietReadAnchor(context: ScenarioContext) {
+  await context.page.waitForTimeout(1600)
+  await context.settle()
+}
+
 /** Opens the command palette with its keybinding (cmd+k). */
 export async function openPalette(context: ScenarioContext) {
   await context.page.keyboard.press("Meta+k")

@@ -1,5 +1,5 @@
 import { defineScenario, type Scenario } from "../scenario"
-import { CHATS, click, composer, parkPointer, reduceMotion, REGIONS, regions, rest, sidebarChatRow, typeIntoComposer } from "./_lib/helpers"
+import { CHATS, click, composer, parkPointer, quietReadAnchor, reduceMotion, REGIONS, regions, rest, sidebarChatRow, typeIntoComposer } from "./_lib/helpers"
 
 // The transcript: each seeded chat as it opens (finished, waiting on a
 // question, streaming, another harness), tool groups and single tools
@@ -88,12 +88,17 @@ export const scenarios: Scenario[] = [
     regions: regions("transcript"),
     covers: { commands: ["chat.getToolEntries"] },
     async run(context) {
+      // Collapsing moves the transcript under the reader: at once, and with
+      // the read position written once it stops (see quietReadAnchor).
+      await reduceMotion(context)
       await click(context, transcript(context).getByRole("button", { name: "1 search, 2 reads, 4 edits, 2 writes, 1 command" }))
       await click(context, transcript(context).getByRole("button", { name: "Find `formatFeet` in text" }))
       await parkPointer(context)
+      await quietReadAnchor(context)
       await context.capture("grep-open")
       await click(context, transcript(context).getByRole("button", { name: "Collapse" }))
       await parkPointer(context)
+      await quietReadAnchor(context)
       await context.capture("collapsed")
     },
   }),
@@ -190,9 +195,11 @@ export const scenarios: Scenario[] = [
       await rest(context)
       await click(context, sidebarChatRow(page, "demo-chat-units"))
       await parkPointer(context)
+      await quietReadAnchor(context)
       await context.capture("windowed")
       await click(context, transcript(context).getByRole("button", { name: "Load More" }))
       await parkPointer(context)
+      await quietReadAnchor(context)
       await context.capture("loaded-older")
     },
   }),
