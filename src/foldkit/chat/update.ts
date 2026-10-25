@@ -585,7 +585,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
  * the composer's message is not for this chat at all. It goes to the
  * delegator, and the app goes with it.
  */
-function routeDelegatedSend(result: Return, app: AppModel, facts: PageFacts): Return {
+export function routeDelegatedSend(result: Return, app: AppModel, facts: PageFacts): Return {
   const out = result.outMessage
   if (!out || out.action._tag !== "Chat" || out.action.message._tag !== "SubmittedMessage") return result
   const target = newChatDelegate(app, facts)?.target
