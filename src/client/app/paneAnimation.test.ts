@@ -32,12 +32,7 @@ describe("paneAnimation", () => {
       previousShouldRenderTerminalLayout: false,
       previousShowTerminalPane: false,
       showTerminalPane: true,
-      terminalLayout: {
-        isVisible: true,
-        mainSizes: [68, 32],
-        terminals: [],
-        nextTerminalIndex: 1,
-      },
+      mainSizes: [68, 32],
       liveLayout: [68, 32],
     })
 
@@ -53,12 +48,7 @@ describe("paneAnimation", () => {
       previousShouldRenderTerminalLayout: false,
       previousShowTerminalPane: false,
       showTerminalPane: true,
-      terminalLayout: {
-        isVisible: true,
-        mainSizes: [68, 32],
-        terminals: [],
-        nextTerminalIndex: 1,
-      },
+      mainSizes: [68, 32],
       liveLayout: [68, 32],
     })
 
@@ -72,12 +62,7 @@ describe("paneAnimation", () => {
       previousShouldRenderTerminalLayout: true,
       previousShowTerminalPane: true,
       showTerminalPane: true,
-      terminalLayout: {
-        isVisible: true,
-        mainSizes: [60, 40],
-        terminals: [],
-        nextTerminalIndex: 1,
-      },
+      mainSizes: [60, 40],
       liveLayout: [68, 32],
     })
 
