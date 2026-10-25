@@ -1,7 +1,6 @@
 import { Schema } from "effect"
 import { defineMessageUnion } from "foldkit/message"
 import type { ChatAttachment, HarnessSkill } from "../../shared/types"
-import { AppAction } from "../app/action"
 import { opaque } from "../core/schema"
 import * as ChatInput from "../core/stores/chatInput"
 import { SignInDialogMessage } from "../settings/auth-cards"
@@ -115,8 +114,6 @@ export const Message = defineMessageUnion({
   // PLUMBING
   /** A store write stamped with the time (core/stores/chatInput's Commands). */
   GotChatInputStoreMessage: { message: ChatInput.Message },
-  /** An AppAction a Command hands back for the root. */
-  RequestedAction: { action: AppAction },
   CompletedMountComposer: {},
   CompletedSideEffect: {},
 })

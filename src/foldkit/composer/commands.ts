@@ -69,16 +69,6 @@ export const PlaceCaret = Command.define("PlaceComposerCaret", {
   }),
 })
 
-export const FocusTextarea = Command.define("FocusComposer", {
-  args: { domId: Schema.String },
-  messages: [Message.CompletedSideEffect],
-  execute: ({ domId }) => Effect.gen(function* () {
-    yield* Render.afterCommit
-    textareaOf(domId)?.focus({ preventScroll: true })
-    return Message.CompletedSideEffect()
-  }),
-})
-
 export const FocusNextChatInput = Command.define("FocusNextChatInput", {
   args: { domId: Schema.String },
   messages: [Message.CompletedSideEffect],
@@ -88,15 +78,6 @@ export const FocusNextChatInput = Command.define("FocusNextChatInput", {
   }),
 })
 
-export const ClearFileInput = Command.define("ClearComposerFileInput", {
-  args: { selector: Schema.String },
-  messages: [Message.CompletedSideEffect],
-  execute: ({ selector }) => Effect.sync(() => {
-    const input = document.querySelector<HTMLInputElement>(selector)
-    if (input) input.value = ""
-    return Message.CompletedSideEffect()
-  }),
-})
 
 /** onListSkills: the selected harness's invocable skills, for the "/" menu. */
 export const ListSkills = Command.define("ListSkills", {

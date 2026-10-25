@@ -179,7 +179,7 @@ export function reconcile(model: Model, ctx: Context): Step {
 
   // The turn is over: there is nothing left to show a hold for.
   if (!ctx.props.canCancel && (next.hold.phase !== "idle" || next.hold.ringShown)) {
-    next = { ...next, hold: { phase: "idle", ringShown: false, version: next.hold.version + 1, resume: false } }
+    next = { ...next, hold: { phase: "idle", ringShown: false, version: next.hold.version + 1 } }
     commands.push(Commands.EmptyRing({ domId: instance.domId, instant: true }))
   }
 
@@ -483,9 +483,10 @@ function step(model: Model, message: Message, ctx: Context): Step {
     RecalledPreviousPrompt: () => (ctx.props.previousPrompt ? { model: { ...model, value: ctx.props.previousPrompt } } : { model }),
     PressedEscapeToStop: () => {
       if (!ctx.props.canCancel || model.hold.phase === "holding" || model.hold.phase === "confirmed") return { model }
-      // A press while the ring is still on its way back takes it from there.
-      const resume = model.hold.phase === "released" && model.hold.ringShown
-      return { model: { ...model, hold: { phase: "holding", ringShown: true, version: model.hold.version + 1, resume } } }
+      // The hold's clock and its ends are a subscription while it holds
+      // (subscriptions.ts); a press while the ring is still on its way back
+      // takes it from there.
+      return { model: { ...model, hold: { phase: "holding", ringShown: true, version: model.hold.version + 1 } } }
     },
 
     MovedSkillSelection: ({ towardWorse }) => ({
@@ -850,7 +851,6 @@ function step(model: Model, message: Message, ctx: Context): Step {
       }
       return { model, actions: [chatInputAction(child)] }
     },
-    RequestedAction: ({ action }) => ({ model, actions: [action] }),
     CompletedSideEffect: () => ({ model }),
   })
 }

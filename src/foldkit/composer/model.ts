@@ -94,7 +94,7 @@ export const Model = Schema.Struct({
   transcribing: Schema.Boolean,
   recorderError: Schema.NullOr(Schema.String),
 
-  hold: Schema.Struct({ phase: HoldPhase, ringShown: Schema.Boolean, version: Schema.Number, resume: Schema.Boolean }),
+  hold: Schema.Struct({ phase: HoldPhase, ringShown: Schema.Boolean, version: Schema.Number }),
 
   popovers: Schema.Struct({
     account: Popover.Model,
@@ -166,7 +166,7 @@ export function init(): Model {
     recording: false,
     transcribing: false,
     recorderError: null,
-    hold: { phase: "idle", ringShown: false, version: 0, resume: false },
+    hold: { phase: "idle", ringShown: false, version: 0 },
     popovers: popoversFor("composer"),
     modelQuery: "",
     tooltips: tooltipsFor("composer"),
