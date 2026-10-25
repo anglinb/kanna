@@ -104,9 +104,10 @@ const chat = (message: ChatSession.Message) => AppAction.Chat({ message })
 export function step(model: Model, message: Message, env: { key: string }): Step | null {
   switch (message._tag) {
     case "MountedViewport":
-      if (message.chatId === model.chatId) return done(model)
-      // A viewport per chat, as React keyed it: the rows' state, the flash,
-      // the minimap's cursor and anything aimed at the last chat go.
+      // A viewport per showing of a chat, as React keyed and mounted it
+      // (another chat, or the same one after leaving the page): the rows'
+      // state, the flash, the minimap's cursor and anything aimed at the
+      // last showing go.
       return done(modifyFields(model, {
         chatId: () => message.chatId,
         messages: () => Messages.reset(),

@@ -146,14 +146,15 @@ describe("transcript viewport: what goes to the page's chat", () => {
 })
 
 describe("transcript viewport: a chat switch", () => {
-  test("another chat's viewport drops the rows' state and what was aimed at the last chat", () => {
+  test("a viewport mounting drops the rows' state and what was aimed at the last showing", () => {
     const opened = { ...init(), chatId: "c1", messages: { ...Messages.init(), open: { "tool:x": true } }, unloadedJump: { messageId: "p0", seq: 1 }, lastJump: { requestId: 1, target: "prompt" as const } }
     const switched = run(opened, Message.MountedViewport({ chatId: "c2" })).model
     expect(switched.chatId).toBe("c2")
     expect(switched.messages.open).toEqual({})
     expect(switched.unloadedJump).toBeNull()
     expect(switched.lastJump).toBeNull()
-    expect(run(opened, Message.MountedViewport({ chatId: "c1" })).model).toBe(opened)
+    // The same chat shown afresh (the page left and come back to) starts over too, as a remount did.
+    expect(run(opened, Message.MountedViewport({ chatId: "c1" })).model.messages.open).toEqual({})
   })
 
   test("the minimap's cursor goes when the strip's room changes", () => {
