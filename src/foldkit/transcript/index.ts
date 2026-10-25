@@ -18,6 +18,8 @@ import { transcriptView } from "./view"
 //   viewport.ts             the scroll position's bookkeeping, against the live DOM
 //   scroller.ts             the message-scroller primitive (follow the end, keep the place)
 //   minimap.ts              the turn strip and its card
+//   chatCard.ts             a live chat card (the chat's row and menu), for the rows
+//   fixture.ts              a windowed chat, for the window parity pages
 //   export/                 the standalone export viewer (src/export-viewer)
 //   messages/               the rows
 
