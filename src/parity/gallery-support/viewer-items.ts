@@ -2,9 +2,9 @@
 // (gallery/viewer.tsx) and the Foldkit one (foldkit/gallery/viewer.ts):
 // attachments of each kind, a chart and a visualization at full size. Text
 // is served from data: URLs, so both apps read the same bytes from any port.
-import type { ChartToolPayload } from "../../../../shared/display-tools"
-import type { VisualizationArtifact } from "../../../../shared/visualization"
-import { CHARTS } from "../../../../foldkit/transcript/messages/fixture"
+import type { ChartToolPayload } from "../../shared/display-tools"
+import type { VisualizationArtifact } from "../../shared/visualization"
+import { CHARTS } from "../../foldkit/transcript/messages/fixture"
 
 export const VIEWER_GALLERY_CHAT_ID = "demo-chat-units"
 
