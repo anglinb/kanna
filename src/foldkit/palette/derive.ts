@@ -12,8 +12,8 @@ import {
   searchSettingsEntries,
   searchThreadsByTitle,
   type SidebarThread,
-} from "../../client/components/command-palette/actions"
-import { buildSettingsCommands, type SettingsCommand, type SettingsCommandEffect } from "../../client/components/command-palette/settings-commands"
+} from "./search"
+import { buildSettingsCommands, type SettingsCommandEffect } from "./settingsCommands"
 import { delegatorDisplayTitle, projectDelegators, resolveDelegateTarget } from "../../client/lib/delegators"
 import { formatSidebarAgeLabel, getPathBasename } from "../../client/lib/formatters"
 import { getBindingsForAction } from "../../client/lib/keybindings"
@@ -43,13 +43,11 @@ import * as SidebarView from "../core/stores/sidebarView"
 import * as TerminalLayout from "../core/stores/terminalLayout"
 import * as Viewer from "../core/stores/viewer"
 import * as AppDialog from "../ui/app-dialog"
-
 import {
-  AppWindow, Archive, Battery, BellRing, Box, Brain, ChartNoAxesColumn, Check, CircleCheck, CircleDashed, Coffee,
-  Columns2, Copy, CornerDownLeft, CornerDownRight, Cpu, ExternalLink, EyeOff, File, FlaskConical, Folder, FolderOpen,
-  Gauge, GitBranch, GitFork, Hash, History, House, ListFilter, ListTodo, Loader2, Lock, LockOpen, LogIn,
-  MessageCircle, Monitor, Moon, PanelLeft, PanelRight, PanelTop, Paperclip, Pin, PinOff, Plus, Settings2, Share2,
-  Sparkles, SquareMenu, SquarePen, SquareTerminal, Sun, Terminal, Volume2,
+  Archive, Box, Brain, Check, CircleCheck, CircleDashed, Columns2, Copy, CornerDownRight, ExternalLink, EyeOff, File,
+  Folder, FolderOpen, Gauge, GitBranch, GitFork, Hash, History, House, ListFilter, ListTodo, Loader2, Lock, LockOpen,
+  MessageCircle, PanelLeft, PanelRight, Paperclip, Pin, PinOff, Plus, Settings2, Share2, Sparkles, SquareMenu,
+  SquarePen, SquareTerminal, Terminal,
 } from "../ui/icons"
 import type { Icon } from "../ui/icon"
 import { CHAT_MODE_LABELS, composerFor, type ComposerController } from "./composer"
@@ -121,26 +119,6 @@ const SIDEBAR_VIEW_COMMANDS: { view: SidebarView.SidebarView; title: string; ico
   { view: "channels", title: "Show Channels", icon: Hash, keywords: ["channels view", "channel"] },
   { view: "archived", title: "Show Archived", icon: Archive, keywords: ["archived chats", "archive", "old chats"] },
 ]
-
-/** settings-commands.ts names a lucide-react icon per command; these are the same ones. */
-function settingsCommandIcon(command: SettingsCommand): Icon {
-  const id = command.id
-  if (id === "set-theme-light") return Sun
-  if (id === "set-theme-dark") return Moon
-  if (id === "set-theme-system") return Monitor
-  if (id === "toggle-recent-chats-sidebar") return FlaskConical
-  if (id === "toggle-project-icons-in-chats") return AppWindow
-  if (id === "toggle-chat-tabs") return PanelTop
-  if (id === "toggle-widgets-peek") return PanelRight
-  if (id === "toggle-terminal-webgl") return Cpu
-  if (id === "toggle-analytics") return ChartNoAxesColumn
-  if (id.startsWith("set-chat-sounds-")) return Volume2
-  if (id.startsWith("set-notifications-")) return BellRing
-  if (id.startsWith("set-submit-while-running-")) return CornerDownLeft
-  if (id === "mac-open-login-items" || id === "mac-toggle-login-item") return LogIn
-  if (id === "mac-toggle-keep-awake-battery") return Battery
-  return Coffee
-}
 
 /** Truncates from the head so the most specific path segments stay visible. */
 export function truncatePathHead(path: string, maxLength = 40) {
@@ -488,7 +466,7 @@ export function derive(model: Model, app: AppModel): PaletteData {
       id: command.id,
       title: command.title,
       keywords: command.keywords,
-      icon: icon(settingsCommandIcon(command)),
+      icon: icon(command.icon),
       searchOnly: command.searchOnly,
       run: () => runSettingsEffect(command.effect),
     })
