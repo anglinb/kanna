@@ -40,14 +40,14 @@ export interface Step {
   actions: AppAction[]
 }
 
-const DelayScrollButton = Command.define("DelayTranscriptScrollButton", {
+export const DelayScrollButton = Command.define("DelayTranscriptScrollButton", {
   args: { token: Schema.Number },
   messages: [Message.ElapsedScrollButtonDelay],
   execute: ({ token }) => Effect.sleep(SCROLL_BUTTON_DELAY_MS).pipe(Effect.as(Message.ElapsedScrollButtonDelay({ token }))),
 })
 
 /** Dropped for a frame before being set, so jumping to the row already lit replays the flash. */
-const RaiseFlash = Command.define("RaiseTranscriptJumpFlash", {
+export const RaiseFlash = Command.define("RaiseTranscriptJumpFlash", {
   args: { token: Schema.Number },
   messages: [Message.RaisedFlash],
   execute: ({ token }) => Effect.callback<ReturnType<typeof Message.RaisedFlash>>((resume) => {
@@ -57,7 +57,7 @@ const RaiseFlash = Command.define("RaiseTranscriptJumpFlash", {
 })
 
 /** Cleared on a timer rather than on animation end, which may never fire. */
-const ClearFlash = Command.define("ClearTranscriptJumpFlash", {
+export const ClearFlash = Command.define("ClearTranscriptJumpFlash", {
   args: { token: Schema.Number },
   messages: [Message.ElapsedFlash],
   execute: ({ token }) => Effect.sleep(JUMP_FLASH_DURATION_MS + JUMP_FLASH_CLEANUP_SLACK_MS).pipe(Effect.as(Message.ElapsedFlash({ token }))),
