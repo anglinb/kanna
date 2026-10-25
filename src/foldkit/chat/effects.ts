@@ -624,6 +624,13 @@ export const MakeTerminalId = Command.define("MakeChatTerminalId", {
     Message.MadeTerminalId({ purpose, projectId, chatKey, terminalId: newTerminalId(nextTerminalIndex) })),
 })
 
+/** The second after the last terminal command, before the diffs refresh. */
+export const ElapseTerminalDiffRefresh = Command.define("ElapseTerminalDiffRefresh", {
+  args: { token: Schema.Number },
+  messages: [Message.ElapsedTerminalDiffRefresh],
+  execute: ({ token }) => Effect.sleep(1_000).pipe(Effect.as(Message.ElapsedTerminalDiffRefresh({ token }))),
+})
+
 export const ElapseColumnSlide = Command.define("ElapseWidgetsColumnSlide", {
   args: { token: Schema.Number, ms: Schema.Number },
   messages: [Message.ElapsedColumnSlide],

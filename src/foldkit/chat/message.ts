@@ -182,6 +182,8 @@ export const Message = defineMessageUnion({
   ClickedEditModels: {},
   GotDefaultModelsMessage: { message: DefaultModelsDialog.Message },
   RanQuickAction: { command: Schema.String },
+  SentTerminalCommand: {},
+  ElapsedTerminalDiffRefresh: { token: Schema.Number },
 
   // Terminals and diffs
   MadeTerminalId: { purpose: TerminalPurpose, projectId: Schema.String, chatKey: Schema.NullOr(Schema.String), terminalId: Schema.String },

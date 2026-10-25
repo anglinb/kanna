@@ -105,6 +105,12 @@ export interface ChatPageRequests {
   editModels: ReadonlyArray<ChildAttribute>
   /** A quick action's row, by its id (`onRunQuickAction`): runs its command in a new terminal. */
   runQuickAction: Readonly<Record<string, ReadonlyArray<ChildAttribute>>>
+  /**
+   * For the terminal workspace's element (`onTerminalCommandSent`): Enter in
+   * a terminal is a command sent, and the open column's diffs refresh a
+   * second after the last one.
+   */
+  terminalKeys: ReadonlyArray<ChildAttribute>
 }
 
 /** The view inputs the chat page gives each sub-slice. */

@@ -33,6 +33,7 @@ import * as Tooltip from "../ui/tooltip"
 import { chooseChatRowMenuItem } from "./chatRowMenu"
 import {
   ElapseColumnSlide,
+  ElapseTerminalDiffRefresh,
   FocusChatInput,
   MakeTerminalId,
   MeasureMenuButton,
@@ -682,6 +683,23 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       return result.outMessage
         ? withActions({ model: next, commands: commands as never }, [AppAction.WriteFaveModels({ faveModels: [...result.outMessage.faveModels] })])
         : { model: next, commands }
+    },
+    // scheduleTerminalDiffRefresh: a command sent in a terminal may have
+    // changed files; the open column's diffs refresh a second after the last.
+    SentTerminalCommand: () => {
+      const current = facts()
+      if (!current.chatId || !current.showRightSidebar) return { model }
+      const token = model.terminalDiffRefreshToken + 1
+      return {
+        model: modifyFields(model, { terminalDiffRefreshToken: () => token }),
+        commands: [ElapseTerminalDiffRefresh({ token })],
+      }
+    },
+    ElapsedTerminalDiffRefresh: ({ token }) => {
+      const current = facts()
+      return token === model.terminalDiffRefreshToken && current.chatId && current.showRightSidebar
+        ? { model, commands: [RefreshDiffs({ chatId: current.chatId })] }
+        : { model }
     },
     // handleRunQuickAction: a terminal of its own, typed into once it opens.
     RanQuickAction: ({ command }) => addTerminal(model, facts(), { _tag: "QuickAction", command }),

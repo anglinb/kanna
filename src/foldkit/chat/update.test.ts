@@ -113,6 +113,17 @@ describe("chat page: navbar", () => {
     expect(escaped.model.title.draft).toBeNull()
   })
 
+  test("a terminal command refreshes the open column's diffs a second after the last one", () => {
+    const base = boot("/chat/c1")
+    const app: AppModel = { ...base, stores: { ...base.stores, rightSidebar: { ...base.stores.rightSidebar, projects: { p1: { widgetsOpen: true, chats: { c1: true } } } as never } } }
+    const first = update(init(), Message.SentTerminalCommand(), app)
+    expect(names(first)).toEqual(["ElapseTerminalDiffRefresh"])
+    const second = update(first.model, Message.SentTerminalCommand(), app)
+    // The first wait ends after a newer command: nothing yet.
+    expect(names(update(second.model, Message.ElapsedTerminalDiffRefresh({ token: 1 }), app))).toEqual([])
+    expect(names(update(second.model, Message.ElapsedTerminalDiffRefresh({ token: 2 }), app))).toEqual(["RefreshChatDiffs"])
+  })
+
   test("a delegator's list button opens its pane, and shuts it when open", () => {
     const app = boot("/chat/c1")
     const opened = update(init(), Message.ClickedDelegatedList({ chatId: "c1", overlay: false }), app)

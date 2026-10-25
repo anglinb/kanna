@@ -173,6 +173,9 @@ export const Model = Schema.Struct({
   /** The Default Models dialog the composer's model picker opens ("Add models…"). */
   defaultModels: DefaultModelsDialog.Model,
 
+  /** Bumped by each terminal command: only the last one's wait refreshes the diffs. */
+  terminalDiffRefreshToken: Schema.Number,
+
   /** Commands for terminals made by a quick action, sent once each opens. */
   pendingTerminalCommands: Schema.Record(Schema.String, Schema.String),
 
@@ -250,6 +253,7 @@ export function init(): Model {
     usageRefreshing: false,
     usageCards: { expanded: {}, tooltips: {} },
     defaultModels: DefaultModelsDialog.init("chat-default-models"),
+    terminalDiffRefreshToken: 0,
     pendingTerminalCommands: {},
     tooltips: {
       openIn: Tooltip.init({ id: "chat-navbar-open-in" }),

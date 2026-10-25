@@ -132,6 +132,7 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
       action.id,
       childAttributes([h.OnClick(Message.RanQuickAction({ command: action.command }))]),
     ])),
+    terminalKeys: childAttributes([h.OnKeyDown((key) => (key === "Enter" ? Message.SentTerminalCommand() : Message.CompletedSideEffect()))]),
   }
   const inputs: ChatPageSliceInputs = { app, page, requests }
   const transcriptInputs: ChatPageSliceInputs = { app, page, requests, emptyState: () => emptyStateView(model, app, facts, page, h) }
