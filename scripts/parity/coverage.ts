@@ -36,7 +36,7 @@ const UNCOVERABLE: Record<string, string> = {
   "skills.listInstalled": "not sent by the React client",
   // The fixture can't stand in for these.
   "project.clone": "needs a real server: the demo can't clone a repository; it answers with the install prompt by design (backend.test.ts pins that)",
-  "auth.login.submitCode": "needs a provider CLI mid sign-in; the demo's services are all signed in and sign-in answers 'needs your machine'",
+  "auth.login.submitCode": "needs a provider CLI waiting for a pasted code; the demo answers auth.login.start with 'needs your machine', so no sign-in gets that far",
   "auth.login.cancel": "needs a provider CLI mid sign-in (see auth.login.submitCode)",
   "auth.openrouter.start": "opens OpenRouter's OAuth popup; the demo has no OAuth app",
   "auth.openrouter.exchange": "needs a code from OpenRouter's OAuth redirect",

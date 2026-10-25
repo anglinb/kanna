@@ -26,14 +26,15 @@ export const REGIONS = {
   widgets: "[data-right-sidebar-visual]",
   /** The settings page (nav and content). */
   settings: "[data-settings-page]",
-  /** The open settings section's content, beside the settings nav. */
-  settingsNav: "[data-settings-page] aside",
   /** A Radix menu (dropdown or context menu) that is open. */
   menu: "[role=menu]",
-  /** A popover or hover card that is open. */
-  popover: "[role=dialog]:not([aria-modal=true])",
-  /** A modal dialog that is open (dialogs, the command palette). */
-  dialog: "[role=dialog][aria-modal=true], [role=alertdialog]",
+  /**
+   * A popover or hover card that is open: a dialog with no title. (No
+   * aria-modal anywhere: Radix marks neither kind with it.)
+   */
+  popover: "[role=dialog]:not([aria-labelledby])",
+  /** A titled dialog that is open (dialogs, the command palette). */
+  dialog: "[role=dialog][aria-labelledby], [role=alertdialog]",
   /** A select's or combobox's option list that is open. */
   listbox: "[role=listbox]",
   /**

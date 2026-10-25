@@ -6,7 +6,8 @@ import { CHATS, click, composer, parkPointer, press, regions, rest, typeIntoComp
 // speed pickers, modes (Shift+Tab), the "/" and "@" menus, queueing while a
 // turn runs, stopping it.
 //
-// Not here: attachments. An upload goes to /api/projects/:id/uploads, which
+// Not here: recording a voice message past the microphone prompt, and
+// attachments. An upload goes to /api/projects/:id/uploads, which
 // the demo's fetch shim (src/demo/environment.ts) answers 404, and the error
 // report the composer then shows quotes the JS stack (bundle file names), so
 // no other build could ever match it. Covering uploads needs the shim to
@@ -334,6 +335,18 @@ export const scenarios: Scenario[] = [
       await context.advance(30_000)
       await parkPointer(context)
       await context.capture("approved-and-cleared")
+    },
+  }),
+  defineScenario({
+    // The browser under the runner grants no microphone: the composer says what it needs.
+    name: "composer-voice-no-microphone",
+    route: CHATS.units,
+    ...desktop,
+    regions: regions("composer"),
+    async run(context) {
+      await click(context, context.page.getByRole("button", { name: "Record voice message" }))
+      await parkPointer(context)
+      await context.capture("needs-microphone")
     },
   }),
 ]
