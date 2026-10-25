@@ -74,12 +74,18 @@ export function item(model: Model, slotId: string, inputs: Messages.ViewInputs, 
   })
 }
 
-export function rowSections(model: Model, sections: ReadonlyArray<GallerySection>, options: Partial<Messages.RenderOptions>, h: HtmlBuilder<Message>): Html[] {
+export function rowSections(
+  model: Model,
+  sections: ReadonlyArray<GallerySection>,
+  options: Partial<Messages.RenderOptions>,
+  h: HtmlBuilder<Message>,
+  references: Omit<Partial<Messages.ViewInputs>, "item" | "options"> = {},
+): Html[] {
   const all: Partial<Messages.RenderOptions> = { interceptLocalLinks: true, ...options }
   return sections.map((section) => h.section([h.AriaLabel(section.label), h.Class("mb-6")], [
     h.h2([h.Class("mx-auto mb-2 max-w-[816px] px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground")], [section.label]),
     ...section.rows.map((row) => h.keyed("div")(row.id, [h.Class(TRANSCRIPT_ROW_CLASS), h.DataAttribute("transcript-row-id", row.id)], [
-      item(model, row.id, { item: { kind: "row", row }, options: all }, h),
+      item(model, row.id, { ...references, item: { kind: "row", row }, options: all }, h),
     ])),
   ]))
 }

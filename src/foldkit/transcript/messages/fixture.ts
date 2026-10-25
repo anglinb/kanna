@@ -11,6 +11,9 @@ import type {
   HydratedTranscriptMessage,
   NormalizedToolCall,
   QueuedChatMessage,
+  SidebarChatRow,
+  SidebarData,
+  SidebarProjectGroup,
   TranscriptEntry,
 } from "../../../shared/types"
 import type { SingleRow, ToolGroupRow, TranscriptRow } from "./rows"
@@ -64,6 +67,12 @@ const SINGLE_DEFAULTS = {
 } as const
 
 let rowIndex = 0
+
+/** Each page starts its clock and row numbers afresh: every gallery module is loaded on every page. */
+function restart() {
+  clock = 0
+  rowIndex = 0
+}
 function single(message: HydratedTranscriptMessage | undefined, flags: Partial<Omit<SingleRow, "kind" | "id" | "message" | "index">> = {}): SingleRow {
   if (!message) throw new Error("fixture: no such message")
   rowIndex += 1
@@ -150,6 +159,7 @@ const MARKDOWN_ANSWER = [
 
 /** Prompts, answers, the session and turn rows, sourced messages. */
 export function textSections(origin: string): GallerySection[] {
+  restart()
   const m = hydrate([
     { _id: "sys-1", kind: "system_init", provider: "claude", model: "claude-opus-4-1", tools: ["Task", "Bash", "Glob", "Grep", "Read", "Edit", "Write", "mcp__linear__list_issues", "mcp__linear__create_issue", "CustomThing"], agents: ["general-purpose", "code-reviewer"], slashCommands: ["compact", "review", "init"], mcpServers: [{ name: "linear", status: "connected" }, { name: "sentry", status: "failed", error: "spawn ENOENT" }], debugRaw: JSON.stringify({ type: "system", subtype: "init", model: "claude-opus-4-1" }) },
     { _id: "sys-2", kind: "system_init", provider: "claude", model: "claude-sonnet-4-5", tools: ["Bash"], agents: [], slashCommands: [], mcpServers: [] },
@@ -270,6 +280,7 @@ const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVR4nGP8z8
 
 /** Every tool kind the row special-cases, folded runs, and a subagent. */
 export function toolSections(): GallerySection[] {
+  restart()
   const m = hydrate([
     call("bash-1", { kind: "tool", toolKind: "bash", toolName: "Bash", toolId: "t-bash-1", input: { command: "bun test src/socket.test.ts", description: "Run the socket tests", timeoutMs: 120000, runInBackground: true } }),
     result("bash-1-r", "t-bash-1", "12 pass\n0 fail\nRan 12 tests across 1 file. [84.00ms]"),
@@ -440,6 +451,7 @@ const PLAN = [
 
 /** AskUserQuestion and ExitPlanMode in each of their states. */
 export function questionSections(): GallerySection[] {
+  restart()
   const ask = (id: string, questions = QUESTIONS): Draft => call(id, { kind: "tool", toolKind: "ask_user_question", toolName: "AskUserQuestion", toolId: `t-${id}`, input: { questions } })
   const plan = (id: string, text: string | undefined = PLAN): Draft => call(id, { kind: "tool", toolKind: "exit_plan_mode", toolName: "ExitPlanMode", toolId: `t-${id}`, input: text === undefined ? {} : { plan: text } })
   const m = hydrate([
@@ -489,6 +501,7 @@ export function questionSections(): GallerySection[] {
 
 /** The same question and plan in an export: nothing to answer. */
 export function readonlySections(): GallerySection[] {
+  restart()
   const m = hydrate([
     call("ro-ask", { kind: "tool", toolKind: "ask_user_question", toolName: "AskUserQuestion", toolId: "t-ro-ask", input: { questions: [QUESTIONS[0]!] } }),
     call("ro-plan", { kind: "tool", toolKind: "exit_plan_mode", toolName: "ExitPlanMode", toolId: "t-ro-plan", input: { plan: "Short plan." } }),
@@ -535,6 +548,7 @@ export const CHARTS: ReadonlyArray<ChartToolPayload> = [
 
 /** Display tools: attachments in their shapes, charts. */
 export function displaySections(origin: string): GallerySection[] {
+  restart()
   const attachment = (name: string, kind: "image" | "video" | "file", path: string, mimeType: string) => ({ type: "attachment", url: `${origin}${path}`, name, kind, mimeType, size: 1024 })
   const display = (id: string, toolName: string, payload: Record<string, unknown>): Draft => call(id, { kind: "tool", toolKind: "display", toolName, toolId: `t-${id}`, input: { payload } })
   const m = hydrate([
@@ -596,4 +610,74 @@ export function displaySections(origin: string): GallerySection[] {
 /** Every row of a page, in order, for a host that wants them flat. */
 export function allRows(sections: ReadonlyArray<GallerySection>): TranscriptRow[] {
   return sections.flatMap((section) => section.rows)
+}
+
+// ── Page: messages-references ────────────────────────────────────────────
+
+function sidebarRow(chatId: string, title: string, extra: Partial<SidebarChatRow> = {}): SidebarChatRow {
+  return {
+    _id: chatId,
+    _creationTime: BASE_TIME,
+    chatId,
+    title,
+    status: "idle",
+    unread: false,
+    localPath: LOCAL_PATH,
+    provider: "claude",
+    lastMessageAt: BASE_TIME,
+    hasAutomation: false,
+    ...extra,
+  }
+}
+
+function sidebarGroup(groupKey: string, title: string, chats: SidebarChatRow[], archivedChats: SidebarChatRow[] = []): SidebarProjectGroup {
+  return { groupKey, title, realTitle: title, localPath: `/Users/demo/code/${title}`, chats, previewChats: chats, olderChats: [], archivedChats, defaultCollapsed: false }
+}
+
+/** The project the chat being read is in, for quotes that name another. */
+export const REFERENCES_PROJECT_ID = "proj-kanna"
+
+/** What the sidebar knows: two chats here (one archived), the parent in another project. */
+export const REFERENCES_SIDEBAR: SidebarData = {
+  projectGroups: [
+    sidebarGroup(REFERENCES_PROJECT_ID, "kanna", [sidebarRow("chat-a", "Flicker fix"), sidebarRow("chat-d", "Planner")], [sidebarRow("chat-b", "Socket test", { archivedAt: BASE_TIME })]),
+    sidebarGroup("proj-site", "website", [sidebarRow("chat-parent", "Launch checklist")]),
+  ],
+}
+
+/** The parents a sub-chat's link back points at: one the sidebar lists, one it no longer does. */
+export const REFERENCES_PARENTS = ["chat-parent", "chat-gone"] as const
+
+/** Messages that name other chats, drawn against REFERENCES_SIDEBAR. */
+export function referencesSections(): GallerySection[] {
+  restart()
+  const m = hydrate([
+    prompt("ref-parent", "Please look at the flaky test and report back.", { source: { kind: "agent", chatId: "chat-parent" } }),
+    prompt("ref-archived", "Here is what I found in the socket test.", { source: { kind: "agent", chatId: "chat-b" } }),
+    prompt("ref-unknown", "Hello from a chat nobody lists.", { source: { kind: "agent", chatId: "chat-zzz" } }),
+    prompt("ref-report", [
+      "<system-message>Sub-chat completed: Flicker fix (chat id chat-a)</system-message>",
+      "Fixed it.",
+      "---",
+      "<system-message>Sub-chat failed: Socket test (chat id chat-b)</system-message>",
+      "Could not reproduce.",
+      "---",
+      "<system-message>Sub-chat needs_input: Mystery (chat id chat-zzz)</system-message>",
+      "Which branch?",
+    ].join("\n"), { source: { kind: "report", chatIds: ["chat-a", "chat-b", "chat-zzz"] } }),
+    prompt("ref-adopted", "<system-message>Sub-chat adopted: Cleanup (chat id chat-a) was taken over by [Planner](/chat/chat-d), which adopted it.</system-message>", { source: { kind: "report", chatIds: ["chat-a"] } }),
+    call("ref-chat", { kind: "tool", toolKind: "chat", toolName: "create_chat", toolId: "t-ref-chat", input: { payload: { title: "Fix the flicker", message: "Find why the sidebar renders twice." } } }),
+    result("ref-chat-r", "t-ref-chat", { chatId: "chat-a", title: "Flicker fix" }),
+  ])
+  return [{
+    label: "References",
+    rows: [
+      single(m.get("ref-parent")),
+      single(m.get("ref-archived")),
+      single(m.get("ref-unknown")),
+      single(m.get("ref-report")),
+      single(m.get("ref-adopted")),
+      single(m.get("ref-chat")),
+    ],
+  }]
 }

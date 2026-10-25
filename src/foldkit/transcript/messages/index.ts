@@ -77,6 +77,19 @@
  *   row a live chat card is (ThreadRowContent, its menu and hover card) and
  *   a schedule card's menu and hover card belong to the sidebar and widgets
  *   slices, so the host draws them.
+ *
+ * ── Not here ─────────────────────────────────────────────────────────────
+ *
+ *   The full-size chart and visualization (ChartFullView with its data
+ *   table, VisualizationFullView with Download image and Mark up) are cards
+ *   of the viewer (ViewerSurface); the viewer slice draws them, from
+ *   `chartFigure` / `chartModel` / `aggregateValues` and `visualizationFrame`.
+ *
+ * ── Fixtures ─────────────────────────────────────────────────────────────
+ *
+ *   fixture.ts holds the messages the parity galleries draw
+ *   (src/parity/{react,foldkit}/gallery/messages-*), through
+ *   `processTranscriptMessages`, with rows built as the resolver would.
  */
 import { Submodel } from "foldkit"
 import type { Html } from "foldkit/html"
@@ -143,8 +156,11 @@ export { attachmentFileCard, attachmentImageCard, formatAttachmentSize, userMess
 export { chatCard, chatReplyQuote, chatToolMessage, inlineChatToolExcerpt, inlineChatToolTarget, isChatToolCall, replyCaption, INTERIM_REPLY_NOTE } from "./chat-tool"
 export { formatScheduleState, formatScheduleTrigger, formatUntil, isScheduleToolCall, scheduleCardBox, scheduleToolMessage } from "./schedule-tool"
 export { attachmentsCard, displayToolMessage } from "./display-tool"
-export { chartTool } from "./chart"
-export { visualization } from "./visualization"
+// The chart and the frame are also what the viewer's full-size chart and
+// visualization draw (ChartFullView, VisualizationFullView): `chartFigure`
+// with its own key and class, `visualizationFrame` with its own key.
+export { aggregateValues, AGGREGATE_OPTIONS, chartFigure, chartModel, chartTool, csvCell, formatChartCell, niceTicks, type AggregateMode, type ChartModel, type ChartTableData } from "./chart"
+export { visualization, visualizationExpandButton, visualizationFrame, visualizationTheme } from "./visualization"
 export { CLAMP_LINES, clampedMessageText, isFoldClick } from "./clamped"
 export { fileContentView } from "./file-content"
 
