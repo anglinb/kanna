@@ -1,8 +1,8 @@
 // Sign-in states for the setup galleries (setup-cards, setup-mac-wizard), shared
 // by the React and Foldkit pages so both draw the same data. Plain data and
 // one browser helper: no React here.
-import type { MacSetupState } from "../../../../client/lib/macApp"
-import { AUTH_SERVICE_LABELS, type AuthServiceId, type AuthServiceSnapshot, type ProviderAuthSnapshot } from "../../../../shared/types"
+import type { MacSetupState } from "../../foldkit/core/macApp"
+import { AUTH_SERVICE_LABELS, type AuthServiceId, type AuthServiceSnapshot, type ProviderAuthSnapshot } from "../../shared/types"
 
 const STARTED_AT = Date.UTC(2026, 5, 1, 11, 58)
 

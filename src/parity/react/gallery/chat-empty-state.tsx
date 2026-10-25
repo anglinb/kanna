@@ -6,7 +6,7 @@ import { useState, type CSSProperties } from "react"
 import { EmptyStateProjectChats, EmptyStateProjectPicker } from "../../../client/app/ChatPage/EmptyStateProject"
 import { TooltipProvider } from "../../../client/components/ui/tooltip"
 import { useSidebarStore } from "../../../client/stores/sidebarStore"
-import { EMPTY_STATE_PROJECT_ID, EMPTY_STATE_PROJECT_PATH, EMPTY_STATE_SIDEBAR } from "./support/empty-state-sidebar"
+import { EMPTY_STATE_PROJECT_ID, EMPTY_STATE_PROJECT_PATH, EMPTY_STATE_SIDEBAR } from "../../gallery-support/empty-state-sidebar"
 
 export default function ChatEmptyStateGallery() {
   // Once, as the page opens, before the list below reads the store. Not at

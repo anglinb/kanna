@@ -6,7 +6,7 @@ import type { KannaSocket } from "../../../client/app/socket"
 import { SetupWizard } from "../../../client/components/auth/SetupWizard"
 import { useMacSetupStore } from "../../../client/lib/macApp"
 import { useProviderAuthStore } from "../../../client/stores/providerAuthStore"
-import { installFakeMacApp, MAC_WIZARD_SNAPSHOT, MAC_WIZARD_START } from "./support/setup-states"
+import { installFakeMacApp, MAC_WIZARD_SNAPSHOT, MAC_WIZARD_START } from "../../gallery-support/setup-states"
 
 /** Nothing here reaches a server: a sign-in started in the gallery goes nowhere. */
 const socket = { command: () => new Promise(() => {}) } as unknown as KannaSocket

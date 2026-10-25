@@ -2,7 +2,7 @@
 // MacSetupCards) in each state the app can report (gallery/setup-mac.ts on
 // the Foldkit side).
 import { MacSetupCards } from "../../../client/components/auth/MacSetupStep"
-import { MAC_STATES } from "./support/setup-states"
+import { MAC_STATES } from "../../gallery-support/setup-states"
 
 export default function SetupMacGallery() {
   return (

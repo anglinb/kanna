@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { hasViewerLevelBelow, viewerLevelBelow } from "./viewer-levels"
+import type { ViewerItem } from "../../foldkit/core/stores/viewer"
 
 const LIST = { kind: "delegated", chatId: "deleg" } as const
 const FILE = { kind: "file", projectId: "p1", path: "README.md" } as const
@@ -42,7 +43,7 @@ describe("viewerLevelBelow on a delegator, whose pane has a floor", () => {
   })
 
   test("something opened inside a previewed chat goes back to that chat first", () => {
-    const chat = { kind: "chat", chatId: "b", back: ["a"] } as const
+    const chat: ViewerItem = { kind: "chat", chatId: "b", back: ["a"] }
     expect(viewerLevelBelow({ item: FILE, returnTo: { item: chat } }, LIST)).toEqual({ item: chat })
     expect(viewerLevelBelow({ item: chat }, LIST)).toEqual({ item: { kind: "chat", chatId: "a" } })
     expect(viewerLevelBelow({ item: { kind: "chat", chatId: "a" } }, LIST)).toEqual({ item: LIST })

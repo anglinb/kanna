@@ -1,6 +1,6 @@
 // src/foldkit/ui/button.ts against the React <Button> (gallery/ui-button.tsx).
 import { button } from "../../../foldkit/ui/button"
-import { BUTTON_SIZES, BUTTON_VARIANTS } from "../../react/gallery/support/button-states"
+import { BUTTON_SIZES, BUTTON_VARIANTS } from "../../gallery-support/button-states"
 import { staticPage } from "./support/static-page"
 
 export default staticPage((h) =>

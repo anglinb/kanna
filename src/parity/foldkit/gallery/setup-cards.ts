@@ -8,7 +8,7 @@ import type { AuthServiceSnapshot } from "../../../shared/types"
 import * as ProviderAuth from "../../../foldkit/core/stores/providerAuth"
 import * as AuthCard from "../../../foldkit/settings/auth-cards"
 import { setupList } from "../../../foldkit/setup/rows"
-import { HEADER_STATES, LOGIN_STATES, SETUP_CARD_SNAPSHOT } from "../../react/gallery/support/setup-states"
+import { HEADER_STATES, LOGIN_STATES, SETUP_CARD_SNAPSHOT } from "../../gallery-support/setup-states"
 import { galleryPage } from "../gallery-page"
 
 const Model = Schema.Struct({ cards: Schema.Record(Schema.String, AuthCard.Model) })

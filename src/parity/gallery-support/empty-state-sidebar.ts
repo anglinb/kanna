@@ -1,4 +1,4 @@
-import type { SidebarChatRow, SidebarData } from "../../../../shared/types"
+import type { SidebarChatRow, SidebarData } from "../../shared/types"
 
 // Shared by the React and Foldkit empty-state galleries: one project's chats
 // in every state the new chat page's list draws (running, waiting on you,

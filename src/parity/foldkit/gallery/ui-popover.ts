@@ -5,7 +5,7 @@ import type { Document, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import { modifyFields } from "foldkit/struct"
 import * as Popover from "../../../foldkit/ui/popover"
-import { POPOVER_FILTERS, POPOVER_MODELS } from "../../react/gallery/support/popover-options"
+import { POPOVER_FILTERS, POPOVER_MODELS } from "../../gallery-support/popover-options"
 import { galleryPage } from "../gallery-page"
 
 const NAMES = ["model", "details", "filter"] as const

@@ -8,7 +8,7 @@ import { AuthCard } from "../../../client/components/auth/AuthCard"
 import { SetupList } from "../../../client/components/auth/MacSetupStep"
 import { SetupCard } from "../../../client/components/auth/SetupCard"
 import { useProviderAuthStore } from "../../../client/stores/providerAuthStore"
-import { HEADER_STATES, LOGIN_STATES, SETUP_CARD_SNAPSHOT } from "./support/setup-states"
+import { HEADER_STATES, LOGIN_STATES, SETUP_CARD_SNAPSHOT } from "../../gallery-support/setup-states"
 
 /** Nothing here reaches a server: a sign-in started in the gallery goes nowhere. */
 const socket = { command: () => new Promise(() => {}) } as unknown as KannaSocket

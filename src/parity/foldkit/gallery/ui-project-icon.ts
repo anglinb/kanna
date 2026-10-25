@@ -3,7 +3,7 @@ import { Schema } from "effect"
 import type { Document, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import { projectIcon } from "../../../foldkit/ui/project-icon"
-import { PROJECT_NAMES } from "../../react/gallery/support/project-names"
+import { PROJECT_NAMES } from "../../gallery-support/project-names"
 import { galleryPage } from "../gallery-page"
 
 const Model = Schema.Struct({ failedIconUrls: Schema.Array(Schema.String) })

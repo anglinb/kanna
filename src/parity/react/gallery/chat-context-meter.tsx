@@ -5,7 +5,7 @@
 import { ContextWindowMeter } from "../../../client/components/chat-ui/ContextWindowMeter"
 import { TooltipProvider } from "../../../client/components/ui/tooltip"
 import type { ContextWindowSnapshot } from "../../../client/lib/contextWindow"
-import { CONTEXT_METER_USAGES } from "./support/context-meter-usages"
+import { CONTEXT_METER_USAGES } from "../../gallery-support/context-meter-usages"
 
 export default function ChatContextMeterGallery() {
   return (

@@ -4,7 +4,7 @@ import { Schema } from "effect"
 import type { Document, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import { macSetupCards } from "../../../foldkit/setup/rows"
-import { MAC_STATES } from "../../react/gallery/support/setup-states"
+import { MAC_STATES } from "../../gallery-support/setup-states"
 import { galleryPage } from "../gallery-page"
 
 const Model = Schema.Struct({})

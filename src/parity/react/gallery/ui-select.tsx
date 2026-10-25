@@ -4,7 +4,7 @@
 import { useState } from "react"
 import { Globe, Lock } from "lucide-react"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../../../client/components/ui/select"
-import { SELECT_MODES } from "./support/select-options"
+import { SELECT_MODES } from "../../gallery-support/select-options"
 
 export default function SelectGallery() {
   const [visibility, setVisibility] = useState<string | undefined>(undefined)

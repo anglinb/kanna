@@ -3,7 +3,7 @@
 // default one with a field (gallery/ui-popover.ts on the Foldkit side).
 import { useState } from "react"
 import { Popover, PopoverContent, PopoverTrigger } from "../../../client/components/ui/popover"
-import { POPOVER_FILTERS, POPOVER_MODELS } from "./support/popover-options"
+import { POPOVER_FILTERS, POPOVER_MODELS } from "../../gallery-support/popover-options"
 
 const triggerClass = "rounded-md border border-border px-3 py-1.5 text-sm"
 const optionClass = "flex w-full items-center px-3 py-2 text-left text-sm hover:bg-muted"
