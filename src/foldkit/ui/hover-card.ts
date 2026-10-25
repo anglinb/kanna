@@ -43,6 +43,13 @@ export const Model = Schema.Struct({
   exitVersion: Schema.Number,
   /** Text selected in the card, or a press in progress on it: leaving doesn't close. */
   isHoldingContent: Schema.Boolean,
+  /**
+   * Where the pointer is, so a visit starts the open delay once (Radix uses
+   * pointerenter, which Foldkit has no attribute for; the first pointermove
+   * of a visit stands in for it).
+   */
+  isPointerOnTrigger: Schema.Boolean,
+  isPointerOnContent: Schema.Boolean,
 })
 export type Model = typeof Model.Type
 
@@ -55,6 +62,8 @@ export function init(config: { id: string; openDelay?: number; closeDelay?: numb
     timerVersion: 0,
     exitVersion: 0,
     isHoldingContent: false,
+    isPointerOnTrigger: false,
+    isPointerOnContent: false,
   }
 }
 
@@ -132,12 +141,12 @@ export function close(model: Model): UpdateReturn {
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     CompletedMountContent: () => ({ model }),
-    EnteredTrigger: () => scheduleOpen(model),
-    LeftTrigger: () => scheduleClose(model),
+    EnteredTrigger: () => scheduleOpen(modifyFields(model, { isPointerOnTrigger: () => true })),
+    LeftTrigger: () => scheduleClose(modifyFields(model, { isPointerOnTrigger: () => false })),
     FocusedTrigger: () => scheduleOpen(model),
     BlurredTrigger: () => scheduleClose(model),
-    EnteredContent: () => scheduleOpen(model),
-    LeftContent: () => scheduleClose(model),
+    EnteredContent: () => scheduleOpen(modifyFields(model, { isPointerOnContent: () => true })),
+    LeftContent: () => scheduleClose(modifyFields(model, { isPointerOnContent: () => false })),
     ElapsedOpenDelay: ({ version }) =>
       version === model.timerVersion && model.phase !== "Open"
         ? { model: modifyFields(model, { phase: () => "Open" as const, exitVersion: Number.increment }) }
@@ -147,7 +156,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     DismissedContent: () => close(model),
     CompletedExitAnimation: ({ version }) =>
       version === model.exitVersion && model.phase === "Closing"
-        ? { model: modifyFields(model, { phase: () => "Closed" as const, isHoldingContent: () => false }) }
+        ? { model: modifyFields(model, { phase: () => "Closed" as const, isHoldingContent: () => false, isPointerOnContent: () => false }) }
         : { model },
   })
 
@@ -280,7 +289,8 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inpu
   const trigger = childAttributes([
     h.DataAttribute("hover-card-trigger", model.id),
     h.DataAttribute("state", state),
-    h.OnMouseEnter(Message.EnteredTrigger()),
+    h.OnPointerMove((_x, _y, pointerType) =>
+      pointerType === "touch" || model.isPointerOnTrigger ? Option.none() : Option.some(Message.EnteredTrigger())),
     h.OnPointerLeave(exceptTouch(Message.LeftTrigger())),
     h.OnFocus(Message.FocusedTrigger()),
     h.OnBlur(Message.BlurredTrigger()),
@@ -305,7 +315,8 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>((model, inpu
           "--radix-hover-card-trigger-width": "var(--radix-popper-anchor-width)",
           "--radix-hover-card-trigger-height": "var(--radix-popper-anchor-height)",
         }),
-        h.OnMouseEnter(Message.EnteredContent()),
+        h.OnPointerMove((_x, _y, pointerType) =>
+          pointerType === "touch" || model.isPointerOnContent ? Option.none() : Option.some(Message.EnteredContent())),
         h.OnPointerLeave(exceptTouch(Message.LeftContent())),
       ], inputs.content()),
     ])
