@@ -8,7 +8,8 @@ import type { Child } from "../ui/attributes"
  * cmdk 1.1.1 (`Command`, `Command.Input`, `Command.List`, `Command.Group`,
  * `Command.Item`, `Command.Empty`) as the app's ui/command.tsx styles it,
  * without React. The palette passes `shouldFilter={false}` and ranks rows
- * itself, so this is cmdk's markup, selection and keyboard model only:
+ * itself (with command-score, in actions.ts), so this is cmdk's markup,
+ * selection and keyboard model only:
  *
  *  - The list is data (`CmdkNode`s, in render order); keyboard navigation
  *    walks its enabled items as cmdk walks `[cmdk-item]:not([aria-disabled])`
@@ -19,6 +20,10 @@ import type { Child } from "../ui/attributes"
  *  - Arrow keys, Home/End, Ctrl+N/J/P/K, ⌘↑/⌘↓ (first/last) and ⌥↑/⌥↓
  *    (previous/next group) move it; Enter chooses it; the pointer moving
  *    over an item highlights it and a click chooses it.
+ *
+ * Items carry a `render` (their children, built with the view's `h`) and
+ * whatever the caller attaches as `run`, so update can find what Enter or a
+ * click chose from the same list the view draws.
  */
 
 // IDS
@@ -33,40 +38,53 @@ const headingId = (key: string) => `${ROOT_ID}-group-${encodeURIComponent(key)}`
 
 // NODES
 
-export interface CmdkItem {
+export type Render<Message> = (h: HtmlBuilder<Message>) => ReadonlyArray<Child>
+
+export interface CmdkItem<Message, Run> {
   readonly kind: "item"
   readonly value: string
   readonly disabled?: boolean
   readonly className?: string
-  readonly children: ReadonlyArray<Child>
+  readonly render: Render<Message>
+  /** What choosing it does; absent on a disabled row. */
+  readonly run?: Run
 }
 
 /** Markup inside the list that isn't an item (a loading row, an error, a hint). */
-export interface CmdkBlock {
+export interface CmdkBlock<Message> {
   readonly kind: "block"
   readonly key: string
-  readonly html: Html
+  readonly render: (h: HtmlBuilder<Message>) => Html
 }
 
-export interface CmdkGroup {
+export interface CmdkGroup<Message, Run> {
   readonly kind: "group"
   readonly key: string
   readonly heading?: string
-  readonly children: ReadonlyArray<CmdkItem | CmdkBlock>
+  readonly children: ReadonlyArray<CmdkItem<Message, Run> | CmdkBlock<Message>>
 }
 
-export type CmdkNode = CmdkGroup | CmdkBlock
+export type CmdkNode<Message, Run> = CmdkGroup<Message, Run> | CmdkBlock<Message>
 
-export function item(value: string, children: ReadonlyArray<Child>, options: { disabled?: boolean; className?: string } = {}): CmdkItem {
-  return { kind: "item", value: value.trim(), children, ...options }
+export function item<Message, Run>(
+  value: string,
+  render: Render<Message>,
+  run: Run | undefined,
+  options: { disabled?: boolean; className?: string } = {},
+): CmdkItem<Message, Run> {
+  return { kind: "item", value: value.trim(), render, ...(run !== undefined ? { run } : {}), ...options }
 }
 
-export function group(key: string, heading: string | undefined, children: ReadonlyArray<CmdkItem | CmdkBlock>): CmdkGroup {
+export function group<Message, Run>(
+  key: string,
+  heading: string | undefined,
+  children: ReadonlyArray<CmdkItem<Message, Run> | CmdkBlock<Message>>,
+): CmdkGroup<Message, Run> {
   return { kind: "group", key, ...(heading ? { heading } : {}), children }
 }
 
-export function block(key: string, html: Html): CmdkBlock {
-  return { kind: "block", key, html }
+export function block<Message>(key: string, render: (h: HtmlBuilder<Message>) => Html): CmdkBlock<Message> {
+  return { kind: "block", key, render }
 }
 
 // SELECTION AND NAVIGATION
@@ -78,7 +96,7 @@ interface NavItem {
   group: number
 }
 
-function navItems(nodes: ReadonlyArray<CmdkNode>): NavItem[] {
+function navItems<M, R>(nodes: ReadonlyArray<CmdkNode<M, R>>): NavItem[] {
   const items: NavItem[] = []
   let groupIndex = 0
   for (const node of nodes) {
@@ -92,12 +110,12 @@ function navItems(nodes: ReadonlyArray<CmdkNode>): NavItem[] {
 }
 
 /** Every item cmdk has registered: what `Command.Empty` counts. */
-export function itemCount(nodes: ReadonlyArray<CmdkNode>): number {
+export function itemCount<M, R>(nodes: ReadonlyArray<CmdkNode<M, R>>): number {
   return navItems(nodes).length
 }
 
 /** All item values, in order. */
-export function itemValues(nodes: ReadonlyArray<CmdkNode>): string[] {
+export function itemValues<M, R>(nodes: ReadonlyArray<CmdkNode<M, R>>): string[] {
   return navItems(nodes).map((entry) => entry.value)
 }
 
@@ -106,14 +124,14 @@ export function itemValues(nodes: ReadonlyArray<CmdkNode>): string[] {
  * one (cmdk selects the first item when nothing is selected or the selected
  * one leaves), else none.
  */
-export function effectiveSelection(nodes: ReadonlyArray<CmdkNode>, value: string): string {
+export function effectiveSelection<M, R>(nodes: ReadonlyArray<CmdkNode<M, R>>, value: string): string {
   const items = navItems(nodes)
   if (value && items.some((entry) => entry.value === value)) return value
   return items.find((entry) => !entry.disabled)?.value ?? ""
 }
 
 /** The item `value` names, if rendered. */
-export function findItem(nodes: ReadonlyArray<CmdkNode>, value: string): CmdkItem | undefined {
+export function findItem<Message, Run>(nodes: ReadonlyArray<CmdkNode<Message, Run>>, value: string): CmdkItem<Message, Run> | undefined {
   for (const node of nodes) {
     if (node.kind !== "group") continue
     for (const child of node.children) {
@@ -130,29 +148,21 @@ export interface NavigationKeys {
   altKey: boolean
 }
 
-export type Navigation =
-  | { kind: "select"; value: string }
-  | { kind: "choose" }
-  /** cmdk claimed the key (preventDefault) but nothing moved. */
-  | { kind: "none" }
-
 /**
- * cmdk's root keydown, after the caller's own handler: which value the key
- * moves to, Enter, or Option.none() when cmdk leaves the key alone.
+ * cmdk's root keydown for the keys that move the highlight: the value the
+ * key moves to, or none when nothing moves (cmdk still claimed the key).
+ * Enter is the caller's.
  */
-export function navigate(nodes: ReadonlyArray<CmdkNode>, selected: string, keys: NavigationKeys): Option.Option<Navigation> {
+export function navigate<M, R>(nodes: ReadonlyArray<CmdkNode<M, R>>, selected: string, keys: NavigationKeys): Option.Option<string> {
   const enabled = navItems(nodes).filter((entry) => !entry.disabled)
   const current = enabled.findIndex((entry) => entry.value === selected)
-  const at = (index: number): Navigation => {
-    const target = enabled[index]
-    return target ? { kind: "select", value: target.value } : { kind: "none" }
-  }
+  const at = (index: number) => Option.fromNullishOr(enabled[index]?.value)
   // cmdk's Q(change): the item `change` away from the selected one. Not
   // looping; with nothing selected, down lands on the first.
-  const step = (change: number): Navigation => at(current + change)
+  const step = (change: number) => at(current + change)
   // cmdk's re(change): the first enabled item of the next (or previous)
   // group that has one, else a plain step.
-  const groupStep = (change: number): Navigation => {
+  const groupStep = (change: number) => {
     const from = enabled[current]
     if (!from) return step(change)
     const groups = [...new Set(enabled.map((entry) => entry.group))].sort((a, b) => a - b)
@@ -166,22 +176,36 @@ export function navigate(nodes: ReadonlyArray<CmdkNode>, selected: string, keys:
   switch (keys.key) {
     case "n":
     case "j":
-      return keys.ctrlKey ? Option.some(next()) : Option.none()
+    case "ArrowDown":
+      return next()
     case "p":
     case "k":
-      return keys.ctrlKey ? Option.some(previous()) : Option.none()
-    case "ArrowDown":
-      return Option.some(next())
     case "ArrowUp":
-      return Option.some(previous())
+      return previous()
     case "Home":
-      return Option.some(at(0))
+      return at(0)
     case "End":
-      return Option.some(at(enabled.length - 1))
-    case "Enter":
-      return Option.some({ kind: "choose" })
+      return at(enabled.length - 1)
     default:
       return Option.none()
+  }
+}
+
+/** Whether cmdk's root keydown claims `keys` (preventDefault) for navigation. */
+export function isNavigationKey(keys: NavigationKeys): boolean {
+  switch (keys.key) {
+    case "n":
+    case "j":
+    case "p":
+    case "k":
+      return keys.ctrlKey
+    case "ArrowDown":
+    case "ArrowUp":
+    case "Home":
+    case "End":
+      return true
+    default:
+      return false
   }
 }
 
@@ -255,13 +279,13 @@ const SR_ONLY_STYLE: Record<string, string> = {
 }
 
 export interface ItemHandlers<Message> {
-  /** The pointer moved over an enabled item (cmdk's onPointerMove). */
-  hovered: (value: string) => Option.Option<Message>
+  /** The pointer moved over an enabled item that isn't highlighted (cmdk's onPointerMove). */
+  hovered: (value: string) => Message
   /** A click on an enabled item. */
   clicked: (value: string) => Message
 }
 
-function itemView<Message>(node: CmdkItem, selected: string, handlers: ItemHandlers<Message>, h: HtmlBuilder<Message>): Html {
+function itemView<Message, Run>(node: CmdkItem<Message, Run>, selected: string, handlers: ItemHandlers<Message>, h: HtmlBuilder<Message>): Html {
   const disabled = Boolean(node.disabled)
   const isSelected = node.value !== "" && node.value === selected
   return h.keyed("div")(`item:${node.value}`, [
@@ -283,16 +307,16 @@ function itemView<Message>(node: CmdkItem, selected: string, handlers: ItemHandl
     ...(disabled
       ? []
       : [
-        h.OnPointerMove(() => handlers.hovered(node.value)),
+        h.OnPointerMove(() => (isSelected ? Option.none() : Option.some(handlers.hovered(node.value)))),
         h.OnClick(handlers.clicked(node.value)),
       ]),
-  ], node.children)
+  ], node.render(h))
 }
 
-function groupView<Message>(node: CmdkGroup, selected: string, handlers: ItemHandlers<Message>, h: HtmlBuilder<Message>): Html {
+function groupView<Message, Run>(node: CmdkGroup<Message, Run>, selected: string, handlers: ItemHandlers<Message>, h: HtmlBuilder<Message>): Html {
   const children = node.children.map((child) => child.kind === "item"
     ? itemView(child, selected, handlers, h)
-    : child.html)
+    : child.render(h))
   return h.keyed("div")(`group:${node.key}`, [
     h.Class(cn(
       "overflow-hidden text-foreground",
@@ -316,12 +340,12 @@ function groupView<Message>(node: CmdkGroup, selected: string, handlers: ItemHan
 }
 
 /** Blocks render in place, where React rendered them between groups. */
-function topLevelView<Message>(node: CmdkNode, selected: string, handlers: ItemHandlers<Message>, h: HtmlBuilder<Message>): Html {
-  return node.kind === "group" ? groupView(node, selected, handlers, h) : node.html
+function topLevelView<Message, Run>(node: CmdkNode<Message, Run>, selected: string, handlers: ItemHandlers<Message>, h: HtmlBuilder<Message>): Html {
+  return node.kind === "group" ? groupView(node, selected, handlers, h) : node.render(h)
 }
 
-export interface ListOptions<Message> {
-  nodes: ReadonlyArray<CmdkNode>
+export interface ListOptions<Message, Run> {
+  nodes: ReadonlyArray<CmdkNode<Message, Run>>
   selected: string
   /** `Command.Empty`'s content, rendered when no item is registered. Null to leave it out. */
   empty: string | null
@@ -332,7 +356,7 @@ export interface ListOptions<Message> {
 }
 
 /** `<CommandList>` with its sizer, `<CommandEmpty>` first, then the nodes. */
-export function listView<Message>(options: ListOptions<Message>, h: HtmlBuilder<Message>): Html {
+export function listView<Message, Run>(options: ListOptions<Message, Run>, h: HtmlBuilder<Message>): Html {
   const selectedId = options.selected ? itemId(options.selected) : undefined
   const showEmpty = options.empty !== null && itemCount(options.nodes) === 0
   return h.div([
@@ -374,7 +398,7 @@ export interface InputOptions<Message> {
 export function inputView<Message>(options: InputOptions<Message>, h: HtmlBuilder<Message>): Html {
   return h.div([h.Class("flex items-center gap-2 border-b border-border px-3.5"), h.Attribute("cmdk-input-wrapper", "")], [
     options.onBack
-      ? h.button([
+      ? h.keyed("button")("back", [
         h.Type("button"),
         h.AriaLabel("Back"),
         h.OnClick(options.onBack),
@@ -387,7 +411,7 @@ export function inputView<Message>(options: InputOptions<Message>, h: HtmlBuilde
     h.keyed("input")("input", [
       h.Class("flex h-12 w-full bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground/70 disabled:cursor-not-allowed disabled:opacity-50"),
       h.Placeholder(options.placeholder),
-      h.Disabled(options.disabled),
+      ...(options.disabled ? [h.Disabled(true)] : []),
       h.Attribute("cmdk-input", ""),
       h.Autocomplete("off"),
       h.Attribute("autocorrect", "off"),

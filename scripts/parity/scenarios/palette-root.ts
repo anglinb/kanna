@@ -10,7 +10,7 @@ const PALETTE = "[role=dialog]:has([cmdk-root])"
 
 export const scenarios: Scenario[] = [
   defineScenario({
-    name: "palette-root",
+    name: "palette-root-keys",
     route: "/home",
     regions: { palette: PALETTE },
     covers: { keybindings: ["openCommandPalette"] },
