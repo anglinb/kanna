@@ -193,13 +193,15 @@ export const scenarios: Scenario[] = [
     route: CHATS.units,
     ...desktop,
     regions: regions("navbar"),
-    covers: { commands: ["chat.create"] },
+    covers: { commands: ["chat.create", "chat.rename"] },
     async run(context) {
       const { page } = context
       await openPalette(context)
       await page.getByRole("dialog", { name: "Command Palette" }).getByRole("combobox").pressSequentially("delegator")
       await click(context, page.getByRole("dialog", { name: "Command Palette" }).getByRole("option", { name: /^New Delegator in tidepool/ }).first())
+      await page.getByPlaceholder("Name (optional)").fill("Release captain")
       await click(context, page.getByRole("button", { name: "Create" }))
+      await click(context, page.locator(REGIONS.sidebar).getByText("Release captain", { exact: true }).first())
       await parkPointer(context)
       await context.capture("delegator")
       await click(context, navbar(context).getByRole("button", { name: /delegated chats/ }))

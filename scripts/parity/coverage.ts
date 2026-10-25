@@ -10,7 +10,9 @@
 //   bun run parity:coverage --verify [dir]  also checks each scenario's
 //                                           `covers.commands` against what it
 //                                           actually sent in a parity run
-//                                           (default .parity/latest)
+//                                           (default .parity/latest), and
+//                                           that it took every capture its
+//                                           run names (a throw loses the rest)
 //
 // Items that can't be covered on the fixture are listed in UNCOVERABLE with
 // the reason. One that becomes covered must leave the list (the report says
@@ -147,6 +149,40 @@ function sentCommands(runDir: string) {
   return sent
 }
 
+/**
+ * The capture labels a scenario's `run` names (`context.capture("…")`), or
+ * "final" when it names none. Read from the function's source, so a label
+ * built at run time isn't seen; every scenario here uses literals.
+ */
+function expectedCaptures(scenario: (typeof scenarios)[number]) {
+  const source = scenario.run?.toString() ?? ""
+  const labels = [...source.matchAll(/\.capture\(\s*"([^"]+)"\s*\)/g)].map((match) => match[1]!)
+  return labels.length > 0 ? [...new Set(labels)] : ["final"]
+}
+
+/**
+ * Captures each variant of a scenario is missing in a run. A scenario that
+ * throws keeps the captures it took before the throw and loses the rest
+ * without a trace in the summary, so a selfcheck where both runs threw at
+ * the same step reads as a pass. This is what catches it.
+ */
+function missingCaptures(runDir: string) {
+  const missing: string[] = []
+  for (const scenario of scenarios) {
+    const scenarioDir = path.join(runDir, scenario.name)
+    if (!existsSync(scenarioDir)) continue
+    const expected = expectedCaptures(scenario)
+    for (const variant of readdirSync(scenarioDir)) {
+      const variantDir = path.join(scenarioDir, variant)
+      if (!statSync(variantDir).isDirectory()) continue
+      const taken = new Set(readdirSync(variantDir).map((entry) => entry.split("@")[0]!))
+      const absent = expected.filter((label) => !taken.has(label))
+      if (absent.length > 0) missing.push(`${scenario.name}/${variant}: no ${absent.map((label) => `"${label}"`).join(", ")}`)
+    }
+  }
+  return missing
+}
+
 function main() {
   const args = process.argv.slice(2)
   const verifyIndex = args.indexOf("--verify")
@@ -222,6 +258,12 @@ function main() {
     for (const entry of mismatched) lines.push(`- ${entry}`)
     lines.push("")
     problems += mismatched.length
+    const missing = missingCaptures(runDir)
+    if (missing.length === 0) lines.push("Every scenario took every capture its run names.")
+    else lines.push("Captures a scenario names but didn't take (it threw before them):", "")
+    for (const entry of missing) lines.push(`- ${entry}`)
+    lines.push("")
+    problems += missing.length
     if (undeclared.length > 0) {
       // Not a failure: a scenario may send what another one is about.
       lines.push("Sent but not in `covers` (beyond what every page sends on boot):", "")
