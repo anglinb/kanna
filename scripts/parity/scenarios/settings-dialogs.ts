@@ -22,6 +22,8 @@ export const scenarios: Scenario[] = [
       const dialog = page.getByRole("dialog")
       // The blank row at the bottom: typing there adds an entry and a new blank row.
       await dialog.getByPlaceholder("Name").last().fill("Sonnet")
+      // The new blank row is on screen before anyone types into the row above it.
+      await rest(context)
       await dialog.getByPlaceholder("Model id").nth(-2).fill("anthropic/claude-sonnet")
       await rest(context)
       await context.capture("added")
