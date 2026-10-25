@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
 import { Story } from "foldkit/test"
+import { fromString } from "foldkit/url"
 import { PROVIDERS, type AuthServiceSnapshot, type HarnessSkill, type SidebarChatRow, type SidebarData } from "../../shared/types"
 import { AppAction } from "../app/action"
-import { SliceOutMessage } from "../app/slice"
+import type { Flags } from "../app/model"
+import { SliceOutMessage, type AppModel } from "../app/slice"
 import * as Stores from "../app/stores"
+import { init as initApp } from "../app/update"
 import * as ChatSession from "../core/chatSession"
 import * as ChatInput from "../core/stores/chatInput"
 import * as ChatPreferences from "../core/stores/chatPreferences"
@@ -15,7 +19,7 @@ import * as Commands from "./commands"
 import type { ComposerProps, Context } from "./context"
 import { Message } from "./message"
 import { init, type Model } from "./model"
-import { reconcile, updateWith } from "./update"
+import { observe, reconcile, updateWith } from "./update"
 
 // ChatInput's handlers as Stories: typing and its draft, sending and a
 // failed send, the "/" menu, Shift+Tab, a harness that needs signing in,
@@ -67,6 +71,11 @@ function props(extra: Partial<ComposerProps> = {}): ComposerProps {
     delegate: null,
     ...extra,
   }
+}
+
+function appAt(path: string): AppModel {
+  const flags: Flags = { sidebarCollapsed: false, systemTheme: "dark", initialAppSettings: null, stores: Stores.load(memoryStorage()) }
+  return initApp(flags, Option.getOrThrow(fromString(`http://localhost${path}`))).model
 }
 
 const context = (extra: Partial<ComposerProps> = {}, storeExtra: Partial<Stores.Model> = {}): Context => ({ props: props(extra), stores: stores(storeExtra) })
@@ -224,6 +233,14 @@ describe("composer: modes and harnesses", () => {
     expect(result.model.signIn.provider).toBe("codex")
     // The harness doesn't change until the sign-in lands.
     expect(result.outMessage).toBeUndefined()
+
+    // It lands: the switch the user asked for applies, and the dialog goes.
+    const signedIn = { ...signedOut, authStatus: "signed_in" } as AuthServiceSnapshot
+    const before: AppModel = { ...appAt("/chat/c1"), stores: ctx.stores }
+    const after: AppModel = { ...before, stores: { ...ctx.stores, providerAuth: { ...ctx.stores.providerAuth, snapshot: { services: [signedIn] } } } }
+    const observed = observe(result.model, before, after)
+    expect(observed.model.pendingSignInProvider).toBeNull()
+    expect(observed.outMessage?.action._tag).toBe("Batch")
   })
 })
 

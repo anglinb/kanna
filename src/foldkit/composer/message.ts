@@ -105,6 +105,12 @@ export const Message = defineMessageUnion({
   /** `enqueueFiles`: files dropped on the page, or attached by the viewer. */
   ReceivedFiles: { files: Schema.Array(FileSchema) },
   ChangedStandalone: { matches: Schema.Boolean },
+  /**
+   * The root Model changed under the composer (an `observe`): what it does
+   * on its own follows (a harness switch waiting on sign-in applies once
+   * the harness is signed in; a draft cleared elsewhere empties the box).
+   */
+  ObservedApp: {},
 
   // PLUMBING
   /** A store write stamped with the time (core/stores/chatInput's Commands). */

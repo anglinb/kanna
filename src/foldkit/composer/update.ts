@@ -279,6 +279,20 @@ export function update(model: Model, message: Message, app: AppModel): Return {
   return updateWith(model, message, contextFromApp(app))
 }
 
+/**
+ * The slice contract's `observe`, for the chat page to call from its own:
+ * React's effects on the auth store (a switch waiting on sign-in) and on
+ * the stored draft (cleared from the sidebar) ran without the composer
+ * doing anything. Nothing happens unless one of those moved.
+ */
+export function observe(model: Model, previousApp: AppModel, app: AppModel): Return {
+  const authChanged = previousApp.stores.providerAuth !== app.stores.providerAuth && model.pendingSignInProvider !== null
+  const draftId = model.instance?.draftId
+  const draftChanged = draftId !== null && draftId !== undefined && previousApp.stores.chatInput.drafts[draftId] !== app.stores.chatInput.drafts[draftId]
+  if (!authChanged && !draftChanged) return { model }
+  return update(model, Message.ObservedApp(), app)
+}
+
 /** `update`, with the page's props given (the chat page's own, or a gallery's). */
 export function updateWith(model: Model, message: Message, ctx: Context): Return {
   const reconciled = reconcile(model, ctx)
@@ -788,6 +802,7 @@ function step(model: Model, message: Message, ctx: Context): Step {
     },
     ChangedStandalone: ({ matches }) => ({ model: model.isStandalone === matches ? model : { ...model, isStandalone: matches } }),
     IgnoredKey: () => ({ model }),
+    ObservedApp: () => ({ model }),
     CompletedMountWaveform: () => ({ model }),
     CompletedMountComposer: () => ({ model }),
 
