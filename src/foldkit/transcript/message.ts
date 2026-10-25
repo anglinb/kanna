@@ -55,5 +55,10 @@ export const Message = defineMessageUnion({
   ReceivedDebugRaw: { chatId: Schema.String, entryId: Schema.String, body: Schema.NullOr(Schema.String), failed: Schema.Boolean },
   /** The local-link menu's trigger got its contextmenu (the menu opens at the link). */
   CompletedOpenLinkMenu: {},
+
+  // A live chat card (chatCard.ts)
+  ClickedChatCard: { chatId: Schema.String },
+  GotCardMenuMessage: { chatId: Schema.String, message: ContextMenu.Message },
+  CompletedOpenUrl: {},
 })
 export type Message = typeof Message.Type

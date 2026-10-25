@@ -8,6 +8,7 @@ import { ArrowDown, Upload } from "../ui/icons"
 import * as Messages from "./messages"
 import { messageNamingParent } from "./messages"
 import { Message } from "./message"
+import { liveChatCard } from "./chatCard"
 import { minimapView } from "./minimap"
 import type { Model } from "./model"
 import { feedOf, linkMenuItems, rowsOf, turnsOf, type LinkMenuSource, type TranscriptSource } from "./source"
@@ -50,6 +51,7 @@ function messagesItem(model: Model, slotId: string, source: TranscriptSource, it
           sidebarReady: references.sidebarReady,
           currentProjectId: source.currentProjectId,
           schedules: references.schedules,
+          renderChatCard: (card: Messages.LiveChatCard) => liveChatCard(model, references.app, card, Date.now(), h),
         }
         : {}),
     },

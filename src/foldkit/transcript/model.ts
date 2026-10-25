@@ -53,6 +53,8 @@ export const Model = Schema.Struct({
   /** A local link's right-click menu (OpenExternalContextMenuContent at the pointer). */
   linkMenu: ContextMenu.Model,
   linkMenuTarget: Schema.NullOr(opaque<OpenLocalLinkTarget>("OpenLocalLinkTarget")),
+  /** Live chat cards' right-click menus (ThreadRowMenu), by chat; made on first use. */
+  cardMenus: Schema.Record(Schema.String, ContextMenu.Model),
 })
 export type Model = typeof Model.Type
 
@@ -74,5 +76,6 @@ export function init(): Model {
     minimap: { height: 0, pointerY: null, heldTurnId: null, finePointer: false },
     linkMenu: ContextMenu.init({ id: LINK_MENU_ID }),
     linkMenuTarget: null,
+    cardMenus: {},
   }
 }

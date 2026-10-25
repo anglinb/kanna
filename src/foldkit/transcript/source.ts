@@ -67,6 +67,8 @@ export interface TranscriptSource {
   options: Partial<RenderOptions>
   /** Absent outside a chat page: every reference draws as plain text. */
   references: {
+    /** The root, for a live chat card's row and menu (chatCard.ts). */
+    app: AppModel
     sidebarThread: (chatId: string | null | undefined) => SidebarThread | null
     sidebarReady: boolean
     schedules: ScheduleReferences
@@ -159,6 +161,7 @@ export function pageSource(app: AppModel, page: ChatPageContext | undefined, mod
     currentProjectId: Sidebar.projectIdForChat(app.stores.sidebar, chatId),
     options: { canLoadDebugRaw: true, interceptLocalLinks: true },
     references: {
+      app,
       sidebarThread: (id) => sidebarThread(app, id),
       sidebarReady: app.stores.sidebar.ready,
       schedules: chatSchedules(app),

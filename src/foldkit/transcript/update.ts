@@ -6,7 +6,9 @@ import { shouldOpenLocalFileLinkInEditor } from "../../client/lib/pathUtils"
 import type { TranscriptEntry } from "../../shared/types"
 import { AppAction, batch } from "../app/action"
 import { requestAction, type AppModel, type SliceReturn } from "../app/slice"
-import { openChatActions } from "../chat/chatReference"
+import { chooseChatOpenMenuItem, openChatActions, sidebarThread } from "../chat/chatReference"
+import { chooseChatRowMenuItem } from "../chat/chatRowMenu"
+import { cardMenuContext, cardMenuOf } from "./chatCard"
 import * as ChatSession from "../core/chatSession"
 import { errorMessage, sendCommand, type KannaSocketService } from "../core/socket"
 import * as Messages from "./messages"
@@ -114,6 +116,7 @@ export function step(model: Model, message: Message, env: { key: string }): Step
         visibleRange: () => null,
         minimap: (minimap) => ({ ...minimap, pointerY: null, heldTurnId: null }),
         linkMenuTarget: () => null,
+        cardMenus: () => ({}),
       }))
 
     case "ChangedAtEnd": {
@@ -303,7 +306,36 @@ export function update(model: Model, message: Message, app: AppModel): SliceRetu
       return { model }
     case "GotLinkMenuMessage":
       return toReturn(linkMenuStep(model, message.message, app))
+    case "ClickedChatCard":
+      return toReturn(done(model, [], openChatActions(app, message.chatId)))
+    case "GotCardMenuMessage":
+      return toReturn(cardMenuStep(model, message.chatId, message.message, app))
     default:
       return { model }
   }
+}
+
+const OpenUrl = Command.define("OpenTranscriptChatCardUrl", {
+  args: { url: Schema.String },
+  messages: [Message.CompletedOpenUrl],
+  execute: ({ url }) => Effect.sync(() => {
+    window.open(url, "_blank", "noopener,noreferrer")
+    return Message.CompletedOpenUrl()
+  }),
+})
+
+/** A live chat card's menu: the open-in items, then the chat's (ThreadRowMenu). */
+function cardMenuStep(model: Model, chatId: string, message: ContextMenu.Message, app: AppModel): Step {
+  const result = ContextMenu.update(cardMenuOf(model, chatId), message)
+  const next = modifyFields(model, { cardMenus: (menus) => ({ ...menus, [chatId]: result.model }) })
+  const commands = Command.mapMessages(result.commands ?? [], (inner: ContextMenu.Message) => Message.GotCardMenuMessage({ chatId, message: inner })) as unknown as ReadonlyArray<AnyCommand>
+  const out = result.outMessage
+  if (!out || out._tag !== "Selected") return done(next, commands)
+  const opened = chooseChatOpenMenuItem(out.value, app, chatId)
+  if (opened) return done(next, commands, opened)
+  const thread = sidebarThread(app, chatId)
+  const choice = thread ? chooseChatRowMenuItem(out.value, cardMenuContext(app, chatId, thread)) : null
+  if (!choice || choice._tag === "None") return done(next, commands)
+  if (choice._tag === "OpenUrl") return done(next, [...commands, OpenUrl({ url: choice.url })])
+  return done(next, commands, [choice.action])
 }
