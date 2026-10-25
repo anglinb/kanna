@@ -104,6 +104,19 @@ describe("connection: load", () => {
     expect(LoadConnection().name).toBe("LoadConnection")
   })
 
+  test("a disabled manifest stops all fleet discovery probes", async () => {
+    const urls: string[] = []
+    const fetchImpl = (async (url: string) => {
+      urls.push(url)
+      if (url !== "/api/capabilities") throw new Error("disabled client attempted cloud discovery")
+      return Response.json({ capabilities: { cloud: false, publicSharing: false } })
+    }) as unknown as typeof fetch
+    const state = await load(fetchImpl)
+    expect(urls).toEqual(["/api/capabilities"])
+    expect(state.mode).toBe("local")
+    expect(state.machines).toEqual([])
+  })
+
   test("JSON 200 from /__cloud/machines → cloud mode with machines", async () => {
     const fetchImpl = (async () => jsonResponse({ machines: MACHINES })) as unknown as typeof fetch
     const state = await load(fetchImpl)
