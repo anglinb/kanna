@@ -1,4 +1,7 @@
 import { Schema } from "effect"
+import type { ProjectQuickAction } from "../../shared/protocol"
+import type { UsageLimitsSnapshot } from "../../shared/types"
+import { opaque } from "../core/schema"
 import { defineMessageUnion } from "foldkit/message"
 import { AppAction } from "../app/action"
 import * as Composer from "../composer"
@@ -71,6 +74,9 @@ export const Message = defineMessageUnion({
   GotOpenSelectMessage: { message: Select.Message },
 
   // What the page sees of the root and the browser
+  /** The page's view mounted; `token` tells this showing from an earlier one. */
+  EnteredPage: { token: Schema.Number },
+  LeftPage: { token: Schema.Number },
   ObservedPage: { watch: Watch, fresh: Schema.Boolean },
   ResizedWindow: { width: Schema.Number },
   MeasuredLayout: { width: Schema.Number, height: Schema.Number },
@@ -121,6 +127,13 @@ export const Message = defineMessageUnion({
   // Terminals and diffs
   MadeTerminalId: { purpose: TerminalPurpose, projectId: Schema.String, chatKey: Schema.NullOr(Schema.String), terminalId: Schema.String },
   TickedDiffRefresh: {},
+
+  // What the widget column shows, loaded by the page
+  SucceededReadQuickActions: { projectId: Schema.String, actions: opaque<ReadonlyArray<ProjectQuickAction>>("ProjectQuickActions") },
+  FailedReadQuickActions: { projectId: Schema.String, error: Schema.String },
+  ReceivedUsageLimits: { snapshot: opaque<UsageLimitsSnapshot>("UsageLimitsSnapshot") },
+  TickedUsageRefresh: {},
+  CompletedRefreshUsage: { snapshot: Schema.NullOr(opaque<UsageLimitsSnapshot>("UsageLimitsSnapshot")) },
 
   /** One of several requests to the root from one update, handed up on its own turn. */
   ForwardedAppAction: { action: AppAction },

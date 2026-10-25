@@ -1,4 +1,7 @@
 import { Schema } from "effect"
+import type { ProjectQuickAction } from "../../shared/protocol"
+import type { UsageLimitsSnapshot } from "../../shared/types"
+import { opaque } from "../core/schema"
 import * as Composer from "../composer"
 import * as Terminal from "../terminal"
 import * as Transcript from "../transcript"
@@ -26,6 +29,13 @@ export const Model = Schema.Struct({
   widgets: Widgets.Model,
   viewer: Viewer.Model,
   terminal: Terminal.Model,
+
+  /**
+   * The page is on screen (its view is mounted), by the token of that
+   * showing. The slice outlives the route; ChatPage did not, and what it
+   * subscribed to ended with it.
+   */
+  presence: Schema.NullOr(Schema.Number),
 
   /** window.innerWidth (useIsMobileViewport). */
   viewportWidth: Schema.Number,
@@ -73,6 +83,16 @@ export const Model = Schema.Struct({
   /** The chat column and the viewer's pane, in percent (the split's layout). */
   viewerSplit: Schema.Tuple([Schema.Number, Schema.Number]),
 
+  /**
+   * What the widget column shows that the page loads for it as it opens
+   * (QuickActionsWidget's read, UsageWidgets' subscription and refresh),
+   * handed to widgets/ as `page.widgetsData`.
+   */
+  quickActions: Schema.Record(Schema.String, opaque<ReadonlyArray<ProjectQuickAction>>("ProjectQuickActions")),
+  quickActionsError: Schema.NullOr(Schema.String),
+  usageLimits: Schema.NullOr(opaque<UsageLimitsSnapshot>("UsageLimitsSnapshot")),
+  usageRefreshing: Schema.Boolean,
+
   /** Commands for terminals made by a quick action, sent once each opens. */
   pendingTerminalCommands: Schema.Record(Schema.String, Schema.String),
 
@@ -99,6 +119,7 @@ export function init(): Model {
     widgets: Widgets.init(),
     viewer: Viewer.init(),
     terminal: Terminal.init(),
+    presence: null,
     // React's useState initializer read the window the same way.
     viewportWidth: typeof window === "undefined" ? 0 : window.innerWidth,
     layoutWidth: 0,
@@ -114,6 +135,10 @@ export function init(): Model {
     title: { draft: null, submitted: null, submittedOver: null },
     widgetsColumn: { open: false, switchKey: null, sliding: false, slideToken: 0, dragWidthPx: null, dragStart: null },
     viewerSplit: [100, 0],
+    quickActions: {},
+    quickActionsError: null,
+    usageLimits: null,
+    usageRefreshing: false,
     pendingTerminalCommands: {},
     tooltips: {
       openIn: Tooltip.init({ id: "chat-navbar-open-in" }),

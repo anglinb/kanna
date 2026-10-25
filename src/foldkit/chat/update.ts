@@ -29,7 +29,9 @@ import {
   MeasureMenuButton,
   OpenCommandPalette,
   OpenWindow,
+  ReadQuickActions,
   RefreshDiffs,
+  RefreshUsage,
   RenameChat,
 } from "./effects"
 import { Message, type MenuId, type ShortcutAction, type TerminalPurpose, type TooltipId, type WashId, type Watch } from "./message"
@@ -261,6 +263,12 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
     commands.push(ViewDelegatorNow({ chatId: watch.chatId }))
   }
 
+  // QuickActionsWidget reads the project's quick actions as it mounts, and
+  // again for each project (its effect ran before the page's own, below).
+  if (watch.projectId && (!previous || previous.projectId !== watch.projectId)) {
+    commands.push(ReadQuickActions({ projectId: watch.projectId }))
+  }
+
   // useChatPageSidebarActions: diffs refresh when the column opens, and the
   // project's git snapshot once per project.
   if (watch.projectId && watch.showRightSidebar && watch.chatId
@@ -358,6 +366,8 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       return then(stepped, (next) => openValue(next, facts(), result.outMessage!.value as OpenAppValue, true))
     },
 
+    EnteredPage: ({ token }) => ({ model: modifyFields(model, { presence: () => token }) }),
+    LeftPage: ({ token }) => (model.presence === token ? { model: modifyFields(model, { presence: () => null }) } : { model }),
     ObservedPage: ({ watch, fresh }) => observePage(model, app, watch, fresh),
     ResizedWindow: ({ width }) => (width === model.viewportWidth ? { model } : { model: modifyFields(model, { viewportWidth: () => width }) }),
     MeasuredLayout: ({ width, height }) => {
@@ -451,6 +461,16 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       const current = facts()
       return current.chatId && current.showRightSidebar ? { model, commands: [RefreshDiffs({ chatId: current.chatId })] } : { model }
     },
+
+    SucceededReadQuickActions: ({ projectId, actions }) => ({
+      model: modifyFields(model, { quickActions: (all) => ({ ...all, [projectId]: actions }), quickActionsError: () => null }),
+    }),
+    FailedReadQuickActions: ({ error }) => ({ model: modifyFields(model, { quickActionsError: () => error }) }),
+    ReceivedUsageLimits: ({ snapshot }) => ({ model: modifyFields(model, { usageLimits: () => snapshot }) }),
+    TickedUsageRefresh: () => ({ model: modifyFields(model, { usageRefreshing: () => true }), commands: [RefreshUsage({ force: false })] }),
+    CompletedRefreshUsage: ({ snapshot }) => ({
+      model: modifyFields(model, { usageRefreshing: () => false, usageLimits: (current) => snapshot ?? current }),
+    }),
 
     ForwardedAppAction: ({ action }) => withActions({ model }, [action]),
     CompletedSideEffect: () => ({ model }),

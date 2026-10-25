@@ -4,8 +4,9 @@ import { domStream } from "../ui/overlay/stream"
 import { DIFF_REFRESH_INTERVAL_MS, EMPTY_STATE_TEXT, EMPTY_STATE_TYPING_INTERVAL_MS } from "../../client/app/ChatPage/utils"
 import { Message, ShortcutAction, TerminalPurpose, Watch, WashId, type MenuId } from "./message"
 import { actionMatchesEvent } from "../../client/lib/keybindings"
-import type { KeybindingsSnapshot } from "../../shared/types"
-import { sendCommand } from "../core/socket"
+import type { ProjectQuickAction } from "../../shared/protocol"
+import type { KeybindingsSnapshot, UsageLimitsSnapshot } from "../../shared/types"
+import { errorMessage, sendCommand } from "../core/socket"
 import { newTerminalId } from "../core/stores/terminalLayout"
 
 /** CommandPalette.tsx's OPEN_COMMAND_PALETTE_EVENT (a React file: restated). */
@@ -37,6 +38,27 @@ export const ObservePage = Mount.define("ObserveChatPage", {
 })
 
 export const pageRootAttribute = PAGE_ROOT_ATTRIBUTE
+
+/** Dispatched on window as the page's view goes, with the showing's token. */
+export const PAGE_LEFT_EVENT = "kanna:chat-page-left"
+
+let presenceTokens = 0
+
+/**
+ * The page's view, mounted: reported as it mounts, and announced on window
+ * as it goes (a Mount can't report after its element is gone; the page's
+ * subscription hears the event). What ChatPage held while mounted (its
+ * subscriptions) follows this.
+ */
+export const HoldPagePresence = Mount.defineStream("ChatPagePresence", {
+  messages: [Message.EnteredPage],
+  execute: () => domStream<typeof Message.EnteredPage.Type>((emit) => {
+    presenceTokens += 1
+    const token = presenceTokens
+    emit(Message.EnteredPage({ token }))
+    return () => window.dispatchEvent(new CustomEvent(PAGE_LEFT_EVENT, { detail: { token } }))
+  }),
+})
 
 /** The page's box (useLayoutWidth and useFixedTerminalHeight's observer). */
 export const ObserveLayout = Mount.defineStream("ObserveChatLayout", {
@@ -245,6 +267,27 @@ export const RefreshDiffs = Command.define("RefreshChatDiffs", {
   execute: ({ chatId }) => sendCommand({ type: "chat.refreshDiffs", chatId }).pipe(
     Effect.ignore,
     Effect.as(Message.CompletedSideEffect()),
+  ),
+})
+
+/** QuickActionsWidget's read, once per project the page opens on (`refreshCachedProjectQuickActions`). */
+export const ReadQuickActions = Command.define("ReadProjectQuickActions", {
+  args: { projectId: Schema.String },
+  messages: [Message.SucceededReadQuickActions, Message.FailedReadQuickActions],
+  execute: ({ projectId }) => sendCommand<ReadonlyArray<ProjectQuickAction>>({ type: "project.readQuickActions", projectId }).pipe(
+    Effect.map((actions) => Message.SucceededReadQuickActions({ projectId, actions: actions ?? [] })),
+    Effect.catch((error) => Effect.succeed(Message.FailedReadQuickActions({ projectId, error: errorMessage(error) }))),
+  ),
+})
+
+/** useUsageLimits' refresh: the server's TTL coalesces however many ask. */
+export const RefreshUsage = Command.define("RefreshUsageLimits", {
+  args: { force: Schema.Boolean },
+  messages: [Message.CompletedRefreshUsage],
+  execute: ({ force }) => sendCommand<UsageLimitsSnapshot>({ type: "usage.refresh", force }).pipe(
+    Effect.map((result) => Message.CompletedRefreshUsage({ snapshot: result && Array.isArray(result.providers) ? result : null })),
+    // Errors surface as "unavailable" provider states in the snapshot.
+    Effect.catch(() => Effect.succeed(Message.CompletedRefreshUsage({ snapshot: null }))),
   ),
 })
 

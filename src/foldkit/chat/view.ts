@@ -10,7 +10,7 @@ import * as Transcript from "../transcript"
 import * as Viewer from "../viewer"
 import * as Widgets from "../widgets"
 import { card, cardContent } from "../ui/card"
-import { HoldColumnDragCursor, HoldMobileSheet, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
+import { HoldColumnDragCursor, HoldMobileSheet, HoldPagePresence, KeepDiffsFresh, ListenForShortcuts, ObserveDock, ObserveLayout, ObservePage, pageRootAttribute, TypeEmptyState } from "./effects"
 import { Message, type Watch } from "./message"
 import type { Model } from "./model"
 import { navbarTitleView, navbarView, washView } from "./navbar"
@@ -66,6 +66,12 @@ export function pageContext(model: Model, facts: PageFacts): ChatPageContext {
     projectPath: facts.navbarLocalPath,
     widgetsActive: facts.showRightSidebar,
     isNewChat: facts.showEmptyState,
+    widgetsData: {
+      quickActions: facts.projectId ? model.quickActions[facts.projectId] ?? null : null,
+      quickActionsError: model.quickActionsError,
+      usageLimits: model.usageLimits,
+      usageRefreshing: model.usageRefreshing,
+    },
     viewer: {
       paneAvailable: facts.viewerPaneAvailable,
       expanded: facts.viewerExpanded,
@@ -191,7 +197,7 @@ export function pageView(model: Model, app: AppModel, h: H): Html {
     chatWorkspace,
     facts.isMobile ? mobileSidebarPaneView(facts, widgets, h) : null,
     // What ChatPage's effects ran on, reported each time it changes.
-    h.div([h.Hidden(true)], [
+    h.div([h.Hidden(true), h.OnMount(HoldPagePresence())], [
       h.keyed("span")(JSON.stringify(watchOf(facts)), [h.OnMount(ObservePage({ watch: watchOf(facts) }))], []),
       facts.showEmptyState ? emptyStateTypist(h) : null,
       facts.projectId

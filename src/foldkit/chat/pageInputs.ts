@@ -1,4 +1,6 @@
 import type { Html } from "foldkit/html"
+import type { ProjectQuickAction } from "../../shared/protocol"
+import type { UsageLimitsSnapshot } from "../../shared/types"
 import type { ProjectTerminalLayout } from "../core/stores/terminalLayout"
 import type { SliceViewInputs } from "../app/slice"
 
@@ -34,6 +36,18 @@ export interface ChatPageContext {
   widgetsActive: boolean
   /** The new chat page is up (WidgetsSidebar's `isNewChat`). */
   isNewChat: boolean
+  /**
+   * What the column shows that the page loads for it (so the reads happen
+   * once, when React's widgets made them): QuickActionsWidget's list for
+   * this project (null until read), and UsageWidgets' snapshot (the
+   * `usage-limits` topic, refreshed while the column is open).
+   */
+  widgetsData: {
+    quickActions: ReadonlyArray<ProjectQuickAction> | null
+    quickActionsError: string | null
+    usageLimits: UsageLimitsSnapshot | null
+    usageRefreshing: boolean
+  }
 
   // The viewer (ViewerLayer's props)
   viewer: {
