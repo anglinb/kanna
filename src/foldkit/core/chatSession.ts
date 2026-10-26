@@ -121,6 +121,12 @@ export const Model = Schema.Struct({
       layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })),
     })),
     timerScheduled: Schema.Boolean,
+    /**
+     * The scheduled write is the throttle's first (no wait): the hook's
+     * timer then ran before the next frame, on the position as it was
+     * reported, so the write keeps the report's own measure.
+     */
+    immediate: Schema.Boolean,
     lastWriteAt: Schema.Number,
     lastWrittenKey: Schema.NullOr(Schema.String),
   }),
@@ -198,7 +204,15 @@ type Return = Update.ReturnWithOutMessage<Model, Message, OutMessage, KannaSocke
 
 // INIT
 
-export function init(chatId: string, options: { windowSize: number; starting: boolean }): Update.Return<Model, Message, KannaSocketService> {
+export function init(
+  chatId: string,
+  options: {
+    windowSize: number
+    starting: boolean
+    /** When the last read position went out from any chat: the hook's throttle outlived a chat. */
+    readAnchorLastWriteAt?: number
+  },
+): Update.Return<Model, Message, KannaSocketService> {
   return {
     model: {
       chatId,
@@ -218,7 +232,8 @@ export function init(chatId: string, options: { windowSize: number; starting: bo
         latch: { chatId: null, anchor: null, source: "none" },
         pending: null,
         timerScheduled: false,
-        lastWriteAt: 0,
+        immediate: false,
+        lastWriteAt: options.readAnchorLastWriteAt ?? 0,
         lastWrittenKey: null,
       },
     },
@@ -368,15 +383,27 @@ const nextFrame = Effect.callback<void>((resume) => {
 })
 
 const WriteReadAnchor = Command.define("WriteReadAnchor", {
-  args: { chatId: Schema.String, messageId: Schema.String, atEnd: Schema.Boolean, layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })) },
+  args: {
+    chatId: Schema.String,
+    messageId: Schema.String,
+    atEnd: Schema.Boolean,
+    layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })),
+    measure: Schema.Boolean,
+  },
   messages: [Message.CompletedSideEffect],
-  execute: ({ chatId, messageId, atEnd, layout: sampled }) => Effect.gen(function* () {
-    // Measured now, as the hook measured at write time; the sample is what
-    // the transcript left as it was taken down. A frame first: the hook's
-    // timer ran after React's synchronous render, and Foldkit renders on the
-    // next frame.
-    yield* nextFrame
-    const layout = measureReadAnchor(chatId, messageId) ?? sampled
+  execute: ({ chatId, messageId, atEnd, layout: sampled, measure }) => Effect.gen(function* () {
+    // A throttled write is measured now, as the hook measured when its timer
+    // ran; a frame first, since the hook's timer ran after React's
+    // synchronous render and Foldkit renders on the next frame. The first
+    // write of a burst keeps the report's measure: the hook's zero-delay
+    // timer ran before the next frame, ahead of what that frame moves (the
+    // scroller following the end a frame behind a change in height). The
+    // sample is also what the transcript left as it was taken down.
+    let layout = sampled
+    if (measure) {
+      yield* nextFrame
+      layout = measureReadAnchor(chatId, messageId) ?? sampled
+    }
     rememberReadAnchor(chatId, { messageId, atEnd, ...(layout ?? {}) })
     yield* sendCommand({ type: "chat.setReadAnchor", chatId, messageId, atEnd, ...(layout ?? {}) }).pipe(Effect.ignore)
     return Message.CompletedSideEffect()
@@ -542,7 +569,8 @@ function settleOptimistic(model: Model): Return {
 
 function flushReadAnchor(model: Model, at: number): Return {
   const pending = model.readAnchor.pending
-  const cleared = modifyFields(model, { readAnchor: (anchor) => ({ ...anchor, pending: null, timerScheduled: false }) })
+  const measure = !model.readAnchor.immediate
+  const cleared = modifyFields(model, { readAnchor: (anchor) => ({ ...anchor, pending: null, timerScheduled: false, immediate: false }) })
   if (!pending) return { model: cleared }
   // While parked at the bottom the top-visible message churns with every
   // streamed chunk, but restore only needs "was at the end", so all of those
@@ -554,7 +582,7 @@ function flushReadAnchor(model: Model, at: number): Return {
   if (key === model.readAnchor.lastWrittenKey) return { model: cleared }
   return {
     model: modifyFields(cleared, { readAnchor: (anchor) => ({ ...anchor, lastWrittenKey: key, lastWriteAt: at }) }),
-    commands: [WriteReadAnchor({ chatId: model.chatId, messageId: pending.messageId, atEnd: pending.atEnd, layout: pending.layout })],
+    commands: [WriteReadAnchor({ chatId: model.chatId, messageId: pending.messageId, atEnd: pending.atEnd, layout: pending.layout, measure })],
   }
 }
 
@@ -717,7 +745,7 @@ export function update(model: Model, message: Message, input: { windowSize: numb
       if (model.readAnchor.timerScheduled) return { model: next, commands: [remember] }
       const delay = Math.max(0, READ_ANCHOR_WRITE_INTERVAL_MS - (at - model.readAnchor.lastWriteAt))
       return {
-        model: modifyFields(next, { readAnchor: (anchor) => ({ ...anchor, timerScheduled: true }) }),
+        model: modifyFields(next, { readAnchor: (anchor) => ({ ...anchor, timerScheduled: true, immediate: delay === 0 }) }),
         commands: [remember, DelayReadAnchorWrite({ ms: delay })],
       }
     },

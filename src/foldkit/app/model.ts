@@ -64,6 +64,12 @@ export const Model = Schema.Struct({
   systemTheme: Schema.Literals(["light", "dark"]),
   /** The page's chat, live (useKannaState's chat half). Null off a chat route. */
   chat: Schema.NullOr(ChatSession.Model),
+  /**
+   * When the last read position went out, carried from one chat's session to
+   * the next: useChatReadAnchor's throttle (`lastWriteAtRef`) lived as long
+   * as the app, not the chat. Unset until a session closes.
+   */
+  readAnchorLastWriteAt: Schema.optional(Schema.Number),
   /** Every client store: sidebar, app settings, drafts, layouts, preferences. */
   stores: Stores.Model,
   /** What the root's actions keep: chats being started, the share and app dialogs. */

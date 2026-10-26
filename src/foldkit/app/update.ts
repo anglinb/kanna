@@ -332,16 +332,22 @@ function syncChatSession(model: Model, at: number): UpdateReturn {
   const chatId = activeChatId(model)
   if (model.chat?.chatId === chatId) return { model }
   const commands: AppCommand[] = []
+  let lastWriteAt = model.readAnchorLastWriteAt ?? 0
   if (model.chat) {
     const closed = ChatSession.close(model.chat, at)
+    lastWriteAt = closed.model.readAnchor.lastWriteAt
     commands.push(...Command.mapMessages(closed.commands, (message: ChatSession.Message) => Message.GotChatMessage({ message })))
   }
-  if (!chatId) return { model: modifyFields(model, { chat: () => null }), commands }
+  if (!chatId) return { model: modifyFields(model, { chat: () => null, readAnchorLastWriteAt: () => lastWriteAt }), commands }
   // A chat started a moment ago has no cache to wait on: its subscription
   // goes out right behind its `chat.create`.
-  const opened = ChatSession.init(chatId, { windowSize: transcriptWindowSize(model), starting: model.actions.startingChatIds.includes(chatId) })
+  const opened = ChatSession.init(chatId, {
+    windowSize: transcriptWindowSize(model),
+    starting: model.actions.startingChatIds.includes(chatId),
+    readAnchorLastWriteAt: lastWriteAt,
+  })
   commands.push(...Command.mapMessages(opened.commands, (message: ChatSession.Message) => Message.GotChatMessage({ message })))
-  return { model: modifyFields(model, { chat: () => opened.model }), commands }
+  return { model: modifyFields(model, { chat: () => opened.model, readAnchorLastWriteAt: () => lastWriteAt }), commands }
 }
 
 const toComposer = (message: Composer.Message) => ChatPageSlice.Message.GotComposerMessage({ message })
