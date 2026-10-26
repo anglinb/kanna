@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { defineMessageUnion } from "foldkit/message"
-import type { OpenLocalLinkTarget } from "../../client/components/messages/shared"
+import type { OpenLocalLinkTarget } from "../core/localLink"
 import * as Composer from "../composer"
 import * as ChatSession from "../core/chatSession"
 import type { ChatViewerState } from "../core/stores/rightSidebar"
