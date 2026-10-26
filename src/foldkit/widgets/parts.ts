@@ -46,8 +46,31 @@ export const RowKebab = Mount.defineStream("WidgetRowKebab", {
       const rect = element.getBoundingClientRect()
       emit(PartsMessage.PressedRowKebab({ x: Math.trunc(rect.left + rect.width / 2), y: Math.trunc(rect.bottom) }))
     }
+    // openMenuOnKey, on the row the kebab sits over (its span's parent): the
+    // menu key and Shift+F10, from the row or anything in it, fire the row's
+    // contextmenu under the kebab, as a click on it would. Browsers don't
+    // agree on where a key-fired contextmenu lands. Where the kebab isn't
+    // laid out (touch), under the row's trailing end.
+    const row = element.parentElement?.parentElement ?? null
+    const keydown = (event: KeyboardEvent) => {
+      if (!row || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return
+      event.preventDefault()
+      const anchor = (element as HTMLElement).offsetParent !== null ? element.getBoundingClientRect() : null
+      const box = row.getBoundingClientRect()
+      row.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: anchor ? anchor.left + anchor.width / 2 : box.right - 12,
+        clientY: anchor ? anchor.bottom : box.top + 27,
+        view: window,
+      }))
+    }
     element.addEventListener("click", click as EventListener)
-    return () => element.removeEventListener("click", click as EventListener)
+    row?.addEventListener("keydown", keydown)
+    return () => {
+      element.removeEventListener("click", click as EventListener)
+      row?.removeEventListener("keydown", keydown)
+    }
   }),
 })
 
