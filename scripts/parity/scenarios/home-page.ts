@@ -1,4 +1,5 @@
 import { defineScenario, type Scenario } from "../scenario"
+import { countUuids } from "./_lib/helpers"
 
 // The projects page (src/foldkit/home/ against LocalProjectsPage, LocalDev
 // and ProjectsHome). Until the sidebar is ported the whole page differs, so
@@ -89,7 +90,10 @@ export const scenarios: Scenario[] = [
     route: "/home",
     regions: { main: MAIN, list: LIST },
     covers: { commands: ["project.open"] },
-    async run({ page, capture }) {
+    async run(context) {
+      const { page, capture } = context
+      // The new chat's id goes into the URL: counted, so runs agree.
+      await countUuids(context)
       await page.locator(MAIN).getByRole("button", { name: /^ledger-api/ }).click()
       await capture("opened")
     },

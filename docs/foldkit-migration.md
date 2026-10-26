@@ -227,6 +227,15 @@ wizard (not ported yet) and the widgets' git changes (in progress).
 Machine budget (2 cores, 7 GB): one parity run at a time, at most two
 porting agents.
 
+## Known differences from React (kept on purpose)
+
+- Charts' last x-axis label: recharts measures tick labels with a DOM span
+  and caches the widths for the page's life; the first measure can land
+  before the web font loads, so React's label sits where the fallback
+  font's width put it (2px off in transcript-export-viewer-chart). The
+  port measures the font it draws with. That scenario tolerates the one
+  label's pixels.
+
 ## Known
 
 - `bun test` has 40 failures on this branch before any of this work (socket,

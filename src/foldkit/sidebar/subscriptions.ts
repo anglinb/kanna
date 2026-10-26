@@ -11,6 +11,7 @@ import type { KannaSocketService } from "../core/socket"
 import { domStream } from "../ui/overlay/stream"
 import { Message } from "./message"
 import { FINE_POINTER_QUERY, isStandaloneNow, PHONE_LAYOUT_QUERY, STANDALONE_QUERY, type Model } from "./model"
+import { projectDragging } from "./hoverCard"
 import { OPEN_LAYER_SELECTOR } from "./mounts"
 import { getProjectGroupReorderPreviewTargetId } from "./projects"
 
@@ -137,24 +138,6 @@ const backgroundClickStream = domStream<Message>((emit) => {
   return () => document.removeEventListener("click", handleClick, true)
 })
 
-/** While the handle is held: the width follows the pointer; the body says col-resize. */
-const resizeStream = domStream<Message>((emit) => {
-  const previousCursor = document.body.style.cursor
-  const previousUserSelect = document.body.style.userSelect
-  document.body.style.cursor = "col-resize"
-  document.body.style.userSelect = "none"
-  const handlePointerMove = (event: PointerEvent) => emit(Message.MovedResize({ pointerX: event.clientX }))
-  const handlePointerUp = () => emit(Message.ReleasedResize())
-  window.addEventListener("pointermove", handlePointerMove)
-  window.addEventListener("pointerup", handlePointerUp, { once: true })
-  return () => {
-    window.removeEventListener("pointermove", handlePointerMove)
-    window.removeEventListener("pointerup", handlePointerUp)
-    document.body.style.cursor = previousCursor
-    document.body.style.userSelect = previousUserSelect
-  }
-})
-
 const ACTIVATION_DISTANCE_PX = 2
 
 /**
@@ -186,6 +169,7 @@ function projectDragStream(projectId: string, startY: number) {
       if (!active) {
         if (Math.abs(deltaY) < ACTIVATION_DISTANCE_PX && Math.abs(event.movementX) < ACTIVATION_DISTANCE_PX) return
         active = true
+        projectDragging.active = true
         measure()
         document.addEventListener("click", stopClick, true)
         emit(Message.ActivatedProjectDrag({ activeHeight: rects.get(projectId)?.height ?? 0 }))
@@ -202,7 +186,10 @@ function projectDragStream(projectId: string, startY: number) {
         : null
       emit(Message.MovedProjectDrag({ deltaY, overId }))
     }
-    const handleUp = () => emit(Message.ReleasedProjectDrag())
+    const handleUp = () => {
+      projectDragging.active = false
+      emit(Message.ReleasedProjectDrag())
+    }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") emit(Message.CancelledProjectDrag())
     }
@@ -213,6 +200,7 @@ function projectDragStream(projectId: string, startY: number) {
     window.addEventListener("contextmenu", preventDefault)
     window.addEventListener("dragstart", preventDefault)
     return () => {
+      projectDragging.active = false
       document.removeEventListener("pointermove", handleMove)
       document.removeEventListener("pointerup", handleUp)
       document.removeEventListener("pointercancel", handleUp)
@@ -234,10 +222,6 @@ export const subscriptions = Subscription.make<Model, Message, KannaSocketServic
   standalone: Subscription.persistentEntry(mediaStream(STANDALONE_QUERY, () => Message.ChangedStandalone({ matches: isStandaloneNow() }))),
   keyboard: Subscription.persistentEntry(keyboardStream),
   backgroundClick: Subscription.persistentEntry(backgroundClickStream),
-  resize: entry({ resizing: Schema.Boolean }, {
-    modelToDependencies: (model) => ({ resizing: model.resizeStart !== null }),
-    dependenciesToStream: ({ resizing }) => (resizing ? resizeStream : Stream.empty),
-  }),
   projectDrag: entry({ projectId: Schema.NullOr(Schema.String), pointerId: Schema.Number, startY: Schema.Number }, {
     modelToDependencies: (model) => ({
       projectId: model.projectDrag?.projectId ?? null,

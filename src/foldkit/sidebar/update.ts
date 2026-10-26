@@ -257,6 +257,13 @@ function exitFocusMode(model: Model, app: AppModel): Return {
   return { model, commands: [LeaveProjectPage()] }
 }
 
+/** dnd-kit's default `onDragOver` announcement. */
+function movedOverAnnouncement(activeId: string, overId: string | null) {
+  return overId
+    ? `Draggable item ${activeId} was moved over droppable area ${overId}.`
+    : `Draggable item ${activeId} is no longer over a droppable area.`
+}
+
 function persistWidth(model: Model, width: number): Return {
   const clamped = clampSidebarWidth(width)
   return { model: modifyFields(model, { sidebarWidth: () => clamped }), commands: [SaveSidebarWidth({ width: clamped })] }
@@ -437,15 +444,29 @@ export function update(model: Model, message: Message, app: AppModel): Return {
         projectDrag: () => ({ projectId, pointerId, startY: y, active: false, deltaY: 0, overId: null, activeHeight: 0 }),
       }),
     }),
+    // dnd-kit announces the pick-up, then `over` (the group itself, at first).
     ActivatedProjectDrag: ({ activeHeight }) => ({
-      model: modifyFields(model, { projectDrag: (drag) => (drag ? { ...drag, active: true, activeHeight, overId: drag.projectId } : drag) }),
+      model: modifyFields(model, {
+        projectDrag: (drag) => (drag ? { ...drag, active: true, activeHeight, overId: drag.projectId } : drag),
+        dndAnnouncement: (said) => (model.projectDrag ? movedOverAnnouncement(model.projectDrag.projectId, model.projectDrag.projectId) : said),
+      }),
     }),
     MovedProjectDrag: ({ deltaY, overId }) => ({
-      model: modifyFields(model, { projectDrag: (drag) => (drag ? { ...drag, deltaY, overId } : drag) }),
+      model: modifyFields(model, {
+        projectDrag: (drag) => (drag ? { ...drag, deltaY, overId } : drag),
+        dndAnnouncement: (said) => (model.projectDrag?.active && model.projectDrag.overId !== overId ? movedOverAnnouncement(model.projectDrag.projectId, overId) : said),
+      }),
     }),
     ReleasedProjectDrag: () => {
       const drag = model.projectDrag
-      const next = modifyFields(model, { projectDrag: () => null })
+      const next = modifyFields(model, {
+        projectDrag: () => null,
+        dndAnnouncement: (said) => (drag?.active
+          ? drag.overId
+            ? `Draggable item ${drag.projectId} was dropped over droppable area ${drag.overId}`
+            : `Draggable item ${drag.projectId} was dropped.`
+          : said),
+      })
       if (!drag?.active || !drag.overId || drag.overId === drag.projectId) return { model: next }
       // In the order the Projects view lists them (LocalProjectsSection's `groupIds`).
       const groupIds = visibleProjectGroups(app, newSidebarEnabled(app) && app.stores.sidebarView.view === "projects").map((group) => group.groupKey)
@@ -454,7 +475,12 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       if (from === -1 || to === -1) return { model: next }
       return requestAction(next, AppAction.ReorderProjectGroups({ projectIds: arrayMove(groupIds, from, to) }))
     },
-    CancelledProjectDrag: () => ({ model: modifyFields(model, { projectDrag: () => null }) }),
+    CancelledProjectDrag: () => ({
+      model: modifyFields(model, {
+        projectDrag: () => null,
+        dndAnnouncement: (said) => (model.projectDrag?.active ? `Dragging was cancelled. Draggable item ${model.projectDrag.projectId} was dropped.` : said),
+      }),
+    }),
 
     // A click on a channel goes to its delegator or its new chat page; on
     // touch, where there is no card, it opens the channel as a page.

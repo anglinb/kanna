@@ -101,6 +101,7 @@ export function init(flags: Flags, frameUrl: Url): UpdateReturn {
     openRouterCallback: OpenRouterCallback.init(Option.getOrElse(url.search, () => "")),
     legacySettingsMigrationStarted: false,
     pageHidden: false,
+    pendingMarkRead: null,
     draftIdsSeen: draftIdsOf(stores),
     sidebar: SidebarSlice.init(),
     home: HomeSlice.init(),
@@ -429,13 +430,36 @@ function changeRoute(model: Model, route: AppRoute): UpdateReturn {
   const session = syncChatSession(next, 0)
   const commands: AppCommand[] = [...routeRedirect(route), ...(session.commands ?? [])]
   // Mark a chat read when the user navigates *away* from it, not when it
-  // opens. Chats that no longer exist are skipped.
+  // opens. Chats that no longer exist are skipped. A mark still waiting for
+  // its page goes now.
+  let pendingMarkRead: string | null = null
+  if (model.pendingMarkRead) commands.push(markRead(model.pendingMarkRead))
   if (previousChatId && previousChatId !== nextChatId) {
     const left = sidebarData(model).projectGroups.flatMap((group) => group.chats).find((chat) => chat.chatId === previousChatId)
-    if (left?.unread) commands.push(SendCommand({ command: { type: "chat.markRead", chatId: previousChatId } }))
+    // useKannaState's effect ran in the commit that showed the next page,
+    // after that page's own effects (a parent's effects follow its
+    // children's): for another chat, after its page is observed.
+    if (left?.unread) {
+      if (nextChatId) pendingMarkRead = previousChatId
+      else commands.push(markRead(previousChatId))
+    }
   }
-  const background = reconcileBackgroundChats(session.model)
+  const background = reconcileBackgroundChats(modifyFields(session.model, { pendingMarkRead: () => pendingMarkRead }))
   return { model: background.model, commands: [...commands, ...(background.commands ?? [])] }
+}
+
+function markRead(chatId: string): AppCommand {
+  return SendCommand({ command: { type: "chat.markRead", chatId } })
+}
+
+/** The chat page's effects ran for the open chat: the mark `changeRoute` held goes after them. */
+function flushPendingMarkRead(result: UpdateReturn, child: ChatPageSlice.Message): UpdateReturn {
+  const pending = result.model.pendingMarkRead
+  if (!pending || child._tag !== "ObservedPage" || child.watch.chatId !== activeChatId(result.model)) return result
+  return {
+    model: modifyFields(result.model, { pendingMarkRead: () => null }),
+    commands: [...(result.commands ?? []), markRead(pending)],
+  }
 }
 
 // ACTIONS (app/actions.ts)
@@ -781,7 +805,7 @@ const updateRoot = (model: Model, message: Message): UpdateReturn =>
     GotSidebarMessage: ({ message: child }) => foldSidebar(model, child),
     GotHomeMessage: ({ message: child }) => foldHome(model, child),
     GotSettingsMessage: ({ message: child }) => foldSettings(model, child),
-    GotChatPageMessage: ({ message: child }) => foldChatPage(model, child),
+    GotChatPageMessage: ({ message: child }) => flushPendingMarkRead(foldChatPage(model, child), child),
     GotPaletteMessage: ({ message: child }) => foldPalette(model, child),
     GotSetupMessage: ({ message: child }) => foldSetup(model, child),
     GotWorkflowsMessage: ({ message: child }) => foldWorkflows(model, child),

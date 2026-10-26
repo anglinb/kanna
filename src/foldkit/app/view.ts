@@ -118,16 +118,21 @@ function layoutView(model: Model, h: HtmlBuilder<Message>): Html {
 function pageView(model: Model, h: HtmlBuilder<Message>): Html {
   const app = { app: model }
   const home = () => h.submodel({ slotId: "home", model: model.home, view: HomeSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotHomeMessage({ message }) })
+  // One function for `/` and a project's page: the view plugin gives each
+  // function's result its own identity, and two arms would replace the page
+  // between them. React Router rendered the same element for both routes, so
+  // the page (and its effects) carried over.
+  const projectsPage = () => h.div([h.Class("hidden md:contents")], [home()])
   return AppRoute.match(model.route, {
     // On mobile the sidebar fills the screen at `/` (see KannaSidebar), so
     // the projects page hides there and lives at `/home` instead. Desktop
     // shows it at both paths.
-    Root: () => h.div([h.Class("hidden md:contents")], [home()]),
+    Root: projectsPage,
     Home: () => home(),
     SettingsIndex: () => null,
     Settings: () => h.submodel({ slotId: "settings", model: model.settings, view: SettingsSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotSettingsMessage({ message }) }),
     Chat: () => h.submodel({ slotId: "chat", model: model.chatPage, view: ChatPageSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotChatPageMessage({ message }) }),
-    Project: () => h.div([h.Class("hidden md:contents")], [home()]),
+    Project: projectsPage,
     Terminal: () => h.submodel({ slotId: "terminal", model: model.terminalPage, view: TerminalPageSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotTerminalPageMessage({ message }) }),
     Workflows: () => h.submodel({ slotId: "workflows", model: model.workflows, view: WorkflowsSlice.view, viewInputs: app, toParentMessage: (message) => Message.GotWorkflowsMessage({ message }) }),
     OpenRouterCallback: () => null,

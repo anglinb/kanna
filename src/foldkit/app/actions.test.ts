@@ -82,6 +82,14 @@ describe("root actions", () => {
     expect(alert.description).toBe("No such project")
   })
 
+  test("deleting the open chat goes home; another chat's delete stays put", () => {
+    const open = update(boot("/chat/c1"), Message.GotActionMessage({ message: ActionMessage.SucceededDeleteChat({ chatId: "c1" }) }))
+    const pushed = (open.commands ?? []).filter((command) => command.name === "PushUrl") as unknown as Array<{ args: { url: string } }>
+    expect(pushed.map((command) => command.args.url)).toEqual(["/"])
+    const other = update(boot("/chat/c1"), Message.GotActionMessage({ message: ActionMessage.SucceededDeleteChat({ chatId: "c2" }) }))
+    expect((other.commands ?? []).map((command) => command.name)).not.toContain("PushUrl")
+  })
+
   test("creating a chat makes an id first, then creates and navigates", () => {
     const asked = update(boot(), Message.RequestedAppAction({ action: AppAction.CreateChat({ projectId: "p1" }) }))
     expect(asked.commands?.map((command) => command.name)).toEqual(["PrepareCreateChat"])

@@ -77,6 +77,9 @@ export const SyncHoverTracker = Command.define("SyncHoverTracker", {
  * the dismissal held while the pointer stays on its row, a press on a row
  * dismissing its card, the window losing focus closing it. Desktop only.
  */
+/** Set by the project drag (subscriptions.ts) while a group is held past its activation distance. */
+export const projectDragging = { active: false }
+
 export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
   args: { list: HoverList },
   messages: [Message.ChangedHoveredRow],
@@ -135,6 +138,10 @@ export const ListHoverTracker = Mount.defineStream("ListHoverTracker", {
       }
       const track = (event: PointerEvent) => {
         if (event.pointerType === "touch" || !finePointer.matches) return
+        // A project dragged in the Projects view stays under the pointer
+        // (dnd-kit moves it with each move), so no row is hovered on the way;
+        // here the group follows a frame behind, and rows show through.
+        if (projectDragging.active) return
         const point = { x: event.clientX, y: event.clientY }
         pointer = point
         if (pinned() !== null) return

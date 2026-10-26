@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Submodel } from "foldkit"
 import { Scene } from "foldkit/test"
 import * as Select from "../../ui/select"
-import { ChartArea, chartFullViewBody, chartModel, ChartTable, niceTicks } from "./chart"
+import { ChartArea, chartFullViewBody, chartModel, ChartTable, niceTicks, preserveEndTicks } from "./chart"
 import { rowContext } from "./context"
 import { CHARTS, displaySections } from "./fixture"
 import { view } from "./index"
@@ -100,5 +100,23 @@ describe("the drawn chart", () => {
       Scene.expectAll(Scene.all.selector("path.recharts-rectangle")).toHaveCount(6),
       Scene.expect(Scene.text("50")).toExist(),
     )
+  })
+})
+
+describe("x axis ticks (recharts' preserveEnd)", () => {
+  test("the last label moves in to end at the chart's edge; a label that would leave the chart is left out", () => {
+    // 30px labels at 0, 100 and 200 on a 205px chart.
+    expect(preserveEndTicks([0, 100, 200], [30, 30, 30], 0, 205)).toEqual([
+      { index: 1, coordinate: 100 },
+      { index: 2, coordinate: 190 },
+    ])
+  })
+
+  test("a label that would come within the gap of the next one is left out", () => {
+    expect(preserveEndTicks([20, 50, 80], [30, 30, 30], 0, 300).map((tick) => tick.index)).toEqual([0, 2])
+  })
+
+  test("unmeasured (no document): every label where its point is", () => {
+    expect(preserveEndTicks([0, 100], [null, null], 0, 50)).toEqual([{ index: 0, coordinate: 0 }, { index: 1, coordinate: 100 }])
   })
 })

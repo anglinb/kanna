@@ -59,7 +59,7 @@ import type { Model } from "./model"
 import { localProjectsSection } from "./projects"
 import { archivedSection, threadSections } from "./sections"
 import { FocusMotion, SIDEBAR_PAGE_ATTRIBUTE } from "./motion"
-import { SidebarCard } from "./mounts"
+import { ResizeHandle, SidebarCard } from "./mounts"
 
 type H = HtmlBuilder<Message>
 
@@ -475,7 +475,7 @@ export const view = Submodel.defineView<Model, Message, SliceViewInputs>((model,
       h.Tabindex(0),
       h.Title("Resize sidebar"),
       h.Class(cn("hidden md:block absolute -right-1 top-3 bottom-3 z-20 w-2 cursor-col-resize rounded-full", "focus-visible:outline-none")),
-      h.OnPointerDown((_pointerType, _button, _screenX, _screenY, _timeStamp, clientX) => Option.some(Message.PressedResizeHandle({ pointerX: clientX }))),
+      h.OnMount(ResizeHandle()),
       h.OnDoubleClick(Message.DoubleClickedResizeHandle()),
       h.OnKeyDownPreventDefault((key) =>
         ["ArrowLeft", "ArrowRight", "Home", "End", "Enter"].includes(key) ? Option.some(Message.PressedResizeKey({ key })) : Option.none()),

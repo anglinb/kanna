@@ -50,6 +50,47 @@ import { createTypeahead, findNextMatch } from "./overlay/typeahead"
  */
 
 export const contentId = (id: string) => `${id}-context-menu`
+
+/**
+ * The last contextmenu event's point. A Foldkit OnContextMenu carries no
+ * position, and Radix opened the menu at the event's: Shift+F10 puts it
+ * beside the focused element, not where the pointer last pressed. The
+ * content's Mount, right after, places the menu there.
+ */
+let lastContextMenu: { x: number; y: number; at: number } | null = null
+/** How recent the event must be to be the one that opened the menu being mounted. */
+const CONTEXT_MENU_EVENT_FRESH_MS = 1_000
+if (typeof document !== "undefined" && !(globalThis as { __kannaContextMenuPoint?: boolean }).__kannaContextMenuPoint) {
+  ;(globalThis as { __kannaContextMenuPoint?: boolean }).__kannaContextMenuPoint = true
+  document.addEventListener("contextmenu", (event) => {
+    lastContextMenu = { x: event.clientX, y: event.clientY, at: performance.now() }
+  }, true)
+}
+
+/**
+ * Radix's Menu root `isUsingKeyboardRef`: a keydown says the keyboard is in
+ * use until the pointer next moves or presses. Opened from the keyboard, the
+ * menu's first item takes focus (the roving group's entry focus).
+ */
+let usingKeyboard = false
+if (typeof document !== "undefined" && !(globalThis as { __kannaContextMenuKeyboard?: boolean }).__kannaContextMenuKeyboard) {
+  ;(globalThis as { __kannaContextMenuKeyboard?: boolean }).__kannaContextMenuKeyboard = true
+  const pointer = () => {
+    usingKeyboard = false
+  }
+  document.addEventListener("keydown", () => {
+    usingKeyboard = true
+  }, true)
+  document.addEventListener("pointerdown", pointer, true)
+  document.addEventListener("pointermove", pointer, true)
+}
+
+/** Where a menu opening now goes: the contextmenu event's point while it is fresh, else the model's. */
+function openingPoint(x: number, y: number) {
+  const recent = lastContextMenu
+  lastContextMenu = null
+  return recent && performance.now() - recent.at < CONTEXT_MENU_EVENT_FRESH_MS ? recent : { x, y }
+}
 const LONG_PRESS_MS = 700
 
 // MODEL
@@ -218,7 +259,8 @@ export const ContextMenuContent = Mount.defineStream("ContextMenuContent", {
       const items = () => Array.from(content.querySelectorAll<HTMLElement>(ITEM_SELECTOR)).filter((item) => !item.hasAttribute("data-disabled"))
 
       cleanups.push(portalToBody(wrapper))
-      cleanups.push(placePopper(wrapper, content, pointReference(x, y), {
+      const point = openingPoint(x, y)
+      cleanups.push(placePopper(wrapper, content, pointReference(point.x, point.y), {
         side: "right",
         align: "start",
         sideOffset: 2,
@@ -231,14 +273,39 @@ export const ContextMenuContent = Mount.defineStream("ContextMenuContent", {
         shouldDismiss: ({ reason }) => reason !== "focus-outside",
         onDismiss: () => emit(Message.DismissedContent()),
       }))
+      // The app's ContextMenu remounts its Root on select, trigger and all,
+      // so Radix gave focus back to an element no longer in the page and it
+      // fell to <body>: after a choice, focus held inside the trigger isn't
+      // restored. (The trigger is the open one holding what had focus.)
+      const focusedBefore = document.activeElement
+      const trigger = focusedBefore instanceof HTMLElement ? focusedBefore.closest<HTMLElement>("[data-state='open']") : null
+      let chose = false
+      const isChoice = (event: Event) => {
+        const chosen = event.target instanceof Element ? event.target.closest(ITEM_SELECTOR) : null
+        return chosen !== null && content.contains(chosen) && !chosen.hasAttribute("data-disabled")
+      }
+      const handleChoiceClick = (event: MouseEvent) => {
+        if (isChoice(event)) chose = true
+      }
+      const handleChoiceKey = (event: KeyboardEvent) => {
+        if ((event.key === "Enter" || event.key === " ") && isChoice(event)) chose = true
+      }
+      content.addEventListener("click", handleChoiceClick, true)
+      content.addEventListener("keydown", handleChoiceKey, true)
+      cleanups.push(() => {
+        content.removeEventListener("click", handleChoiceClick, true)
+        content.removeEventListener("keydown", handleChoiceKey, true)
+      })
       cleanups.push(installFocusScope(content, {
         trapped: true,
         loop: false,
         // The menu itself takes focus on open, not its first item.
         onMountAutoFocus: () => {
           content.focus({ preventScroll: true })
+          if (usingKeyboard) items()[0]?.focus({ preventScroll: true })
           return true
         },
+        onUnmountAutoFocus: (previous) => chose && trigger !== null && previous !== null && trigger.contains(previous),
       }))
       cleanups.push(installFocusGuards(document))
       cleanups.push(hideOthers(content))

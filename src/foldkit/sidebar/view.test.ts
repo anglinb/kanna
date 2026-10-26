@@ -13,7 +13,7 @@ import { ListHoverTracker } from "./hoverCard"
 import { Message } from "./message"
 import { init, type Model } from "./model"
 import { FocusMotion } from "./motion"
-import { SidebarCard } from "./mounts"
+import { ResizeHandle, SidebarCard } from "./mounts"
 import { update } from "./update"
 import { view } from "./view"
 
@@ -50,6 +50,7 @@ function appAt(path: string): AppModel {
 const mounted = [
   Scene.Mount.resolve(SidebarCard, Message.ChangedPeek({ peeking: false })),
   Scene.Mount.resolve(FocusMotion, Message.CompletedSideEffect()),
+  Scene.Mount.resolve(ResizeHandle, Message.CompletedSideEffect()),
   Scene.Mount.resolve(ListHoverTracker, Message.ChangedHoveredRow({ list: "chats", key: null })),
 ]
 
