@@ -29,6 +29,37 @@ export const PushUrl = Command.define("PushUrl", {
   execute: ({ url }) => AppNavigation.pushUrl(url).pipe(Effect.as(Message.CompletedNavigation())),
 })
 
+/** Two animation frames, where there are any (none in tests: it goes on at once). */
+const twoFrames = Effect.callback<void>((resume) => {
+  if (typeof requestAnimationFrame === "undefined") {
+    resume(Effect.void)
+    return
+  }
+  let frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => resume(Effect.void))
+  })
+  return Effect.sync(() => cancelAnimationFrame(frame))
+})
+
+/**
+ * Home from a chat the server doesn't know, once the page has drawn the
+ * state that found it out. React's redirect was an effect, and the router
+ * navigated in a transition: the selected project the same commit seeded
+ * drew the chat page once more first, and its effects ran (the quick
+ * actions read, the diff refresh, the usage subscription) before home
+ * replaced it. Nothing moves if the page went somewhere else meanwhile.
+ */
+export const BounceHomeFromChat = Command.define("BounceHomeFromChat", {
+  args: { chatId: Schema.String },
+  messages: [Message.CompletedNavigation],
+  execute: ({ chatId }) => Effect.gen(function* () {
+    yield* twoFrames
+    if (new URL(AppNavigation.currentHref()).pathname !== `/chat/${encodeURIComponent(chatId)}`) return Message.CompletedNavigation()
+    yield* AppNavigation.pushUrl("/")
+    return Message.CompletedNavigation()
+  }),
+})
+
 export const ReplaceUrl = Command.define("ReplaceUrl", {
   args: { url: Schema.String },
   messages: [Message.CompletedNavigation],

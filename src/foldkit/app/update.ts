@@ -17,6 +17,7 @@ import * as Sidebar from "../core/stores/sidebar"
 import * as ViewerStore from "../core/stores/viewer"
 import {
   ApplyTheme,
+  BounceHomeFromChat,
   DelayAuthRetry,
   DelayBackgroundChatDrop,
   FetchAuthStatus,
@@ -398,7 +399,7 @@ function bounceUnknownChat(model: Model): UpdateReturn {
       : { model }
   }
   if (model.actions.pendingChatId === chatId) return { model }
-  return { model, commands: [PushUrl({ url: "/" })] }
+  return { model, commands: [BounceHomeFromChat({ chatId })] }
 }
 
 /**
