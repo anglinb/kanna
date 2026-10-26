@@ -21,6 +21,9 @@ export default defineConfig({
     host: "0.0.0.0",
     port: DEV_CLIENT_PORT,
     strictPort: true,
+    // Test artifacts and builds aren't the app: a full parity run leaves
+    // tens of thousands of files, past the system's limit on file watchers.
+    watch: { ignored: ["**/.parity/**", "**/.e2e/**", "**/dist/**", "**/.claude/**"] },
     proxy: {
       "/ws": {
         target: `ws://${backendTargetHost}:${backendPort}`,
