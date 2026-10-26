@@ -10,7 +10,7 @@ import { transcriptMarkdownChildren, type RowContext } from "./context"
 import { displayToolMessage } from "./display-tool"
 import { fileContentView } from "./file-content"
 import { keys, Message } from "./model"
-import { RequestPayloadsOnMount } from "./mounts"
+import { RequestPayloadsOnMount, RequestPayloadsOnPointerEnter } from "./mounts"
 import { isScheduleToolCall, scheduleToolMessage } from "./schedule-tool"
 import { expandableRow, getToolIcon, metaCodeBlock, metaLabel, metaRow, verticalLineContainer } from "./shared"
 import { textMessage } from "./simple"
@@ -112,7 +112,7 @@ export function toolCallMessage(message: ToolCall, options: ToolCallOptions, con
       ? UserRound({ class: "size-4 text-muted-icon" }, h)
       : getToolIcon(message.toolName)({ class: "size-4 text-muted-icon" }, h)
 
-  return metaRow({ class: "w-full", attributes: payloadIds.length > 0 ? [h.OnMouseEnter(Message.WantedPayloads({ entryIds: payloadIds }))] : [] }, [
+  return metaRow({ class: "w-full", attributes: payloadIds.length > 0 ? [h.OnMount(RequestPayloadsOnPointerEnter({ entryIds: payloadIds }))] : [] }, [
     expandableRow(keys.tool(message.id), context, [
       h.div([h.Class("w-5 h-5 relative flex items-center justify-center")], [icon]),
       metaLabel("h-5 text-left transition-opacity duration-200 truncate", [

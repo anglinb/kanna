@@ -6,6 +6,7 @@ import { animatedShinyText } from "../../ui/animated-shiny-text"
 import { ChevronRight } from "../../ui/icons"
 import type { RowContext } from "./context"
 import { keys, Message } from "./model"
+import { RequestPayloadsOnPointerEnter } from "./mounts"
 import { metaLabel, metaRow } from "./shared"
 import { toolCallMessage, trimmedPayloadIds, type ToolCall, type ToolCallOptions } from "./tool-call"
 
@@ -53,7 +54,7 @@ export function collapsedToolGroup(
     label: [label],
     loading: anyInProgress && options.isLoading,
     count: messages.length,
-    onPointerEnter: entryIds.length > 0 ? Message.WantedPayloads({ entryIds }) : undefined,
+    pointerEnterPayloads: entryIds.length > 0 ? entryIds : undefined,
   }, () => messages.map((message) => toolCallMessage(message as ToolCall, options, context, h)), context, h)
 }
 
@@ -63,14 +64,14 @@ export function collapsedToolGroup(
  * from the bottom.
  */
 export function collapsedGroup(
-  options: { key: string; label: ReadonlyArray<string>; loading?: boolean; count: number; onPointerEnter?: Message },
+  options: { key: string; label: ReadonlyArray<string>; loading?: boolean; count: number; pointerEnterPayloads?: ReadonlyArray<string> },
   children: () => ReadonlyArray<Child>,
   context: RowContext,
   h: HtmlBuilder<Message>,
 ): Html {
   const expanded = Boolean(context.model.open[options.key])
   const loading = options.loading ?? false
-  return metaRow({ class: "w-full", attributes: options.onPointerEnter ? [h.OnMouseEnter(options.onPointerEnter)] : [] }, [
+  return metaRow({ class: "w-full", attributes: options.pointerEnterPayloads ? [h.OnMount(RequestPayloadsOnPointerEnter({ entryIds: options.pointerEnterPayloads }))] : [] }, [
     h.div([h.Class("flex flex-col w-full")], [
       h.button([
         h.OnClick(Message.SetOpen({ key: options.key, open: !expanded })),
