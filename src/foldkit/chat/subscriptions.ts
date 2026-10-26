@@ -22,14 +22,21 @@ const USAGE_POLL_MS = 60_000
 
 /**
  * UsageWidgets mounts with the widget column, which is there whenever the
- * page has a project (open or not, and on a phone as a closed sheet); a
- * phone's new chat page also shows the cards (EmptyStateUsageCards).
+ * page has a project (open or not, and on a phone as a closed sheet).
  */
-function usageShown(model: Model) {
+function usageWidgetsShown(model: Model) {
   const watch = model.watch
-  if (model.presence === null || !watch) return false
-  return watch.projectId !== null || (watch.isMobile && watch.showEmptyState)
+  return model.presence !== null && Boolean(watch) && watch!.projectId !== null
 }
+
+/** A phone's new chat page also shows the cards (EmptyStateUsageCards), with a subscription of their own. */
+function emptyStateUsageShown(model: Model) {
+  const watch = model.watch
+  return model.presence !== null && Boolean(watch?.isMobile && watch.showEmptyState)
+}
+
+const usageLimitsStream = () =>
+  topicStream<UsageLimitsSnapshot>({ type: "usage-limits" }).pipe(Stream.map((snapshot) => Message.ReceivedUsageLimits({ snapshot })))
 
 const pageSubscriptions = Subscription.make<Model, Message, KannaSocketService>()((entry) => ({
   /** useIsMobileViewport. */
@@ -54,12 +61,12 @@ const pageSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
   // Per project: UsageWidgets mounts with the project's widget column, so
   // another project subscribes anew.
   usageLimits: entry({ shown: Schema.Boolean, projectId: Schema.NullOr(Schema.String) }, {
-    modelToDependencies: (model) => ({ shown: usageShown(model), projectId: model.watch?.projectId ?? null }),
-    dependenciesToStream: ({ shown }) =>
-      Stream.when(
-        topicStream<UsageLimitsSnapshot>({ type: "usage-limits" }).pipe(Stream.map((snapshot) => Message.ReceivedUsageLimits({ snapshot }))),
-        Effect.sync(() => shown),
-      ),
+    modelToDependencies: (model) => ({ shown: usageWidgetsShown(model), projectId: model.watch?.projectId ?? null }),
+    dependenciesToStream: ({ shown }) => Stream.when(usageLimitsStream(), Effect.sync(() => shown)),
+  }),
+  emptyStateUsageLimits: entry({ shown: Schema.Boolean }, {
+    modelToDependencies: (model) => ({ shown: emptyStateUsageShown(model) }),
+    dependenciesToStream: ({ shown }) => Stream.when(usageLimitsStream(), Effect.sync(() => shown)),
   }),
 
   /**
@@ -68,7 +75,8 @@ const pageSubscriptions = Subscription.make<Model, Message, KannaSocketService>(
    * goes out in React's order.
    */
   usageRefresh: entry({ active: Schema.Boolean }, {
-    modelToDependencies: (model) => ({ active: usageShown(model) && model.watch?.projectId !== null && Boolean(model.watch?.showRightSidebar) }),
+    // Open, or peeking from the edge (UsageWidgets' `showRightSidebar || widgetsPeeking`).
+    modelToDependencies: (model) => ({ active: usageWidgetsShown(model) && Boolean(model.watch?.showRightSidebar || model.widgetsColumn.peekRequested) }),
     dependenciesToStream: ({ active }) =>
       Stream.when(
         Stream.tick(`${USAGE_POLL_MS} millis`).pipe(

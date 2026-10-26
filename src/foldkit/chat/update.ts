@@ -337,7 +337,8 @@ function observePage(model: Model, app: AppModel, watch: Watch, fresh: boolean):
   // UsageWidgets refreshes as it mounts with the open column: a child's
   // effect, so ahead of the page's diff refresh below. (The minute ticks
   // after it are a subscription.)
-  const usageActive = (w: Watch | null | undefined) => Boolean(w?.projectId && w.showRightSidebar)
+  const peeking = model.widgetsColumn.peekRequested
+  const usageActive = (w: Watch | null | undefined) => Boolean(w?.projectId && (w.showRightSidebar || peeking))
   if (usageActive(watch) && (!usageActive(previous) || previous?.projectId !== watch.projectId)) {
     next = modifyFields(next, { usageRefreshing: () => true })
     commands.push(RefreshUsage({ force: false }))
@@ -742,9 +743,14 @@ export function update(model: Model, message: Message, app: AppModel): Return {
         onSome: (next) => commitColumnWidth(model, app, next),
       })
     },
-    ChangedWidgetsPeek: ({ peeking }) => (model.widgetsColumn.peekRequested === peeking
-      ? { model }
-      : { model: modifyFields(model, { widgetsColumn: (column) => ({ ...column, peekRequested: peeking }) }) }),
+    ChangedWidgetsPeek: ({ peeking }) => {
+      if (model.widgetsColumn.peekRequested === peeking) return { model }
+      const next = modifyFields(model, { widgetsColumn: (column) => ({ ...column, peekRequested: peeking }) })
+      // A peek mounts the column's usage as an open one does: it refreshes
+      // (UsageWidgets' `active` is `showRightSidebar || widgetsPeeking`).
+      if (!peeking || !model.watch?.projectId || model.watch.showRightSidebar) return { model: next }
+      return { model: modifyFields(next, { usageRefreshing: () => true }), commands: [RefreshUsage({ force: false })] }
+    },
     ElapsedColumnSlide: ({ token }) => model.widgetsColumn.slideToken === token && model.widgetsColumn.sliding
       ? { model: modifyFields(model, { widgetsColumn: (column) => ({ ...column, sliding: false }) }) }
       : { model },
