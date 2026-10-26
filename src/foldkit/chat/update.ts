@@ -39,6 +39,7 @@ import {
   ElapseTerminalDiffRefresh,
   FocusChatInput,
   MakeTerminalId,
+  MeasureDock,
   MeasureMenuButton,
   MeasureTabMenuButton,
   OpenWindow,
@@ -556,7 +557,7 @@ export function update(model: Model, message: Message, app: AppModel): Return {
   const facts = () => pageFacts(app, model.viewportWidth, model.settledShowEmptyState)
   return Message.match<Return>(message, {
     GotTranscriptMessage: ({ message: inner }) => routeLocalLink(foldTranscript(model, { message: inner, app }) as Return, facts()),
-    GotComposerMessage: ({ message: inner }) => routeDelegatedSend(foldComposer(model, { message: inner, app, page: model }) as Return, app, facts()),
+    GotComposerMessage: ({ message: inner }) => withDockMeasure(model, routeDelegatedSend(foldComposer(model, { message: inner, app, page: model }) as Return, app, facts())),
     GotWidgetsMessage: ({ message: inner }) => foldWidgets(model, { message: inner, app }) as Return,
     GotViewerMessage: ({ message: inner }) => routeLocalLink(foldViewer(model, { message: inner, app }) as Return, facts()),
     GotTerminalMessage: ({ message: inner }) => {
@@ -853,6 +854,21 @@ export function routeLocalLink(result: Return, facts: PageFacts): Return {
  * the composer's message is not for this chat at all. It goes to the
  * delegator, and the app goes with it.
  */
+/**
+ * The chat input reported its layout (`onLayoutChange`) from layout effects
+ * on its text, its attachments' count and its upload error, and as it
+ * mounted for another chat: the dock is measured after each.
+ */
+function withDockMeasure(before: Model, result: Return): Return {
+  const was = before.composer
+  const now = result.model.composer
+  const changed = was.value !== now.value
+    || was.attachments.length !== now.attachments.length
+    || was.uploadError !== now.uploadError
+    || was.instance?.chatKey !== now.instance?.chatKey
+  return changed ? { ...result, commands: [...(result.commands ?? []), MeasureDock()] } : result
+}
+
 export function routeDelegatedSend(result: Return, app: AppModel, facts: PageFacts): Return {
   const out = result.outMessage
   if (!out || out.action._tag !== "Chat" || out.action.message._tag !== "SubmittedMessage") return result

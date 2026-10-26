@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { Command, Mount } from "foldkit"
+import { Command, Mount, Render } from "foldkit"
 import { domStream } from "../ui/overlay/stream"
 import { interpolateLayout, prefersReducedMotion } from "../../client/app/paneAnimation"
 import {
@@ -97,15 +97,54 @@ export const ObserveNavbar = Mount.defineStream("ObserveChatNavbar", {
   }),
 })
 
-/** The composer dock's height (useTranscriptPaddingBottom). */
+/** The dock ChatPage's `inputRef` points at: the one mounted last. */
+let currentDock: HTMLElement | null = null
+/** Pages whose first dock got the observer (useTranscriptPaddingBottom's, set up once as ChatPage mounted). */
+const observedDockPages = new WeakSet<Element>()
+
+const dockHeight = () => currentDock?.getBoundingClientRect().height ?? 0
+
+/**
+ * The composer dock's height (useTranscriptPaddingBottom). Its observer was
+ * set up once, on the dock the page mounted with; a dock drawn anew later
+ * (the page gaining its project wraps it in the terminal's split) is
+ * measured only when the chat input says its layout changed: as it mounts,
+ * on a window resize, and on what `MeasureDock` follows. So the dock growing
+ * under a message of its own (no microphone) leaves the transcript's padding
+ * where it was, in React and here.
+ */
 export const ObserveDock = Mount.defineStream("ObserveChatDock", {
   messages: [Message.MeasuredDock],
   execute: ({ element }) => domStream<typeof Message.MeasuredDock.Type>((emit) => {
-    const read = () => emit(Message.MeasuredDock({ height: element.getBoundingClientRect().height }))
-    const observer = new ResizeObserver(read)
-    observer.observe(element)
+    const dock = element as HTMLElement
+    currentDock = dock
+    const read = () => emit(Message.MeasuredDock({ height: dockHeight() }))
+    const root = dock.closest(`[${PAGE_ROOT_ATTRIBUTE}]`)
+    let observer: ResizeObserver | null = null
+    if (!root || !observedDockPages.has(root)) {
+      if (root) observedDockPages.add(root)
+      observer = new ResizeObserver(read)
+      observer.observe(dock)
+    }
     read()
-    return () => observer.disconnect()
+    window.addEventListener("resize", read)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener("resize", read)
+      if (currentDock === dock) currentDock = null
+    }
+  }),
+})
+
+/**
+ * The chat input's `onLayoutChange` after its text, attachments or upload
+ * error changed (its layout effects): the dock measured once the patch is in.
+ */
+export const MeasureDock = Command.define("MeasureChatDock", {
+  messages: [Message.MeasuredDock],
+  execute: Effect.gen(function* () {
+    yield* Render.afterCommit
+    return Message.MeasuredDock({ height: dockHeight() })
   }),
 })
 
