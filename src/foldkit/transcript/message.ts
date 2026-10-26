@@ -30,7 +30,8 @@ export const Message = defineMessageUnion({
   ResizedViewport: { width: Schema.Number },
   ChangedVisibleRange: { range: Range },
   /** The message at the top of the viewport as the reader scrolls, with when (for the write's throttle). */
-  ReportedReadAnchor: { messageId: Schema.String, atEnd: Schema.Boolean, layout: Layout, at: Schema.Number },
+  /** `settled`: no render was outstanding as it was taken (the page showed its Model). */
+  ReportedReadAnchor: { messageId: Schema.String, atEnd: Schema.Boolean, layout: Layout, at: Schema.Number, settled: Schema.Boolean },
   RequestedLoadOlder: {},
   SpentJump: { requestId: Schema.Number, target: opaque<ChatJumpTarget>("ChatJumpTarget") },
   JumpedToRow: { rowId: Schema.String },

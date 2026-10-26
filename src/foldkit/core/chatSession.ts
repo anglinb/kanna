@@ -1,6 +1,6 @@
 import { Effect, Equivalence, Option, Schema, Stream } from "effect"
 import { measureReadAnchor } from "./readAnchorMeasure"
-import { Command, Dom, Subscription, type Update } from "foldkit"
+import { Command, Dom, Render, Subscription, type Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { modifyFields } from "foldkit/struct"
 import {
@@ -119,6 +119,7 @@ export const Model = Schema.Struct({
       messageId: Schema.String,
       atEnd: Schema.Boolean,
       layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })),
+      settled: Schema.Boolean,
     })),
     timerScheduled: Schema.Boolean,
     /**
@@ -193,6 +194,8 @@ export const Message = defineMessageUnion({
     atEnd: Schema.Boolean,
     layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })),
     at: Schema.Number,
+    /** No render was outstanding as the transcript took it: the page showed its Model. */
+    settled: Schema.Boolean,
   },
   ElapsedReadAnchorTimer: { at: Schema.Number },
   ChangedVisibility: { hidden: Schema.Boolean, at: Schema.Number },
@@ -382,26 +385,31 @@ const nextFrame = Effect.callback<void>((resume) => {
   return Effect.sync(() => cancelAnimationFrame(frame))
 })
 
+/** When a write measures the reader's position (see WriteReadAnchor). */
+const WriteMeasure = Schema.Literals(["sample", "after-render", "next-frame"])
+
 const WriteReadAnchor = Command.define("WriteReadAnchor", {
   args: {
     chatId: Schema.String,
     messageId: Schema.String,
     atEnd: Schema.Boolean,
     layout: Schema.NullOr(Schema.Struct({ transcriptWidth: Schema.Number, offsetFromMessage: Schema.Number })),
-    measure: Schema.Boolean,
+    measure: WriteMeasure,
   },
   messages: [Message.CompletedSideEffect],
   execute: ({ chatId, messageId, atEnd, layout: sampled, measure }) => Effect.gen(function* () {
-    // A throttled write is measured now, as the hook measured when its timer
-    // ran; a frame first, since the hook's timer ran after React's
-    // synchronous render and Foldkit renders on the next frame. The first
-    // write of a burst keeps the report's measure: the hook's zero-delay
-    // timer ran before the next frame, ahead of what that frame moves (the
-    // scroller following the end a frame behind a change in height). The
-    // sample is also what the transcript left as it was taken down.
+    // The hook measured as its timer ran, after React's synchronous render.
+    // A throttled write measures a frame on (Foldkit renders on the next
+    // one). The first write of a burst ran before the next frame, ahead of
+    // what that frame moves (the scroller following the end a frame behind
+    // a change in height): it keeps the report's own measure, unless the
+    // report came in while the press that caused it was still to render
+    // (React had drawn it already), and then it measures once that render
+    // is in. The sample is also what the transcript left as it was taken
+    // down.
     let layout = sampled
-    if (measure) {
-      yield* nextFrame
+    if (measure !== "sample") {
+      yield* (measure === "after-render" ? Render.afterCommit : nextFrame)
       layout = measureReadAnchor(chatId, messageId) ?? sampled
     }
     rememberReadAnchor(chatId, { messageId, atEnd, ...(layout ?? {}) })
@@ -569,7 +577,6 @@ function settleOptimistic(model: Model): Return {
 
 function flushReadAnchor(model: Model, at: number): Return {
   const pending = model.readAnchor.pending
-  const measure = !model.readAnchor.immediate
   const cleared = modifyFields(model, { readAnchor: (anchor) => ({ ...anchor, pending: null, timerScheduled: false, immediate: false }) })
   if (!pending) return { model: cleared }
   // While parked at the bottom the top-visible message churns with every
@@ -580,6 +587,7 @@ function flushReadAnchor(model: Model, at: number): Return {
     ? `${model.chatId}:atEnd`
     : `${model.chatId}:${pending.messageId}:${pending.layout?.offsetFromMessage ?? ""}`
   if (key === model.readAnchor.lastWrittenKey) return { model: cleared }
+  const measure = !model.readAnchor.immediate ? "next-frame" as const : pending.settled ? "sample" as const : "after-render" as const
   return {
     model: modifyFields(cleared, { readAnchor: (anchor) => ({ ...anchor, lastWrittenKey: key, lastWriteAt: at }) }),
     commands: [WriteReadAnchor({ chatId: model.chatId, messageId: pending.messageId, atEnd: pending.atEnd, layout: pending.layout, measure })],
@@ -737,8 +745,8 @@ export function update(model: Model, message: Message, input: { windowSize: numb
     CompletedCommand: () => ({ model }),
     FailedCommand: ({ error }) => withError({ model }, error),
 
-    ReportedReadAnchor: ({ messageId, atEnd, layout, at }) => {
-      const next = modifyFields(model, { readAnchor: (anchor) => ({ ...anchor, pending: { messageId, atEnd, layout } }) })
+    ReportedReadAnchor: ({ messageId, atEnd, layout, at, settled }) => {
+      const next = modifyFields(model, { readAnchor: (anchor) => ({ ...anchor, pending: { messageId, atEnd, layout, settled } }) })
       // A measured position is kept in this browser's copy at once.
       const remember = RememberReadAnchor({ chatId: model.chatId, anchor: { messageId, atEnd, ...(layout ?? {}) } as ResolvedChatReadAnchor })
       // Already scheduled: the newer position just replaces the pending one.

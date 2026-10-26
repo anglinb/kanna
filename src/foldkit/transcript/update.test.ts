@@ -131,9 +131,9 @@ describe("transcript viewport: what goes to the page's chat", () => {
   })
 
   test("a read position goes to the chat with its time", () => {
-    const reported = run(init(), Message.ReportedReadAnchor({ messageId: "m1", atEnd: false, layout: { transcriptWidth: 800, offsetFromMessage: 12 }, at: 5 }))
+    const reported = run(init(), Message.ReportedReadAnchor({ messageId: "m1", atEnd: false, layout: { transcriptWidth: 800, offsetFromMessage: 12 }, at: 5, settled: true }))
     const action = reported.outMessage?.action
-    expect(action?._tag === "Chat" ? action.message : null).toEqual({ _tag: "ReportedReadAnchor", messageId: "m1", atEnd: false, layout: { transcriptWidth: 800, offsetFromMessage: 12 }, at: 5 })
+    expect(action?._tag === "Chat" ? action.message : null).toEqual({ _tag: "ReportedReadAnchor", messageId: "m1", atEnd: false, layout: { transcriptWidth: 800, offsetFromMessage: 12 }, at: 5, settled: true })
   })
 
   test("a question's answers and a plan's decision are the chat's tool responses", () => {

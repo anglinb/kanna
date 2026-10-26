@@ -72,14 +72,14 @@ describe("chat session", () => {
 
   test("read anchor writes are throttled and deduped", () => {
     const ready = ChatSession.update(open(), ChatSession.Message.ReceivedSnapshot({ snapshot: snapshot("c1", []) }), input).model
-    const first = ChatSession.update(ready, ChatSession.Message.ReportedReadAnchor({ messageId: "m1", atEnd: true, layout: null, at: 10_000 }), input)
+    const first = ChatSession.update(ready, ChatSession.Message.ReportedReadAnchor({ messageId: "m1", atEnd: true, layout: null, at: 10_000, settled: true }), input)
     expect(first.commands?.map((command) => command.name)).toEqual(["RememberReadAnchor", "DelayReadAnchorWrite"])
-    const second = ChatSession.update(first.model, ChatSession.Message.ReportedReadAnchor({ messageId: "m2", atEnd: true, layout: null, at: 10_100 }), input)
+    const second = ChatSession.update(first.model, ChatSession.Message.ReportedReadAnchor({ messageId: "m2", atEnd: true, layout: null, at: 10_100, settled: true }), input)
     expect(second.commands?.map((command) => command.name)).toEqual(["RememberReadAnchor"])
     const flushed = ChatSession.update(second.model, ChatSession.Message.ElapsedReadAnchorTimer({ at: 10_200 }), input)
     expect(flushed.commands?.map((command) => command.name)).toEqual(["WriteReadAnchor"])
     // At the end again: same key, no second write.
-    const again = ChatSession.update(flushed.model, ChatSession.Message.ReportedReadAnchor({ messageId: "m3", atEnd: true, layout: null, at: 20_000 }), input)
+    const again = ChatSession.update(flushed.model, ChatSession.Message.ReportedReadAnchor({ messageId: "m3", atEnd: true, layout: null, at: 20_000, settled: true }), input)
     const flushedAgain = ChatSession.update(again.model, ChatSession.Message.ElapsedReadAnchorTimer({ at: 20_000 }), input)
     expect(flushedAgain.commands ?? []).toHaveLength(0)
   })
@@ -87,20 +87,28 @@ describe("chat session", () => {
   test("the first write keeps the report's measure; a throttled one measures again", () => {
     const layout = { transcriptWidth: 816, offsetFromMessage: 197 }
     const ready = ChatSession.update(open(), ChatSession.Message.ReceivedSnapshot({ snapshot: snapshot("c1", []) }), input).model
-    const first = ChatSession.update(ready, ChatSession.Message.ReportedReadAnchor({ messageId: "m1", atEnd: false, layout, at: 10_000 }), input)
+    const first = ChatSession.update(ready, ChatSession.Message.ReportedReadAnchor({ messageId: "m1", atEnd: false, layout, at: 10_000, settled: true }), input)
     const written = ChatSession.update(first.model, ChatSession.Message.ElapsedReadAnchorTimer({ at: 10_000 }), input)
-    expect(written.commands?.[0]?.args).toEqual({ chatId: "c1", messageId: "m1", atEnd: false, layout, measure: false })
-    const later = ChatSession.update(written.model, ChatSession.Message.ReportedReadAnchor({ messageId: "m2", atEnd: true, layout: null, at: 10_500 }), input)
+    expect(written.commands?.[0]?.args).toEqual({ chatId: "c1", messageId: "m1", atEnd: false, layout, measure: "sample" })
+    const later = ChatSession.update(written.model, ChatSession.Message.ReportedReadAnchor({ messageId: "m2", atEnd: true, layout: null, at: 10_500, settled: true }), input)
     expect(later.commands?.find((command) => command.name === "DelayReadAnchorWrite")?.args).toEqual({ ms: 1_000 })
     const throttled = ChatSession.update(later.model, ChatSession.Message.ElapsedReadAnchorTimer({ at: 11_500 }), input)
-    expect(throttled.commands?.[0]?.args).toMatchObject({ messageId: "m2", measure: true })
+    expect(throttled.commands?.[0]?.args).toMatchObject({ messageId: "m2", measure: "next-frame" })
+  })
+
+  test("a first write reported before the press's render measures once it is in", () => {
+    const ready = ChatSession.update(open(), ChatSession.Message.ReceivedSnapshot({ snapshot: snapshot("c1", []) }), input).model
+    const layout = { transcriptWidth: 366, offsetFromMessage: 121 }
+    const first = ChatSession.update(ready, ChatSession.Message.ReportedReadAnchor({ messageId: "m1", atEnd: true, layout, at: 10_000, settled: false }), input)
+    const written = ChatSession.update(first.model, ChatSession.Message.ElapsedReadAnchorTimer({ at: 10_000 }), input)
+    expect(written.commands?.[0]?.args).toMatchObject({ messageId: "m1", measure: "after-render" })
   })
 
   test("the throttle carries over from the chat before", () => {
     const started = ChatSession.init("c2", { windowSize: 50, starting: false, readAnchorLastWriteAt: 10_000 })
     const opened = ChatSession.update(started.model, ChatSession.Message.ResolvedCache({ window: null, remembered: null, timedOut: false }), input).model
     const ready = ChatSession.update(opened, ChatSession.Message.ReceivedSnapshot({ snapshot: snapshot("c2", []) }), input).model
-    const reported = ChatSession.update(ready, ChatSession.Message.ReportedReadAnchor({ messageId: "m1", atEnd: false, layout: null, at: 10_000 }), input)
+    const reported = ChatSession.update(ready, ChatSession.Message.ReportedReadAnchor({ messageId: "m1", atEnd: false, layout: null, at: 10_000, settled: true }), input)
     expect(reported.commands?.find((command) => command.name === "DelayReadAnchorWrite")?.args).toEqual({ ms: 1_500 })
   })
 })

@@ -211,7 +211,7 @@ export function step(model: Model, message: Message, env: { key: string }): Step
       return done(modifyFields(model, { minimap: (minimap) => ({ ...minimap, heldTurnId: null }) }))
 
     case "ReportedReadAnchor":
-      return done(model, [], [chat(ChatSession.Message.ReportedReadAnchor({ messageId: message.messageId, atEnd: message.atEnd, layout: message.layout, at: message.at }))])
+      return done(model, [], [chat(ChatSession.Message.ReportedReadAnchor({ messageId: message.messageId, atEnd: message.atEnd, layout: message.layout, at: message.at, settled: message.settled }))])
     case "RequestedLoadOlder":
       return done(model, [], [chat(ChatSession.Message.ClickedLoadOlder({ untilMessageId: null, all: false }))])
     case "ClickedLoadMore":
