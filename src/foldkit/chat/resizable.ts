@@ -80,11 +80,36 @@ export function panel<Message>(
   ])
 }
 
+/** The library's least hit target across a separator (`resizeTargetMinimumSize`). */
+const RESIZE_TARGET_MINIMUM_PX = { coarse: 20, fine: 10 }
+
 /**
- * A separator's drag, on its element: the pointer is captured on the press,
- * and every move reports the first panel's new share of the group (its
- * parent), held between `min` and `max` percent; the release reports the
- * last one again as `done`. A disabled separator doesn't drag.
+ * Whether a press at (x, y) lands on the separator as the library hit-tests
+ * it: its rect, widened to the least target across, with whatever is on top
+ * there belonging to the group (the terminal pane's header paints over the
+ * lower half of the chat's row handle, and a press there still drags).
+ */
+function pressHitsSeparator(element: HTMLElement, event: PointerEvent): boolean {
+  const target = event.target
+  if (!(target instanceof Node)) return false
+  if (element.contains(target)) return true
+  const group = element.parentElement
+  if (!group || !(group.contains(target) || target.contains(group))) return false
+  const least = window.matchMedia("(pointer:coarse)").matches ? RESIZE_TARGET_MINIMUM_PX.coarse : RESIZE_TARGET_MINIMUM_PX.fine
+  const rect = element.getBoundingClientRect()
+  const growX = Math.max(0, least - rect.width) / 2
+  const growY = Math.max(0, least - rect.height) / 2
+  return event.clientX >= rect.left - growX && event.clientX <= rect.right + growX
+    && event.clientY >= rect.top - growY && event.clientY <= rect.bottom + growY
+}
+
+/**
+ * A separator's drag: the pointer is captured on the press, and every move
+ * reports the first panel's new share of the group (its parent), held
+ * between `min` and `max` percent; the release reports the last one again as
+ * `done`. A disabled separator doesn't drag. The press is heard on the
+ * document, as react-resizable-panels hears it, and taken when it hits the
+ * separator's target; the separator takes focus, as the library gives it.
  */
 export function separatorDrag(options: {
   element: HTMLElement
@@ -98,7 +123,8 @@ export function separatorDrag(options: {
   let last = 0
   const firstPanel = () => element.previousElementSibling as HTMLElement | null
   const down = (event: PointerEvent) => {
-    if (event.button !== 0 || element.getAttribute("data-separator") === "disabled") return
+    if (event.defaultPrevented || (event.pointerType === "mouse" && event.button > 0)) return
+    if (element.getAttribute("data-separator") === "disabled" || !pressHitsSeparator(element, event)) return
     const group = element.parentElement
     const panel = firstPanel()
     if (!group || !panel) return
@@ -107,6 +133,7 @@ export function separatorDrag(options: {
     const size = orientation === "horizontal" ? groupRect.width : groupRect.height
     if (size <= 0) return
     event.preventDefault()
+    element.focus({ preventScroll: true, focusVisible: false } as FocusOptions)
     element.setPointerCapture(event.pointerId)
     const first = ((orientation === "horizontal" ? panelRect.width : panelRect.height) / size) * 100
     start = { pointer: orientation === "horizontal" ? event.clientX : event.clientY, first, size, pointerId: event.pointerId }
@@ -126,12 +153,13 @@ export function separatorDrag(options: {
     element.setAttribute("data-separator", "inactive")
     options.report(last, size, true)
   }
-  element.addEventListener("pointerdown", down)
+  const document = element.ownerDocument
+  document.addEventListener("pointerdown", down, true)
   element.addEventListener("pointermove", move)
   element.addEventListener("pointerup", end)
   element.addEventListener("pointercancel", end)
   return () => {
-    element.removeEventListener("pointerdown", down)
+    document.removeEventListener("pointerdown", down, true)
     element.removeEventListener("pointermove", move)
     element.removeEventListener("pointerup", end)
     element.removeEventListener("pointercancel", end)
