@@ -22,9 +22,10 @@ import { chartOf, Message, selectOf, type AggregateMode, type ChartState } from 
  * settings: nice ticks (getNiceTickValues), the band and point scales, bar
  * positions (combineAllBarPositions), d3's monotone curve with d3-path's
  * 3-digit rounding, sector paths, the axis-tooltip index and the tooltip's
- * placement. Not ported: tick thinning for labels that collide (recharts'
- * `preserveEnd`), which these charts' labels never need at the widths the
- * transcript has.
+ * placement, and the x axis' `preserveEnd` ticks (getTicksEnd): the last
+ * label pulled in to end at the chart's edge, a label that would overlap
+ * the next one or leave the chart left out, label widths measured as
+ * recharts' getStringSize measured them.
  */
 
 // ── The data (copied from ChartTool.tsx) ─────────────────────────────────
@@ -483,6 +484,63 @@ function sectorPath(cx: number, cy: number, innerRadius: number, outerRadius: nu
 
 interface Offset { left: number; top: number; width: number; height: number }
 
+/** Recharts' axis default: the gap kept between two tick labels. */
+const MIN_TICK_GAP = 5
+
+const tickWidths = new Map<string, number>()
+let measureContext: CanvasRenderingContext2D | null | undefined
+
+/**
+ * A tick label's width at the axis' 12px (getStringSize: a span in the body,
+ * so the body's font). Null without a document (tests): every label shows
+ * where its point is.
+ */
+function tickLabelWidth(text: string): number | null {
+  if (typeof document === "undefined") return null
+  const cached = tickWidths.get(text)
+  if (cached !== undefined) return cached
+  if (measureContext === undefined) measureContext = document.createElement("canvas").getContext("2d")
+  if (!measureContext) return null
+  measureContext.font = `12px ${getComputedStyle(document.body).fontFamily}`
+  const width = measureContext.measureText(text).width
+  tickWidths.set(text, width)
+  return width
+}
+
+/**
+ * Recharts' getTicksEnd over an axis from `start` to `end` (the chart's own
+ * box, selectAxisViewBox): from the last tick back, the last one moved in to
+ * fit, each shown only if it fits before the one after it.
+ */
+export function preserveEndTicks(coordinates: ReadonlyArray<number>, sizes: ReadonlyArray<number | null>, start: number, end: number): Array<{ index: number; coordinate: number }> {
+  const count = coordinates.length
+  const first = coordinates[0]
+  const second = coordinates[1]
+  const sign = count >= 2 && first !== undefined && second !== undefined ? Math.sign(second - first) : 1
+  const shown: Array<{ index: number; coordinate: number }> = []
+  let limit = end
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const coordinate = coordinates[index]!
+    const size = sizes[index]
+    if (size === null || size === undefined) {
+      shown.unshift({ index, coordinate })
+      continue
+    }
+    let tickCoordinate = coordinate
+    if (index === count - 1) {
+      const gap = sign * (coordinate + sign * size / 2 - limit)
+      tickCoordinate = gap > 0 ? coordinate - gap * sign : coordinate
+    }
+    const inside = !(sign * tickCoordinate < sign * start || sign * tickCoordinate > sign * limit)
+      && sign * (tickCoordinate - sign * size / 2 - start) >= 0
+      && sign * (tickCoordinate + sign * size / 2 - limit) <= 0
+    if (!inside) continue
+    limit = tickCoordinate - sign * (size / 2 + MIN_TICK_GAP)
+    shown.unshift({ index, coordinate: tickCoordinate })
+  }
+  return shown
+}
+
 const MARGIN = { top: 12, right: 12, left: 12, bottom: 0 }
 const X_AXIS_HEIGHT = 30
 const TICK_SIZE = 6
@@ -919,7 +977,9 @@ function cartesianChart(key: string, model: ChartModel, chart: ChartState, width
       h.g([h.Class(`recharts-cartesian-axis-tick-lines recharts-${axis}Axis-tick-lines`)], Array.from({ length: count }, () => h.g([h.Class("recharts-layer recharts-cartesian-axis-tick")], []))),
     ]),
   ])
-  contents[500] = [tickGroup("x", model.data.length), tickGroup("y", layout.yTicks.length)]
+  const xLabels = model.data.map((row) => String(row[model.xKey] ?? ""))
+  const xTicks = preserveEndTicks(xs, xLabels.map(tickLabelWidth), 0, width)
+  contents[500] = [tickGroup("x", xTicks.length), tickGroup("y", layout.yTicks.length)]
 
   const label = (record: Record<string, string | number>, x: number, dy: string, text: string) => h.g([h.Class("recharts-layer recharts-cartesian-axis-tick-label")], [
     h.text([...attributes(record, h), h.Class("recharts-text recharts-cartesian-axis-tick-value")], [
@@ -929,11 +989,11 @@ function cartesianChart(key: string, model: ChartModel, chart: ChartState, width
   const labelY = bottom + TICK_SIZE + TICK_MARGIN
   const labelX = offset.left - TICK_SIZE - TICK_MARGIN
   contents[2000] = [
-    h.g([h.Class("recharts-cartesian-axis-tick-labels recharts-xAxis-tick-labels")], model.data.map((row, dataIndex) => label(
-      { height: X_AXIS_HEIGHT, orientation: "bottom", width: offset.width, stroke: "none", "font-size": 12, x: xs[dataIndex]!, y: labelY, "text-anchor": "middle", fill: TICK_FILL },
-      xs[dataIndex]!,
+    h.g([h.Class("recharts-cartesian-axis-tick-labels recharts-xAxis-tick-labels")], xTicks.map(({ index, coordinate }) => label(
+      { height: X_AXIS_HEIGHT, orientation: "bottom", width: offset.width, stroke: "none", "font-size": 12, x: coordinate, y: labelY, "text-anchor": "middle", fill: TICK_FILL },
+      coordinate,
       "0.71em",
-      String(row[model.xKey] ?? ""),
+      xLabels[index]!,
     ))),
     h.g([h.Class("recharts-cartesian-axis-tick-labels recharts-yAxis-tick-labels")], layout.yTicks.map((tick) => label(
       { width: model.yAxisWidth, orientation: "left", height: offset.height, stroke: "none", "font-size": 12, x: labelX, y: y(tick), "text-anchor": "end", fill: TICK_FILL },
