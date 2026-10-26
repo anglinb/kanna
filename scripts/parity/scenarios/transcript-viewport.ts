@@ -154,6 +154,11 @@ export const scenarios: Scenario[] = [
     // export opens full size, and Escape closes it.
     name: "transcript-export-viewer-chart",
     route: "/__gallery/transcript-export-viewer?bundle=chart",
+    // React's last x label sits 2px further right: recharts measured "09:00"
+    // (getStringSize) before the page's font had loaded and cached that
+    // narrower width for the page's life. The port measures the label it
+    // draws. The difference is that one label's pixels (about 190, 0.015%).
+    pixelTolerance: 0.0002,
     regions: regions("viewer"),
     async run(context) {
       await reduceMotion(context)
