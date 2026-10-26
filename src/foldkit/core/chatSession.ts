@@ -125,7 +125,8 @@ export const Model = Schema.Struct({
     /**
      * The scheduled write is the throttle's first (no wait): the hook's
      * timer then ran before the next frame, on the position as it was
-     * reported, so the write keeps the report's own measure.
+     * reported, so the write keeps the report's own measure (or, reported
+     * before a press had rendered, measures once it has: WriteReadAnchor).
      */
     immediate: Schema.Boolean,
     lastWriteAt: Schema.Number,
