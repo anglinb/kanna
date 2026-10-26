@@ -46,6 +46,7 @@ import {
   ReadQuickActions,
   RefreshDiffs,
   RefreshUsage,
+  RefreshUsageAfterPorts,
   RenameChat,
 } from "./effects"
 import { Message, type MenuId, type ShortcutAction, type TerminalPurpose, type TooltipId, type WashId, type Watch } from "./message"
@@ -748,8 +749,11 @@ export function update(model: Model, message: Message, app: AppModel): Return {
       const next = modifyFields(model, { widgetsColumn: (column) => ({ ...column, peekRequested: peeking }) })
       // A peek mounts the column's usage as an open one does: it refreshes
       // (UsageWidgets' `active` is `showRightSidebar || widgetsPeeking`).
+      // A moment later: the Ports widget above it reads first (its poll
+      // starts with the column's subscriptions, after this update), as
+      // React ran the column's effects in tree order.
       if (!peeking || !model.watch?.projectId || model.watch.showRightSidebar) return { model: next }
-      return { model: modifyFields(next, { usageRefreshing: () => true }), commands: [RefreshUsage({ force: false })] }
+      return { model: next, commands: [RefreshUsageAfterPorts()] }
     },
     ElapsedColumnSlide: ({ token }) => model.widgetsColumn.slideToken === token && model.widgetsColumn.sliding
       ? { model: modifyFields(model, { widgetsColumn: (column) => ({ ...column, sliding: false }) }) }

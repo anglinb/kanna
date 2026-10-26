@@ -616,6 +616,12 @@ export const ReadQuickActions = Command.define("ReadProjectQuickActions", {
   ),
 })
 
+/** The usage refresh of a peeking column, after the Ports widget's first read. */
+export const RefreshUsageAfterPorts = Command.define("RefreshUsageAfterPorts", {
+  messages: [Message.TickedUsageRefresh],
+  execute: Effect.sleep("1 millis").pipe(Effect.as(Message.TickedUsageRefresh())),
+})
+
 /** useUsageLimits' refresh: the server's TTL coalesces however many ask. */
 export const RefreshUsage = Command.define("RefreshUsageLimits", {
   args: { force: Schema.Boolean },
