@@ -1,10 +1,28 @@
 # React → Foldkit migration
 
-The web client (`src/client`, React 19) is being ported to
+The web client (`src/client`, React 19) was ported to
 [Foldkit](https://foldkit.dev) in `src/foldkit`, following the approach in
 [Maple's React to Foldkit write-up](https://maple.dev/blog/react-to-foldkit/):
 build the parity harness first, decide what "done" means before porting,
 and keep agents away from the yardstick.
+
+## Outcome (2026-10-26)
+
+React is gone: no React component, hook or store in the tree, no React
+package installed (Bun doesn't install peers, `bunfig.toml`), and
+`bun run react-free` clean. The dev server, the production build, the
+export viewer and the kanna.sh demo all run the Foldkit client.
+
+- Parity: every scenario (433) against React's recording
+  (`.parity/baseline`): about 4,190 of 4,258 captures match. What is left
+  is listed under "Known flakes" below: timing races that React shows
+  against itself too, and one-level anti-aliasing at a few corners.
+- End to end, on a real server with real agent turns: 23 scenarios, every
+  one passing against React's build before the switch; on the Foldkit
+  client, repeated runs pass 46/46 and 45/46 (the one miss was the
+  scenario's own wait, since fixed).
+- `bun test`: 26 failures, all server/CLI ones that predate this work (the
+  suite had 40; a test leaking a read-only `window` caused 13 of them).
 
 ## Done
 
@@ -140,67 +158,23 @@ clean; it is also what proves React can be deleted. Bare `zustand` counts
 
 ## End-to-end runs (real server)
 
-`bun run e2e` builds the Foldkit client (`vite.foldkit.config.ts`,
-`src/foldkit/entry`) and runs `scripts/foldkit/e2e/scenarios.ts` against a
+`bun run e2e` builds the client and runs `scripts/foldkit/e2e/scenarios.ts` against a
 real Kanna server: its own data dir under `/tmp/kanna-e2e-*`, two throwaway
 git projects, real agent turns (Claude, with the machine's own sign-in).
-`--app react` runs the same scenarios against React's build: a scenario
-is only trusted once it passes there. `--no-agent` skips the turns,
+Every scenario passed against React's build before React was deleted.
+`--no-agent` skips the turns,
 `--repeat N` runs the suite N times, names pick scenarios. Failures leave
 screenshots in `.e2e/`. The runner deletes the sessions its turns leave in
 `~/.claude/projects` and `~/.codex/sessions` (only those started under
 `/tmp/kanna-e2e-*`).
 
-React passes 23/23. Foldkit passes 21/23; the two left are the setup
-wizard (not ported yet) and the widgets' git changes (in progress).
+React passed 23/23; the Foldkit client passes 23/23.
 
 ## Integration follow-ups
 
-- Sidebar: use `AppAction.Batch` (Archive All, Restore), `OpenChatAt`
-  (hover card jumps), `OpenCommandPalette` instead of the window event.
-- Projects page: refetch GitHub repos on a sign-in change via `observe`
-  (React sends `github.listRecentRepos` twice at boot); use
-  `OpenCommandPalette` instead of the window event.
-- Create chat from the projects page: the demo backend returns its own
-  chat id instead of the client's, so React ends up back at `/`; decide
-  whether the fixture should honor the client id (the real server does).
-- `scripts/parity/scenarios/terminal.ts`: React sometimes sends
-  `terminal.create` twice (a race with the demo's "no shell yet" reply);
-  handle it as `terminal-page.ts` does, so the scenarios are deterministic.
-- `ui/`: opening a modal Select shouldn't close a tooltip already up
-  (Radix registers the new layer before its outside-click check).
-- Sidebar and chat tabs share the chat hover card; move it to one module
-  (the tab card imports the sidebar's `chatCardBody`).
-- `ui/context-menu`: a plain label entry, so `settings/menu.ts` (a local
-  copy for the skills menu heading) can go.
-- `ui/select`: report a choice only for a new value, as Radix does;
-  `settings/shared.ts` `updateSettingsSelect` filters it meanwhile.
-- React bugs matched, to file: RawMessageSection never shows the raw
-  message (its effect cancels its own request); Escape doesn't close the
-  local-link menu.
-- Live schedule card in transcript rows (widgets slice) and the
-  export viewer's ViewerLayer (viewer slice).
-- `@foldkit/vite-plugin` peers on Vite 8; we run Vite 6 (works so far).
-- `app/action.ts` imports types from React files
-  (`components/messages/shared`, `lib/chat-navigation` is fine); move
-  those types before React is deleted. Also `transcript/source.ts`
-  (`ResolvedTranscriptRow` from KannaTranscript.tsx) and the pure client
-  helpers that import zustand stores' types (kannaStateHelpers,
-  viewer-split, chatBrowserNotifications): fix in the deletion sweep.
-- Deleting React (rehearsed in a worktree, green: typecheck, `bun test`
-  same failures as before, all four builds): `src/client` keeps only the
-  pure helpers the rest reaches (the reach script in
-  `/home/dev/foldkit-briefs/delete/`); `src/main.tsx`, `src/export-viewer`,
-  `src/parity/react`, `vite-plugin-message-scroller.ts` and the React
-  dependencies go; `vite.parity.config.ts` builds Foldkit alone and
-  `bun run parity` compares it with `.parity/baseline` (recorded from React
-  by `--save-baseline` before the deletion); client tests stay out of
-  typecheck as before.
-- Production entry: `index.html` still loads React. The live dev instance
-  runs Vite from this checkout, so the switch waits until every slice is
-  in and the e2e suite passes; then `index.html` loads
-  `src/foldkit/entry/main.ts`, `vite.config.ts` takes the `foldkit()`
-  plugin, and `vite.foldkit.config.ts` goes.
+All done (they were the cross-slice wiring each slice left for the root).
+What remains open: `core/renderCommit.ts` reaches Foldkit's internal
+`RenderCommit` service by its key, which an upgrade may move.
 
 ## Loops
 
@@ -236,9 +210,22 @@ porting agents.
   port measures the font it draws with. That scenario tolerates the one
   label's pixels.
 
+## Known flakes (parity)
+
+Timing, not behavior; most fail React against React (`--selfcheck`) too:
+the widget column's 5s/7s polls racing a capture (widgets-ignore-file,
+-checkout-branch, -stop-task, -delete-quick-action, -run-quick-action,
+-add-quick-action); a hover card under a resting pointer
+(widgets-generate-and-push, -edge-peek); the read anchor's throttled write
+landing on either side of a capture (transcript-ask-user-question-answer,
+transcript-load-older, composer-plan-mode-*); the minimap's first tick
+(chat-featured, palette-new-delegator); one-level anti-aliasing at chip and
+checkbox corners (mobile-attach, mobile-send, composer-slash-menu,
+settings-providers, palette-keyboard-navigation).
+
 ## Known
 
-- `bun test` has 40 failures on this branch before any of this work (socket,
-  CLI, cloud integration, terminal); same set with and without it.
+- `bun test` has 26 failures (socket, CLI, cloud integration, terminal)
+  that predate this work.
 - The demo backend didn't answer `github.listRecentRepos`, which the home
   page sends; it now returns `{ available: false, repos: [] }`.
