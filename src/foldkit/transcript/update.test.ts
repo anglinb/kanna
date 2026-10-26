@@ -9,7 +9,7 @@ import { memoryStorage } from "../core/stores/testing"
 import * as Messages from "./messages"
 import { Message } from "./message"
 import { init, type Model } from "./model"
-import { DelayScrollButton, update } from "./update"
+import { DelayScrollButton, leftPage, update } from "./update"
 import { DriveViewport, JumpViewportToRow } from "./viewport"
 import { AppAction } from "../app/action"
 import * as ViewerStore from "../core/stores/viewer"
@@ -58,6 +58,15 @@ describe("transcript viewport: the scroll-to-bottom button", () => {
     const away = run(init(), Message.ChangedAtEnd({ isAtEnd: false })).model
     const back = run(away, Message.ChangedAtEnd({ isAtEnd: true })).model
     expect(run(back, Message.ElapsedScrollButtonDelay({ token: 1 })).model.showScrollToBottom).toBe(false)
+  })
+
+  test("the page going starts it over: back on a read position, it shows again", () => {
+    const shown = { ...init(), isAtEnd: false, showScrollToBottom: true, scrollButtonToken: 1 }
+    const left = leftPage(shown)
+    expect(left.isAtEnd).toBe(true)
+    expect(left.showScrollToBottom).toBe(false)
+    const restored = run(left, Message.ChangedAtEnd({ isAtEnd: false }))
+    expect(names(restored)).toEqual(["DelayTranscriptScrollButton"])
   })
 
   test("the same report twice starts no second delay", () => {

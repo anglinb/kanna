@@ -24,7 +24,7 @@ import { transcriptView } from "./view"
 //   messages/               the rows
 
 export { Message, Model, init }
-export { update } from "./update"
+export { leftPage, update } from "./update"
 
 type ViewInputs = SliceViewInputs & Partial<Pick<ChatPageSliceInputs, "page" | "emptyState">>
 

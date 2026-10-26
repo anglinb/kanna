@@ -596,7 +596,9 @@ export function update(model: Model, message: Message, app: AppModel): Return {
     },
 
     EnteredPage: ({ token }) => ({ model: modifyFields(model, { presence: () => token }) }),
-    LeftPage: ({ token }) => (model.presence === token ? { model: modifyFields(model, { presence: () => null }) } : { model }),
+    LeftPage: ({ token }) => (model.presence === token
+      ? { model: modifyFields(model, { presence: () => null, transcript: (transcript) => Transcript.leftPage(transcript) }) }
+      : { model }),
     ObservedPage: ({ watch, fresh }) => observePage(model, app, watch, fresh),
     ResizedWindow: ({ width }) => (width === model.viewportWidth ? { model } : { model: modifyFields(model, { viewportWidth: () => width }) }),
     MeasuredLayout: ({ width, height }) => {
