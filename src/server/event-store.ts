@@ -1,3 +1,4 @@
+import { existingAccountId } from "../shared/accounts"
 import path from "node:path"
 import { Context, Deferred, Effect, FileSystem, Layer, Option, Result, Schema, type Scope } from "effect"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
@@ -41,7 +42,7 @@ import {
   type TranscriptPayload,
   type TranscriptPayloadReadError,
 } from "./transcript-payloads"
-import { INLINE_TOOL_KINDS } from "./events"
+import { INLINE_TOOL_KINDS, type UsageLimitResume } from "./events"
 import {
   copyTranscriptMedia,
   externalizeEntryImages,
@@ -277,6 +278,7 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_created":
       return 1
     case "chat_renamed":
+    case "chat_account_set":
     case "chat_provider_set":
     case "chat_plan_mode_set":
     case "chat_auto_plan_set":
@@ -294,6 +296,7 @@ function getReplayEventPriority(event: StoreEvent) {
       return 6
     case "turn_cancelled":
     case "turn_resume_pending_set":
+    case "usage_limit_resume_set":
       return 7
     case "turn_finished":
     case "turn_failed":
@@ -581,6 +584,7 @@ export class EventStore extends Context.Service<EventStore, {
   readonly pruneStaleEmptyChats: (options?: StaleChatSweepOptions) => Effect.Effect<string[], EventStoreFileError | TranscriptMediaError>
   readonly autoArchiveStaleChats: (options?: StaleChatSweepOptions) => Effect.Effect<string[], EventStoreFileError>
   readonly deleteStaleChats: (options?: StaleChatSweepOptions) => Effect.Effect<string[], EventStoreFileError | TranscriptMediaError>
+  readonly setChatAccount: (chatId: string, provider: AgentProvider, accountId: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setChatProvider: (chatId: string, provider: AgentProvider) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setPlanMode: (chatId: string, planMode: boolean) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setAutoPlan: (chatId: string, autoPlan: boolean) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
@@ -616,6 +620,8 @@ export class EventStore extends Context.Service<EventStore, {
   readonly recordTurnFailed: (chatId: string, error: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly recordTurnCancelled: (chatId: string) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setTurnResumePending: (chatId: string, pending: boolean) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
+  /** Set (or, with null, clear) when a chat stopped by a usage limit continues. See `ChatRecord.usageLimitResume`. */
+  readonly setUsageLimitResume: (chatId: string, resume: UsageLimitResume | null) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   readonly setSessionToken: (chatId: string, sessionToken: string | null) => Effect.Effect<void, EventStoreNotFoundError | EventStoreFileError>
   /** `pendingForkAt` is where the fork branches off that session (`ChatRecord.pendingForkAt`); cleared with the token. */
   readonly setPendingForkSessionToken: (
@@ -988,6 +994,11 @@ class StoreMemory {
         chat.updatedAt = event.timestamp
         break
       }
+      case "chat_account_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (chat) chat.accountIds = { ...chat.accountIds, [event.provider]: event.accountId }
+        break
+      }
       case "chat_provider_set": {
         const chat = this.state.chatsById.get(event.chatId)
         if (!chat) break
@@ -1140,6 +1151,16 @@ class StoreMemory {
           chat.resumePending = true
         } else {
           delete chat.resumePending
+        }
+        break
+      }
+      case "usage_limit_resume_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        if (event.resume) {
+          chat.usageLimitResume = { ...event.resume }
+        } else {
+          delete chat.usageLimitResume
         }
         break
       }
@@ -2311,6 +2332,10 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     Effect.flatMap((chat) => unchanged(chat) ? Effect.void : appendEvent(filePath, makeEvent())),
   )
 
+  const setChatAccount = (chatId: string, provider: AgentProvider, accountId: string) => chatSetting(paths.chatsLog, chatId,
+    (chat) => chat.accountIds?.[provider] === accountId,
+    (): ChatEvent => ({ v: STORE_VERSION, type: "chat_account_set", timestamp: Date.now(), chatId, provider, accountId }))
+
   const setChatProvider = Effect.fn("EventStore.setChatProvider")(function* (chatId: string, provider: AgentProvider) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
     yield* chatSetting(paths.chatsLog, chatId, (chat) => chat.provider === provider, (): ChatEvent => ({
@@ -2444,6 +2469,8 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     if (sourceChat.touchedFiles?.length) {
       yield* recordFilesTouched(chatId, sourceChat.touchedFiles)
     }
+    for (const [provider, accountId] of Object.entries(sourceChat.accountIds ?? {})) yield* setChatAccount(chatId, provider as AgentProvider, accountId)
+    if (!sourceChat.accountIds?.[sourceProvider]) yield* setChatAccount(chatId, sourceProvider, existingAccountId(sourceProvider))
     yield* setChatProvider(chatId, sourceProvider)
     yield* setPlanMode(chatId, sourceChat.planMode)
     yield* setAutoPlan(chatId, sourceChat.autoPlan)
@@ -2963,6 +2990,21 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     }))
   })
 
+  /** Bookkeeping like `setTurnResumePending`, so it leaves `updatedAt` alone too. */
+  const setUsageLimitResume = Effect.fn("EventStore.setUsageLimitResume")(function* (chatId: string, resume: UsageLimitResume | null) {
+    yield* Effect.annotateCurrentSpan("chatId", chatId)
+    yield* chatSetting(paths.turnsLog, chatId, (chat) =>
+      (chat.usageLimitResume?.at ?? null) === (resume?.at ?? null)
+      && (chat.usageLimitResume?.provider ?? null) === (resume?.provider ?? null),
+    (): TurnEvent => ({
+      v: STORE_VERSION,
+      type: "usage_limit_resume_set",
+      timestamp: Date.now(),
+      chatId,
+      resume,
+    }))
+  })
+
   const setSessionToken = Effect.fn("EventStore.setSessionToken")(function* (chatId: string, sessionToken: string | null) {
     yield* Effect.annotateCurrentSpan("chatId", chatId)
     yield* chatSetting(paths.turnsLog, chatId, (chat) => chat.sessionToken === sessionToken, (): TurnEvent => ({
@@ -3166,6 +3208,7 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     pruneStaleEmptyChats,
     autoArchiveStaleChats,
     deleteStaleChats,
+    setChatAccount,
     setChatProvider,
     setPlanMode,
     setAutoPlan,
@@ -3187,6 +3230,7 @@ const makeEventStore = Effect.fn("EventStore.make")(function* (options: EventSto
     recordTurnFailed,
     recordTurnCancelled,
     setTurnResumePending,
+    setUsageLimitResume,
     setSessionToken,
     setPendingForkSessionToken,
     compact: compact(),

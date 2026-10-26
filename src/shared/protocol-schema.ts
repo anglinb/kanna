@@ -1,3 +1,4 @@
+import { McpServerInputSchema, McpProviderSchema } from "./mcp-schema"
 import { Effect, Schema, Struct } from "effect"
 import { isClientEnvelope, type ClientEnvelope } from "./protocol"
 
@@ -144,6 +145,7 @@ const EditorOpenSettings = Schema.Struct({ preset: EditorPreset, commandTemplate
 
 /** The settings a send carries from the composer, shared by chat.send and message.enqueue. */
 const ComposerFields = {
+  accountId: Schema.optionalKey(Schema.String),
   attachments: Schema.optionalKey(Schema.Array(ChatAttachment)),
   provider: Schema.optionalKey(AgentProvider),
   model: Schema.optionalKey(Schema.String),
@@ -201,14 +203,29 @@ export const ClientCommandSchema = Schema.Union([
   command("settings.writeAppSettingsPatch", { patch: AppSettingsPatch }),
   command("settings.readLlmProvider"),
   command("usage.refresh", { force: optionalBoolean }),
+  command("accounts.create", { account: Schema.Struct({ provider: AgentProvider, label: Schema.String, apiKey: optionalString, baseUrl: optionalString, apiProvider: Schema.optionalKey(Schema.Literals(["openai", "openrouter", "custom"])) }) }),
+  command("accounts.setDefault", { provider: AgentProvider, accountId: Schema.String }),
+  command("accounts.updateKey", { accountId: Schema.String, apiKey: Schema.String }),
+  command("accounts.rename", { accountId: Schema.String, label: Schema.String }),
+  command("accounts.remove", { accountId: Schema.String }),
+  command("accounts.login", { accountId: Schema.String }),
+  command("accounts.submitCode", { accountId: Schema.String, code: Schema.String }),
+  command("accounts.cancelLogin", { accountId: Schema.String }),
   command("auth.refresh", { force: optionalBoolean }),
   command("auth.install", { service: AuthServiceId }),
-  command("auth.login.start", { service: AuthServiceId }),
-  command("auth.login.submitCode", { service: AuthServiceId, code: Schema.String }),
-  command("auth.login.cancel", { service: AuthServiceId }),
+  command("auth.login.start", { service: AuthServiceId, accountId: optionalString }),
+  command("auth.login.submitCode", { service: AuthServiceId, code: Schema.String, accountId: optionalString }),
+  command("auth.login.cancel", { service: AuthServiceId, accountId: optionalString }),
   command("auth.openrouter.start", { callbackUrl: Schema.String }),
   command("auth.openrouter.exchange", { code: Schema.String }),
   command("chat.listSkills", { provider: AgentProvider, chatId: optionalString, projectId: optionalString }),
+  command("mcp.read"),
+  command("mcp.save", { server: McpServerInputSchema }),
+  command("mcp.remove", { id: Schema.String }),
+  command("mcp.connect", { id: Schema.String }),
+  command("mcp.disconnect", { id: Schema.String }),
+  command("mcp.importConfig", { content: Schema.String, providers: Schema.Array(McpProviderSchema), projectPath: optionalString }),
+  command("mcp.importProvider", { provider: Schema.Literals(["claude", "codex", "cursor"]), projectPath: optionalString }),
   command("skills.search", { query: Schema.String, limit: optionalNumber }),
   command("skills.install", { source: Schema.String, skillId: Schema.String }),
   command("skills.uninstall", { skillId: Schema.String }),
@@ -287,6 +304,7 @@ export const ClientCommandSchema = Schema.Union([
   command("chat.discardDiffFile", { chatId: Schema.String, path: Schema.String }),
   command("chat.ignoreDiffFile", { chatId: Schema.String, path: Schema.String }),
   command("chat.cancel", { chatId: Schema.String }),
+  command("chat.usageLimitResume", { chatId: Schema.String, action: Schema.Literals(["cancel", "now"]) }),
   command("chat.stopDraining", { chatId: Schema.String }),
   command("chat.stopTask", { chatId: Schema.String, taskId: Schema.String }),
   command("chat.exportStandalone", {

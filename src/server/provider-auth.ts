@@ -326,7 +326,7 @@ export interface ExecResult {
 
 export interface ExecOptions {
   readonly stdin?: string
-  readonly env?: Record<string, string>
+  readonly env?: Record<string, string | undefined>
   /** Kill the process after this long; what it printed so far is still returned. */
   readonly timeoutMs?: number
 }
@@ -352,10 +352,10 @@ export interface ProviderAuthOptions {
   /** Start a login CLI with piped output (default: a real process). */
   readonly spawnStreaming?: (
     argv: ReadonlyArray<string>,
-    options?: { readonly env?: Record<string, string> },
+    options?: { readonly env?: Record<string, string | undefined> },
   ) => Effect.Effect<LoginChild, CommandSpawnError, Scope.Scope>
   /** Start a login CLI on a PTY (default: a real process on the machine's `PtySpawner`). */
-  readonly spawnPty?: (argv: ReadonlyArray<string>) => Effect.Effect<LoginChild, CommandSpawnError, Scope.Scope>
+  readonly spawnPty?: (argv: ReadonlyArray<string>, options?: { readonly env?: Record<string, string | undefined> }) => Effect.Effect<LoginChild, CommandSpawnError, Scope.Scope>
   /** Default: the user's llm-provider.json. */
   readonly readLlmProvider?: Effect.Effect<LlmProviderSnapshot, LlmProviderFileError>
   readonly writeLlmProvider?: (value: LlmProviderWrite) => Effect.Effect<LlmProviderSnapshot, LlmProviderFileError>
@@ -370,6 +370,8 @@ export interface ProviderAuthOptions {
   readonly claudeMinimumVersion?: string
   /** After a sign-in is verified (CLI flows) or saved (OpenRouter). */
   readonly onSignedIn?: (service: AuthServiceId) => Effect.Effect<void>
+  readonly environment?: Record<string, string | undefined>
+  readonly services?: AuthServiceId[]
   readonly platform?: NodeJS.Platform
 }
 
@@ -392,6 +394,7 @@ export class ProviderAuth extends Context.Service<ProviderAuth, {
   readonly probeService: (service: AuthServiceId) => Effect.Effect<void>
   /** Install or update a CLI. Progress and failures land in the snapshot. */
   readonly install: (service: AuthServiceId) => Effect.Effect<void, ProviderAuthError>
+  readonly signOut: (service: "claude" | "codex") => Effect.Effect<void, ProviderAuthError>
   readonly startLogin: (service: AuthServiceId) => Effect.Effect<void, ProviderAuthError>
   readonly submitLoginCode: (service: AuthServiceId, code: string) => Effect.Effect<void, ProviderAuthError>
   readonly cancelLogin: (service: AuthServiceId) => Effect.Effect<void>
@@ -467,7 +470,7 @@ type RefreshAction =
   | { readonly _tag: "start"; readonly done: Deferred.Deferred<void> }
   | { readonly _tag: "skip" }
 
-const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: ProviderAuthOptions) {
+export const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: ProviderAuthOptions) {
   const analytics = yield* Analytics
   const layerScope = yield* Effect.scope
   const machine = yield* Machine
@@ -477,13 +480,17 @@ const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: Prov
     yield* Effect.context<FileSystem.FileSystem | ProcessSpawner | PtySpawner | Machine | FileSystemExtras>(),
   )
 
-  const exec = options.exec
+  const rawExec = options.exec
     ?? ((argv: ReadonlyArray<string>, execOptions?: ExecOptions) => execCommand(argv, execOptions).pipe(Effect.provide(platformContext)))
-  const spawnStreaming = options.spawnStreaming
-    ?? ((argv: ReadonlyArray<string>, spawnOptions?: { readonly env?: Record<string, string> }) =>
+  const rawSpawnStreaming = options.spawnStreaming
+    ?? ((argv: ReadonlyArray<string>, spawnOptions?: { readonly env?: Record<string, string | undefined> }) =>
       spawnStreamingCommand(argv, spawnOptions).pipe(Effect.provide(platformContext)))
-  const spawnPty = options.spawnPty
-    ?? ((argv: ReadonlyArray<string>) => spawnPtyCommand(argv).pipe(Effect.provide(platformContext)))
+  const rawSpawnPty = options.spawnPty
+    ?? ((argv: ReadonlyArray<string>, spawnOptions?: { readonly env?: Record<string, string | undefined> }) => spawnPtyCommand(argv, spawnOptions).pipe(Effect.provide(platformContext)))
+  const profileArgv = (argv: ReadonlyArray<string>) => options.environment?.CODEX_HOME ? [argv[0]!, "-c", 'cli_auth_credentials_store="file"', ...argv.slice(1)] : argv
+  const exec: NonNullable<ProviderAuthOptions["exec"]> = (argv, opts) => rawExec(profileArgv(argv), { ...opts, env: { ...opts?.env, ...options.environment } })
+  const spawnStreaming: NonNullable<ProviderAuthOptions["spawnStreaming"]> = (argv, opts) => rawSpawnStreaming(profileArgv(argv), { ...opts, env: { ...opts?.env, ...options.environment } })
+  const spawnPty: NonNullable<ProviderAuthOptions["spawnPty"]> = (argv, opts) => rawSpawnPty(argv, { ...opts, env: { ...opts?.env, ...options.environment } })
   const readLlmProvider = options.readLlmProvider
     ?? readLlmProviderSnapshot().pipe(Effect.provide(platformContext))
   const writeLlmProvider = options.writeLlmProvider
@@ -746,9 +753,9 @@ const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: Prov
 
   const doRefresh = Effect.fn("ProviderAuth.doRefresh")(function* (force: boolean) {
     if (force) commandPaths.clear()
-    yield* Effect.forEach(AUTH_SERVICE_ORDER, probeService, { concurrency: "unbounded", discard: true })
+    yield* Effect.forEach(options.services ?? AUTH_SERVICE_ORDER, probeService, { concurrency: "unbounded", discard: true })
     yield* Ref.set(lastStatusRefreshAt, Option.some(yield* Clock.currentTimeMillis))
-    yield* checkLatestVersionsInBackground
+    if (!options.services) yield* checkLatestVersionsInBackground
   })
 
   const refresh = Effect.fn("ProviderAuth.refresh")(function* (refreshOptions: { readonly force?: boolean } = {}) {
@@ -870,7 +877,7 @@ const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: Prov
       ? `The update finished, but ${probed.label} still reports ${probed.version} (latest is ${probed.latestVersion}).`
       : null
     yield* patchService(service, { installState: stale ? "error" : "idle", installError: stale })
-    yield* checkLatestVersionsInBackground
+    if (!options.services) yield* checkLatestVersionsInBackground
   })
 
   const install = Effect.fn("ProviderAuth.install")(function* (service: AuthServiceId) {
@@ -1383,6 +1390,17 @@ const makeProviderAuth = Effect.fn("ProviderAuth.make")(function* (options: Prov
     refresh,
     probeService,
     install,
+    signOut: (service) => Effect.gen(function* () {
+      yield* teardownFlow(service)
+      const binary = yield* cliPath(service)
+      if (!binary) return yield* loginError(service, "The provider CLI is not installed.")
+      const result = yield* exec([binary, ...(service === "claude" ? ["auth", "logout"] : ["logout"])], { timeoutMs: 15_000 }).pipe(
+        Effect.mapError(() => loginError(service, "Unable to sign out this account.")),
+      )
+      if (result.code !== 0) return yield* loginError(service, "Unable to sign out this account.")
+      yield* setLogin(service, { phase: "idle" })
+      yield* probeService(service)
+    }),
     startLogin,
     submitLoginCode,
     cancelLogin,
@@ -1454,7 +1472,7 @@ const pipeText = (stream: Stream.Stream<Uint8Array, CommandSpawnError>) =>
 /** A login CLI with piped stdout/stderr, killed when the scope closes. */
 export const spawnStreamingCommand = Effect.fn("ProviderAuth.spawnStreaming")(function* (
   argv: ReadonlyArray<string>,
-  options: { readonly env?: Record<string, string> } = {},
+  options: { readonly env?: Record<string, string | undefined> } = {},
 ) {
   const command = argv[0] ?? ""
   yield* Effect.annotateCurrentSpan("command", command)
@@ -1472,7 +1490,7 @@ export const spawnStreamingCommand = Effect.fn("ProviderAuth.spawnStreaming")(fu
 })
 
 /** A login CLI on a PTY (claude's Ink app needs one), killed when the scope closes. */
-export const spawnPtyCommand = Effect.fn("ProviderAuth.spawnPty")(function* (argv: ReadonlyArray<string>) {
+export const spawnPtyCommand = Effect.fn("ProviderAuth.spawnPty")(function* (argv: ReadonlyArray<string>, options: { readonly env?: Record<string, string | undefined> } = {}) {
   const command = argv[0] ?? ""
   yield* Effect.annotateCurrentSpan("command", command)
   const ptys = yield* PtySpawner
@@ -1490,7 +1508,7 @@ export const spawnPtyCommand = Effect.fn("ProviderAuth.spawnPty")(function* (arg
     cols: 200,
     rows: 50,
     name: "xterm-256color",
-    env: { ...machine.env.snapshot(), TERM: "xterm-256color" },
+    env: { ...machine.env.snapshot(), ...options.env, TERM: "xterm-256color" },
     onData: (data) => {
       Queue.offerUnsafe(output, decoder.decode(data))
     },

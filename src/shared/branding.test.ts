@@ -28,4 +28,13 @@ describe("runtime profile helpers", () => {
     expect(getKeybindingsFilePath("/tmp/home", env)).toBe("/tmp/home/.kanna-dev/keybindings.json")
     expect(getKeybindingsFilePathDisplay(env)).toBe("~/.kanna-dev/keybindings.json")
   })
+
+  test("KANNA_DATA_ROOT_NAME overrides the data root for either profile", () => {
+    const env = { KANNA_RUNTIME_PROFILE: "dev", KANNA_DATA_ROOT_NAME: ".kanna-foldkit" }
+
+    expect(getDataRootName(env)).toBe(".kanna-foldkit")
+    expect(getDataDir("/tmp/home", env)).toBe("/tmp/home/.kanna-foldkit/data")
+    expect(getDataDirDisplay(env)).toBe("~/.kanna-foldkit/data")
+    expect(getDataRootName({ KANNA_DATA_ROOT_NAME: "  " })).toBe(".kanna")
+  })
 })

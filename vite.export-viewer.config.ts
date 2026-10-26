@@ -1,7 +1,7 @@
 import path from "node:path"
 import { rm } from "node:fs/promises"
 import { defineConfig } from "vite"
-import react from "@vitejs/plugin-react"
+import { foldkit } from "@foldkit/vite-plugin"
 
 const GOOGLE_FONT_IMPORT_PATTERN = /@import(?:\s+url\()?["']https:\/\/fonts\.googleapis\.com[^;]+;?/g
 const EXPORT_VIEWER_OUT_DIR = path.resolve(import.meta.dirname, "dist/export-viewer")
@@ -18,10 +18,12 @@ const UNUSED_PUBLIC_ENTRIES = [
   "screenshot.png",
 ]
 
+// The export viewer is the Foldkit one (src/foldkit/transcript/export); the
+// React one (src/export-viewer) is kept until React is deleted, unbuilt.
 export default defineConfig({
-  root: path.resolve(import.meta.dirname, "src/export-viewer"),
+  root: path.resolve(import.meta.dirname, "src/foldkit/transcript/export"),
   plugins: [
-    react(),
+    foldkit(),
     {
       name: "strip-export-viewer-google-font-import",
       generateBundle(_options, bundle) {

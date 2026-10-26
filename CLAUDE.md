@@ -1,7 +1,7 @@
 # Kanna — development notes
 
 Kanna is a local web UI for coding agents (Claude Code, Codex, Cursor, Grok Build, Pi).
-Bun server + React 19 client, talking over one WebSocket.
+Bun server + [Foldkit](https://foldkit.dev) client (the Elm architecture on Effect), talking over one WebSocket.
 
 ## Commands
 
@@ -9,12 +9,16 @@ Bun server + React 19 client, talking over one WebSocket.
 - `bun test` — unit/integration suite (Bun test)
 - `bun run check` — typecheck + both production builds
 - `bun run build` — client + export-viewer bundles
+- `bun run parity [names]` — every scenario against the recorded baseline
+  (`.parity/baseline`); `--record` re-records it after a deliberate visual change
+- `bun run e2e` — real-server end-to-end scenarios (own data dir, real agent turns)
+- `bun run react-free` — fails if anything the client imports reaches React
 
 ## How it fits together
 
 ```
-React client (src/client)
-  socket.ts ── one WebSocket ──► WSRouter (src/server/ws-router.ts)
+Foldkit client (src/foldkit; framework-free helpers in src/client)
+  core/socket.ts ── one WebSocket ──► WSRouter (src/server/ws-router.ts)
                                    ├─ commands: switch on ClientCommand (shared/protocol.ts)
                                    ├─ snapshots: per-topic push with dedupe signatures
                                    ├─ AgentCoordinator (agent.ts) ── provider adapters:
@@ -61,6 +65,12 @@ React client (src/client)
   transcript path see headers only.
 
 ## Conventions
+
+- The web client is `src/foldkit` (entry `src/foldkit/entry/main.ts`;
+  conventions in `docs/foldkit-conventions.md`). There is no React: Bun
+  doesn't install peer dependencies (`bunfig.toml`), and `bun run
+  react-free` keeps the import graph clean. `src/client` holds only the
+  framework-free helpers the client imports.
 
 - `src/shared/` is imported by both sides — no Bun/node imports there.
 - Server modules reach Bun and the OS only through the platform services in

@@ -1,0 +1,120 @@
+# Foldkit port: conventions
+
+Read with `docs/foldkit-migration.md` (what "done" means, the rules). This
+file is how the code is written.
+
+## Where things go
+
+```
+src/foldkit/
+  app/        root program: Model, Message, update, view, routing, wiring
+  core/       socket resource, snapshot subscriptions, commands, storage,
+              theme, keybindings, app dialogs, shared helpers
+  ui/         primitives replacing src/client/components/ui (Radix/shadcn)
+  markdown/   markdown → Foldkit Html (replaces react-markdown)
+  <feature>/  one folder per ported slice: sidebar/, home/, settings/,
+              chat/, composer/, transcript/, palette/, terminal/, …
+```
+
+- One folder is owned by one agent at a time. `app/` and `core/` are owned
+  by the integrator; a slice agent asks for changes there in its report, or
+  makes the smallest additive change (a field, a `Got*` Message, a view
+  call) and says so.
+- `src/client/**` is what is left of the React client: framework-free
+  helpers (`src/client/lib/*`, `kannaStateHelpers.ts`, `derived.ts`, …)
+  the client imports. Nothing there may import a UI framework.
+- `src/shared/**` is shared with the server: import, never fork.
+
+## Code style
+
+- The repo's style: double quotes, no semicolons, 2-space indent, comments
+  that say why. Match the density of the React file being ported; carry its
+  comments over when they still explain the Foldkit code.
+- Foldkit idioms (docs: `/home/dev/foldkit-docs/llms-full.txt`, index in
+  `/home/dev/foldkit-docs/INDEX.txt`):
+  - Model is a `Schema.Struct`. Snapshot data typed by interfaces in
+    `src/shared` goes in with `opaque<T>("Name")` from `core/schema.ts`.
+  - Messages from `defineMessageUnion`, past-tense facts:
+    `ClickedArchive`, `ReceivedSidebarSnapshot`, `SucceededForkChat`,
+    `FailedForkChat`. `Got*` only for a child's Message lifted by a parent.
+  - Side effects only in Commands (`Command.define`), Subscriptions, Mounts
+    and ManagedResources. `update` and `view` are pure.
+  - A slice is a Submodel: `Model`, `Message`, `OutMessage` (facts the
+    parent must act on: navigation, opening a dialog), `init`, `update`,
+    `view(model, …inputs, h)`. Shared state it only reads (sidebar data,
+    settings) comes in as view inputs / update inputs from the parent, not
+    copied into its Model.
+  - `h` is the last parameter of every view helper.
+  - Key list items by stable ids (`h.keyed`).
+- Socket commands go through `core/` helpers (a `ClientCommand` in, a
+  result or error Message out). The command log is compared with React's,
+  so send the same commands, with the same fields, in the same order.
+
+## Talking to the root
+
+- A slice asks the root for anything app-wide through its OutMessage:
+  `RequestedAppAction({ action })` with an `AppAction` from
+  `app/action.ts` (navigate, create/fork/archive/delete a chat, write
+  settings, open externally, a store change as `AppAction.Store`, a
+  message to the page's chat session as `AppAction.Chat`, …). The root
+  runs it (`app/actions.ts`); confirm/prompt dialogs those need are the
+  root's.
+- What a slice reads from the root comes in as view and update inputs:
+  the stores (`app/stores.ts`), the page's chat session
+  (`core/chatSession.ts`, selectors there), connection status, settings.
+
+## Event data Foldkit's attributes don't carry
+
+`h.OnClick` carries no modifier keys or button, `h.OnContextMenu` no
+position, and there is no generic `On(event)` attribute. When the React
+code read the event (Cmd/Ctrl-click for a background tab, a context menu
+at the pointer, drag data, wheel deltas), use one of:
+
+- `Mount.defineStream` on that element with `Dom.streamFromEvent` (the
+  mapper gets the real event, may `preventDefault` synchronously); or
+- for many identical elements (every chat link in a transcript), one
+  delegated `Dom.streamFromEvent` on `document` in a Subscription that
+  finds the target by a `data-*` attribute.
+
+## Matching the recorded behavior
+
+The React client is gone; what it did is recorded in `.parity/baseline`
+and the end-to-end scenarios. What follows is how the port was held to it,
+and how a change is held to the recording.
+
+
+- Same DOM: element types, nesting, `class` strings copied verbatim from
+  the JSX (resolve `cn(...)`/`cva` the same way, using
+  `src/client/lib/utils.ts`), the same `aria-*`, `role`, `data-*`,
+  `title`, `type`, `tabindex`. Radix adds attributes (`data-state`,
+  `aria-expanded`, `aria-controls`) that CSS and the accessibility tree
+  read; reproduce the ones that matter to either.
+- Same text, including whitespace that renders.
+- Same timing where it is visible: what shows on the first frame, what
+  waits for a snapshot.
+- When React was wrong, the port matched it anyway and noted it; the
+  deliberate exceptions are listed in `docs/foldkit-migration.md`.
+- A deliberate visual change: re-record the scenarios it changes
+  (`bun run parity --record <names>`) in the same change.
+
+## Testing
+
+- Story tests for update logic, Scene tests for views, next to the module
+  (`foo.ts` / `foo.test.ts`), under `bun test`.
+- Parity: `bun run parity <scenario> [--region <name>]`. Scenarios live in
+  `scripts/parity/scenarios/`, one file per area. Gallery pages
+  (`src/parity/foldkit/gallery/<name>.ts`, served at
+  `/__gallery/<name>`) check a component in isolation.
+- The harness, scenarios and the fixture are protected: never change one
+  to make a difference go away. Only the agent asked to write scenarios, or
+  to build gallery pages, edits them.
+- `bun run typecheck` must stay clean (tsc, one at a time machine-wide; the `tsconfig.json`
+  includes `src/foldkit/**`).
+
+## Worktrees
+
+Port agents work in their own git worktree. If `node_modules` is missing
+there, symlink it: `ln -s /home/dev/kanna-foldkit/node_modules node_modules`.
+Never run `bun add`; ask for a dependency in the report. Parity runs take a
+machine-wide lock, so a run may wait for another agent's; that is
+expected. Commit on the worktree's branch; the integrator merges.

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { easePane, interpolateLayout, paneDurationMs, PANE_CLOSE_MS, PANE_OPEN_MS } from "./paneAnimation"
-import { resolveTerminalAnimationState, shouldRequestTerminalFocus } from "./useTerminalToggleAnimation"
+import { resolveTerminalAnimationState, shouldRequestTerminalFocus } from "../../foldkit/chat/terminalPane"
 
 describe("paneAnimation", () => {
   test("clamps easing at the ends", () => {
@@ -32,12 +32,7 @@ describe("paneAnimation", () => {
       previousShouldRenderTerminalLayout: false,
       previousShowTerminalPane: false,
       showTerminalPane: true,
-      terminalLayout: {
-        isVisible: true,
-        mainSizes: [68, 32],
-        terminals: [],
-        nextTerminalIndex: 1,
-      },
+      mainSizes: [68, 32],
       liveLayout: [68, 32],
     })
 
@@ -53,12 +48,7 @@ describe("paneAnimation", () => {
       previousShouldRenderTerminalLayout: false,
       previousShowTerminalPane: false,
       showTerminalPane: true,
-      terminalLayout: {
-        isVisible: true,
-        mainSizes: [68, 32],
-        terminals: [],
-        nextTerminalIndex: 1,
-      },
+      mainSizes: [68, 32],
       liveLayout: [68, 32],
     })
 
@@ -72,12 +62,7 @@ describe("paneAnimation", () => {
       previousShouldRenderTerminalLayout: true,
       previousShowTerminalPane: true,
       showTerminalPane: true,
-      terminalLayout: {
-        isVisible: true,
-        mainSizes: [60, 40],
-        terminals: [],
-        nextTerminalIndex: 1,
-      },
+      mainSizes: [60, 40],
       liveLayout: [68, 32],
     })
 

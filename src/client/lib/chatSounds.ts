@@ -1,4 +1,4 @@
-import type { ChatSoundId, ChatSoundPreference } from "../stores/chatSoundPreferencesStore"
+import type { ChatSoundId, ChatSoundPreference } from "../../shared/types"
 import { publicAssetUrl } from "./publicAsset"
 
 const CHAT_SOUND_SRC: Record<ChatSoundId, string> = {

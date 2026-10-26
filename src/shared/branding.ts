@@ -4,6 +4,7 @@ export const DATA_ROOT_NAME = ".kanna"
 export const DEV_DATA_ROOT_NAME = ".kanna-dev"
 export const PACKAGE_NAME = "kanna-code"
 export const RUNTIME_PROFILE_ENV_VAR = "KANNA_RUNTIME_PROFILE"
+export const DATA_ROOT_NAME_ENV_VAR = "KANNA_DATA_ROOT_NAME"
 // Read version from package.json — JSON import works in both Bun and Vite
 import pkg from "../../package.json"
 export const APP_VERSION = pkg.version
@@ -29,6 +30,9 @@ export function getRuntimeProfile(env: RuntimeEnv = getRuntimeEnv()): RuntimePro
 }
 
 export function getDataRootName(env: RuntimeEnv = getRuntimeEnv()) {
+  // Lets a second dev instance on one machine keep its own data and instance lock.
+  const override = env?.[DATA_ROOT_NAME_ENV_VAR]?.trim()
+  if (override) return override
   return getRuntimeProfile(env) === "dev" ? DEV_DATA_ROOT_NAME : DATA_ROOT_NAME
 }
 

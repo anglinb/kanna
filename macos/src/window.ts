@@ -330,6 +330,7 @@ export class MainWindow {
    *  server; another machine loads from kanna.sh, at `url` when a link inside
    *  the page picked a path there. */
   async showMachine(subdomain: string | null, url?: string) {
+    if (subdomain && !fleet.enabled) { this.showThisMac(); return }
     const machine = subdomain && subdomain !== fleet.thisSubdomain ? fleet.list.find((m) => m.subdomain === subdomain) : undefined
     if (!machine) {
       this.showThisMac()
@@ -354,6 +355,7 @@ export class MainWindow {
    *  expired session lands: kanna.sh sent the page to its sign-in, which the
    *  window never shows. */
   signIn(subdomain: string, url?: string) {
+    if (!fleet.enabled) { this.showThisMac(); return }
     this.showThisMac()
     signIn(fleet.site, () => void this.showMachine(subdomain, url))
   }
@@ -371,7 +373,7 @@ export class MainWindow {
    *  (src/client/stores/connectionStore.ts). null while this Mac isn't on
    *  Kanna Cloud: the picker falls back to its local behavior. */
   pushFleet() {
-    const payload = fleet.list.length
+    const payload = fleet.enabled && fleet.list.length
       ? { machines: fleet.list, thisMachine: fleet.thisSubdomain, showing: this.showingSubdomain }
       : null
     this.runInPage(

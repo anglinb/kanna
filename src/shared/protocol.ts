@@ -1,3 +1,4 @@
+import type { McpServerInput, McpProvider } from "./mcp"
 import type {
   AppSettingsSnapshot,
   AppSettingsPatch,
@@ -171,18 +172,33 @@ export type ClientCommand =
   | { type: "settings.writeAppSettingsPatch"; patch: AppSettingsPatch }
   | { type: "settings.readLlmProvider" }
   | { type: "usage.refresh"; force?: boolean }
+  | { type: "accounts.create"; account: import("./accounts").AccountInput }
+  | { type: "accounts.setDefault"; provider: AgentProvider; accountId: string }
+  | { type: "accounts.updateKey"; accountId: string; apiKey: string }
+  | { type: "accounts.rename"; accountId: string; label: string }
+  | { type: "accounts.remove"; accountId: string }
+  | { type: "accounts.login"; accountId: string }
+  | { type: "accounts.submitCode"; accountId: string; code: string }
+  | { type: "accounts.cancelLogin"; accountId: string }
   | { type: "auth.refresh"; force?: boolean }
   /** Install (or update to the latest version of) a service's CLI. */
   | { type: "auth.install"; service: AuthServiceId }
-  | { type: "auth.login.start"; service: AuthServiceId }
+  | { type: "auth.login.start"; service: AuthServiceId; accountId?: string }
   /** claude only: the code the user pasted back from the OAuth page. */
-  | { type: "auth.login.submitCode"; service: AuthServiceId; code: string }
-  | { type: "auth.login.cancel"; service: AuthServiceId }
+  | { type: "auth.login.submitCode"; service: AuthServiceId; accountId?: string; code: string }
+  | { type: "auth.login.cancel"; service: AuthServiceId; accountId?: string }
   /** Ack result: `{ authUrl: string }` — open in a popup. */
   | { type: "auth.openrouter.start"; callbackUrl: string }
   /** Ack result: LlmProviderSnapshot with the exchanged key saved. */
   | { type: "auth.openrouter.exchange"; code: string }
   | { type: "chat.listSkills"; provider: AgentProvider; chatId?: string; projectId?: string }
+  | { type: "mcp.read" }
+  | { type: "mcp.save"; server: McpServerInput }
+  | { type: "mcp.remove"; id: string }
+  | { type: "mcp.connect"; id: string }
+  | { type: "mcp.disconnect"; id: string }
+  | { type: "mcp.importConfig"; content: string; providers: McpProvider[]; projectPath?: string }
+  | { type: "mcp.importProvider"; provider: "claude" | "codex" | "cursor"; projectPath?: string }
   | { type: "skills.search"; query: string; limit?: number }
   | { type: "skills.install"; source: string; skillId: string }
   | { type: "skills.uninstall"; skillId: string }
@@ -277,6 +293,7 @@ export type ClientCommand =
   | { type: "chat.loadOlder"; chatId: string; untilMessageId?: string; all?: boolean }
   | {
       type: "chat.send"
+      accountId?: string
       chatId?: string
       projectId?: string
       provider?: AgentProvider
@@ -324,6 +341,11 @@ export type ClientCommand =
   | { type: "chat.discardDiffFile"; chatId: string; path: string }
   | { type: "chat.ignoreDiffFile"; chatId: string; path: string }
   | { type: "chat.cancel"; chatId: string }
+  /**
+   * A chat waiting for its usage limit to reset (`ChatRuntime.usageLimitResume`):
+   * `cancel` turns the resume off for it, `now` sends the "carry on" at once.
+   */
+  | { type: "chat.usageLimitResume"; chatId: string; action: "cancel" | "now" }
   | { type: "chat.stopDraining"; chatId: string }
   /** Stops one background task (a monitor, a workflow, a subagent) and leaves the turn running. */
   | { type: "chat.stopTask"; chatId: string; taskId: string }
@@ -337,6 +359,7 @@ export type ClientCommand =
   | { type: "chat.respondTool"; chatId: string; toolUseId: string; result: unknown }
   | {
       type: "message.enqueue"
+      accountId?: string
       chatId: string
       content: string
       attachments?: ChatAttachment[]

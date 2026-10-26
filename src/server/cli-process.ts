@@ -18,6 +18,7 @@ export interface CliProcess {
 }
 
 export interface CliSpawnArgs {
+  readonly env?: Record<string, string | undefined>
   readonly cwd: string
   readonly argv: ReadonlyArray<string>
   /** Written to stdin, which is then closed. Without it stdin is closed from the start. */
@@ -38,6 +39,7 @@ export const spawnCli = Effect.fn("CliProcess.make")(function* (command: string)
     yield* Effect.annotateCurrentSpan("command", command)
     const proc = yield* spawner.spawn([command, ...args.argv], {
       cwd: args.cwd,
+      env: args.env,
       stdin: args.stdin ?? "ignore",
       stdout: "pipe",
       stderr: "pipe",

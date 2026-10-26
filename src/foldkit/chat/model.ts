@@ -1,0 +1,275 @@
+import { Schema } from "effect"
+import type { ProjectQuickAction } from "../../shared/protocol"
+import type { UsageLimitsSnapshot } from "../../shared/types"
+import { opaque } from "../core/schema"
+import * as Composer from "../composer"
+import * as Terminal from "../terminal"
+import * as Transcript from "../transcript"
+import * as Viewer from "../viewer"
+import * as Widgets from "../widgets"
+import * as ChatCard from "../ui/chat-hover-card"
+import * as ContextMenu from "../ui/context-menu"
+import * as Select from "../ui/select"
+import * as Tooltip from "../ui/tooltip"
+import * as DefaultModelsDialog from "./defaultModelsDialog"
+import { TabCard, TabDrag, Watch } from "./message"
+
+// The chat page's Model: the sub-slices, and what ChatPage kept in state and
+// refs of its own.
+
+const Wash = Schema.Struct({
+  /** Something has scrolled under the navbar. */
+  scrolled: Schema.Boolean,
+  /** Just after a chat opened: the wash takes its state at once, no fade. */
+  settling: Schema.Boolean,
+  token: Schema.Number,
+})
+
+export const Model = Schema.Struct({
+  transcript: Transcript.Model,
+  composer: Composer.Model,
+  widgets: Widgets.Model,
+  viewer: Viewer.Model,
+  terminal: Terminal.Model,
+
+  /**
+   * The page is on screen (its view is mounted), by the token of that
+   * showing. The slice outlives the route; ChatPage did not, and what it
+   * subscribed to ended with it.
+   */
+  presence: Schema.NullOr(Schema.Number),
+
+  /** window.innerWidth (useIsMobileViewport). */
+  viewportWidth: Schema.Number,
+  /** The page's own box (useLayoutWidth, useFixedTerminalHeight). */
+  layoutWidth: Schema.Number,
+  layoutHeight: Schema.Number,
+  /** The navbar's height, published as `--chat-navbar-h`. Null until measured. */
+  navbarHeight: Schema.NullOr(Schema.Number),
+  /** The composer dock's height (useTranscriptPaddingBottom). */
+  dockHeight: Schema.Number,
+
+  /** Files are being dragged over the chat card: the transcript shows its drop overlay. */
+  pageFileDragActive: Schema.Boolean,
+
+  /** The page as last observed; null before the first look. */
+  watch: Schema.NullOr(Watch),
+  lastGitRefreshProjectId: Schema.NullOr(Schema.String),
+  /** The empty state as the page last showed it (`settledShowEmptyStateRef`). */
+  settledShowEmptyState: Schema.Boolean,
+  emptyStateTyping: Schema.Struct({
+    /** The typing belongs to the empty state now on screen. */
+    started: Schema.Boolean,
+    count: Schema.Number,
+    complete: Schema.Boolean,
+  }),
+
+  /**
+   * Whether the empty state on screen came in typing its line out (the
+   * viewport's `emptyStateAnimatesInRef`), for the chat it came in on: the
+   * viewport is per chat, and one that mounts on an empty state already typed
+   * shows it as is.
+   */
+  emptyStateEntrance: Schema.NullOr(Schema.Struct({ chatId: Schema.NullOr(Schema.String), animatesIn: Schema.Boolean })),
+  /** The project's chats under the empty state (EmptyStateProjectChats). */
+  projectChats: Schema.Struct({
+    query: Schema.String,
+    cascadeDone: Schema.Boolean,
+    /** The clock its ages read against, taken as it appeared. */
+    nowMs: Schema.NullOr(Schema.Number),
+    stuck: Schema.Boolean,
+  }),
+
+  /** The chat tabs' menus, one per tab, made on first use (chatTabs.ts `tabMenu`). */
+  tabMenus: Schema.Record(Schema.String, ContextMenu.Model),
+  tabDrag: Schema.NullOr(TabDrag),
+  /** The tabs the bar came up with: those don't animate in. */
+  tabsInitial: Schema.NullOr(Schema.Array(Schema.String)),
+  /** The chat card beneath the tab under the pointer (tabHoverCard.ts). */
+  tabCard: TabCard,
+
+  washes: Schema.Struct({ transcript: Wash, widgets: Wash }),
+  washTokens: Schema.Number,
+
+  title: Schema.Struct({
+    /** The text field's value while renaming in place. */
+    draft: Schema.NullOr(Schema.String),
+    /** A name typed here, shown until the server's title catches up. */
+    submitted: Schema.NullOr(Schema.String),
+    /** The server's title when `submitted` was typed: moving on from it settles it. */
+    submittedOver: Schema.NullOr(Schema.String),
+  }),
+
+  widgetsColumn: Schema.Struct({
+    open: Schema.Boolean,
+    switchKey: Schema.NullOr(Schema.String),
+    sliding: Schema.Boolean,
+    slideToken: Schema.Number,
+    dragWidthPx: Schema.NullOr(Schema.Number),
+    dragStart: Schema.NullOr(Schema.Struct({ pointerX: Schema.Number, widthPx: Schema.Number })),
+    /** The closed column asked to be shown over the chat (useEdgePeek's `requested`). */
+    peekRequested: Schema.Boolean,
+  }),
+
+  /**
+   * The terminal's split under the panes (useTerminalToggleAnimation): its
+   * live layout, which a toggle slides to the new one, and what the React
+   * hook wrote on the DOM imperatively (`data-terminal-open` on the panel,
+   * `data-terminal-animated` on the pane, which stays "true" once a slide
+   * has run until a snap sets it back).
+   */
+  terminalPane: Schema.Struct({
+    split: Schema.NullOr(Schema.Tuple([Schema.Number, Schema.Number])),
+    panelOpen: Schema.NullOr(Schema.Literals(["true", "false"])),
+    animated: Schema.Boolean,
+    animation: Schema.NullOr(Schema.Struct({
+      token: Schema.Number,
+      from: Schema.Tuple([Schema.Number, Schema.Number]),
+      to: Schema.Tuple([Schema.Number, Schema.Number]),
+      durationMs: Schema.Number,
+    })),
+    tokens: Schema.Number,
+    previousShouldRender: Schema.Boolean,
+    previousShow: Schema.Boolean,
+    /** Bumped when the pane opens by a toggle: the terminal takes focus. Per switch key. */
+    focusRequest: Schema.Struct({ key: Schema.NullOr(Schema.String), version: Schema.Number }),
+  }),
+
+  /**
+   * The viewer's split as last laid out (ChatPage's `viewerSplitStateRef`):
+   * the pane's state, the chat and the split it was for (a split is new per
+   * project, and none on a phone), and a slide under way.
+   */
+  viewerPane: Schema.Struct({
+    state: Schema.Literals(["closed", "docked", "expanded"]),
+    chatKey: Schema.String,
+    group: Schema.NullOr(Schema.String),
+    /** Opened docked before the page had a width: it takes its width once measured. */
+    pendingDock: Schema.Boolean,
+    animation: Schema.NullOr(Schema.Struct({
+      token: Schema.Number,
+      from: Schema.Tuple([Schema.Number, Schema.Number]),
+      to: Schema.Tuple([Schema.Number, Schema.Number]),
+      durationMs: Schema.Number,
+    })),
+    tokens: Schema.Number,
+  }),
+
+  /** The chat column and the viewer's pane, in percent (the split's layout). */
+  viewerSplit: Schema.Tuple([Schema.Number, Schema.Number]),
+
+  /**
+   * What the widget column shows that the page loads for it as it opens
+   * (QuickActionsWidget's read, UsageWidgets' subscription and refresh),
+   * handed to widgets/ as `page.widgetsData`.
+   */
+  quickActions: Schema.Record(Schema.String, opaque<ReadonlyArray<ProjectQuickAction>>("ProjectQuickActions")),
+  quickActionsError: Schema.NullOr(Schema.String),
+  usageLimits: Schema.NullOr(opaque<UsageLimitsSnapshot>("UsageLimitsSnapshot")),
+  usageRefreshing: Schema.Boolean,
+  /** A phone's new chat page shows the usage as cards (usageCards.ts): which are open, and their bars' tooltips. */
+  usageCards: Schema.Struct({
+    expanded: Schema.Record(Schema.String, Schema.Boolean),
+    tooltips: Schema.Record(Schema.String, Tooltip.Model),
+  }),
+
+  /** The Default Models dialog the composer's model picker opens ("Add models…"). */
+  defaultModels: DefaultModelsDialog.Model,
+
+  /** Bumped by each terminal command: only the last one's wait refreshes the diffs. */
+  terminalDiffRefreshToken: Schema.Number,
+
+  /** Commands for terminals made by a quick action, sent once each opens. */
+  pendingTerminalCommands: Schema.Record(Schema.String, Schema.String),
+
+  tooltips: Schema.Struct({
+    openIn: Tooltip.Model,
+    terminal: Tooltip.Model,
+    widgets: Tooltip.Model,
+    picker: Tooltip.Model,
+    delegated: Tooltip.Model,
+  }),
+  menus: Schema.Struct({
+    overflow: ContextMenu.Model,
+    title: ContextMenu.Model,
+  }),
+  openSelect: Select.Model,
+})
+export type Model = typeof Model.Type
+
+const wash = { scrolled: false, settling: true, token: 0 }
+
+export const initialViewerPane: Model["viewerPane"] = {
+  state: "closed",
+  chatKey: "",
+  group: null,
+  pendingDock: false,
+  animation: null,
+  tokens: 0,
+}
+
+export const initialTerminalPane: Model["terminalPane"] = {
+  split: null,
+  panelOpen: null,
+  animated: false,
+  animation: null,
+  tokens: 0,
+  previousShouldRender: false,
+  previousShow: false,
+  focusRequest: { key: null, version: 0 },
+}
+
+export function init(): Model {
+  return {
+    transcript: Transcript.init(),
+    composer: Composer.init(),
+    widgets: Widgets.init(),
+    viewer: Viewer.init(),
+    terminal: Terminal.init(),
+    presence: null,
+    // React's useState initializer read the window the same way.
+    viewportWidth: typeof window === "undefined" ? 0 : window.innerWidth,
+    layoutWidth: 0,
+    layoutHeight: 0,
+    navbarHeight: null,
+    dockHeight: 148,
+    pageFileDragActive: false,
+    watch: null,
+    lastGitRefreshProjectId: null,
+    settledShowEmptyState: false,
+    emptyStateTyping: { started: false, count: 0, complete: false },
+    emptyStateEntrance: null,
+    projectChats: { query: "", cascadeDone: false, nowMs: null, stuck: false },
+    tabMenus: {},
+    tabDrag: null,
+    tabsInitial: null,
+    tabCard: { hovered: null, card: ChatCard.initCardData() },
+    washes: { transcript: wash, widgets: wash },
+    washTokens: 0,
+    title: { draft: null, submitted: null, submittedOver: null },
+    widgetsColumn: { open: false, switchKey: null, sliding: false, slideToken: 0, dragWidthPx: null, dragStart: null, peekRequested: false },
+    terminalPane: initialTerminalPane,
+    viewerPane: initialViewerPane,
+    viewerSplit: [100, 0],
+    quickActions: {},
+    quickActionsError: null,
+    usageLimits: null,
+    usageRefreshing: false,
+    usageCards: { expanded: {}, tooltips: {} },
+    defaultModels: DefaultModelsDialog.init("chat-default-models"),
+    terminalDiffRefreshToken: 0,
+    pendingTerminalCommands: {},
+    tooltips: {
+      openIn: Tooltip.init({ id: "chat-navbar-open-in" }),
+      terminal: Tooltip.init({ id: "chat-navbar-terminal" }),
+      widgets: Tooltip.init({ id: "chat-navbar-widgets" }),
+      picker: Tooltip.init({ id: "chat-empty-state-project" }),
+      delegated: Tooltip.init({ id: "chat-navbar-delegated" }),
+    },
+    menus: {
+      overflow: ContextMenu.init({ id: "chat-navbar-overflow" }),
+      title: ContextMenu.init({ id: "chat-navbar-title" }),
+    },
+    openSelect: Select.init({ id: "chat-navbar-open-destination" }),
+  }
+}

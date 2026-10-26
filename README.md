@@ -62,7 +62,7 @@ That's it. Kanna opens in your browser at [`localhost:3210`](http://localhost:32
 ## Architecture
 
 ```
-Browser (React + Zustand)
+Browser (Foldkit: the Elm architecture on Effect)
     ↕  WebSocket
 Bun Server (HTTP + WS)
     ├── WSRouter ─── subscription & command routing
@@ -122,6 +122,28 @@ kanna --cloudflared <token>  # run a named Cloudflare tunnel from a token
 ```
 
 Default URL: `http://localhost:3210`
+
+### Disabling cloud
+
+Cloud features are enabled by default. Disable them for one launch with:
+
+```bash
+kanna --no-cloud
+```
+
+For a persistent setting, create `~/.kanna/config.json` (`~/.kanna-dev/config.json` for development):
+
+```json
+{ "cloud": { "enabled": false } }
+```
+
+Or launch with `KANNA_CLOUD_ENABLED=false kanna`. Precedence is CLI, environment, config, then the enabled default. `KANNA_CLOUD_ENABLED=true` overrides a disabled config; `--cloud` explicitly enables hosted mode. Invalid settings report an error instead of silently enabling cloud.
+
+Restart the server after changing this policy (`kanna stop`, then launch again). The CLI and Mac app refuse to reuse a server with a conflicting policy; older servers must be upgraded to attest that cloud is fully disabled. The Mac app reads the same config and shell environment.
+
+With cloud disabled, Kanna does not load pairing credentials, start cloud connections or heartbeats, discover Fleet machines, mint cloud tokens, or accept cloud proxy authentication. Cloud endpoints return 404, and pairing/Fleet controls disappear. `kanna pair`, public sharing (`--share`, `--cloudflared`), and exposing local ports are unavailable. Existing pairing credentials stay on disk for re-enabling cloud later.
+
+Local chats, agents, password authentication, and LAN/Tailscale access still work. This setting controls Kanna Cloud and public tunnels; provider requests, Git operations, analytics, and update checks have their own behavior.
 
 ### Network access (Tailscale / LAN)
 
@@ -220,15 +242,15 @@ bun run dev:server   # http://localhost:5175
 
 ```
 src/
-├── client/          React UI layer
-│   ├── app/         App router, pages, socket client, useKannaState + feature hooks
-│   │                (useChatCommands, useSendMessage, useAppSettingsSync,
-│   │                useUpdateRestart, useShareExport, snapshotEquality)
-│   ├── components/  Messages, chat chrome (incl. chat-ui/git/ panel modules),
-│   │                dialogs, buttons, inputs
-│   ├── hooks/       Theme, standalone mode detection
-│   ├── stores/      Zustand stores (chat input, preferences, project order)
-│   └── lib/         Formatters, path utils, transcript parsing, storage keys
+├── foldkit/         Web client (Foldkit: the Elm architecture on Effect)
+│   ├── app/         Root program: routes, auth, socket, snapshots, root actions
+│   ├── core/        Socket, chat session, stores, navigation
+│   ├── ui/          Primitives (dialogs, menus, tooltips, selects, icons)
+│   ├── markdown/    Markdown → Foldkit views
+│   └── sidebar/ home/ settings/ chat/ composer/ transcript/ widgets/
+│                    viewer/ terminal/ palette/ setup/  one folder per screen
+├── client/          Framework-free client helpers (formatters, path utils,
+│                    transcript parsing, keybindings, storage keys)
 ├── server/          Bun backend
 │   ├── cli.ts       CLI entry point & browser launcher
 │   ├── server.ts    HTTP/WS server setup & static serving

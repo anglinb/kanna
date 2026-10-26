@@ -1,3 +1,6 @@
+import { ManagedMcp } from "./managed-mcp"
+import type { McpBridgeServers } from "../shared/mcp"
+import { runTest } from "./effect/testing"
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -19,12 +22,14 @@ import {
 } from "./agent"
 import type { HarnessTurn } from "./harness-types"
 import type { SubagentActivityUpdate } from "./background-tasks"
-import type { ChatAttachment, TranscriptEntry } from "../shared/types"
+import type { AgentProvider, ChatAttachment, TranscriptEntry } from "../shared/types"
+import { runKanna } from "./effect/bridge"
 import type { SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
 import { makeFakeAnalytics } from "./analytics.fake"
 import { fakeCodexAppServer } from "./codex-app-server.fake"
 import { testPlatformContext } from "./platform/testing"
+import { USAGE_LIMIT_RESUME_SLACK_MS } from "./usage-limit-resume"
 
 async function waitFor(condition: () => boolean, timeoutMs = 2000) {
   const start = Date.now()
@@ -1585,6 +1590,48 @@ describe("AgentCoordinator claude integration", () => {
     events.close()
   })
 
+  test("MCP changes reconnect Claude with the existing conversation and only local bridge credentials", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "kanna-agent-mcp-"))
+    try {
+      await runTest(Effect.gen(function* () {
+        const mcp = yield* ManagedMcp
+        const snapshot = yield* mcp.save({ name: "github", transport: "http", url: "https://upstream.example/mcp", headers: { Authorization: "Bearer upstream-secret" }, providers: ["claude"] })
+        const configured = snapshot.servers[0]!
+        const store = createFakeStore()
+        const starts: Array<{ servers: McpBridgeServers; sessionToken: string | null }> = []
+        const coordinator = new AgentCoordinator({
+          platform: testPlatformContext, managedMcp: mcp, store: store as never, onStateChange: () => {},
+          startClaudeSession: async (args) => {
+            starts.push({ servers: args.mcpServers ?? {}, sessionToken: args.sessionToken })
+            const events = new AsyncEventQueue<any>()
+            return {
+              provider: "claude", stream: events, getAccountInfo: async () => null,
+              interrupt: async () => {}, close: () => events.close(), setModel: async () => {}, setPermissionMode: async () => {},
+              sendPrompt: async () => {
+                events.push({ type: "session_token" as const, sessionToken: "claude-mcp-session" })
+                events.push({ type: "transcript" as const, entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "done" }) })
+              },
+            }
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => coordinator.dispose()))
+        const send = (content: string) => coordinator.send({ type: "chat.send", chatId: "chat-1", provider: "claude", content, model: "claude-opus-4-1" })
+        yield* Effect.promise(() => send("one"))
+        yield* Effect.promise(() => waitFor(() => store.turnFinishedCount === 1))
+        yield* Effect.promise(() => send("two"))
+        yield* Effect.promise(() => waitFor(() => store.turnFinishedCount === 2))
+        expect(starts).toHaveLength(1)
+        expect(starts[0]?.servers.github?.url).toStartWith("http://127.0.0.1:")
+        expect(JSON.stringify(starts)).not.toContain("upstream-secret")
+        yield* mcp.save({ id: configured.id, name: configured.name, transport: "http", url: configured.url, providers: [] })
+        yield* Effect.promise(() => send("three"))
+        yield* Effect.promise(() => waitFor(() => store.turnFinishedCount === 3))
+        expect(starts).toHaveLength(2)
+        expect(starts[1]).toEqual({ servers: {}, sessionToken: "claude-mcp-session" })
+      }).pipe(Effect.provide(ManagedMcp.layer(dataDir))))
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+
   test("a chat made a delegator restarts its Claude session, which resumes with the delegator instructions", async () => {
     const startSessionCalls: Array<{ delegator?: boolean; sessionToken: string | null }> = []
     const store = createFakeStore()
@@ -3084,6 +3131,11 @@ function createFakeStore(options?: {
       throw new Error("Did not expect turn failure")
     },
     async recordTurnCancelled() {},
+    async setUsageLimitResume(chatId: string, resume: { at: number; provider: AgentProvider } | null) {
+      const target = requireChat(chatId) as { usageLimitResume?: { at: number; provider: AgentProvider } }
+      if (resume) target.usageLimitResume = resume
+      else delete target.usageLimitResume
+    },
     async setTurnResumePending(chatId: string, pending: boolean) {
       const target = requireChat(chatId)
       if (pending) {
@@ -3801,5 +3853,164 @@ describe("waiting on a subagent", () => {
 
     await agent.stopBackgroundTask("chat-1", "agent-thread-1")
     expect(stopped).toEqual(["agent-thread-1"])
+  })
+})
+
+describe("usage limit resume", () => {
+  const RESETS_AT_SECONDS = 1_900_000_000
+  const failed = (result: string) => ({
+    type: "transcript" as const,
+    entry: timestamped({ kind: "result", subtype: "error", isError: true, durationMs: 0, result }),
+  })
+
+  /** A Claude chat whose first prompt is refused by its limit and whose later prompts succeed. */
+  function claudeHittingItsLimit() {
+    const store = createFakeStore()
+    store.chat.provider = "claude"
+    ;(store as { recordTurnFailed: () => Promise<void> }).recordTurnFailed = async () => {}
+    const prompts: string[] = []
+    const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
+      store: store as never,
+      onStateChange: () => {},
+      startClaudeSession: async (args) => {
+        const events = new AsyncEventQueue<any>()
+        return {
+          provider: "claude",
+          stream: events,
+          getAccountInfo: async () => null,
+          interrupt: async () => {},
+          close: () => events.close(),
+          setModel: async () => {},
+          setPermissionMode: async () => {},
+          sendPrompt: async (content: string) => {
+            prompts.push(content)
+            events.push({ type: "session_token" as const, sessionToken: "claude-session-1" })
+            if (prompts.length === 1) {
+              args.onRateLimitEvent?.({ status: "rejected", resetsAt: RESETS_AT_SECONDS, rateLimitType: "five_hour" })
+              events.push(failed("You've hit your limit · resets 3pm"))
+              return
+            }
+            events.push({ type: "transcript" as const, entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "done" }) })
+          },
+        }
+      },
+    })
+    const send = (content: string) => coordinator.send({ type: "chat.send", chatId: "chat-1", provider: "claude", content, model: "claude-opus-4-1" })
+    return { store, coordinator, prompts, send }
+  }
+
+  const resumeOf = (store: ReturnType<typeof createFakeStore>) =>
+    (store.chat as { usageLimitResume?: { at: number; provider: AgentProvider } }).usageLimitResume
+
+  test("a Claude turn its limit refused waits for the reset, holding the queue", async () => {
+    const { store, coordinator, prompts, send } = claudeHittingItsLimit()
+    await send("start the work")
+    await waitFor(() => resumeOf(store) !== undefined)
+    expect(resumeOf(store)).toEqual({ at: RESETS_AT_SECONDS * 1000 + USAGE_LIMIT_RESUME_SLACK_MS, provider: "claude" })
+
+    // Something queued behind the refused turn waits with it.
+    await store.enqueueMessage("chat-1", { content: "and then this", attachments: [] })
+    await runKanna(coordinator.resumeAfterUsageLimitEffect("chat-2"))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(prompts).toHaveLength(1)
+
+    // At the reset: the "carry on" first, then what was queued.
+    expect(await runKanna(coordinator.resumeAfterUsageLimitEffect("chat-1"))).toBe(true)
+    expect(resumeOf(store)).toBeUndefined()
+    await waitFor(() => prompts.length === 3)
+    expect(prompts[1]).toContain("usage limit")
+    expect(prompts[2]).toContain("and then this")
+    // Sent on the wire only: the transcript gets no prompt for it.
+    expect(store.messages.filter((entry) => entry.kind === "user_prompt")).toHaveLength(2)
+    await coordinator.dispose()
+  })
+
+  test("a resume the user cancels sends nothing, and leaves the queue to them", async () => {
+    const { store, coordinator, prompts, send } = claudeHittingItsLimit()
+    await send("start the work")
+    await waitFor(() => resumeOf(store) !== undefined)
+    await store.enqueueMessage("chat-1", { content: "and then this", attachments: [] })
+
+    await runKanna(coordinator.cancelUsageLimitResumeEffect("chat-1"))
+    expect(resumeOf(store)).toBeUndefined()
+    // Nothing is due any more, so a resume pass does nothing.
+    expect(await runKanna(coordinator.resumeAfterUsageLimitEffect("chat-1"))).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(prompts).toHaveLength(1)
+    expect(store.queuedMessages).toHaveLength(1)
+    await coordinator.dispose()
+  })
+
+  test("a message the user sends takes over from the resume", async () => {
+    const { store, coordinator, prompts, send } = claudeHittingItsLimit()
+    await send("start the work")
+    await waitFor(() => resumeOf(store) !== undefined)
+    await send("try again")
+    await waitFor(() => prompts.length === 2)
+    expect(resumeOf(store)).toBeUndefined()
+    await coordinator.dispose()
+  })
+
+  test("a refusal that overage covered, and a failure for any other reason, are not waited out", async () => {
+    const store = createFakeStore()
+    store.chat.provider = "claude"
+    ;(store as { recordTurnFailed: () => Promise<void> }).recordTurnFailed = async () => {}
+    const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
+      store: store as never,
+      onStateChange: () => {},
+      startClaudeSession: async () => {
+        const events = new AsyncEventQueue<any>()
+        return {
+          provider: "claude",
+          stream: events,
+          getAccountInfo: async () => null,
+          interrupt: async () => {},
+          close: () => events.close(),
+          setModel: async () => {},
+          setPermissionMode: async () => {},
+          sendPrompt: async () => {
+            events.push(failed("API Error: 500"))
+          },
+        }
+      },
+    })
+    await coordinator.send({ type: "chat.send", chatId: "chat-1", provider: "claude", content: "work", model: "claude-opus-4-1" })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(resumeOf(store)).toBeUndefined()
+    await coordinator.dispose()
+  })
+
+  test("a Codex turn that ran out of usage waits for its full window to reset", async () => {
+    const store = createFakeStore()
+    store.chat.provider = "codex"
+    ;(store as { recordTurnFailed: () => Promise<void> }).recordTurnFailed = async () => {}
+    const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
+      store: store as never,
+      onStateChange: () => {},
+      codexManager: {
+        ...fakeCodexAppServer({
+          async startSession() {},
+          async startTurn(): Promise<HarnessTurn> {
+            async function* stream() {
+              yield failed("You've hit your usage limit.: usageLimitExceeded")
+            }
+            return { provider: "codex", stream: stream(), interrupt: async () => {}, close: () => {} }
+          },
+        }),
+        readAccountRateLimits: () => Effect.succeed({
+          rateLimits: {
+            primary: { usedPercent: 100, resetsAt: RESETS_AT_SECONDS },
+            secondary: { usedPercent: 40, resetsAt: RESETS_AT_SECONDS + 86_400 },
+          },
+        }),
+      },
+    })
+    await coordinator.send({ type: "chat.send", chatId: "chat-1", provider: "codex", content: "work", model: "gpt-5.4" })
+    await waitFor(() => resumeOf(store) !== undefined)
+    expect(resumeOf(store)).toEqual({ at: RESETS_AT_SECONDS * 1000 + USAGE_LIMIT_RESUME_SLACK_MS, provider: "codex" })
+    await coordinator.dispose()
   })
 })

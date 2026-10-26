@@ -1,4 +1,4 @@
-import type { ViewerWidthClass } from "../stores/viewerStore"
+import type { ViewerWidthClass } from "../../foldkit/core/stores/viewer"
 
 /**
  * How the chat page's split, the chat column beside the viewer's pane,

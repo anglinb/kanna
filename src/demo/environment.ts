@@ -1,6 +1,6 @@
 import type { ClientEnvelope, ServerEnvelope } from "../shared/protocol"
-import type { AppThemePreference } from "../shared/types"
-import { DEMO_UNAVAILABLE_MESSAGE, DemoBackend } from "./backend"
+import type { AppThemePreference, ChatAttachment } from "../shared/types"
+import { DEMO_UNAVAILABLE_MESSAGE, DemoBackend, type DemoClock } from "./backend"
 
 /**
  * Puts the browser in a state where the real Kanna client runs with no
@@ -69,14 +69,37 @@ export function readThemeParam(): AppThemePreference {
 let backend: DemoBackend | null = null
 let openSocket: DemoWebSocket | null = null
 
+/**
+ * Hooks for the parity harness (src/parity), which runs the React and the
+ * Foldkit client on this same fake backend. `clock` drives the scripted
+ * turns, so a test can hold them still; `onClientEnvelope` and
+ * `onServerEnvelope` see every frame. Must be called before the first socket
+ * opens. The demo itself never calls it.
+ */
+export interface DemoEnvironmentOptions {
+  clock?: DemoClock
+  onClientEnvelope?: (envelope: ClientEnvelope) => void
+  onServerEnvelope?: (envelope: ServerEnvelope) => void
+}
+
+let environmentOptions: DemoEnvironmentOptions = {}
+
+export function configureDemoEnvironment(options: DemoEnvironmentOptions) {
+  if (backend) throw new Error("configureDemoEnvironment must run before the first socket opens")
+  environmentOptions = options
+}
+
 function getBackend() {
   if (!backend) {
     backend = new DemoBackend((envelope: ServerEnvelope) => {
       const socket = openSocket
       if (!socket) return
       const data = JSON.stringify(envelope)
-      window.setTimeout(() => socket.deliver(data), LATENCY_MS)
-    }, undefined, { theme: readThemeParam() })
+      window.setTimeout(() => {
+        environmentOptions.onServerEnvelope?.(envelope)
+        socket.deliver(data)
+      }, LATENCY_MS)
+    }, environmentOptions.clock, { theme: readThemeParam() })
     backend.start()
   }
   return backend
@@ -118,6 +141,7 @@ class DemoWebSocket extends EventTarget {
   send(data: string) {
     if (this.readyState !== DemoWebSocket.OPEN) return
     const envelope = JSON.parse(data) as ClientEnvelope
+    environmentOptions.onClientEnvelope?.(envelope)
     window.setTimeout(() => getBackend().receive(envelope), LATENCY_MS)
   }
 
@@ -150,6 +174,59 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
 }
 
+// Files attached in the composer, kept for the visit: the server's
+// /api/projects/:id/uploads, in memory. Keyed by "<projectId>/<storedName>".
+const uploads = new Map<string, Blob>()
+let uploadCount = 0
+
+async function receiveUpload(projectId: string, body: BodyInit | null | undefined) {
+  const localPath = getBackend().projectLocalPath(projectId)
+  if (!localPath) return jsonResponse({ error: "Project not found" }, 404)
+  const files = body instanceof FormData ? body.getAll("files").filter((value): value is File => value instanceof File) : []
+  if (files.length === 0) return jsonResponse({ error: "No files uploaded", stage: "read-files" }, 400)
+  const attachments: ChatAttachment[] = files.map((file) => {
+    uploadCount += 1
+    // As the server names a second upload of the same file: name-1.ext.
+    const dot = file.name.lastIndexOf(".")
+    const base = dot > 0 ? file.name.slice(0, dot) : file.name
+    const extension = dot > 0 ? file.name.slice(dot) : ""
+    let storedName = file.name
+    for (let counter = 1; uploads.has(`${projectId}/${storedName}`); counter++) storedName = `${base}-${counter}${extension}`
+    uploads.set(`${projectId}/${storedName}`, file)
+    const mimeType = file.type || "application/octet-stream"
+    return {
+      id: `demo-upload-${uploadCount}`,
+      kind: mimeType.startsWith("image/") ? "image" : "file",
+      displayName: file.name,
+      absolutePath: `${localPath}/.kanna/uploads/${storedName}`,
+      relativePath: `./.kanna/uploads/${storedName}`,
+      contentUrl: `/api/projects/${projectId}/uploads/${encodeURIComponent(storedName)}/content`,
+      mimeType,
+      size: file.size,
+    }
+  })
+  return jsonResponse({ attachments })
+}
+
+function answerUploads(url: URL, method: string, body: BodyInit | null | undefined) {
+  const upload = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads$/)
+  if (upload && method === "POST") return receiveUpload(decodeURIComponent(upload[1]!), body)
+  const stored = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/([^/]+?)(\/content)?$/)
+  if (!stored) return null
+  const key = `${decodeURIComponent(stored[1]!)}/${decodeURIComponent(stored[2]!)}`
+  if (stored[3] && method === "GET") {
+    const file = uploads.get(key)
+    return file
+      ? new Response(file, { headers: { "Content-Type": file.type || "application/octet-stream" } })
+      : jsonResponse({ error: "Attachment not found" }, 404)
+  }
+  if (!stored[3] && method === "DELETE") {
+    uploads.delete(key)
+    return new Response(null, { status: 204 })
+  }
+  return null
+}
+
 // The demo is served from kanna.sh, so its same-origin /api and /auth calls
 // would otherwise reach the site's own worker. Answer them here instead, and
 // skip GitHub lookups for the made-up repos.
@@ -160,6 +237,9 @@ function installFetchShim() {
     const url = new URL(href, window.location.href)
     if (url.origin === window.location.origin) {
       if (url.pathname === "/auth/status") return jsonResponse({ enabled: false, authenticated: true })
+      const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
+      const upload = answerUploads(url, method, init?.body)
+      if (upload) return upload
       if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/") || url.pathname === "/health") {
         return jsonResponse({ error: DEMO_UNAVAILABLE_MESSAGE }, 404)
       }
