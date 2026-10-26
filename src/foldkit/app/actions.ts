@@ -872,7 +872,13 @@ export function makeActions<Host extends ActionsHost>(root: RootEffects<Host>) {
         // Put away on purpose: a draft left in it is not to come back when
         // its project is next clicked.
         stores(root.storesMessage.chatInput(ChatInput.Message.ForgotStartedChat({ chatId }))),
-        (step) => leaveChat(step, chatId),
+        // handleDeleteChat navigated to the project's next chat, but in a
+        // transition: the sidebar push that drops the deleted chat (right
+        // behind the reply) rendered first, still on the old route, and the
+        // missing-chat effect sent the page to `/`. (A push ahead of the
+        // reply found no group to pick from, `/` again.) Archived chats
+        // still count as existing, so an archive stays on the next chat.
+        (step) => (chatId === root.activeChatId(step) ? root.navigate("/")(step) as Return<Host> : { model: step }),
       ]),
       SucceededHideProject: ({ projectId }) => {
         const steps: Step[] = [
