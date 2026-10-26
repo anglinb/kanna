@@ -19,6 +19,13 @@ export interface RunKannaOptions {
 export function runKanna(container: HTMLElement, options: RunKannaOptions = {}) {
   if (options.memoryRoute) startMemoryHistory(options.memoryRoute)
   else stampInitialHistoryIndex()
+  // Inside the container, not in its place: Foldkit's first patch replaces
+  // the element it mounts on, and React rendered into #root, whose rules
+  // (index.css: height 100%, overflow hidden) hold the page in the window.
+  // The runtime names itself after its container's id.
+  const mount = document.createElement("div")
+  mount.id = `${container.id || "kanna"}-app`
+  container.appendChild(mount)
   const application = Runtime.makeApplication({
     Model,
     Flags,
@@ -27,7 +34,7 @@ export function runKanna(container: HTMLElement, options: RunKannaOptions = {}) 
     view,
     subscriptions,
     managedResources,
-    container,
+    container: mount,
     routing: {
       onUrlRequest: (request) => Message.ClickedLink({ request }),
       onUrlChange: (url) => Message.ChangedUrl({ url }),
