@@ -53,6 +53,8 @@ export function hideOthers(target: Element): () => void {
 
   return () => {
     for (const node of hidden) {
+      // Released on its way to <body> (`releaseHidden`): nothing left to undo.
+      if (!hiddenCount.has(node)) continue
       const count = (hiddenCount.get(node) ?? 1) - 1
       const marker = (markerCount.get(node) ?? 1) - 1
       hiddenCount.set(node, count)
@@ -64,6 +66,22 @@ export function hideOthers(target: Element): () => void {
       if (!marker) node.removeAttribute("data-aria-hidden")
     }
   }
+}
+
+/**
+ * An overlay moving out of the app for <body> takes off the marks a modal
+ * gave it while it was still inside. A Radix portal is the body's own from
+ * its first frame, so a modal that hid the page before it arrived never
+ * reached it (a chat card coming up beside the context menu that opened in
+ * the same frame stays in the accessibility tree).
+ */
+export function releaseHidden(element: Element) {
+  if (!hiddenCount.get(element)) return
+  hiddenCount.delete(element)
+  markerCount.delete(element)
+  if (!uncontrolled.has(element)) element.removeAttribute("aria-hidden")
+  uncontrolled.delete(element)
+  element.removeAttribute("data-aria-hidden")
 }
 
 // SCROLL LOCK

@@ -1,3 +1,5 @@
+import { releaseHidden } from "./modal"
+
 /**
  * Moves an overlay's root element to the end of <body>, where Radix's Portal
  * puts it, and removes it again on cleanup.
@@ -14,6 +16,7 @@
  */
 export function portalToBody(element: Element): () => void {
   element.ownerDocument.body.appendChild(element)
+  releaseHidden(element)
   return () => {
     try {
       element.remove()
