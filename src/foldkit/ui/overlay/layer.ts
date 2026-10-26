@@ -48,6 +48,20 @@ interface Layer {
 
 const layers: Layer[] = []
 let originalBodyPointerEvents = ""
+/** The press that is opening a modal layer, if one is under way (`markModalOpening`). */
+let modalOpeningEvent: Event | null = null
+
+/**
+ * Says that this pointerdown opens a modal layer (a Select's trigger opens on
+ * the press). Radix opened it while the press was still on its way to the
+ * document, so the layers already up saw a modal layer above them by the
+ * time their outside-press check ran, and stayed (a tooltip over the Select's
+ * trigger stays up behind the listbox). Here the new layer registers a frame
+ * later, so the trigger says so on the press itself.
+ */
+export function markModalOpening(event: Event) {
+  modalOpeningEvent = event
+}
 
 function highestDisablingIndex() {
   for (let index = layers.length - 1; index >= 0; index--) {
@@ -101,7 +115,9 @@ export function registerLayer(element: HTMLElement, options: LayerOptions): () =
 
   const handlePointerDown = (event: PointerEvent) => {
     if (!event.target || isInsideLayerOrAbove(layer, event.target)) return
-    // Under a modal layer, only the layers it leaves interactive can be dismissed.
+    // Under a modal layer, only the layers it leaves interactive can be
+    // dismissed; one this very press is opening counts.
+    if (event === modalOpeningEvent) return
     const disabling = highestDisablingIndex()
     if (disabling !== -1 && layers.indexOf(layer) < disabling) return
     if (event.pointerType === "touch") {

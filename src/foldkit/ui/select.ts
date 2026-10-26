@@ -7,7 +7,7 @@ import { cn } from "../../client/lib/utils"
 import type { Child, ExtraAttributes } from "./attributes"
 import { Check, ChevronDown, ChevronUp } from "./icons"
 import { focusElement, installFocusGuards, installFocusScope } from "./overlay/focus"
-import { registerLayer } from "./overlay/layer"
+import { markModalOpening, registerLayer } from "./overlay/layer"
 import { hideOthers, lockScroll } from "./overlay/modal"
 import { placePopper, POPPER_WRAPPER_INITIAL_STYLE, type Align, type Side } from "./overlay/popper"
 import { portalToBody } from "./overlay/portal"
@@ -214,7 +214,11 @@ export const SelectTrigger = Mount.define("SelectTrigger", {
           const handlePointerDown = (event: PointerEvent) => {
             const target = event.target as Element
             if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
-            if (event.button === 0 && !event.ctrlKey && event.pointerType === "mouse") event.preventDefault()
+            if (event.button === 0 && !event.ctrlKey && event.pointerType === "mouse") {
+              event.preventDefault()
+              // The press opens the listbox, a modal layer.
+              if (!(trigger as HTMLButtonElement).disabled && trigger.getAttribute("data-state") !== "open") markModalOpening(event)
+            }
           }
           const handleClick = () => trigger.focus()
           trigger.addEventListener("pointerdown", handlePointerDown)
