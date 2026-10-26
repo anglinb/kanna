@@ -206,7 +206,13 @@ function localDevView(model: Model, app: AppModel, h: H): Html {
         ? connectingNotice(false, `preview-${preview}`, h)
         : connectHelp(previewContext(preview, model), model, `preview-${preview}`, h),
     ]
-    : isConnected(app)
+    // Until the page has read its environment (`?preview=` among it), the
+    // list isn't drawn: LocalDev read the param on its first render, and a
+    // list mounted for that frame would fetch the GitHub repos a preview
+    // never asks for.
+    : !model.pageMounted
+      ? []
+      : isConnected(app)
       ? [h.keyed("div")("connected", [h.Class(cn(model.revealChildren && "transition-opacity duration-200 ease-snappy starting:opacity-0"))], [
         projectsHomeView(model, app, h),
       ])]
