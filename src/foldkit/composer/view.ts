@@ -397,7 +397,7 @@ function composerView(model: Model, ctx: Context, editModels: ReadonlyArray<Chil
       Message.HoveredSkill({ index }),
       Message.AcceptedSkill({ index }),
       [
-        h.span([h.Class("shrink-0 font-mono text-[13px]")], [`/${skill.name}`]),
+        h.span([h.Class("shrink-0 font-mono text-[13px]")], ["/", skill.name]),
         skill.argumentHint ? h.span([h.Class("shrink-0 font-mono text-[12px] text-muted-foreground")], [skill.argumentHint]) : null,
         skill.description ? h.span([h.Class("min-w-0 truncate text-xs text-muted-foreground")], [skill.description]) : null,
       ],
