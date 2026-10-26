@@ -86,9 +86,13 @@ function writeUnsaved() {
 }
 
 /** Null where there is no `localStorage` (tests); the drafts then live in memory only. */
+let writerWindow: Window | null = null
+
 function getDebouncedWriter(): DebouncedWriter | null {
   if (typeof window === "undefined" || !("localStorage" in window)) return null
-  if (!debouncedWriter) {
+  // One writer per window: its pagehide listeners are that window's.
+  if (!debouncedWriter || writerWindow !== window) {
+    writerWindow = window
     debouncedWriter = createDebouncedWriter(window.localStorage, DRAFT_PERSIST_DELAY_MS)
     window.addEventListener("pagehide", debouncedWriter.flush)
     // After the writer's own flush: on top of the last state it saved.
