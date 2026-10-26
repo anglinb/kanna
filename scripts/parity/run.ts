@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
-// Parity runner: drives every scenario against the React reference and the
-// Foldkit candidate (both on the demo backend, src/parity) and compares
-// pixels, painted styles, the accessibility tree, the ClientCommand log,
-// unhandled commands and console errors.
+// Parity runner: drives every scenario against the Foldkit app (on the demo
+// backend, src/parity) and compares it with a recorded baseline: the React
+// client's captures, recorded before React was deleted, or a later recording
+// of a deliberate change. It compares pixels, painted styles, the
+// accessibility tree, the ClientCommand log, unhandled commands and console
+// errors.
 //
-//   bun run parity                       every scenario
+//   bun run parity                       every scenario, against .parity/baseline
 //   bun run parity chat-featured home    just these
 //   bun run parity home --region sidebar just one region of each capture
-//   bun run parity --selfcheck           React against React: must pass
+//   bun run parity --selfcheck           the app against itself: must pass
 //   bun run parity --selfcheck --inject-css 'button{letter-spacing:.01em}' --expect-fail
 //                                        proves a one-rule change is caught
-//   bun run parity --record              capture React into .parity/baseline (no comparison)
-//   bun run parity --record --app foldkit  …or the Foldkit app, to re-baseline a deliberate change
-//   bun run parity --baseline            Foldkit against the recording instead of a live React
-//   bun run parity --save-baseline       React against Foldkit, keeping React's captures as the recording
+//   bun run parity --record              capture the app into .parity/baseline (no
+//                                        comparison): re-baselines a deliberate change
 //   (--record and --baseline take an optional directory: --baseline path/to/dir)
 //
 // Artifacts land in .parity/runs/<stamp>/ (.parity/latest points at the last
@@ -49,12 +49,8 @@ const PIXEL_THRESHOLD = 0
 // no tolerance.
 const DEFAULT_PIXEL_TOLERANCE = 0.0001
 
-// Inputs of each app's build. A change to any of them rebuilds that app.
-// Both hash all of src/: gallery pages cross over (the React icon gallery
-// reads the Foldkit icon list), and the Foldkit app imports React-free
-// modules from src/client.
+// Inputs of the app's build. A change to any of them rebuilds it.
 const BUILD_INPUTS = {
-  react: ["src", "public", "vite.parity.config.ts", "vite-plugin-message-scroller.ts", "package.json", "bun.lock"],
   foldkit: ["src", "public", "vite.parity.config.ts", "package.json", "bun.lock"],
 } as const
 type AppName = keyof typeof BUILD_INPUTS
@@ -70,16 +66,14 @@ interface Options {
   record: string | null
   /** The app `record` captures. */
   recordApp: AppName
-  /** Compare the candidate with a recording instead of running React. */
+  /** The recording to compare with (default .parity/baseline). */
   baseline: string | null
-  /** Keep the live reference's captures as a recording while comparing. */
-  saveBaseline: string | null
 }
 
 const DEFAULT_BASELINE_DIR = path.join(PARITY_DIR, "baseline")
 
 function parseArgs(argv: string[]): Options {
-  const options: Options = { names: [], selfcheck: false, injectCss: null, expectFail: false, regions: [], record: null, recordApp: "react", baseline: null, saveBaseline: null }
+  const options: Options = { names: [], selfcheck: false, injectCss: null, expectFail: false, regions: [], record: null, recordApp: "foldkit", baseline: null }
   // A directory follows the flag when the next argument is a path, not a scenario name.
   const dirAfter = (i: number) => {
     const next = argv[i + 1]
@@ -87,17 +81,12 @@ function parseArgs(argv: string[]): Options {
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
-    if (arg === "--record" || arg === "--baseline" || arg === "--save-baseline") {
+    if (arg === "--record" || arg === "--baseline") {
       const dir = dirAfter(i)
       if (dir) i++
       const resolved = path.resolve(dir ?? DEFAULT_BASELINE_DIR)
       if (arg === "--record") options.record = resolved
-      else if (arg === "--baseline") options.baseline = resolved
-      else options.saveBaseline = resolved
-    } else if (arg === "--app") {
-      const app = argv[++i]
-      if (app !== "react" && app !== "foldkit") throw new Error(`--app takes react or foldkit, not ${app}`)
-      options.recordApp = app
+      else options.baseline = resolved
     } else if (arg === "--selfcheck") options.selfcheck = true
     else if (arg === "--expect-fail") options.expectFail = true
     else if (arg === "--inject-css") options.injectCss = argv[++i] ?? ""
@@ -167,7 +156,6 @@ async function build(app: AppName) {
   console.log(`building ${app}…`)
   const proc = Bun.spawn(["bunx", "vite", "build", "--config", "vite.parity.config.ts", "--logLevel", "error"], {
     cwd: ROOT,
-    env: { ...process.env, PARITY_APP: app },
     stdout: "inherit",
     stderr: "inherit",
   })
@@ -363,7 +351,12 @@ async function main() {
   const missing = options.names.filter((name) => !allScenarios.some((s) => s.name === name))
   if (missing.length > 0) throw new Error(`no scenario named ${missing.join(", ")}`)
   if (options.record) return record(options, selected)
-  const baseline = options.baseline
+  // The reference is a recording: the given one, else the default, unless
+  // this is a selfcheck (the app against itself).
+  const baseline = options.selfcheck ? null : options.baseline ?? DEFAULT_BASELINE_DIR
+  if (baseline && !existsSync(path.join(baseline, "meta.json"))) {
+    throw new Error(`no baseline at ${path.relative(ROOT, baseline)}: record one first (bun run parity --record)`)
+  }
   const baselineMeta = baseline ? JSON.parse(readFileSync(path.join(baseline, "meta.json"), "utf8")) as BaselineMeta : null
 
   const release = await acquireLock()
@@ -371,15 +364,13 @@ async function main() {
   const runDir = path.join(PARITY_DIR, "runs", stamp)
   mkdirSync(runDir, { recursive: true })
 
-  // With a baseline there is no reference app: its captures are read back,
-  // and URLs in them are normalized against the origin it was recorded on.
-  const referenceDir = baseline ? null : await build("react")
-  const candidateDir = options.selfcheck && referenceDir ? referenceDir : await build("foldkit")
-  const reference = referenceDir ? serve(referenceDir) : { origin: baselineMeta!.origin, stop: () => {} }
-  const candidate = options.selfcheck && referenceDir ? serve(referenceDir) : serve(candidateDir)
+  // The recording's captures are read back, and URLs in them are normalized
+  // against the origin they were recorded on.
+  const candidateDir = await build("foldkit")
+  const reference = baseline ? { origin: baselineMeta!.origin, stop: () => {} } : serve(candidateDir)
+  const candidate = serve(candidateDir)
   const browser = await chromium.launch()
   const outcomes: Outcome[] = []
-  if (options.saveBaseline && !baseline && !options.selfcheck) writeBaselineMeta(options.saveBaseline, "react")
 
   try {
     for (const scenario of selected) {
@@ -389,7 +380,6 @@ async function main() {
           const refRuns = baseline
             ? readBaselineRuns(baseline, scenario, variant, options.regions)
             : await runApp(browser, reference.origin, scenario, theme, viewport, null, options.regions)
-          if (options.saveBaseline && !baseline && !options.selfcheck) writeBaselineRuns(options.saveBaseline, scenario, variant, refRuns, reference.origin)
           const candRuns = await runApp(browser, candidate.origin, scenario, theme, viewport, options.injectCss, options.regions)
           const labels = [...new Set([...refRuns, ...candRuns].map((run) => run.label))]
           for (const label of labels) {
@@ -430,7 +420,7 @@ async function main() {
   const lines = [
     `# Parity run ${stamp}`,
     "",
-    `${options.selfcheck ? "Selfcheck (React against React)" : baselineMeta ? `Recorded ${baselineMeta.app} (${baselineMeta.commit}, ${baselineMeta.recordedAt}) against Foldkit` : "React against Foldkit"}${options.injectCss ? `, candidate CSS injected: \`${options.injectCss}\`` : ""}`,
+    `${baselineMeta ? `Recorded ${baselineMeta.app} (${baselineMeta.commit}, ${baselineMeta.recordedAt}) against Foldkit` : "Selfcheck (the app against itself)"}${options.injectCss ? `, candidate CSS injected: \`${options.injectCss}\`` : ""}`,
     "",
     `${passed}/${outcomes.length} captures pass.`,
     "",

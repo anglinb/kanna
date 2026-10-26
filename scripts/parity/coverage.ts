@@ -76,13 +76,18 @@ function clientCommandTypes() {
   return [...new Set([...block.matchAll(/type: "([\w.]+)"/g)].map((match) => match[1]!))].sort()
 }
 
+/** The app's routes, from its routers (src/foldkit/app/route.ts): `literal("chat")`, `string("chatId")` → `/chat/:chatId`. */
 function appRoutes() {
-  const source = readFileSync(path.join(ROOT, "src/client/app/App.tsx"), "utf8")
-  return [...new Set([...source.matchAll(/<Route\s+path="([^"]+)"/g)].map((match) => match[1]!))]
+  const source = readFileSync(path.join(ROOT, "src/foldkit/app/route.ts"), "utf8")
+  const routes = [...source.matchAll(/Router = pipe\(([\s\S]*?)Route\.mapTo/g)].map((match) => {
+    const parts = [...match[1]!.matchAll(/literal\("([^"]+)"\)|string\("([^"]+)"\)/g)].map((part) => (part[1] ? part[1] : `:${part[2]}`))
+    return parts.length === 0 ? "/" : `/${parts.join("/")}`
+  })
+  return [...new Set(routes)]
 }
 
 function settingsSections() {
-  const source = readFileSync(path.join(ROOT, "src/client/app/settings/registry.ts"), "utf8")
+  const source = readFileSync(path.join(ROOT, "src/foldkit/settings/registry.ts"), "utf8")
   const start = source.indexOf("export const SETTINGS_SECTIONS")
   const end = source.indexOf("] as const", start)
   return [...source.slice(start, end).matchAll(/id: "([\w-]+)"/g)].map((match) => match[1]!)

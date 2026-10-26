@@ -62,7 +62,7 @@ That's it. Kanna opens in your browser at [`localhost:3210`](http://localhost:32
 ## Architecture
 
 ```
-Browser (React + Zustand)
+Browser (Foldkit: the Elm architecture on Effect)
     ↕  WebSocket
 Bun Server (HTTP + WS)
     ├── WSRouter ─── subscription & command routing
@@ -242,15 +242,15 @@ bun run dev:server   # http://localhost:5175
 
 ```
 src/
-├── client/          React UI layer
-│   ├── app/         App router, pages, socket client, useKannaState + feature hooks
-│   │                (useChatCommands, useSendMessage, useAppSettingsSync,
-│   │                useUpdateRestart, useShareExport, snapshotEquality)
-│   ├── components/  Messages, chat chrome (incl. chat-ui/git/ panel modules),
-│   │                dialogs, buttons, inputs
-│   ├── hooks/       Theme, standalone mode detection
-│   ├── stores/      Zustand stores (chat input, preferences, project order)
-│   └── lib/         Formatters, path utils, transcript parsing, storage keys
+├── foldkit/         Web client (Foldkit: the Elm architecture on Effect)
+│   ├── app/         Root program: routes, auth, socket, snapshots, root actions
+│   ├── core/        Socket, chat session, stores, navigation
+│   ├── ui/          Primitives (dialogs, menus, tooltips, selects, icons)
+│   ├── markdown/    Markdown → Foldkit views
+│   └── sidebar/ home/ settings/ chat/ composer/ transcript/ widgets/
+│                    viewer/ terminal/ palette/ setup/  one folder per screen
+├── client/          Framework-free client helpers (formatters, path utils,
+│                    transcript parsing, keybindings, storage keys)
 ├── server/          Bun backend
 │   ├── cli.ts       CLI entry point & browser launcher
 │   ├── server.ts    HTTP/WS server setup & static serving

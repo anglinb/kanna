@@ -20,11 +20,9 @@ src/foldkit/
   by the integrator; a slice agent asks for changes there in its report, or
   makes the smallest additive change (a field, a `Got*` Message, a view
   call) and says so.
-- Do not edit `src/client/**`. React must keep working until the switch.
-  React-free modules there (`src/client/lib/*`, `src/client/app/socket.ts`,
-  `kannaStateHelpers.ts`, `derived.ts`, …) are imported as they are. Code
-  that is pure but sits inside a React file is copied into the slice
-  (keep its comment) and the React copy is left alone.
+- `src/client/**` is what is left of the React client: framework-free
+  helpers (`src/client/lib/*`, `kannaStateHelpers.ts`, `derived.ts`, …)
+  the client imports. Nothing there may import a UI framework.
 - `src/shared/**` is shared with the server: import, never fork.
 
 ## Code style
@@ -78,7 +76,12 @@ at the pointer, drag data, wheel deltas), use one of:
   delegated `Dom.streamFromEvent` on `document` in a Subscription that
   finds the target by a `data-*` attribute.
 
-## Matching React
+## Matching the recorded behavior
+
+The React client is gone; what it did is recorded in `.parity/baseline`
+and the end-to-end scenarios. What follows is how the port was held to it,
+and how a change is held to the recording.
+
 
 - Same DOM: element types, nesting, `class` strings copied verbatim from
   the JSX (resolve `cn(...)`/`cva` the same way, using
@@ -89,7 +92,10 @@ at the pointer, drag data, wheel deltas), use one of:
 - Same text, including whitespace that renders.
 - Same timing where it is visible: what shows on the first frame, what
   waits for a snapshot.
-- When React is wrong, match it anyway and note it in the report.
+- When React was wrong, the port matched it anyway and noted it; the
+  deliberate exceptions are listed in `docs/foldkit-migration.md`.
+- A deliberate visual change: re-record the scenarios it changes
+  (`bun run parity --record <names>`) in the same change.
 
 ## Testing
 
@@ -97,7 +103,7 @@ at the pointer, drag data, wheel deltas), use one of:
   (`foo.ts` / `foo.test.ts`), under `bun test`.
 - Parity: `bun run parity <scenario> [--region <name>]`. Scenarios live in
   `scripts/parity/scenarios/`, one file per area. Gallery pages
-  (`src/parity/{react,foldkit}/gallery/<name>.tsx|.ts`, served at
+  (`src/parity/foldkit/gallery/<name>.ts`, served at
   `/__gallery/<name>`) check a component in isolation.
 - The harness, scenarios and the fixture are protected: never change one
   to make a difference go away. Only the agent asked to write scenarios, or

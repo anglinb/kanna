@@ -9,7 +9,7 @@ import type { Browser, BrowserContext, Locator, Page } from "playwright"
 // run.
 
 export interface E2EContext {
-  app: "react" | "foldkit"
+  app: "foldkit"
   /** Every page a scenario opened, for run.ts to screenshot when it fails. */
   pages: Page[]
   browser: Browser

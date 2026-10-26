@@ -1,8 +1,7 @@
 import { defineConfig } from "vite"
-import react from "@vitejs/plugin-react"
+import { foldkit } from "@foldkit/vite-plugin"
 import { getDefaultDevServerPort } from "./src/shared/dev-ports"
 import { DEV_CLIENT_PORT } from "./src/shared/ports"
-import { messageScrollerPatch } from "./vite-plugin-message-scroller"
 
 function getBackendTargetHost() {
   return process.env.KANNA_DEV_BACKEND_TARGET_HOST || "127.0.0.1"
@@ -17,7 +16,7 @@ const backendTargetHost = getBackendTargetHost()
 const backendPort = getBackendPort()
 
 export default defineConfig({
-  plugins: [messageScrollerPatch(), react()],
+  plugins: [foldkit()],
   server: {
     host: "0.0.0.0",
     port: DEV_CLIENT_PORT,

@@ -1,0 +1,5 @@
+[install]
+# Peer dependencies are not installed for us: @pierre/diffs names React as a
+# peer for its React entry point, which this client doesn't use, and Kanna's
+# web client has no React in it. What a package needs is listed in package.json.
+peer = false

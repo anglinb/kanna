@@ -2,13 +2,11 @@
 // End-to-end runs against a real Kanna server: a fresh data dir, throwaway
 // git projects, the real WebSocket server and real agent turns. Each
 // scenario drives the client the way a person would and checks what they
-// would see. The same scenarios run against React's build, which is how a
-// scenario is known to be right before the Foldkit client is judged by it.
+// would see. (Every scenario passed against the React client before it was
+// deleted; they are the Foldkit client's regression suite now.)
 //
-//   bun run ./scripts/foldkit/e2e/run.ts                       Foldkit, every scenario
-//   bun run ./scripts/foldkit/e2e/run.ts --app react           the React build (dist/client)
-//   bun run ./scripts/foldkit/e2e/run.ts --app both
-//   bun run ./scripts/foldkit/e2e/run.ts --no-build            reuse the last builds
+//   bun run ./scripts/foldkit/e2e/run.ts                       every scenario
+//   bun run ./scripts/foldkit/e2e/run.ts --no-build            reuse the last build
 //   bun run ./scripts/foldkit/e2e/run.ts --no-agent            skip scenarios that run a real turn
 //   bun run ./scripts/foldkit/e2e/run.ts --repeat 3            the whole suite, three times over
 //   bun run ./scripts/foldkit/e2e/run.ts send-prompt rename    only these (and what they need)
@@ -27,16 +25,14 @@ const option = (name: string) => {
   const index = args.indexOf(name)
   return index >= 0 ? args[index + 1] : undefined
 }
-const appArg = option("--app") ?? "foldkit"
-const apps = appArg === "both" ? ["react", "foldkit"] : [appArg]
+const apps = ["foldkit"]
 const repeat = Number(option("--repeat") ?? "1")
-const optionValues = new Set([option("--app"), option("--repeat")].filter(Boolean))
+const optionValues = new Set([option("--repeat")].filter(Boolean))
 const only = args.filter((arg) => !arg.startsWith("--") && !optionValues.has(arg))
 const withAgent = !flag("--no-agent")
 
 const BUILDS = {
-  react: { dir: path.join(REPO, "dist/client"), command: ["x", "vite", "build"] },
-  foldkit: { dir: path.join(REPO, "dist/foldkit-client"), command: ["x", "vite", "build", "--config", "vite.foldkit.config.ts"] },
+  foldkit: { dir: path.join(REPO, "dist/client"), command: ["x", "vite", "build"] },
 } as const
 
 function build(app: keyof typeof BUILDS) {
@@ -140,7 +136,7 @@ function removeE2ESessions() {
 
 interface Outcome { app: string; round: number; name: string; ok: boolean; ms: number; error?: string }
 
-async function runApp(browser: Browser, app: "react" | "foldkit", round: number, port: number): Promise<Outcome[]> {
+async function runApp(browser: Browser, app: "foldkit", round: number, port: number): Promise<Outcome[]> {
   const root = path.join("/tmp", `kanna-e2e-${app}-${process.pid}-${round}`)
   rmSync(root, { recursive: true, force: true })
   mkdirSync(root, { recursive: true })
@@ -198,7 +194,7 @@ const outcomes: Outcome[] = []
 try {
   for (let round = 1; round <= repeat; round += 1) {
     for (const [index, app] of apps.entries()) {
-      outcomes.push(...await runApp(browser, app as "react" | "foldkit", round, 4840 + index))
+      outcomes.push(...await runApp(browser, app as "foldkit", round, 4840 + index))
     }
   }
 } finally {
