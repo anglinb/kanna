@@ -121,6 +121,8 @@ export const Model = Schema.Struct({
   /** A Cmd/Ctrl-click on a chat, heard before the row's own click. */
   backgroundClickChatId: Schema.NullOr(Schema.String),
   projectDrag: Schema.NullOr(ProjectDrag),
+  /** dnd-kit's live-region announcement: the last thing a drag said (its default announcements). */
+  dndAnnouncement: Schema.String,
 })
 export type Model = typeof Model.Type
 
@@ -176,5 +178,6 @@ export function init(storage?: Storage): Model {
     card: ChatCard.initCardData(),
     backgroundClickChatId: null,
     projectDrag: null,
+    dndAnnouncement: "",
   }
 }

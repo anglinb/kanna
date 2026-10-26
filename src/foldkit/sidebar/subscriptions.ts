@@ -11,6 +11,7 @@ import type { KannaSocketService } from "../core/socket"
 import { domStream } from "../ui/overlay/stream"
 import { Message } from "./message"
 import { FINE_POINTER_QUERY, isStandaloneNow, PHONE_LAYOUT_QUERY, STANDALONE_QUERY, type Model } from "./model"
+import { projectDragging } from "./hoverCard"
 import { OPEN_LAYER_SELECTOR } from "./mounts"
 import { getProjectGroupReorderPreviewTargetId } from "./projects"
 
@@ -168,6 +169,7 @@ function projectDragStream(projectId: string, startY: number) {
       if (!active) {
         if (Math.abs(deltaY) < ACTIVATION_DISTANCE_PX && Math.abs(event.movementX) < ACTIVATION_DISTANCE_PX) return
         active = true
+        projectDragging.active = true
         measure()
         document.addEventListener("click", stopClick, true)
         emit(Message.ActivatedProjectDrag({ activeHeight: rects.get(projectId)?.height ?? 0 }))
@@ -184,7 +186,10 @@ function projectDragStream(projectId: string, startY: number) {
         : null
       emit(Message.MovedProjectDrag({ deltaY, overId }))
     }
-    const handleUp = () => emit(Message.ReleasedProjectDrag())
+    const handleUp = () => {
+      projectDragging.active = false
+      emit(Message.ReleasedProjectDrag())
+    }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") emit(Message.CancelledProjectDrag())
     }
@@ -195,6 +200,7 @@ function projectDragStream(projectId: string, startY: number) {
     window.addEventListener("contextmenu", preventDefault)
     window.addEventListener("dragstart", preventDefault)
     return () => {
+      projectDragging.active = false
       document.removeEventListener("pointermove", handleMove)
       document.removeEventListener("pointerup", handleUp)
       document.removeEventListener("pointercancel", handleUp)

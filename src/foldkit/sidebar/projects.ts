@@ -80,7 +80,7 @@ export function arrayMove<T>(items: ReadonlyArray<T>, from: number, to: number):
 const DND_INSTRUCTIONS = "To pick up a draggable item, press the space bar. While dragging, use the arrow keys to move the item. Press space again to drop the item in its new position, or press escape to cancel."
 export const DND_DESCRIBED_BY_ID = "DndDescribedBy-0"
 
-function dndAccessibility(h: H): ReadonlyArray<Html> {
+function dndAccessibility(announcement: string, h: H): ReadonlyArray<Html> {
   return [
     h.keyed("div")(DND_DESCRIBED_BY_ID, [h.Id(DND_DESCRIBED_BY_ID), h.Style({ display: "none" })], [DND_INSTRUCTIONS]),
     h.keyed("div")("DndLiveRegion-0", [
@@ -102,7 +102,7 @@ function dndAccessibility(h: H): ReadonlyArray<Html> {
         "clip-path": "inset(100%)",
         "white-space": "nowrap",
       }),
-    ]),
+    ], announcement ? [announcement] : []),
   ]
 }
 
@@ -261,6 +261,6 @@ export function localProjectsSection(options: LocalProjectsOptions, app: AppMode
   // DndContext renders no element of its own; its screen-reader nodes go to <body>.
   return h.keyed("div")("local-projects", [h.Class("contents")], [
     ...options.projectGroups.map(group),
-    ...dndAccessibility(h),
+    ...dndAccessibility(model.dndAnnouncement, h),
   ])
 }
