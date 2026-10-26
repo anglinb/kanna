@@ -1,6 +1,7 @@
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import { Command, Mount, Render } from "foldkit"
 import { domStream } from "../ui/overlay/stream"
+import { afterPendingRender, renderCommit } from "../core/renderCommit"
 import { interpolateLayout, prefersReducedMotion } from "../../client/app/paneAnimation"
 import {
   attachFilesToComposer,
@@ -430,8 +431,9 @@ export const HoldArrivalFocus = Mount.defineStream("ChatArrivalFocus", {
 export const KeepChatFocus = Mount.defineStream("ChatStickyFocus", {
   args: { canCancel: Schema.Boolean },
   messages: [Message.CompletedSideEffect],
-  execute: ({ canCancel }) => domStream<typeof Message.CompletedSideEffect.Type>(() => {
+  execute: ({ canCancel }) => Stream.unwrap(Effect.map(renderCommit, (signal) => domStream<typeof Message.CompletedSideEffect.Type>(() => {
     let rafId = 0
+    let cancelRender: () => void = () => {}
     let pointerStartTarget: Element | null = null
     const restoreFocusIfNeeded = (pointerEndTarget: EventTarget | null) => {
       const target = pointerEndTarget instanceof Element ? pointerEndTarget : null
@@ -451,17 +453,20 @@ export const KeepChatFocus = Mount.defineStream("ChatStickyFocus", {
     }
     const handlePointerDown = (event: PointerEvent) => {
       cancelAnimationFrame(rafId)
+      cancelRender()
       pointerStartTarget = event.target instanceof Element ? event.target : null
     }
-    // A frame after the click's own render, as React's check ran: React
-    // rendered the click synchronously, Foldkit renders on the next frame,
-    // which is queued behind this pointerup's. Checked a frame sooner, a
-    // button the click takes away (an answered question's Submit) is still
-    // there and focused, and focus would go to the composer.
+    // A frame after the pointer comes up, as React's check ran, on the DOM
+    // the click left: React rendered the click before that frame; here its
+    // render may still be outstanding then (behind this frame's callback, or
+    // a frame on when a touch's click comes late), so the check waits for
+    // it. Checked sooner, a button the click takes away (an answered
+    // question's Submit) is still there, and focus would go to the composer.
     const handlePointerUp = (event: PointerEvent) => {
       cancelAnimationFrame(rafId)
+      cancelRender()
       rafId = window.requestAnimationFrame(() => {
-        rafId = window.requestAnimationFrame(() => restoreFocusIfNeeded(event.target))
+        cancelRender = afterPendingRender(signal, () => restoreFocusIfNeeded(event.target))
       })
     }
     const handleRestoreFocus = () => {
@@ -490,12 +495,13 @@ export const KeepChatFocus = Mount.defineStream("ChatStickyFocus", {
     window.addEventListener(RESTORE_CHAT_INPUT_FOCUS_EVENT, handleRestoreFocus)
     return () => {
       cancelAnimationFrame(rafId)
+      cancelRender()
       window.removeEventListener("pointerdown", handlePointerDown, true)
       window.removeEventListener("pointerup", handlePointerUp, true)
       window.removeEventListener("keydown", handleKeyDown, true)
       window.removeEventListener(RESTORE_CHAT_INPUT_FOCUS_EVENT, handleRestoreFocus)
     }
-  }),
+  }))),
 })
 
 // FILES DROPPED ON THE PAGE (usePageFileDrop)
