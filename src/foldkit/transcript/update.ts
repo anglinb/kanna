@@ -99,7 +99,15 @@ const done = (model: Model, commands: ReadonlyArray<AnyCommand> = [], actions: A
  * with the button down. A pending show is dropped with its token.
  */
 export function leftPage(model: Model): Model {
-  return modifyFields(model, { isAtEnd: () => true, showScrollToBottom: () => false, scrollButtonToken: (token) => token + 1 })
+  return modifyFields(model, {
+    isAtEnd: () => true,
+    showScrollToBottom: () => false,
+    scrollButtonToken: (token) => token + 1,
+    // The viewport's own state went with it (folded runs open, clamps):
+    // the page comes back drawing them closed from its first frame, not a
+    // frame after the viewport mounts.
+    messages: (rows) => Messages.reset(rows),
+  })
 }
 
 /** The minimap's reset effect: a change in capacity, room or overflow drops the cursor and the hold. */
