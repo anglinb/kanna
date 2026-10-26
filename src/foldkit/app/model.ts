@@ -73,6 +73,11 @@ export const Model = Schema.Struct({
   /** pagehide puts the bare app name in the title, for the bfcache; pageshow brings it back. */
   pageHidden: Schema.Boolean,
   /**
+   * A chat left for another chat, marked read once the next chat page's
+   * effects have run (`changeRoute`).
+   */
+  pendingMarkRead: Schema.NullOr(Schema.String),
+  /**
    * The draft ids as draft protection last looked (useKannaState's effect
    * dependencies): text drafts and attachment drafts, sorted.
    */
