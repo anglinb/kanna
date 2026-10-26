@@ -287,3 +287,48 @@ export const SidebarCard = Mount.defineStream("SidebarCard", {
       return () => cleanups.reverse().forEach((cleanup) => cleanup())
     }),
 })
+
+/**
+ * On the resize handle: KannaSidebar's onPointerDown and its resizing effect.
+ * React ran the effect in the same task as the press (a discrete event's
+ * effects flush synchronously), so a quick click's pointerup always found its
+ * listener; a Subscription started after the press's render could miss it
+ * and leave the body on col-resize. So it is all here, synchronous: the press
+ * is held (preventDefault, which also keeps focus where it was), the body
+ * says col-resize, and the window's pointer is followed until it lets go.
+ */
+export const ResizeHandle = Mount.defineStream("SidebarResizeHandle", {
+  messages: [Message.PressedResizeHandle, Message.MovedResize, Message.ReleasedResize, Message.CompletedSideEffect],
+  execute: ({ element }) =>
+    domStream<typeof Message.PressedResizeHandle.Type | typeof Message.MovedResize.Type | typeof Message.ReleasedResize.Type | typeof Message.CompletedSideEffect.Type>((emit) => {
+      let release: (() => void) | null = null
+      const handlePointerDown = (event: PointerEvent) => {
+        event.preventDefault()
+        release?.()
+        emit(Message.PressedResizeHandle({ pointerX: event.clientX }))
+        const previousCursor = document.body.style.cursor
+        const previousUserSelect = document.body.style.userSelect
+        document.body.style.cursor = "col-resize"
+        document.body.style.userSelect = "none"
+        const handlePointerMove = (move: PointerEvent) => emit(Message.MovedResize({ pointerX: move.clientX }))
+        const handlePointerUp = () => {
+          release?.()
+          emit(Message.ReleasedResize())
+        }
+        window.addEventListener("pointermove", handlePointerMove)
+        window.addEventListener("pointerup", handlePointerUp, { once: true })
+        release = () => {
+          release = null
+          window.removeEventListener("pointermove", handlePointerMove)
+          window.removeEventListener("pointerup", handlePointerUp)
+          document.body.style.cursor = previousCursor
+          document.body.style.userSelect = previousUserSelect
+        }
+      }
+      element.addEventListener("pointerdown", handlePointerDown as EventListener)
+      return () => {
+        element.removeEventListener("pointerdown", handlePointerDown as EventListener)
+        release?.()
+      }
+    }),
+})

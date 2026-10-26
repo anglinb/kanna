@@ -137,24 +137,6 @@ const backgroundClickStream = domStream<Message>((emit) => {
   return () => document.removeEventListener("click", handleClick, true)
 })
 
-/** While the handle is held: the width follows the pointer; the body says col-resize. */
-const resizeStream = domStream<Message>((emit) => {
-  const previousCursor = document.body.style.cursor
-  const previousUserSelect = document.body.style.userSelect
-  document.body.style.cursor = "col-resize"
-  document.body.style.userSelect = "none"
-  const handlePointerMove = (event: PointerEvent) => emit(Message.MovedResize({ pointerX: event.clientX }))
-  const handlePointerUp = () => emit(Message.ReleasedResize())
-  window.addEventListener("pointermove", handlePointerMove)
-  window.addEventListener("pointerup", handlePointerUp, { once: true })
-  return () => {
-    window.removeEventListener("pointermove", handlePointerMove)
-    window.removeEventListener("pointerup", handlePointerUp)
-    document.body.style.cursor = previousCursor
-    document.body.style.userSelect = previousUserSelect
-  }
-})
-
 const ACTIVATION_DISTANCE_PX = 2
 
 /**
@@ -234,10 +216,6 @@ export const subscriptions = Subscription.make<Model, Message, KannaSocketServic
   standalone: Subscription.persistentEntry(mediaStream(STANDALONE_QUERY, () => Message.ChangedStandalone({ matches: isStandaloneNow() }))),
   keyboard: Subscription.persistentEntry(keyboardStream),
   backgroundClick: Subscription.persistentEntry(backgroundClickStream),
-  resize: entry({ resizing: Schema.Boolean }, {
-    modelToDependencies: (model) => ({ resizing: model.resizeStart !== null }),
-    dependenciesToStream: ({ resizing }) => (resizing ? resizeStream : Stream.empty),
-  }),
   projectDrag: entry({ projectId: Schema.NullOr(Schema.String), pointerId: Schema.Number, startY: Schema.Number }, {
     modelToDependencies: (model) => ({
       projectId: model.projectDrag?.projectId ?? null,
