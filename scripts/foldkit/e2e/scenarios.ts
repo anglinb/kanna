@@ -285,8 +285,11 @@ export const scenarios: E2EScenario[] = [
       await chooseRowMenuItem(page, context.state.chatTitle, "Pin")
       await until(async () => {
         await chatRow(page, context.state.chatTitle!).first().click({ button: "right" })
+        // The menu animates in: wait for it before reading what it offers.
+        await page.getByRole("menu").first().waitFor({ state: "visible", timeout: 2_000 })
         const unpin = await page.getByRole("menuitem", { name: "Unpin" }).isVisible()
         await page.keyboard.press("Escape")
+        await page.getByRole("menu").first().waitFor({ state: "hidden", timeout: 2_000 }).catch(() => {})
         return unpin
       }, "the menu to offer Unpin")
       await chooseRowMenuItem(page, context.state.chatTitle, "Unpin")
