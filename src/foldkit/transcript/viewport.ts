@@ -202,8 +202,8 @@ export class ViewportController {
     private readonly content: HTMLElement,
     spacer: HTMLElement,
     private readonly emit: Emit,
-    /** Whether the runtime has a render still to patch in (none outside a runtime). */
-    private readonly isRenderPending: () => boolean = () => false,
+    /** Whether the last press is still to render (`trackPresses`; never outside a runtime). */
+    private readonly pressRendering: () => boolean = () => false,
   ) {
     this.feed = readFeed(viewport) ?? emptyFeed()
     this.pageAtEnd = this.feed.atEnd
@@ -626,7 +626,7 @@ export class ViewportController {
     const key = JSON.stringify([messageId, isAtEnd, layout])
     if (key === this.lastReport) return
     this.lastReport = key
-    this.emit(Message.ReportedReadAnchor({ messageId, atEnd: isAtEnd, layout, at: Date.now(), settled: !this.isRenderPending() }))
+    this.emit(Message.ReportedReadAnchor({ messageId, atEnd: isAtEnd, layout, at: Date.now(), settled: !this.pressRendering() }))
   }
 
   /**
@@ -740,19 +740,56 @@ export function emptyFeed(): Feed {
 }
 
 /**
+ * The runtime's commit signal (foldkit's internal `RenderCommit`, looked up
+ * by its key): whether a render is scheduled, and a call for the next patch.
+ */
+class RenderCommitSignal extends Context.Service<RenderCommitSignal, {
+  readonly isCommitPending: () => boolean
+  readonly onNextCommit: (callback: () => void) => () => void
+}>()("@foldkit/RenderCommit") {}
+
+/**
+ * Whether the last press (pointer down, click, key) is still to render.
+ * React rendered a press's state change before the event returned, so a
+ * report that followed it (a tap's scroll event) saw the press's DOM; here
+ * that render can be a frame away, and the write waits for it. Cleared by
+ * the next patch, or after two frames if the press changed nothing.
+ */
+function trackPresses(signal: RenderCommitSignal["Service"]): { pressRendering: () => boolean; stop: () => void } {
+  let pending = false
+  let frame = 0
+  let cancelCommit: () => void = () => {}
+  const settle = () => {
+    pending = false
+    cancelCommit()
+    window.cancelAnimationFrame(frame)
+  }
+  const press = () => {
+    settle()
+    pending = true
+    cancelCommit = signal.onNextCommit(settle)
+    frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => {
+        if (!signal.isCommitPending()) settle()
+      })
+    })
+  }
+  const events = ["pointerdown", "click", "keydown"] as const
+  for (const name of events) document.addEventListener(name, press, true)
+  return {
+    pressRendering: () => pending,
+    stop: () => {
+      settle()
+      for (const name of events) document.removeEventListener(name, press, true)
+    },
+  }
+}
+
+/**
  * On the scroller's root (`message-scroller`): finds its parts, starts the
  * controller and keeps it for the element's life. Keyed by chat in the view,
  * so each open gets a fresh one.
  */
-/**
- * The runtime's commit signal (foldkit's internal `RenderCommit`, looked up
- * by its key): whether a render is scheduled and not yet patched in. React
- * rendered an event's state change before the event returned, so a report
- * taken after a press saw the press's DOM; here the press's render may
- * still be a frame away, and the write waits for it.
- */
-class RenderCommitSignal extends Context.Service<RenderCommitSignal, { readonly isCommitPending: () => boolean }>()("@foldkit/RenderCommit") {}
-
 export const ControlViewport = Mount.defineStream("ControlTranscriptViewport", {
   messages: [
     Message.MountedViewport,
@@ -767,15 +804,18 @@ export const ControlViewport = Mount.defineStream("ControlTranscriptViewport", {
     Message.AppliedUnloadedJump,
   ],
   execute: ({ element }) => Stream.unwrap(Effect.map(Effect.serviceOption(RenderCommitSignal), (signal) => domStream<Reported>((emit) => {
-    const isRenderPending = Option.match(signal, { onNone: () => () => false, onSome: (service) => () => service.isCommitPending() })
     const viewport = element.querySelector<HTMLElement>('[data-slot="message-scroller-viewport"]')
     const content = viewport?.querySelector<HTMLElement>('[data-slot="message-scroller-content"]')
     const spacer = content?.querySelector<HTMLElement>(":scope > [data-message-scroller-spacer]")
     if (!(element instanceof HTMLElement) || !viewport || !content || !spacer) return () => {}
-    const controller = new ViewportController(element, viewport, content, spacer, emit, isRenderPending)
+    const presses = Option.match(signal, { onNone: () => null, onSome: trackPresses })
+    const controller = new ViewportController(element, viewport, content, spacer, emit, presses?.pressRendering)
     emit(Message.MountedViewport({ chatId: readFeed(viewport)?.chatId ?? null }))
     controller.start()
-    return () => controller.dispose()
+    return () => {
+      controller.dispose()
+      presses?.stop()
+    }
   }))),
 })
 
