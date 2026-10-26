@@ -194,6 +194,22 @@ describe("sidebar: header and navigation", () => {
   })
 })
 
+describe("sidebar: project drag announcements", () => {
+  test("say what dnd-kit's default announcements said, the drop last", () => {
+    Story.story(
+      updateFor(appAt("/home")),
+      Story.given(sidebar),
+      Story.message(Message.PressedProjectHeader({ projectId: "p2", pointerId: 1, y: 100 })),
+      Story.message(Message.ActivatedProjectDrag({ activeHeight: 40 })),
+      Story.model((model) => expect(model.dndAnnouncement).toBe("Draggable item p2 was moved over droppable area p2.")),
+      Story.message(Message.MovedProjectDrag({ deltaY: -50, overId: "p1" })),
+      Story.model((model) => expect(model.dndAnnouncement).toBe("Draggable item p2 was moved over droppable area p1.")),
+      Story.message(Message.CancelledProjectDrag()),
+      Story.model((model) => expect(model.dndAnnouncement).toBe("Dragging was cancelled. Draggable item p2 was dropped.")),
+    )
+  })
+})
+
 describe("sidebar: resizing", () => {
   test("follows the pointer within its bounds, and saves on release", () => {
     Story.story(
