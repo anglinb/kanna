@@ -35,6 +35,8 @@ export class ChatAgentError extends Schema.TaggedError<ChatAgentError>()(
 export class ChatAgent extends Context.Service<ChatAgent, {
   readonly isBusy: (chatId: string) => boolean
   readonly isDraining: (chatId: string) => boolean
+  /** A turn that died on a connection error is waiting out its backoff to retry. */
+  readonly hasPendingRetry?: (chatId: string) => boolean
   /** Work handed to another agent of the provider's is still going. What a chat waits on. */
   readonly hasDelegatedWork: (chatId: string) => boolean
   /** The kinds of task it left running that it is not waiting on: `shell`, `monitor`. */
@@ -74,6 +76,7 @@ export class ChatAgent extends Context.Service<ChatAgent, {
     return {
       isBusy: (chatId) => coordinator().isBusy(chatId),
       isDraining: (chatId) => coordinator().isDraining(chatId),
+      hasPendingRetry: (chatId) => coordinator().hasPendingTransientRetry?.(chatId) ?? false,
       hasDelegatedWork: (chatId) => coordinator().hasDelegatedWork(chatId),
       getLeftRunning: (chatId) => coordinator().getLeftRunning(chatId),
       isPlanning: (chatId) => coordinator().isPlanning(chatId),
@@ -108,4 +111,4 @@ export type CoordinatorLike = Pick<
   | "cancel"
   | "closeChat"
   | "forkChat"
->
+> & Partial<Pick<AgentCoordinator, "hasPendingTransientRetry">>

@@ -653,6 +653,7 @@ const makeOrchestrator = Effect.fn("Orchestrator.make")(function* (options: Orch
     // Cut short by a shutdown and about to be picked back up.
     if (chat.resumePending) return true
     if (agent.isBusy(chat.id) || agent.isDraining(chat.id)) return true
+    if (agent.hasPendingRetry?.(chat.id)) return true
     // A queue normally drains as soon as the turn ends, so messages in it mean
     // a turn is about to start. The exception is a stopped chat, whose queue
     // is parked until someone sends again.

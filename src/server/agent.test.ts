@@ -2222,6 +2222,121 @@ describe("AgentCoordinator claude integration", () => {
     events.close()
   })
 
+  test("a turn that dies on a connection error is retried with backoff", async () => {
+    const events = new AsyncEventQueue<any>()
+    const store = createFakeStore()
+    const prompts: string[] = []
+    const delays: number[] = []
+    store.recordTurnFailed = (async () => {}) as never
+    const connectionError = () => events.push({
+      type: "transcript" as const,
+      entry: timestamped({
+        kind: "result",
+        subtype: "error",
+        isError: true,
+        durationMs: 0,
+        result: "API Error: Unable to connect to API (EPROTO)",
+      }),
+    })
+
+    const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
+      store: store as never,
+      onStateChange: () => {},
+      transientRetryDelayMs: (attempt) => {
+        delays.push(attempt)
+        return 1
+      },
+      startClaudeSession: async () => ({
+        provider: "claude",
+        stream: events,
+        getAccountInfo: async () => null,
+        interrupt: async () => {},
+        close: () => {},
+        setModel: async () => {},
+        setPermissionMode: async () => {},
+        sendPrompt: async (content: string) => { prompts.push(content) },
+      }),
+    })
+
+    await coordinator.send({
+      type: "chat.send",
+      chatId: "chat-1",
+      provider: "claude",
+      content: "do something",
+      model: "claude-opus-4-1",
+    })
+    await waitFor(() => prompts.length === 1)
+
+    connectionError()
+    await waitFor(() => prompts.length === 2)
+    expect(prompts[1]).toContain("connection to the API dropped")
+    expect(store.messages.some((entry) => entry.kind === "status" && entry.status.includes("attempt 1"))).toBe(true)
+
+    connectionError()
+    await waitFor(() => prompts.length === 3)
+    expect(delays).toEqual([1, 2])
+
+    events.push({
+      type: "transcript" as const,
+      entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "done" }),
+    })
+    await waitFor(() => store.turnFinishedCount === 1)
+    // The retries were wire-only: the transcript holds the one prompt the user sent.
+    expect(store.messages.filter((entry) => entry.kind === "user_prompt")).toHaveLength(1)
+
+    events.close()
+  })
+
+  test("a stop drops a connection-error retry waiting out its backoff", async () => {
+    const events = new AsyncEventQueue<any>()
+    const store = createFakeStore()
+    const prompts: string[] = []
+    store.recordTurnFailed = (async () => {}) as never
+
+    const coordinator = new AgentCoordinator({
+      platform: testPlatformContext,
+      store: store as never,
+      onStateChange: () => {},
+      transientRetryDelayMs: () => 60_000,
+      startClaudeSession: async () => ({
+        provider: "claude",
+        stream: events,
+        getAccountInfo: async () => null,
+        interrupt: async () => {},
+        close: () => {},
+        setModel: async () => {},
+        setPermissionMode: async () => {},
+        sendPrompt: async (content: string) => { prompts.push(content) },
+      }),
+    })
+
+    await coordinator.send({
+      type: "chat.send",
+      chatId: "chat-1",
+      provider: "claude",
+      content: "do something",
+      model: "claude-opus-4-1",
+    })
+    events.push({
+      type: "transcript" as const,
+      entry: timestamped({
+        kind: "result",
+        subtype: "error",
+        isError: true,
+        durationMs: 0,
+        result: "API Error: Connection dropped (ECONNRESET)",
+      }),
+    })
+    await waitFor(() => coordinator.hasPendingTransientRetry("chat-1"))
+
+    await coordinator.cancel("chat-1")
+    expect(coordinator.hasPendingTransientRetry("chat-1")).toBe(false)
+    expect(prompts).toHaveLength(1)
+
+    events.close()
+  })
+
   test("force-sending a queued message does not surface the cancelled prompt's error result", async () => {
     const events = new AsyncEventQueue<any>()
     const store = createFakeStore()

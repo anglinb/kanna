@@ -92,6 +92,12 @@ import { runKanna } from "./effect/bridge"
 import type { PlatformServices } from "./platform"
 import { timestamped } from "./transcript"
 import {
+  formatRetryStatus,
+  isTransientApiError,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
+  transientRetryDelayMs,
+} from "./transient-api-error"
+import {
   findWorkflowOf,
   finishActivity,
   isDelegatedTask,
@@ -401,6 +407,8 @@ interface AgentCoordinatorArgs {
     provider: AgentProvider,
     query: { cwd: string; sessionToken: string | null | undefined }
   ) => SessionArtifactStatus | Promise<SessionArtifactStatus>
+  /** Backoff before connection-error retry `attempt`. Injectable so tests need not wait. */
+  transientRetryDelayMs?: (attempt: number) => number
 }
 
 
@@ -440,6 +448,14 @@ Kanna restarted while you were working on this, so your process was stopped mid-
 Whatever you were doing last may not have completed — re-check the state of any file you were editing and any command you had running before assuming it finished.
 </system-message>`
 
+/**
+ * Wire-only prompt for an automatic retry after the harness lost its
+ * connection to the model API (see `transient-api-error.ts`).
+ */
+export const RETRY_AFTER_CONNECTION_ERROR_MESSAGE = `<system-message>
+Your previous request failed because the connection to the API dropped, and Kanna is retrying automatically. Continue the task you were on from where it left off.
+</system-message>`
+
 interface StartTurnArgs {
   chatId: string
   provider: AgentProvider
@@ -454,6 +470,8 @@ interface StartTurnArgs {
   steered?: boolean
   /** Who sent the prompt, when not the user. Stamped on the transcript entry. */
   source?: MessageSource
+  /** Started by a connection-error retry, which must not cancel itself. */
+  transientRetry?: boolean
 }
 
 interface SendMessageOptions {
@@ -1193,6 +1211,15 @@ export class AgentCoordinator {
    * those, and a chat read as idle inside one would be reported finished.
    */
   private readonly startingTurns = new Map<string, number>()
+  /**
+   * Connection-error retries (`transient-api-error.ts`): the attempts made
+   * since the chat last had a turn succeed or a turn started any other way,
+   * and the retry waiting out its backoff. A chat with one waiting is not
+   * settled, though it has no turn running.
+   */
+  private readonly transientRetryAttempts = new Map<string, number>()
+  private readonly pendingTransientRetries = new Map<string, Fiber.Fiber<unknown, unknown>>()
+  private readonly transientRetryDelayMs: (attempt: number) => number
   private shuttingDown = false
   /**
    * Chats, schedules and the links between them. Set after construction,
@@ -1248,6 +1275,7 @@ export class AgentCoordinator {
         )
         : (messageContent, cwd) => withSharedQuickResponse(args.platform, generateTitleForChatDetailed(messageContent, cwd)))
     this.startClaudeSessionFn = args.startClaudeSession ?? startClaudeSession
+    this.transientRetryDelayMs = args.transientRetryDelayMs ?? ((attempt) => transientRetryDelayMs(attempt))
     this.checkSessionArtifactEffect = args.checkSessionArtifact
       ? (provider, query) => Effect.tryPromise({
         try: () => Promise.resolve(args.checkSessionArtifact!(provider, query)),
@@ -1403,7 +1431,12 @@ export class AgentCoordinator {
     }
     // What only the coordinator knows to be going. The orchestrator adds the
     // rest (queues, reports on their way) and finds the chats above them.
-    const unsettled = new Set([...this.activeTurns.keys(), ...this.startingTurns.keys(), ...this.drainingStreams.keys()])
+    const unsettled = new Set([
+      ...this.activeTurns.keys(),
+      ...this.startingTurns.keys(),
+      ...this.drainingStreams.keys(),
+      ...this.pendingTransientRetries.keys(),
+    ])
     for (const chatId of this.subagents.keys()) {
       if (this.hasDelegatedWork(chatId)) unsettled.add(chatId)
     }
@@ -1511,8 +1544,86 @@ export class AgentCoordinator {
   }
 
   private notifySettled(chatId: string) {
-    if (this.shuttingDown || this.isBusy(chatId)) return
+    if (this.shuttingDown || this.isBusy(chatId) || this.pendingTransientRetries.has(chatId)) return
     this.onChatSettled?.(chatId)
+  }
+
+  /** Whether a connection-error retry is waiting out its backoff. */
+  hasPendingTransientRetry(chatId: string) {
+    return this.pendingTransientRetries.has(chatId)
+  }
+
+  /** Drops a retry still waiting, and with `resetAttempts` the count too. */
+  private dropTransientRetryEffect(chatId: string, options: { resetAttempts: boolean }) {
+    const self = this
+    return Effect.gen(function* () {
+      if (options.resetAttempts) self.transientRetryAttempts.delete(chatId)
+      const fiber = self.pendingTransientRetries.get(chatId)
+      if (!fiber) return
+      self.pendingTransientRetries.delete(chatId)
+      yield* Fiber.interrupt(fiber)
+    })
+  }
+
+  /**
+   * After a Claude turn died on a connection error: say so, wait out the
+   * backoff, then send a wire-only "carry on" into the same session with the
+   * settings the failed turn ran with. Anything else that starts a turn in the
+   * chat meanwhile (the user, the queue, a background wakeup) or a stop drops
+   * the retry; the session already holds the work, so nothing is lost.
+   */
+  private scheduleTransientRetryEffect(active: ActiveTurn, attempt: number) {
+    const self = this
+    const chatId = active.chatId
+    return Effect.gen(function* () {
+      const delayMs = self.transientRetryDelayMs(attempt)
+      self.transientRetryAttempts.set(chatId, attempt)
+      yield* storeWriteEffect(self.store.appendMessage(chatId, timestamped({
+        kind: "status",
+        status: formatRetryStatus(attempt, delayMs),
+      })))
+      const retry = Effect.gen(function* () {
+        yield* Effect.sleep(delayMs)
+        if (self.pendingTransientRetries.get(chatId) !== fiber) return
+        self.pendingTransientRetries.delete(chatId)
+        const chat = self.store.getChat(chatId)
+        if (!chat || chat.deletedAt || chat.archivedAt || self.shuttingDown || self.isBusy(chatId)) {
+          self.notifySettled(chatId)
+          return
+        }
+        const started = yield* Effect.exit(self.startTurnForChatEffect({
+          chatId,
+          provider: active.provider,
+          content: RETRY_AFTER_CONNECTION_ERROR_MESSAGE,
+          attachments: [],
+          model: active.model,
+          effort: active.effort,
+          serviceTier: active.serviceTier,
+          planMode: active.planMode && !active.planExited,
+          autoPlan: active.autoPlan,
+          appendUserPrompt: false,
+          transientRetry: true,
+        }))
+        if (Exit.isFailure(started)) {
+          if (Cause.hasInterruptsOnly(started.cause)) return
+          self.transientRetryAttempts.delete(chatId)
+          const error = Cause.squash(started.cause)
+          const message = error instanceof Error ? error.message : String(error)
+          yield* storeWriteEffect(self.store.appendMessage(chatId, timestamped({
+            kind: "result",
+            subtype: "error",
+            isError: true,
+            durationMs: 0,
+            result: message,
+          })))
+          yield* storeWriteEffect(self.store.recordTurnFailed(chatId, message))
+          self.emitStateChange(chatId)
+          self.notifySettled(chatId)
+        }
+      })
+      const fiber: Fiber.Fiber<unknown, unknown> = self.forkBackground(retry)
+      self.pendingTransientRetries.set(chatId, fiber)
+    })
   }
 
   /**
@@ -2141,6 +2252,9 @@ export class AgentCoordinator {
   private startTurnForChatEffect = Effect.fn("Agent.startTurnForChat")((args: StartTurnArgs) => {
     const self = this
     return Effect.gen(function* () {
+      // Any other start supersedes a connection-error retry and begins a
+      // fresh count.
+      if (!args.transientRetry) yield* self.dropTransientRetryEffect(args.chatId, { resetAttempts: true })
       const previousActive = self.activeTurns.get(args.chatId)
       const previousClaudeSession = self.claudeSessions.get(args.chatId)
       self.markStarting(args.chatId)
@@ -2927,6 +3041,12 @@ export class AgentCoordinator {
         }
         yield* self.cancelEffect(chatId)
       }
+      // A retry still waiting out its backoff is a turn that was going to
+      // run, so it comes back on the next boot the same way.
+      for (const chatId of [...self.pendingTransientRetries.keys()]) {
+        yield* Effect.exit(storeWriteEffect(self.store.setTurnResumePending(chatId, true)))
+        yield* self.dropTransientRetryEffect(chatId, { resetAttempts: true })
+      }
     })
   })
 
@@ -3192,6 +3312,12 @@ export class AgentCoordinator {
               : completedPromptSeqs.includes(active.claudePromptSeq)
             if (event.entry.kind === "result" && active && completesActive) {
               active.hasFinalResult = true
+              const retryAttempt = event.entry.isError
+                && !active.cancelRequested
+                && !self.shuttingDown
+                && isTransientApiError(event.entry.result)
+                ? (self.transientRetryAttempts.get(session.chatId) ?? 0) + 1
+                : null
               if (event.entry.isError) {
                 yield* storeWriteEffect(self.store.recordTurnFailed(session.chatId, event.entry.result || "Turn failed"))
               } else if (!active.cancelRequested) {
@@ -3199,8 +3325,16 @@ export class AgentCoordinator {
               }
               active.customTools?.abort()
               self.activeTurns.delete(session.chatId)
-              if (!active.cancelRequested) {
-                yield* self.maybeStartNextQueuedMessageEffect(session.chatId)
+              if (retryAttempt !== null && retryAttempt <= TRANSIENT_RETRY_MAX_ATTEMPTS) {
+                // Queued messages wait for the retry: it finishes the turn they
+                // were queued behind.
+                yield* self.scheduleTransientRetryEffect(active, retryAttempt)
+              } else {
+                // Succeeded, failed some other way, or out of attempts.
+                self.transientRetryAttempts.delete(session.chatId)
+                if (!active.cancelRequested) {
+                  yield* self.maybeStartNextQueuedMessageEffect(session.chatId)
+                }
               }
               self.notifySettled(session.chatId)
             }
@@ -3452,6 +3586,16 @@ export class AgentCoordinator {
       // an idle chat can still have sub-chats to stop.
       const stopped = !options?.hideInterrupted && !self.shuttingDown
       if (stopped) self.onChatStopped?.(chatId)
+
+      // A stop also stops a connection-error retry waiting to go. The chat was
+      // held unsettled for it, so with no turn left it settles now.
+      if (self.pendingTransientRetries.has(chatId)) {
+        yield* self.dropTransientRetryEffect(chatId, { resetAttempts: true })
+        if (!self.activeTurns.has(chatId)) {
+          self.emitStateChange(chatId)
+          self.notifySettled(chatId)
+        }
+      }
 
       // Also clean up any draining stream for this chat.
       const draining = self.drainingStreams.get(chatId)
