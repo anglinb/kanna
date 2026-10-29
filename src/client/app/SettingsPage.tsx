@@ -9,7 +9,6 @@ import { useLocation, useNavigate, useOutletContext, useParams } from "react-rou
 import { getKeybindingsFilePathDisplay, SDK_CLIENT_APP } from "../../shared/branding"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { cn } from "../lib/utils"
-import { ChangelogSection, useChangelog } from "./settings/ChangelogSection"
 import { GeneralSection } from "./settings/GeneralSection"
 import { KeybindingsSection } from "./settings/KeybindingsSection"
 import { LabsSection } from "./settings/LabsSection"
@@ -17,7 +16,6 @@ import { MacSection } from "./settings/MacSection"
 import { ProvidersSection } from "./settings/ProvidersSection"
 import { SETTINGS_SECTIONS, visibleSettingsSections } from "./settings/registry"
 import { SkillsSection } from "./settings/SkillsSection"
-import { UsageSection } from "./settings/UsageSection"
 import { getKeybindingsSubtitle, SETTINGS_INSET_X_CLASS, SettingsActionButton, SettingsNotice, SettingsPlaceholder } from "./settings/shared"
 import type { KannaState } from "./useKannaState"
 
@@ -47,6 +45,7 @@ type SidebarPageId = SidebarItem["id"]
 
 export function resolveSettingsSectionId(sectionId: string | undefined): SidebarPageId | null {
   if (!sectionId) return null
+  if (sectionId === "usage") return "providers"
   return sidebarItems.some((item) => item.id === sectionId) ? (sectionId as SidebarPageId) : null
 }
 
@@ -103,7 +102,6 @@ export function SettingsPage() {
   const machineName = state.localProjects?.machine.displayName ?? "Unavailable"
   const projectCount = state.localProjects?.projects.length ?? 0
   const appVersion = SDK_CLIENT_APP.split("/")[1] ?? "unknown"
-  const changelog = useChangelog(selectedPage === "changelog" && !isConnecting)
   const resolvedKeybindings = useMemo(() => getResolvedKeybindings(state.keybindings), [state.keybindings])
   const keybindingsFilePathDisplay = resolvedKeybindings.filePathDisplay || getKeybindingsFilePathDisplay()
 
@@ -111,9 +109,13 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!sectionId) return
+    if (sectionId === "usage") {
+      navigate(`/settings/providers${location.hash || "#usageLimits"}`, { replace: true })
+      return
+    }
     if (resolveSettingsSectionId(sectionId)) return
     navigate("/settings/general", { replace: true })
-  }, [navigate, sectionId])
+  }, [navigate, sectionId, location.hash])
 
   useEffect(() => {
     let cancelled = false
@@ -313,30 +315,13 @@ export function SettingsPage() {
                 ) : selectedPage === "mac" ? (
                   <MacSection />
                 ) : selectedPage === "providers" ? (
-                  <ProvidersSection state={state} />
+                  <ProvidersSection state={state} focusRowId={location.hash.slice(1)} />
                 ) : selectedPage === "keybindings" ? (
                   <KeybindingsSection state={state} />
                 ) : selectedPage === "skills" ? (
                   <SkillsSection state={state} />
-                ) : selectedPage === "usage" ? (
-                  <UsageSection state={state} />
-                ) : selectedPage === "labs" ? (
-                  <LabsSection state={state} appVersion={appVersion} />
                 ) : (
-                  <ChangelogSection
-                    status={changelog.status}
-                    releases={changelog.releases}
-                    error={changelog.error}
-                    onRetry={changelog.retry}
-                    updateSnapshot={state.updateSnapshot}
-                    currentVersion={appVersion}
-                    onInstallUpdate={() => {
-                      void state.handleInstallUpdate()
-                    }}
-                    onCheckForUpdates={() => {
-                      void state.handleCheckForUpdates({ force: true })
-                    }}
-                  />
+                  <LabsSection state={state} appVersion={appVersion} />
                 )}
               </div>
             )}

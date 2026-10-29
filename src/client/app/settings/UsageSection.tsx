@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { ChevronRight } from "lucide-react"
-import type { ProviderUsageSnapshot, UsageLimitWindow, UsageLimitsSnapshot } from "../../../shared/types"
-import { PROVIDERS } from "../../../shared/types"
+import type {
+  AgentProvider,
+  ProviderAuthSnapshot,
+  ProviderUsageSnapshot,
+  UsageLimitWindow,
+  UsageLimitsSnapshot,
+} from "../../../shared/types"
+import { PROVIDERS, authServiceForProvider } from "../../../shared/types"
 import { PROVIDER_ICONS } from "../../components/chat-ui/ChatPreferenceControls"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip"
 import { formatRelativeTime } from "../../lib/formatters"
 import { cn } from "../../lib/utils"
+import { selectAuthService, useProviderAuthStore } from "../../stores/providerAuthStore"
 import type { KannaState } from "../useKannaState"
 
 const MINUTE_MS = 60_000
@@ -120,7 +127,7 @@ export function UsageBar({ usedPercent }: { usedPercent: number | null }) {
 }
 
 /** Shared grid so every window row lines up like a table (settings + empty state). */
-const WINDOW_ROW_GRID = "grid grid-cols-[minmax(0,1fr)_5rem_minmax(4rem,1.4fr)_2.375rem] items-center gap-3"
+const WINDOW_ROW_GRID = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 @lg:grid-cols-[minmax(0,1fr)_5rem_minmax(4rem,1.4fr)_2.375rem] @lg:gap-y-0"
 
 // The widget column's rows: a bare reset time ("2h"), a bar 40% narrower, and
 // the percent right-aligned so the numbers line up down the card. The narrow
@@ -162,7 +169,7 @@ function WindowRow({ window, compact = false }: { window: UsageLimitWindow; comp
   const resets = window.resetsAt ? formatUntil(window.resetsAt) : null
   return (
     <div className={compact ? COMPACT_WINDOW_ROW_GRID : WINDOW_ROW_GRID}>
-      <div className="min-w-0 truncate text-sm text-foreground">{window.label}</div>
+      <div className={cn("min-w-0 text-sm text-foreground", compact ? "truncate" : "@lg:truncate")}>{window.label}</div>
       <ResetTime resets={resets} compact={compact} />
       <UsageBar usedPercent={window.usedPercent} />
       <div className={cn("tabular-nums", compact ? "text-right text-xs text-muted-foreground" : "text-right text-sm font-medium text-foreground")}>
@@ -170,6 +177,41 @@ function WindowRow({ window, compact = false }: { window: UsageLimitWindow; comp
       </div>
     </div>
   )
+}
+
+/**
+ * The email of the account a harness is signed in with, from the provider-auth
+ * probe (`claude auth status`, `cursor-agent status`, ...), or null. Only an
+ * email counts: Codex reports just its login method ("ChatGPT"), which says
+ * nothing about whose limits these are.
+ */
+export function useUsageAccountEmail(provider: AgentProvider): string | null {
+  return useProviderAuthStore((store) => {
+    const serviceId = authServiceForProvider(provider)
+    const service = serviceId ? selectAuthService(store.snapshot, serviceId) : null
+    if (service?.authStatus !== "signed_in") return null
+    return service.account?.includes("@") ? service.account : null
+  })
+}
+
+/**
+ * The providers whose harness is signed in. The auth probe decides when it has
+ * an answer; until it does (not probed yet, or the probe failed) live limit
+ * data is the evidence, since only a signed-in account reports any. Harnesses
+ * without a sign-in of their own (pi) never qualify.
+ */
+export function signedInUsageProviders(
+  providers: ProviderUsageSnapshot[],
+  auth: ProviderAuthSnapshot | null,
+): ProviderUsageSnapshot[] {
+  return providers.filter((usage) => {
+    const serviceId = authServiceForProvider(usage.provider)
+    if (!serviceId) return false
+    const status = selectAuthService(auth, serviceId)?.authStatus
+    if (status === "signed_in") return true
+    if (status === undefined || status === "unknown" || status === "error") return usage.status === "ok"
+    return false
+  })
 }
 
 /** Scope and plan as one label ("Personal max"), or "" when neither is known. */
@@ -187,7 +229,7 @@ export function UsageWindowRows({ snapshot, compact = false, className }: {
   className?: string
 }) {
   return (
-    <div className={cn("space-y-2.5", className)}>
+    <div className={cn("@container space-y-2.5", className)}>
       {snapshot.windows.map((window) => (
         <WindowRow key={window.id} window={window} compact={compact} />
       ))}
@@ -261,6 +303,10 @@ export function ProviderCard({
   // Scope and plan share one pill ("Personal Pro"); `capitalize` title-cases the
   // raw plan string ("max" → "Max").
   const planBadgeText = planLabel(snapshot)
+  // Collapsed headers share their row with a meter; the email waits for the
+  // card to open.
+  const accountEmail = useUsageAccountEmail(snapshot.provider)
+  const showAccountEmail = accountEmail !== null && showBody
 
   const identity = (
     <div className="flex min-w-0 items-center gap-2.5">
@@ -287,6 +333,11 @@ export function ProviderCard({
       {planBadgeText ? (
         <span className="min-w-0 shrink truncate rounded-full border border-border px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
           {planBadgeText}
+        </span>
+      ) : null}
+      {showAccountEmail ? (
+        <span className="min-w-0 shrink truncate text-xs text-muted-foreground" title={accountEmail}>
+          {accountEmail}
         </span>
       ) : null}
     </div>
@@ -419,13 +470,26 @@ export function useUsageLimits(socket: KannaState["socket"], active = true) {
 
 export function UsageSection({ state }: { state: Pick<KannaState, "socket"> }) {
   const { snapshot, refreshing, refresh: runRefresh } = useUsageLimits(state.socket)
+  const auth = useProviderAuthStore((store) => store.snapshot)
+  const providers = useMemo(
+    () => (snapshot ? signedInUsageProviders(snapshot.providers, auth) : []),
+    [snapshot, auth],
+  )
 
   return (
     <div className="space-y-4">
-      {snapshot ? (
+      {!snapshot ? (
+        <div className="rounded-2xl border border-border bg-card/40 px-5 py-6 text-sm text-muted-foreground">
+          Loading usage…
+        </div>
+      ) : providers.length === 0 ? (
+        <div className="rounded-2xl border border-border bg-card/40 px-5 py-6 text-sm text-muted-foreground">
+          No harness is signed in. Sign in under Settings → Providers to see its usage limits.
+        </div>
+      ) : (
         // Always render whatever we have (cached/stale) — the poll swaps in
         // fresh numbers when they land; the header "Updated …" is the control.
-        snapshot.providers.map((provider) => (
+        providers.map((provider) => (
           <ProviderCard
             key={provider.provider}
             snapshot={provider}
@@ -435,10 +499,6 @@ export function UsageSection({ state }: { state: Pick<KannaState, "socket"> }) {
             }}
           />
         ))
-      ) : (
-        <div className="rounded-2xl border border-border bg-card/40 px-5 py-6 text-sm text-muted-foreground">
-          Loading usage…
-        </div>
       )}
     </div>
   )

@@ -22,8 +22,7 @@ import { KannaSidebar } from "./KannaSidebar"
 import { ChatPage } from "./ChatPage"
 import { LocalProjectsPage } from "./LocalProjectsPage"
 import { OpenRouterCallbackPage } from "./OpenRouterCallbackPage"
-// Code-split: its own route, with 8 settings sections and a second
-// react-markdown instance behind the changelog.
+// Code-split: its own route, with its settings sections.
 const SettingsPage = lazy(() => import("./SettingsPage").then((m) => ({ default: m.SettingsPage })))
 const WorkflowsGalleryPage = lazy(() => import("./WorkflowsGalleryPage").then((m) => ({ default: m.WorkflowsGalleryPage })))
 import { TerminalPage } from "./TerminalPage"
@@ -330,8 +329,8 @@ function KannaLayout() {
     void state.socket.command({ type: "project.setPinned", projectId, pinned }).catch(() => {})
   }, [state.socket])
   useMigrateChannelPins(state.socket, state.sidebarReady)
-  const handleOpenChangelog = useCallback(() => {
-    navigate("/settings/changelog")
+  const handleOpenUpdate = useCallback(() => {
+    navigate("/settings/general#applicationUpdate")
   }, [navigate])
   // Rendered inline rather than through a `useMemo`: `KannaSidebar` is memoized
   // and every prop below is now stable, so React skips it on its own. The memo
@@ -370,7 +369,7 @@ function KannaLayout() {
       onSetProjectPinned={handleSetProjectPinned}
       editorLabel={state.editorLabel}
       updateSnapshot={state.updateSnapshot}
-      onOpenChangelog={handleOpenChangelog}
+      onOpenUpdate={handleOpenUpdate}
     />
   )
 

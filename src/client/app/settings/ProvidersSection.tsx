@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
-import { History, Loader2 } from "lucide-react"
+import { ChevronDown, History, Loader2 } from "lucide-react"
 import {
+  authServiceForProvider,
   chatModeFromFlags,
   chatModeToFlags,
   DEFAULT_OPENAI_SDK_MODEL,
@@ -8,8 +9,9 @@ import {
   PROVIDERS,
   type AgentProvider,
   type ChatMode,
-  type GrokReasoningEffort,
   type LlmProviderKind,
+  type LlmProviderSnapshot,
+  type ProviderAuthSnapshot,
 } from "../../../shared/types"
 import { AuthCard } from "../../components/auth/AuthCard"
 import { ChatPreferenceControls } from "../../components/chat-ui/ChatPreferenceControls"
@@ -22,7 +24,7 @@ import { SelectItem } from "../../components/ui/select"
 import { applyModelToComposerState } from "../../lib/composer"
 import { cn } from "../../lib/utils"
 import { useChatPreferencesStore, type ComposerState } from "../../stores/chatPreferencesStore"
-import { useProviderAuthStore } from "../../stores/providerAuthStore"
+import { selectAuthService, useProviderAuthStore } from "../../stores/providerAuthStore"
 import type { KannaState } from "../useKannaState"
 import {
   handleSettingsInputKeyDown,
@@ -36,6 +38,7 @@ import {
   SettingsSelect,
 } from "./shared"
 import { SETTINGS_ROWS } from "./registry"
+import { planLabel, signedInUsageProviders, UsageWindowRows, useUsageLimits } from "./UsageSection"
 
 function ProviderLogo({ provider }: { provider: AgentProvider }) {
   const Icon = PROVIDER_ICONS[provider]
@@ -48,9 +51,20 @@ const QUICK_RESPONSE_PROVIDER_OPTIONS: Array<{ value: LlmProviderKind; label: st
   { value: "custom", label: "Custom" },
 ]
 
+/** Only configured connections get chat defaults; installing a CLI alone is not enough. */
+export function configuredProviders(auth: ProviderAuthSnapshot | null, registry: LlmProviderSnapshot | null): AgentProvider[] {
+  return PROVIDERS.filter(({ id }) => {
+    if (id === "pi") return registry?.enabled === true
+    const service = authServiceForProvider(id)
+    return service !== null && selectAuthService(auth, service)?.authStatus === "signed_in"
+  }).map(({ id }) => id)
+}
+
 export function ProvidersSection({
   state,
+  focusRowId = "",
 }: {
+  focusRowId?: string
   state: Pick<
     KannaState,
     | "socket"
@@ -70,6 +84,22 @@ export function ProvidersSection({
   const handleWriteAppSettings = state.handleWriteAppSettings
 
   const providerAuthSnapshot = useProviderAuthStore((store) => store.snapshot)
+  const { snapshot: usageSnapshot, refreshing, refresh } = useUsageLimits(state.socket)
+  const configured = configuredProviders(providerAuthSnapshot, llmProvider)
+  const usageProviders = usageSnapshot ? signedInUsageProviders(usageSnapshot.providers, providerAuthSnapshot) : []
+  const [showMoreProviders, setShowMoreProviders] = useState(() => PROVIDERS.some(({ id }) => `${id}Defaults` === focusRowId))
+  const [showRegistry, setShowRegistry] = useState(() => ["modelRegistry", "defaultModels", "piDefaults"].includes(focusRowId))
+  const registryVisible = showRegistry || llmProvider?.enabled || Boolean(llmProvider?.apiKey) || Boolean(llmProvider?.warning)
+  const otherServices = providerAuthSnapshot?.services.filter((service) =>
+    service.service !== "gh" && service.authStatus !== "signed_in",
+  ) ?? []
+  const github = selectAuthService(providerAuthSnapshot, "gh")
+
+  useEffect(() => {
+    if (["modelRegistry", "defaultModels", "piDefaults"].includes(focusRowId)) setShowRegistry(true)
+    if (PROVIDERS.some(({ id }) => `${id}Defaults` === focusRowId)) setShowMoreProviders(true)
+  }, [focusRowId])
+
   const defaultProvider = useChatPreferencesStore((store) => store.defaultProvider)
   const providerDefaults = useChatPreferencesStore((store) => store.providerDefaults)
   const setDefaultProvider = useChatPreferencesStore((store) => store.setDefaultProvider)
@@ -210,251 +240,215 @@ export function ProvidersSection({
     </span>
   ) : null
 
+  function renderDefaults(provider: AgentProvider) {
+    const defaults = providerDefaults[provider]
+    return (
+      <SettingsRow def={SETTINGS_ROWS[`${provider}Defaults`]} title="Chat defaults" description={null} wideControl>
+        <ChatPreferenceControls
+          availableProviders={state.availableProviders}
+          selectedProvider={provider}
+          showProviderPicker={false}
+          providerLocked
+          model={defaults.model}
+          modelOptions={defaults.modelOptions}
+          onModelChange={(_, model) => handleProviderDefaultModelChange(provider, model)}
+          onModelOptionChange={(change) => {
+            if (change.type === "contextWindow") {
+              handleProviderDefaultModelOptionsChange(provider, { contextWindow: change.contextWindow })
+            } else if (change.type === "fastMode") {
+              handleProviderDefaultModelOptionsChange(provider, { fastMode: change.fastMode })
+            } else {
+              handleProviderDefaultModelOptionsChange(provider, { reasoningEffort: change.effort })
+            }
+          }}
+          onEditModels={provider === "pi" ? () => setDefaultModelsDialogOpen(true) : undefined}
+          mode={chatModeFromFlags(defaults.planMode, defaults.autoPlan)}
+          onModeChange={(mode) => handleProviderDefaultModeChange(provider, mode)}
+          includeMode={provider === "claude" || provider === "codex" || provider === "grok"}
+          className="justify-start flex-wrap"
+        />
+      </SettingsRow>
+    )
+  }
+
   return (
     <>
       {providersError ? <SettingsErrorBanner message={providersError} /> : null}
       <SettingsGroups>
-        <SettingsGroup title="Accounts">
-          {providerAuthSnapshot ? (
-            providerAuthSnapshot.services.map((service) => (
-              // One surface for every account: each card drops its own
-              // box and becomes a row of the group's card, with its actions
-              // drawn as text like every other row's.
-              <AuthCard
-                key={service.service}
-                row
-                textActions
-                service={service}
-                socket={state.socket}
-              />
-            ))
-          ) : (
-            <div className="flex items-center gap-3 px-4 py-3 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-              Checking provider sign-in status…
-            </div>
-          )}
-        </SettingsGroup>
-        <SettingsGroup title="Defaults">
+        <SettingsGroup>
           <SettingsRow def={SETTINGS_ROWS.defaultProvider} description={null}>
             <SettingsSelect
+              aria-label="Default provider"
               value={defaultProvider}
               onValueChange={(value) => handleDefaultProviderChange(value as "last_used" | AgentProvider)}
             >
               <SelectItem value="last_used">
-                <span className="flex items-center gap-2">
-                  <History className="h-4 w-4 shrink-0" />
-                  Last Used
-                </span>
+                <span className="flex items-center gap-2"><History className="size-4 shrink-0" />Last Used</span>
               </SelectItem>
-              {PROVIDERS.map((provider) => (
-                <SelectItem key={provider.id} value={provider.id}>
+              {PROVIDERS.filter(({ id }) => configured.includes(id) || id === defaultProvider).map((provider) => (
+                <SelectItem key={provider.id} value={provider.id} disabled={!configured.includes(provider.id)}>
                   <span className="flex items-center gap-2">
                     <ProviderLogo provider={provider.id} />
-                    {provider.label}
+                    {provider.label}{!configured.includes(provider.id) ? " (not connected)" : ""}
                   </span>
                 </SelectItem>
               ))}
             </SettingsSelect>
           </SettingsRow>
-
-          <SettingsRow def={SETTINGS_ROWS.claudeDefaults} description={null} icon={<ProviderLogo provider="claude" />} wideControl>
-            <ChatPreferenceControls
-              availableProviders={state.availableProviders}
-              selectedProvider="claude"
-              showProviderPicker={false}
-              providerLocked
-              model={providerDefaults.claude.model}
-              modelOptions={providerDefaults.claude.modelOptions}
-              onModelChange={(_, model) => {
-                handleProviderDefaultModelChange("claude", model)
-              }}
-              onModelOptionChange={(change) => {
-                if (change.type === "claudeReasoningEffort") {
-                  handleProviderDefaultModelOptionsChange("claude", { reasoningEffort: change.effort })
-                } else if (change.type === "contextWindow") {
-                  handleProviderDefaultModelOptionsChange("claude", { contextWindow: change.contextWindow })
-                } else if (change.type === "fastMode") {
-                  handleProviderDefaultModelOptionsChange("claude", { fastMode: change.fastMode })
-                }
-              }}
-              mode={chatModeFromFlags(providerDefaults.claude.planMode, providerDefaults.claude.autoPlan)}
-              onModeChange={(mode) => handleProviderDefaultModeChange("claude", mode)}
-              includeMode
-              className="justify-start flex-wrap"
-            />
-          </SettingsRow>
-
-          <SettingsRow def={SETTINGS_ROWS.codexDefaults} description={null} icon={<ProviderLogo provider="codex" />} wideControl>
-            <ChatPreferenceControls
-              availableProviders={state.availableProviders}
-              selectedProvider="codex"
-              showProviderPicker={false}
-              providerLocked
-              model={providerDefaults.codex.model}
-              modelOptions={providerDefaults.codex.modelOptions}
-              onModelChange={(_, model) => {
-                handleProviderDefaultModelChange("codex", model)
-              }}
-              onModelOptionChange={(change) => {
-                if (change.type === "codexReasoningEffort") {
-                  handleProviderDefaultModelOptionsChange("codex", { reasoningEffort: change.effort })
-                } else if (change.type === "fastMode") {
-                  handleProviderDefaultModelOptionsChange("codex", { fastMode: change.fastMode })
-                }
-              }}
-              mode={chatModeFromFlags(providerDefaults.codex.planMode, providerDefaults.codex.autoPlan)}
-              onModeChange={(mode) => handleProviderDefaultModeChange("codex", mode)}
-              includeMode
-              className="justify-start flex-wrap"
-            />
-          </SettingsRow>
-
-          <SettingsRow def={SETTINGS_ROWS.cursorDefaults} description={null} icon={<ProviderLogo provider="cursor" />} wideControl>
-            <ChatPreferenceControls
-              availableProviders={state.availableProviders}
-              selectedProvider="cursor"
-              showProviderPicker={false}
-              providerLocked
-              model={providerDefaults.cursor.model}
-              modelOptions={providerDefaults.cursor.modelOptions}
-              onModelChange={(_, model) => {
-                handleProviderDefaultModelChange("cursor", model)
-              }}
-              onModelOptionChange={(change) => {
-                if (change.type === "fastMode") {
-                  handleProviderDefaultModelOptionsChange("cursor", { fastMode: change.fastMode })
-                }
-              }}
-              mode={chatModeFromFlags(providerDefaults.cursor.planMode, providerDefaults.cursor.autoPlan)}
-              className="justify-start flex-wrap"
-            />
-          </SettingsRow>
-
-          <SettingsRow def={SETTINGS_ROWS.grokDefaults} description={null} icon={<ProviderLogo provider="grok" />} wideControl>
-            <ChatPreferenceControls
-              availableProviders={state.availableProviders}
-              selectedProvider="grok"
-              showProviderPicker={false}
-              providerLocked
-              model={providerDefaults.grok.model}
-              modelOptions={providerDefaults.grok.modelOptions}
-              onModelChange={(_, model) => {
-                handleProviderDefaultModelChange("grok", model)
-              }}
-              onModelOptionChange={(change) => {
-                // Grok's effort picker reports through the codex change type
-                // (see reasoningChangeFor in ChatPreferenceControls).
-                if (change.type === "codexReasoningEffort") {
-                  handleProviderDefaultModelOptionsChange("grok", {
-                    reasoningEffort: change.effort as GrokReasoningEffort,
-                  })
-                }
-              }}
-              mode={chatModeFromFlags(providerDefaults.grok.planMode, providerDefaults.grok.autoPlan)}
-              onModeChange={(mode) => handleProviderDefaultModeChange("grok", mode)}
-              includeMode
-              className="justify-start flex-wrap"
-            />
-          </SettingsRow>
-
-          <SettingsRow def={SETTINGS_ROWS.piDefaults} description={null} icon={<ProviderLogo provider="pi" />} wideControl>
-            <ChatPreferenceControls
-              availableProviders={state.availableProviders}
-              selectedProvider="pi"
-              showProviderPicker={false}
-              providerLocked
-              model={providerDefaults.pi.model}
-              modelOptions={providerDefaults.pi.modelOptions}
-              onModelChange={(_, model) => {
-                handleProviderDefaultModelChange("pi", model)
-              }}
-              onModelOptionChange={(change) => {
-                if (change.type === "piReasoningEffort") {
-                  handleProviderDefaultModelOptionsChange("pi", { reasoningEffort: change.effort })
-                }
-              }}
-              onEditModels={() => setDefaultModelsDialogOpen(true)}
-              mode={chatModeFromFlags(providerDefaults.pi.planMode, providerDefaults.pi.autoPlan)}
-              className="justify-start flex-wrap"
-            />
-          </SettingsRow>
         </SettingsGroup>
 
-        <SettingsGroup title="Model Registry">
-          {llmProviderError || llmProvider?.warning ? (
-            <div className="space-y-3 p-4">
-              {llmProviderError ? <SettingsNotice>{llmProviderError}</SettingsNotice> : null}
-              {llmProvider?.warning ? <SettingsNotice tone="warning">{llmProvider.warning}</SettingsNotice> : null}
+        <div id={SETTINGS_ROWS.usageLimits.id} className="flex scroll-mt-4 flex-col gap-8">
+          {!providerAuthSnapshot ? (
+            <div className="flex items-center gap-3 px-4 text-sm text-muted-foreground" role="status">
+              <Loader2 className="size-4 shrink-0 animate-spin" />Checking provider sign-in status…
             </div>
           ) : null}
-          {/* Provider, endpoint, key and model each get a titled row, as in
-              iOS Settings: with no field frames, a stack of bare inputs in
-              one row left nothing to say which was which once filled. */}
-          <SettingsRow def={SETTINGS_ROWS.modelRegistry} description={llmValidationDescription}>
-            <SettingsSelect
-              value={llmProviderDraft.provider}
-              onValueChange={(value) => handleLlmProviderSelection(value as LlmProviderKind)}
-            >
-              {QUICK_RESPONSE_PROVIDER_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SettingsSelect>
-          </SettingsRow>
-          {llmProviderDraft.provider === "custom" ? (
-            <SettingsRow nested wideControl title="Base URL">
-              <Input
-                value={llmProviderDraft.baseUrl}
-                onChange={(event) => setLlmProviderDraft((current) => ({ ...current, baseUrl: event.target.value }))}
-                onBlur={() => void commitLlmProvider()}
-                onKeyDown={(event) => handleSettingsInputKeyDown(event, () => void commitLlmProvider())}
-                placeholder="https://your-provider.example/v1"
-                spellCheck={false}
-                autoComplete="off"
-                className={cn(SETTINGS_CONTROL_CLASS, "font-mono")}
-              />
-            </SettingsRow>
+          {PROVIDERS.filter(({ id }) => id !== "pi" && configured.includes(id)).map((provider) => {
+            const serviceId = authServiceForProvider(provider.id)
+            const service = serviceId ? selectAuthService(providerAuthSnapshot, serviceId) : null
+            if (!service) return null
+            const usage = usageProviders.find((entry) => entry.provider === provider.id)
+            const plan = usage ? planLabel(usage) : ""
+            return (
+              <SettingsGroup key={provider.id}>
+                <AuthCard row textActions service={service} socket={state.socket} detail={
+                  plan ? <span className="hidden min-w-0 truncate text-xs capitalize text-muted-foreground @lg:inline">{plan}</span> : null
+                } />
+                {service.account ? <div className="break-all px-4 py-2 text-xs text-muted-foreground">{service.account}</div> : null}
+                {usage ? (
+                  <div className="flex flex-col gap-3 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span>Usage limits</span>
+                      <SettingsActionButton disabled={refreshing} onClick={() => void refresh(true)} className="h-7">
+                        {refreshing ? "Refreshing…" : "Refresh"}
+                      </SettingsActionButton>
+                    </div>
+                    {usage.windows.length || usage.credits || usage.detail ? (
+                      <UsageWindowRows snapshot={usage} />
+                    ) : <div className="text-xs text-muted-foreground">Usage limits are not available.</div>}
+                  </div>
+                ) : null}
+                {renderDefaults(provider.id)}
+              </SettingsGroup>
+            )
+          })}
+          {providerAuthSnapshot && configured.length === 0 ? (
+            <div className="px-4 text-sm text-muted-foreground">Connect a provider below to start chatting. Its usage and defaults will appear here.</div>
           ) : null}
-          <SettingsRow nested wideControl title="API Key">
-            <Input
-              type="password"
-              value={llmProviderDraft.apiKey}
-              onChange={(event) => setLlmProviderDraft((current) => ({ ...current, apiKey: event.target.value }))}
-              onBlur={() => void commitLlmProvider()}
-              onKeyDown={(event) => handleSettingsInputKeyDown(event, () => void commitLlmProvider())}
-              placeholder="Required"
-              autoComplete="off"
-              className={cn(SETTINGS_CONTROL_CLASS, "font-mono")}
-            />
-          </SettingsRow>
-          <SettingsRow
-            nested
-            wideControl
-            title="Quick Response Model"
-          >
-            <Input
-              value={llmProviderDraft.model}
-              onChange={(event) => setLlmProviderDraft((current) => ({ ...current, model: event.target.value }))}
-              onBlur={() => void commitLlmProvider()}
-              onKeyDown={(event) => handleSettingsInputKeyDown(event, () => void commitLlmProvider())}
-              placeholder="Model id"
-              spellCheck={false}
-              autoComplete="off"
-              className={cn(SETTINGS_CONTROL_CLASS, "font-mono")}
-            />
-          </SettingsRow>
+        </div>
 
-          <SettingsRow
-            def={SETTINGS_ROWS.defaultModels}
-            description={null}
-          >
-            <SettingsActionButton onClick={() => setDefaultModelsDialogOpen(true)}>
-              Edit models
+        {otherServices.length > 0 || !registryVisible ? (
+          <section>
+            <SettingsActionButton aria-expanded={showMoreProviders} aria-controls="more-providers" onClick={() => setShowMoreProviders(!showMoreProviders)} className="px-4" icon={<ChevronDown className={cn("transition-transform", showMoreProviders && "rotate-180")} />}>
+              {showMoreProviders ? "Hide setup options" : "Set up more providers"}
             </SettingsActionButton>
-          </SettingsRow>
-        </SettingsGroup>
+            <div id="more-providers" hidden={!showMoreProviders} className="mt-2">
+              <SettingsGroup>
+                {otherServices.map((service) => (
+                  <div key={service.service} id={service.service !== "openrouter" && service.service !== "gh" ? SETTINGS_ROWS[`${service.service}Defaults`].id : undefined}>
+                    <AuthCard row textActions service={service} socket={state.socket} />
+                  </div>
+                ))}
+                {!registryVisible ? (
+                  <SettingsRow title="Model Registry" description="Connect OpenAI, OpenRouter, or a custom endpoint for Pi and quick responses.">
+                    <SettingsActionButton onClick={() => setShowRegistry(true)}>Set up</SettingsActionButton>
+                  </SettingsRow>
+                ) : null}
+              </SettingsGroup>
+            </div>
+          </section>
+        ) : null}
+
+        {registryVisible ? (
+          <div id={!configured.includes("pi") && ["piDefaults", "defaultModels"].includes(focusRowId) ? focusRowId : undefined} className="scroll-mt-4">
+            <SettingsGroup title="Model Registry" trailing={
+              !llmProvider?.enabled && !llmProvider?.apiKey && !llmProvider?.warning ? (
+                <SettingsActionButton onClick={() => setShowRegistry(false)}>Hide</SettingsActionButton>
+              ) : undefined
+            }>
+              {llmProviderError || llmProvider?.warning ? (
+                <div className="space-y-3 p-4">
+                  {llmProviderError ? <SettingsNotice>{llmProviderError}</SettingsNotice> : null}
+                  {llmProvider?.warning ? <SettingsNotice tone="warning">{llmProvider.warning}</SettingsNotice> : null}
+                </div>
+              ) : null}
+              {/* Provider, endpoint, key and model each get a titled row, as in
+                  iOS Settings: with no field frames, a stack of bare inputs in
+                  one row left nothing to say which was which once filled. */}
+              <SettingsRow def={SETTINGS_ROWS.modelRegistry} description={llmValidationDescription}>
+                <SettingsSelect
+                  value={llmProviderDraft.provider}
+                  onValueChange={(value) => handleLlmProviderSelection(value as LlmProviderKind)}
+                >
+                  {QUICK_RESPONSE_PROVIDER_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SettingsSelect>
+              </SettingsRow>
+              {llmProviderDraft.provider === "custom" ? (
+                <SettingsRow nested wideControl title="Base URL">
+                  <Input
+                    value={llmProviderDraft.baseUrl}
+                    onChange={(event) => setLlmProviderDraft((current) => ({ ...current, baseUrl: event.target.value }))}
+                    onBlur={() => void commitLlmProvider()}
+                    onKeyDown={(event) => handleSettingsInputKeyDown(event, () => void commitLlmProvider())}
+                    placeholder="https://your-provider.example/v1"
+                    spellCheck={false}
+                    autoComplete="off"
+                    className={cn(SETTINGS_CONTROL_CLASS, "font-mono")}
+                  />
+                </SettingsRow>
+              ) : null}
+              <SettingsRow nested wideControl title="API Key">
+                <Input
+                  type="password"
+                  value={llmProviderDraft.apiKey}
+                  onChange={(event) => setLlmProviderDraft((current) => ({ ...current, apiKey: event.target.value }))}
+                  onBlur={() => void commitLlmProvider()}
+                  onKeyDown={(event) => handleSettingsInputKeyDown(event, () => void commitLlmProvider())}
+                  placeholder="Required"
+                  autoComplete="off"
+                  className={cn(SETTINGS_CONTROL_CLASS, "font-mono")}
+                />
+              </SettingsRow>
+              <SettingsRow
+                nested
+                wideControl
+                title="Quick Response Model"
+              >
+                <Input
+                  value={llmProviderDraft.model}
+                  onChange={(event) => setLlmProviderDraft((current) => ({ ...current, model: event.target.value }))}
+                  onBlur={() => void commitLlmProvider()}
+                  onKeyDown={(event) => handleSettingsInputKeyDown(event, () => void commitLlmProvider())}
+                  placeholder="Model id"
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={cn(SETTINGS_CONTROL_CLASS, "font-mono")}
+                />
+              </SettingsRow>
+
+              {configured.includes("pi") ? renderDefaults("pi") : null}
+              {configured.includes("pi") ? (
+                <SettingsRow def={SETTINGS_ROWS.defaultModels} description={null}>
+                  <SettingsActionButton onClick={() => setDefaultModelsDialogOpen(true)}>
+                    Edit models
+                  </SettingsActionButton>
+                </SettingsRow>
+              ) : null}
+            </SettingsGroup>
+          </div>
+        ) : null}
+
+        {github ? (
+          <div id={SETTINGS_ROWS.github.id} className="scroll-mt-4">
+            <SettingsGroup title="GitHub">
+              <AuthCard row textActions service={github} socket={state.socket} />
+            </SettingsGroup>
+          </div>
+        ) : null}
       </SettingsGroups>
       <Dialog open={llmValidationDialogOpen} onOpenChange={setLlmValidationDialogOpen}>
         <DialogContent size="lg">

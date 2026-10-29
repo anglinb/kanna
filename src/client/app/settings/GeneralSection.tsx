@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import { DownloadCloud } from "lucide-react"
-import { useNavigate } from "react-router-dom"
 import { ANALYTICS_STATIC_EVENT_NAMES, ANALYTICS_STATIC_PROPERTY_NAMES } from "../../../shared/analytics"
 import type { EditorPreset } from "../../../shared/protocol"
 import { DEFAULT_NEW_PROJECTS_DIRECTORY, isNightlyVersion, type PaneVisibilityScope, type SubmitWhileRunning } from "../../../shared/types"
@@ -88,7 +87,6 @@ export function GeneralSection({
   >
   appVersion: string
 }) {
-  const navigate = useNavigate()
   const { theme, setTheme } = useTheme()
   const appSettings = state.appSettings
   const updateSnapshot = state.updateSnapshot
@@ -351,14 +349,6 @@ export function GeneralSection({
                 {updateSnapshot?.error ? (
                   <span> {updateSnapshot.error}</span>
                 ) : null}
-                {" "}
-                <button
-                  type="button"
-                  onClick={() => navigate("/settings/changelog")}
-                  className={SETTINGS_INLINE_ACTION_CLASS}
-                >
-                  Changelog
-                </button>
               </>
             )}
           >

@@ -1,4 +1,4 @@
-import { BookText, Command, FlaskConical, Gauge, LaptopMinimal, MessageSquareQuote, ScrollText, Settings2, type LucideIcon } from "lucide-react"
+import { BookText, Command, FlaskConical, LaptopMinimal, MessageSquareQuote, Settings2, type LucideIcon } from "lucide-react"
 import { macSetupAvailable } from "../../lib/macApp"
 
 /**
@@ -28,7 +28,7 @@ export const SETTINGS_SECTIONS = [
     id: "providers",
     label: "Providers",
     icon: MessageSquareQuote as LucideIcon,
-    subtitle: "Sign-ins, the default provider, and model defaults for each harness.",
+    subtitle: "Sign-ins, usage limits, and model defaults for each harness you've set up.",
   },
   {
     id: "skills",
@@ -43,24 +43,13 @@ export const SETTINGS_SECTIONS = [
     subtitle: "Edit global app shortcuts stored in the active keybindings file.",
   },
   {
-    id: "usage",
-    label: "Usage",
-    icon: Gauge as LucideIcon,
-    subtitle: "Subscription rate limits for each harness, with reset times.",
-  },
-  {
     id: "labs",
     label: "Labs",
     icon: FlaskConical as LucideIcon,
     subtitle: "Experimental features that are still in progress.",
   },
-  // always last
-  {
-    id: "changelog",
-    label: "Changelog",
-    icon: ScrollText as LucideIcon,
-    subtitle: "Release notes from the public GitHub releases feed.",
-  },
+  // Changelog (settings/ChangelogSection.tsx) is hidden for now; re-add it
+  // here, always last, and restore its branch in SettingsPage to bring it back.
 ] as const
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
@@ -208,6 +197,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "The harness new chats start with. A chat keeps its provider once a session exists.",
     keywords: ["harness", "agent"],
   },
+  usageLimits: {
+    sectionId: "providers",
+    title: "Usage Limits",
+    description: "Subscription rate limits for each signed-in harness, with reset times.",
+    keywords: ["usage", "rate limit", "quota", "credits", "plan", "reset"],
+  },
   claudeDefaults: {
     sectionId: "providers",
     title: "Claude Code Defaults",
@@ -249,6 +244,12 @@ export const SETTINGS_ROWS = defineRows({
     title: "Default Models",
     description: "Models shown in Pi's model picker, with a display label and the model id sent to the Model Registry endpoint.",
     keywords: ["fave models", "pi"],
+  },
+  github: {
+    sectionId: "providers",
+    title: "GitHub",
+    description: "The GitHub CLI sign-in Kanna uses for cloning and pull requests.",
+    keywords: ["gh", "git", "pull request", "clone"],
   },
 
   // This Mac (Kanna for Mac)

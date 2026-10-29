@@ -192,7 +192,7 @@ describe("getSettingsPaletteEntries", () => {
 
     // Sections
     expect(ids).toContain("settings-section-general")
-    expect(ids).toContain("settings-section-changelog")
+    expect(ids).toContain("settings-section-labs")
 
     // Registry rows carry anchored paths
     const theme = entries.find((entry) => entry.id === "settings-row-theme")
@@ -201,6 +201,12 @@ describe("getSettingsPaletteEntries", () => {
 
     // Individual keybinding rows are intentionally excluded from the palette
     expect(ids.some((id) => id.startsWith("settings-row-keybinding-"))).toBe(false)
+  })
+
+  test("usage search points at the combined Providers page", () => {
+    const entries = getSettingsPaletteEntries()
+    expect(entries.some((entry) => entry.id === "settings-section-usage")).toBe(false)
+    expect(searchSettingsEntries(entries, "usage").find((entry) => entry.id === "settings-row-usageLimits")?.path).toBe("/settings/providers#usageLimits")
   })
 
   test("rows are searchable by description keywords", () => {

@@ -256,12 +256,15 @@ export function AuthCard({
   className,
   row = false,
   textActions = false,
+  detail,
 }: {
   service: AuthServiceSnapshot
   socket: KannaSocket
   className?: string
   row?: boolean
   textActions?: boolean
+  /** Extra header content after the version, such as the subscription plan. */
+  detail?: React.ReactNode
 }) {
   const Icon = AUTH_SERVICE_ICONS[service.service]
   const version = displayVersion(service.version)
@@ -338,6 +341,7 @@ export function AuthCard({
           {version ? (
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{version}</span>
           ) : null}
+          {detail}
         </div>
         {action}
       </div>

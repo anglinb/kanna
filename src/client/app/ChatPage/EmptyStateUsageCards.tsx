@@ -11,7 +11,7 @@ let lastUsageSnapshot: UsageLimitsSnapshot | null = null
  * only providers with live limit data (Claude/Codex when signed in with a
  * subscription). Cards start collapsed — each header carries its first window's
  * meter — with the composer's current provider listed first. Display-only —
- * refresh lives on the Settings → Usage page.
+ * refresh lives on the Settings → Providers page.
  */
 export function EmptyStateUsageCards({
   socket,

@@ -116,7 +116,7 @@ interface KannaSidebarProps {
   onSetProjectPinned: (projectId: string, pinned: boolean) => void
   editorLabel: string
   updateSnapshot: UpdateSnapshot | null
-  onOpenChangelog: () => void
+  onOpenUpdate: () => void
 }
 
 /**
@@ -356,7 +356,7 @@ function KannaSidebarImpl({
   onSetProjectPinned,
   editorLabel,
   updateSnapshot,
-  onOpenChangelog,
+  onOpenUpdate,
 }: KannaSidebarProps) {
   // The one place that wants the whole snapshot. Selected here rather than
   // passed down so a sidebar push re-renders this component and nothing above
@@ -910,7 +910,7 @@ function KannaSidebarImpl({
       label="Update"
       busy={isUpdating}
       disabled={isUpdating}
-      onClick={onOpenChangelog}
+      onClick={onOpenUpdate}
       title={updateSnapshot?.latestVersion ? `Update to ${updateSnapshot.latestVersion}` : "Update Kanna"}
     />
   ) : null
