@@ -1,3 +1,5 @@
+import { desktopCloudEnabled } from "./cloud-policy"
+import { shellEnv } from "./shell-env"
 import { session } from "electron"
 import fs from "node:fs"
 import path from "node:path"
@@ -28,14 +30,17 @@ export interface Machine {
 export const SESSION_COOKIE = "kanna_cloud_session"
 
 class Fleet {
+  enabled = false
   list: Machine[] = []
   /** This Mac's subdomain; null while it isn't on Kanna Cloud. */
   thisSubdomain: string | null = null
   onChange: (() => void) | null = null
   private timer: NodeJS.Timeout | null = null
+  private refreshId = 0
 
   /** The control plane this Mac paired with (cloud.json's controlUrl), else kanna.sh. */
   get site() {
+    if (!this.enabled) return "https://kanna.sh"
     const root = dataRoot(agent.mode)
     try {
       const pairing = JSON.parse(fs.readFileSync(path.join(root ?? "", "cloud.json"), "utf8")) as { controlUrl?: string }
@@ -56,6 +61,7 @@ class Fleet {
 
   /** Whether the window has a kanna.sh session to open other machines with. */
   async hasSession() {
+    if (!this.enabled) return false
     const host = new URL(this.site).hostname.toLowerCase()
     const cookies = await session.defaultSession.cookies.get({ name: SESSION_COOKIE })
     const now = Date.now() / 1000
@@ -71,14 +77,43 @@ class Fleet {
     void this.refresh()
   }
 
+  private disable(stopPolling = true) {
+    const changed = this.enabled || this.list.length > 0 || this.thisSubdomain !== null
+    this.enabled = false
+    this.list = []
+    this.thisSubdomain = null
+    if (stopPolling && this.timer) { clearInterval(this.timer); this.timer = null }
+    if (changed) this.onChange?.()
+  }
+
   async refresh() {
+    const id = ++this.refreshId
+    const root = dataRoot(agent.mode)
     const server = agent.serverURL
-    if (!server) return
+    const current = () => id === this.refreshId && root === dataRoot(agent.mode) && server === agent.serverURL
+    const allowed = desktopCloudEnabled(root, await shellEnv())
+    if (!current()) return
+    if (!allowed || !server) { this.disable(); return }
     try {
+      // Consult neutral capabilities before touching cloud routes or credentials.
+      const manifest = await fetch(new URL("/api/capabilities", server), { signal: AbortSignal.timeout(10_000) })
+      let enabled = manifest.status === 404
+      if (manifest.ok) {
+        if (manifest.headers.get("content-type")?.includes("application/json")) {
+          const body = await manifest.json() as { capabilities?: { cloud?: boolean } }
+          enabled = body.capabilities?.cloud !== false
+        } else enabled = true // Older server's SPA fallback.
+      }
+      if (!current()) return
+      if (!enabled) { this.disable(manifest.ok); return }
+      const becameEnabled = !this.enabled
+      this.enabled = true
+      if (!this.timer) this.timer = setInterval(() => void this.refresh(), 60_000)
+      if (becameEnabled) this.onChange?.()
       const response = await fetch(new URL("/api/cloud/fleet", server), { signal: AbortSignal.timeout(10_000) })
       if (response.status !== 200) return
-      // CloudLocalFleetResponse in src/shared/cloud-api.ts.
       const decoded = (await response.json()) as { self?: string | null; machines: Machine[] }
+      if (!current()) return
       const machines = [...decoded.machines].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
       const self = decoded.self ?? null
       if (JSON.stringify(machines) !== JSON.stringify(this.list) || self !== this.thisSubdomain) {
@@ -86,8 +121,9 @@ class Fleet {
         this.thisSubdomain = self
         this.onChange?.()
       }
-    } catch {}
+    } catch { if (current()) this.disable(false) }
   }
+
 }
 
 export const fleet = new Fleet()

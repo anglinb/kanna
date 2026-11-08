@@ -23,6 +23,7 @@ export function instanceFingerprint(dataDir: string) {
 export interface ExistingInstance {
   localUrl: string
   port: number
+  cloudEnabled?: boolean
 }
 
 /** Nothing usable answered /health on the port. Never escapes the probe. */
@@ -38,6 +39,7 @@ class InstanceProbeError extends Schema.TaggedError<InstanceProbeError>()(
 const InstanceHealth = Schema.Struct({
   ok: Schema.Literal(true),
   instance: Schema.String,
+  cloudEnabled: Schema.optional(Schema.Boolean),
 })
 
 const PROBE_TIMEOUT = "700 millis"
@@ -65,7 +67,7 @@ export const probeExistingInstance = Effect.fn("Instance.probeExisting")(functio
   })
   const health = Schema.decodeUnknownOption(InstanceHealth)(body)
   if (Option.isNone(health) || health.value.instance !== expected) return null
-  return { localUrl: `http://localhost:${port}`, port } satisfies ExistingInstance
+  return { localUrl: `http://localhost:${port}`, port, ...(health.value.cloudEnabled !== undefined ? { cloudEnabled: health.value.cloudEnabled } : {}) } satisfies ExistingInstance
 }, (effect) => effect.pipe(
   Effect.timeoutOption(PROBE_TIMEOUT),
   Effect.map(Option.getOrNull),

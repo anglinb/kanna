@@ -1,3 +1,4 @@
+import { useServerCapabilities } from "../stores/serverCapabilitiesStore"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { ChevronsUpDown, Cloud, ExternalLink, LaptopMinimal, Loader2, Settings2 } from "lucide-react"
 import {
@@ -62,6 +63,7 @@ function OnlineDot({ online }: { online: boolean }) {
  * kanna.sh).
  */
 export function MachineSwitcher() {
+  const capabilities = useServerCapabilities()
   const mode = useConnectionStore((state) => state.mode)
   const machines = useConnectionStore((state) => state.machines)
   const load = useConnectionStore((state) => state.load)
@@ -69,7 +71,7 @@ export function MachineSwitcher() {
   const thisMachineSubdomain = useConnectionStore((state) => state.thisMachine)
   const showingMachine = useConnectionStore((state) => state.showingMachine)
   const [pairDialogOpen, setPairDialogOpen] = useState(false)
-  const { session, starting, begin } = useCloudPairSession({ enabled: mode === "local" })
+  const { session, starting, begin } = useCloudPairSession({ enabled: capabilities?.cloud === true && mode === "local" })
   const startedRef = useRef(false)
   // The machine being switched to. Loading another machine takes a moment
   // (a new origin, a new socket), and without this the picker closes and
@@ -94,10 +96,10 @@ export function MachineSwitcher() {
   }, [showingMachine])
 
   useEffect(() => {
-    if (mode === "unknown") {
+    if (capabilities && (mode === "unknown" || (!capabilities.cloud && mode !== "local"))) {
       void load()
     }
-  }, [mode, load])
+  }, [mode, load, capabilities?.cloud])
 
   // Mint a claim URL the first time the dialog opens; the server reuses a
   // live session, so reopening never burns a code.
@@ -108,7 +110,7 @@ export function MachineSwitcher() {
     begin()
   }, [pairDialogOpen, session.status, begin])
 
-  if (mode === "unknown") {
+  if (!capabilities?.cloud || mode === "unknown") {
     return null
   }
 

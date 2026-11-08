@@ -109,7 +109,7 @@ ipcMain.on("kanna:initial", (event) => {
   event.returnValue = {
     chrome: main?.initialChrome() ?? { fullScreen: false, vars: {} },
     version: app.getVersion(),
-    features: ["fleet", "setup"],
+    features: fleet.enabled ? ["fleet", "setup"] : ["setup"],
   }
 })
 
@@ -158,7 +158,7 @@ function handleURL(raw: string) {
     return
   }
   if (url.protocol !== `${URL_SCHEME}:` || !main) return
-  if (url.hostname === "auth") {
+  if (url.hostname === "auth" && fleet.enabled) {
     void handleAuthCallback(url, fleet.site)
   } else if (url.hostname === "open") {
     const target = url.searchParams.get("url")
@@ -408,7 +408,7 @@ function rebuildMenu() {
         },
       ],
     },
-    { label: "Fleet", submenu: fleetItems },
+    ...(fleet.enabled ? [{ label: "Fleet", submenu: fleetItems }] : []),
     { role: "windowMenu" },
     {
       role: "help",

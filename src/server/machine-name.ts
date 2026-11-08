@@ -59,8 +59,9 @@ const readComputerName = Effect.fn("MachineName.readComputerName")(function* () 
   )
 })
 
+/** Pass null for identityPath to resolve a local name without reading cloud credentials. */
 export const getMachineDisplayName = Effect.fn("MachineName.getDisplayName")(function* (
-  identityPath?: string,
+  identityPath?: string | null,
   overridePath?: string,
 ) {
   const override = yield* readMachineNameOverride(overridePath)
@@ -68,7 +69,7 @@ export const getMachineDisplayName = Effect.fn("MachineName.getDisplayName")(fun
     return override
   }
 
-  const devboxSubdomain = yield* readDevboxSubdomain(identityPath)
+  const devboxSubdomain = identityPath === null ? null : yield* readDevboxSubdomain(identityPath)
   if (devboxSubdomain) {
     return devboxSubdomain
   }

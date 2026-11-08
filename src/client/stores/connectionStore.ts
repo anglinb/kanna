@@ -1,3 +1,4 @@
+import { getServerCapabilities, useServerCapabilitiesStore } from "./serverCapabilitiesStore"
 import { create } from "zustand"
 import {
   CLOUD_BROWSER_PATH_PREFIX,
@@ -81,6 +82,11 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   fromMacApp: false,
 
   load: async (fetchImpl = fetch) => {
+    const capabilities = await getServerCapabilities(fetchImpl)
+    if (!capabilities.cloud) {
+      set({ mode: "local", machines: [], thisMachine: null, showingMachine: null, fromMacApp: false })
+      return
+    }
     try {
       const response = await fetchImpl(`${CLOUD_BROWSER_PATH_PREFIX}/machines`, {
         headers: { Accept: "application/json" },
@@ -105,6 +111,10 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   },
 
   setMacAppFleet: (payload) => {
+    if (useServerCapabilitiesStore.getState().value?.cloud === false) {
+      set({ mode: "local", machines: [], thisMachine: null, showingMachine: null, fromMacApp: false })
+      return
+    }
     if (payload && Array.isArray(payload.machines)) {
       set({
         mode: "cloud",

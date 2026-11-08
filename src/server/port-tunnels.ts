@@ -1,10 +1,10 @@
+import { CloudDisabledError } from "./cloud/feature"
 import { FileSystem, Context, Deferred, Effect, Layer, Schema } from "effect"
-import {
-  startShareTunnel,
-  type CloudflaredInstallError,
-  type ShareTunnelError,
-  type ShareTunnelExitedError,
-  type StartedShareTunnel,
+import type {
+  CloudflaredInstallError,
+  ShareTunnelError,
+  ShareTunnelExitedError,
+  StartedShareTunnel,
 } from "./share"
 
 /**
@@ -44,7 +44,7 @@ export class TunnelWithoutUrlError extends Schema.TaggedError<TunnelWithoutUrlEr
 }
 
 export type StartTunnelError = CloudflaredInstallError | ShareTunnelError | ShareTunnelExitedError
-export type ExposeError = InvalidPortError | TunnelWithoutUrlError | StartTunnelError
+export type ExposeError = InvalidPortError | TunnelWithoutUrlError | StartTunnelError | CloudDisabledError
 
 export interface PortTunnelsOptions {
   /** Starts cloudflared for a local URL. Defaults to a quick tunnel. */
@@ -61,7 +61,7 @@ export class PortTunnels extends Context.Service<PortTunnels, {
    * spawning a second cloudflared.
    */
   readonly expose: (port: number) => Effect.Effect<ExposedPort, ExposeError>
-  readonly unexpose: (port: number) => Effect.Effect<{ ok: true; port: number }, InvalidPortError>
+  readonly unexpose: (port: number) => Effect.Effect<{ ok: true; port: number }, InvalidPortError | CloudDisabledError>
 }>()("@kanna/server/PortTunnels") {
   static readonly layer = (options: PortTunnelsOptions = {}) => Layer.effect(this, makePortTunnels(options))
 }
@@ -75,7 +75,10 @@ function validatePort(port: number) {
 const makePortTunnels = Effect.fn("PortTunnels.make")(function* (options: PortTunnelsOptions) {
   const fs = yield* FileSystem.FileSystem
   const startTunnel = options.startTunnel
-    ?? ((localUrl: string) => startShareTunnel(localUrl, "quick").pipe(Effect.provideService(FileSystem.FileSystem, fs)))
+    ?? ((localUrl: string) => Effect.promise(() => import("./share")).pipe(
+      Effect.flatMap(({ startShareTunnel }) => startShareTunnel(localUrl, "quick")),
+      Effect.provideService(FileSystem.FileSystem, fs),
+    ))
   // Plain maps: every read and write is a synchronous step inside one effect.
   const tunnels = new Map<number, { publicUrl: string; stop: () => void }>()
   const pending = new Map<number, Deferred.Deferred<ExposedPort, ExposeError>>()
@@ -152,4 +155,12 @@ const makePortTunnels = Effect.fn("PortTunnels.make")(function* (options: PortTu
     expose,
     unexpose,
   }
+})
+
+/** Public exposure is a cloud capability; this binding never starts a connector. */
+export const PortTunnelsDisabled = Layer.succeed(PortTunnels, {
+  publicUrl: () => Effect.succeed(undefined),
+  list: Effect.succeed([]),
+  expose: () => Effect.fail(new CloudDisabledError({})),
+  unexpose: () => Effect.fail(new CloudDisabledError({})),
 })
