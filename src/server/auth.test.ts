@@ -392,6 +392,63 @@ describe("wrong-password backoff", () => {
     expect(response.status).toBe(413)
   })
 
+  test("the limit is on what arrives, not on what the request says its length is", async () => {
+    const auth = createAuthManager("secret")
+    let pulled = 0
+    const chunk = new TextEncoder().encode("x".repeat(4 * 1024))
+    // Chunked: no Content-Length at all, and far more than a login.
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1
+        if (pulled > 64) controller.close()
+        else controller.enqueue(chunk)
+      },
+    })
+    const request = new Request("http://localhost:3210/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body, duplex: "half" } as RequestInit)
+    expect(request.headers.has("content-length")).toBe(false)
+    const response = await auth.handleLogin(request, "/", "203.0.113.9")
+    expect(response.status).toBe(413)
+    // Reading stopped a chunk or so past the limit, not at the end.
+    expect(pulled).toBeLessThan(12)
+  })
+
+  test("a login within the limit still signs in, as JSON and as a form", async () => {
+    const auth = createAuthManager("secret")
+    const json = await auth.handleLogin(new Request("http://localhost:3210/auth/login", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "secret", next: "/settings" }),
+    }), "/", "203.0.113.9")
+    expect(json.status).toBe(200)
+    expect(await json.json()).toEqual({ ok: true, nextPath: "/settings" })
+    const form = await auth.handleLogin(new Request("http://localhost:3210/auth/login", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "password=secret&next=%2Fchat",
+    }), "/", "203.0.113.9")
+    expect(form.status).toBe(200)
+    expect(await form.json()).toEqual({ ok: true, nextPath: "/chat" })
+    for (const body of ["null", "[]", "\"secret\"", "{"]) {
+      const odd = await auth.handleLogin(new Request("http://localhost:3210/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body }), "/", "198.51.100.4")
+      expect([body, odd.status === 400 || odd.status === 401]).toEqual([body, true])
+    }
+  })
+
+  test("a client that is waiting is turned away before its body is read", async () => {
+    const time = 1_000_000
+    const auth = createAuthManager("secret", { now: () => time })
+    for (let attempt = 0; attempt < 5; attempt += 1) await login(auth, "wrong", "203.0.113.9")
+    let pulled = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1
+        controller.enqueue(new TextEncoder().encode("x".repeat(1024)))
+      },
+    })
+    const response = await auth.handleLogin(
+      new Request("http://localhost:3210/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body, duplex: "half" } as RequestInit),
+      "/", "203.0.113.9",
+    )
+    expect(response.status).toBe(429)
+    expect(pulled).toBeLessThanOrEqual(1)
+  })
+
   test("a refused guess says how long to wait", async () => {
     const time = 1_000_000
     const auth = createAuthManager("secret", { now: () => time })

@@ -456,6 +456,9 @@ async function maybeSelfUpdate(_argv: string[], deps: CliRuntimeDeps) {
 
 export async function runCli(argv: string[], deps: CliRuntimeDeps, env: Record<string, string | undefined> = process.env): Promise<CliRunResult> {
   let parsedArgs = parseArgs(argv, env)
+  // What the environment asked of a run, kept for the one that follows a
+  // successful `pair`: that path is parsed again below, after these are gone.
+  const runEnv = { [PASSWORD_ENV_VAR]: env[PASSWORD_ENV_VAR], [CLOUDFLARED_TOKEN_ENV_VAR]: env[CLOUDFLARED_TOKEN_ENV_VAR] }
   // Read, and then gone: every agent, terminal and tunnel this process starts
   // is handed its environment.
   delete env[PASSWORD_ENV_VAR]
@@ -481,7 +484,8 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps, env: Record<s
     // comes online immediately and the hosted URL opens once the tunnel
     // connects. From then on any plain `kanna` does the same (sticky).
     deps.log(`${LOG_PREFIX} starting ${CLI_COMMAND}…`)
-    parsedArgs = parseArgs([])
+    // `KANNA_PASSWORD=… kanna pair` asked for a password: the server it starts has one.
+    parsedArgs = parseArgs([], runEnv)
   }
 
   if (parsedArgs.kind === "slim-transcripts") {

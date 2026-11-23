@@ -1074,6 +1074,21 @@ describe("schedules", () => {
     expect(prompts(root)[1]).toMatchObject({ content: "check the deploy", source: { kind: "schedule" } })
   })
 
+  test("a schedule that names no mode runs in its chat's, and not on a provider that cannot hold to it", async () => {
+    const { orchestrator, store, userChat, setClock } = await setup()
+    const root = await userChat()
+    setClock(1_000_000)
+    // Saved while the chat had full access, for a provider with no read-only mode.
+    await orchestrator.setSchedule(root, { message: "tidy the repo", newChat: false, provider: "cursor", inMinutes: 10 })
+    // Since then the chat went into plan mode. The run would take that mode
+    // from the chat, and cursor would be started with full access all the same.
+    await store.setPlanMode(root, true)
+
+    setClock(1_000_000 + 10 * 60_000)
+    await orchestrator.runDueSchedules()
+    expect(store.getQueuedMessages(root)).toEqual([])
+  })
+
   test("a repeating schedule skips a run while its last message is still waiting", async () => {
     const { orchestrator, store, userChat, setClock } = await setup()
     const root = await userChat()

@@ -8,6 +8,11 @@ const MAX_QUICK_ACTIONS = 50
 const MAX_LABEL_LENGTH = 80
 const MAX_COMMAND_LENGTH = 2_000
 
+/**
+ * The most the file is read at, and so the most it is written at: a file this
+ * server saved must be one it will read. Fifty actions at their longest, in a
+ * script that takes three bytes a character, come to about 300 KB.
+ */
 const MAX_QUICK_ACTIONS_FILE_BYTES = 256 * 1024
 
 function getProjectQuickActionsPath(projectPath: string) {
@@ -65,7 +70,18 @@ export async function readProjectQuickActions(projectPath: string): Promise<Proj
 export async function writeProjectQuickActions(projectPath: string, quickActions: ProjectQuickAction[]): Promise<ProjectQuickAction[]> {
   const filePath = getProjectQuickActionsPath(projectPath)
   const normalized = normalizeQuickActions(quickActions)
+  const text = `${JSON.stringify({ quickActions: normalized }, null, 2)}\n`
+  // Refused here, not found out at the next read, which would show an empty
+  // list and let the next save replace every action with whatever was added.
+  if (Buffer.byteLength(text) > MAX_QUICK_ACTIONS_FILE_BYTES) {
+    throw new Error("These quick actions are too large to save together. Shorten the longest commands, or remove some.")
+  }
+  // Nor is a file too large to have been read replaced by a list that never held what is in it.
+  const existing = Bun.file(filePath)
+  if (await existing.exists() && existing.size > MAX_QUICK_ACTIONS_FILE_BYTES) {
+    throw new Error("This project's quick-actions file is too large to read, so it was not replaced. Shorten .kanna/quick-actions.json by hand first.")
+  }
   await mkdir(path.dirname(filePath), { recursive: true })
-  await Bun.write(filePath, `${JSON.stringify({ quickActions: normalized }, null, 2)}\n`)
+  await Bun.write(filePath, text)
   return normalized
 }

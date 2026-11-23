@@ -21,6 +21,14 @@ import { SwapIn, useWidgetExpanded, WidgetCard } from "./WidgetCard"
  * added, so hiding it with none saved would leave no way to add the first.
  * Empty, opening it (or pressing +) goes straight to the add form.
  */
+/**
+ * Whether the label alone says what will run. Only when it is the command:
+ * `bun test; ./install.sh` begins with `bun test`, and is not it.
+ */
+export function commandIsShownByLabel(action: Pick<ProjectQuickAction, "label" | "command">) {
+  return action.command === action.label
+}
+
 export function QuickActionsWidget({
   projectId,
   socket,
@@ -195,8 +203,10 @@ export function QuickActionsWidget({
                     {action.label}
                     {/* The file is the project's, so a clone brings its
                         actions with it. A label that is not the command gets
-                        the command beside it: what runs is what is shown. */}
-                    {action.command.startsWith(action.label)
+                        the command beside it: what runs is what is shown.
+                        Not "begins with": `bun test; ./install.sh` begins
+                        with `bun test`. */}
+                    {commandIsShownByLabel(action)
                       ? null
                       : <span className="text-muted-foreground"> · {action.command}</span>}
                   </span>

@@ -159,18 +159,47 @@ function buildCookie(name: string, value: string, req: Request, trustProxy: bool
   return parts.join("; ")
 }
 
+/** The body was larger than a login is. */
+export class BodyTooLarge extends Error {}
+
+/**
+ * A request's body, read no further than `limit` bytes. Content-Length is the
+ * sender's word and a chunked body has none, so the count is of what arrives:
+ * one byte over and reading stops, with what came before thrown away.
+ */
+export async function readBodyWithin(req: Request, limit: number): Promise<Uint8Array> {
+  if (Number(req.headers.get("content-length") ?? 0) > limit) throw new BodyTooLarge()
+  if (!req.body) return new Uint8Array()
+  const reader = req.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel().catch(() => {})
+      throw new BodyTooLarge()
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks)
+}
+
 async function readLoginForm(req: Request) {
   const contentType = req.headers.get("content-type") ?? ""
+  // Parsed from the bytes that were let in, never from the request's own stream.
+  const bounded = new Response(await readBodyWithin(req, MAX_LOGIN_BODY_BYTES), { headers: { "content-type": contentType } })
 
   if (contentType.includes("application/json")) {
-    const payload = await req.json() as { password?: unknown; next?: unknown }
+    const payload = await bounded.json() as { password?: unknown; next?: unknown }
     return {
-      password: typeof payload.password === "string" ? payload.password : "",
-      nextPath: sanitizeNextPath(typeof payload.next === "string" ? payload.next : "/"),
+      password: typeof payload?.password === "string" ? payload.password : "",
+      nextPath: sanitizeNextPath(typeof payload?.next === "string" ? payload.next : "/"),
     }
   }
 
-  const formData = await req.formData()
+  const formData = await bounded.formData()
   return {
     password: String(formData.get("password") ?? ""),
     nextPath: sanitizeNextPath(String(formData.get("next") ?? "/")),
@@ -258,31 +287,38 @@ export function createAuthManager(password: string, options: AuthManagerOptions 
       return Response.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    // A login is a password and a path. Anything larger is not one, and this
-    // route is the one a stranger can post to.
-    if (Number(req.headers.get("content-length") ?? 0) > MAX_LOGIN_BODY_BYTES) {
-      return Response.json({ error: "Request too large" }, { status: 413 })
-    }
-
     const client = loginClientKey(clientAddress)
-    // The body is read before the wait is looked at, so that the check, the
-    // compare and the count below run with no await between them. Read after
-    // the check, any number of guesses sent at once all passed it before the
-    // first of them was counted, and the wait slowed nobody down.
-    const form = await readLoginForm(req).then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    )
-    const waitMs = throttle.waitMs(client)
-    if (waitMs > 0) {
+    const wait = () => {
+      const waitMs = throttle.waitMs(client)
+      if (waitMs <= 0) return null
       const seconds = Math.ceil(waitMs / 1000)
       return Response.json(
         { error: `Too many wrong passwords. Try again in ${seconds} second${seconds === 1 ? "" : "s"}.`, retryAfterSeconds: seconds },
         { status: 429, headers: { "Retry-After": String(seconds) } },
       )
     }
+    // A client that is waiting is told so before a byte of its body is read:
+    // what it sends meanwhile costs this server nothing.
+    const waitingAlready = wait()
+    if (waitingAlready) return waitingAlready
+
+    // A login is a password and a path. Anything larger is not one, and this
+    // route is the one a stranger can post to. The limit is on what is read,
+    // not on what the request says its length is.
+    const form = await readLoginForm(req).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+    // Looked at again, now that the body is in: the check, the compare and the
+    // count below run with no await between them. With only the check above,
+    // any number of guesses sent at once would all pass it before the first of
+    // them was counted, and the wait would slow nobody down.
+    const waiting = wait()
+    if (waiting) return waiting
     if (!form.ok) {
-      return Response.json({ error: "Invalid login request" }, { status: 400 })
+      return form.error instanceof BodyTooLarge
+        ? Response.json({ error: "Request too large" }, { status: 413 })
+        : Response.json({ error: "Invalid login request" }, { status: 400 })
     }
 
     const { password: candidate, nextPath } = form.value

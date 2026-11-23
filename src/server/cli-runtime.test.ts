@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { compareVersions, classifyInstallVersionFailure, parseArgs, runCli } from "./cli-runtime"
+import { compareVersions, classifyInstallVersionFailure, parseArgs, runCli, PASSWORD_ENV_VAR } from "./cli-runtime"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 
 const originalRuntimeProfile = process.env.KANNA_RUNTIME_PROFILE
@@ -745,6 +745,24 @@ describe("runCli cloud", () => {
     expect(calls.startServer.length).toBe(1)
     expect(fake.calls.starts.length).toBe(1)
     expect(calls.log.some((line) => line.includes("starting kanna"))).toBe(true)
+    if (result.kind === "started") await result.stop()
+  })
+
+  test("a password asked for in the environment survives pairing", async () => {
+    const fake = createFakeCloudRuntime()
+    const { calls, deps } = createDeps({
+      runPairCommandImpl: async () => 0,
+      readCloudIdentityImpl: async () => ({ ...CLOUD_IDENTITY }),
+      createCloudRuntimeImpl: () => fake.runtime,
+    })
+    const env: Record<string, string | undefined> = { [PASSWORD_ENV_VAR]: "hunter2", PATH: "/usr/bin" }
+
+    const result = await runCli(["pair", "ABC123"], deps, env)
+
+    // `KANNA_PASSWORD=hunter2 kanna pair` starts a server that asks for it,
+    expect(calls.startServer[0]).toMatchObject({ password: "hunter2" })
+    // and still hands it to nothing that server starts.
+    expect(env[PASSWORD_ENV_VAR]).toBeUndefined()
     if (result.kind === "started") await result.stop()
   })
 

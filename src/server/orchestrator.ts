@@ -1613,9 +1613,11 @@ export class ChatOrchestrator {
       if (pending) return { outcome: "skipped" }
       const own = this.ownRun(chat)
       const provider = schedule.provider ?? own.provider ?? undefined
-      // Checked again at the run: the chat may have moved to another provider
-      // since the schedule was made.
-      if (schedule.planMode) this.requirePlanModeProvider(provider)
+      // Checked again at the run, against the plan mode the run will have: the
+      // chat may have moved to another provider, or into plan mode, since the
+      // schedule was made. A schedule that says nothing takes the chat's.
+      const planMode = schedule.planMode ?? own.planMode
+      if (planMode) this.requirePlanModeProvider(provider)
       const sameProvider = provider === own.provider
       // Before the turn starts, like a parent's own message (`send`).
       const arms = Boolean(schedule.reportsToParent && chat.parentChatId && !chat.reportOwed)
@@ -1628,7 +1630,7 @@ export class ChatOrchestrator {
           provider,
           model: schedule.model ?? (sameProvider ? own.model : undefined),
           effort: schedule.effort ?? (sameProvider && !schedule.model ? own.effort : undefined),
-          planMode: schedule.planMode ?? own.planMode,
+          planMode,
           autoPlan: own.autoPlan,
         }, { source })
       } catch (error) {

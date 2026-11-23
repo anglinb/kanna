@@ -30,34 +30,94 @@ type Verdict = string | null
 
 const READ_ONLY = "read-only"
 
+/**
+ * What a word will be when the shell runs it, where that is not what is
+ * written: a variable's value, or the file names a wildcard matches. For most
+ * commands it does not matter what a word turns into; for the ones whose
+ * arguments decide whether they write, it does (`shellLineWrites`).
+ *
+ *  - "variable": holds `$NAME`. It could be any text, an option included.
+ *  - "wildcard-option": a wildcard with nothing fixed before it (`*.ts`), or
+ *    behind a dash, so a file's name can come out as an option.
+ *  - "wildcard": any other wildcard (`src/*.ts`). One word here, any number
+ *    of words there.
+ */
+type Unknown = "variable" | "wildcard-option" | "wildcard" | null
+
 /** Words of one command, and why the line could not be split into commands when it could not. */
-type Parsed = { ok: true; commands: string[][] } | { ok: false; reason: string }
+type Parsed = { ok: true; commands: string[][]; unknowns: Unknown[][] } | { ok: false; reason: string }
+
+const EXPANSION = "it uses a shell expansion that could turn into anything (${...}, $[...], $'...' or $\"...\")"
 
 /**
  * Splits a shell line into its commands (at `|`, `&&`, `||`, `;` and line
- * breaks), honouring quotes. Anything that would run a command this cannot
- * see, or send output to a file, ends the parse with the reason.
+ * breaks), reading quotes as bash and zsh do. Anything that would run a
+ * command this cannot see, or send output to a file, ends the parse with the
+ * reason. So does anything the shell would rewrite in a way this does not
+ * follow exactly: the guard is only as good as its agreement with the shell
+ * about what the words are.
  */
 export function parseShellLine(line: string): Parsed {
   const commands: string[][] = []
+  const unknowns: Unknown[][] = []
   let words: string[] = []
+  let wordUnknowns: Unknown[] = []
   let word = ""
   let hasWord = false
+  /** What was written before the word's first unquoted wildcard, when it has one. */
+  let globPrefix: string | null = null
+  let expands = false
+  /** The next word is the file an input redirection reads, which the command is not given. */
+  let readsFrom = false
   const endWord = () => {
-    if (hasWord) words.push(word)
+    if (hasWord && readsFrom) {
+      readsFrom = false
+    } else if (hasWord) {
+      words.push(word)
+      // A lone `[` is the test command, not a wildcard.
+      const glob = word === "[" ? null : globPrefix
+      wordUnknowns.push(expands ? "variable" : glob === null ? null : glob === "" || glob.startsWith("-") ? "wildcard-option" : "wildcard")
+    }
     word = ""
     hasWord = false
+    globPrefix = null
+    expands = false
   }
   const endCommand = () => {
     endWord()
-    if (words.length > 0) commands.push(words)
+    if (words.length > 0) {
+      commands.push(words)
+      unknowns.push(wordUnknowns)
+    }
     words = []
+    wordUnknowns = []
   }
   const fail = (reason: string): Parsed => ({ ok: false, reason })
+
+  /**
+   * A `$` at `index`. Null when it is only a dollar sign; a reason when the
+   * line must be refused; otherwise it starts a variable, whose value this
+   * cannot know. `quoted`: inside double quotes, where `$'` and `$"` are
+   * plain text.
+   */
+  const dollar = (index: number, quoted: boolean): { fail: string } | { variable: boolean } => {
+    const next = line[index + 1]
+    if (next === "(") return { fail: "it runs another command inside it ($(...) or backticks)" }
+    // `${X:--delete}` is `-delete` when X is unset, and zsh runs code from `${(e)...}`.
+    if (next === "{" || next === "[") return { fail: EXPANSION }
+    if (!quoted && (next === "'" || next === '"')) return { fail: EXPANSION }
+    // A name, a positional or special parameter, or one of zsh's `$+x`, `$~x`, `$=x`, `$^x`.
+    return { variable: next !== undefined && /[A-Za-z0-9_@*#?!$\-+~=^]/.test(next) }
+  }
 
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index]!
     const next = line[index + 1]
+    const code = char.charCodeAt(0)
+
+    // Tab and line break are the shell's own. Any other control character is
+    // one the shell and this would have to agree on, and nothing needs one.
+    if ((code < 0x20 && char !== "\t" && char !== "\n") || code === 0x7f) return fail("it has a control character in it")
 
     if (char === "'") {
       const close = line.indexOf("'", index + 1)
@@ -72,10 +132,16 @@ export function parseShellLine(line: string): Parsed {
       let text = ""
       for (; close < line.length && line[close] !== '"'; close += 1) {
         const inner = line[close]!
-        if (inner === "`" || (inner === "$" && line[close + 1] === "(")) return fail("it runs another command inside it ($(...) or backticks)")
-        if (inner === "\\" && close + 1 < line.length) {
+        if (inner === "`") return fail("it runs another command inside it ($(...) or backticks)")
+        if (inner === "$") {
+          const found = dollar(close, true)
+          if ("fail" in found) return fail(found.fail)
+          if (found.variable) expands = true
+        }
+        // Inside double quotes a backslash only quotes these; before anything else it is itself.
+        if (inner === "\\" && close + 1 < line.length && '$`"\\\n'.includes(line[close + 1]!)) {
           close += 1
-          text += line[close]
+          if (line[close] !== "\n") text += line[close]
           continue
         }
         text += inner
@@ -93,8 +159,35 @@ export function parseShellLine(line: string): Parsed {
       index += 1
       continue
     }
-    if (char === "`" || (char === "$" && next === "(")) return fail("it runs another command inside it ($(...) or backticks)")
+    if (char === "`") return fail("it runs another command inside it ($(...) or backticks)")
+    if (char === "#" && !hasWord) {
+      // A comment, to the end of the line: the shell passes none of it on.
+      while (index + 1 < line.length && line[index + 1] !== "\n") index += 1
+      continue
+    }
+    if (char === "$") {
+      const found = dollar(index, false)
+      if ("fail" in found) return fail(found.fail)
+      if (found.variable) expands = true
+      word += char
+      hasWord = true
+      continue
+    }
     if (char === "(" || char === ")") return fail("it uses a subshell")
+    if (char === "{") {
+      // `-{delete,x}` is two words to the shell. A bare `{}` is itself.
+      if (next !== "}") return fail("it uses brace expansion ({a,b}), which the shell turns into several words")
+      word += "{}"
+      hasWord = true
+      index += 1
+      continue
+    }
+    if (char === "*" || char === "?" || char === "[") {
+      if (globPrefix === null) globPrefix = word
+      word += char
+      hasWord = true
+      continue
+    }
     if (char === "\n" || char === ";") {
       endCommand()
       continue
@@ -118,24 +211,37 @@ export function parseShellLine(line: string): Parsed {
       if (hasWord && /^\d+$/.test(word)) {
         word = ""
         hasWord = false
+        globPrefix = null
+        expands = false
       } else {
         endWord()
       }
       let cursor = index + 1
       if (line[cursor] === ">") cursor += 1
       while (line[cursor] === " " || line[cursor] === "\t") cursor += 1
-      const target = /^(&\d|\/dev\/null(?![\w./-]))/.exec(line.slice(cursor))
+      // Another descriptor or /dev/null, and nothing more: `>&2file` is a file named "2file".
+      const target = /^(&\d+|\/dev\/null)(?=$|[\s;|&)])/.exec(line.slice(cursor))
       if (!target) return fail("it writes its output to a file")
       index = cursor + target[0].length - 1
       continue
     }
     if (char === "<") {
       if (next === "(") return fail("it runs another command inside it (<(...))")
-      // Input redirection reads. The file name that follows is taken as a word.
-      endWord()
+      // Input redirection reads. Like `>`, a descriptor before it belongs to
+      // it; and the file name after it is the shell's, not an argument:
+      // `git config a b < --list` is a write, whatever that file is called.
+      if (hasWord && /^\d+$/.test(word)) {
+        word = ""
+        hasWord = false
+        globPrefix = null
+        expands = false
+      } else {
+        endWord()
+      }
+      readsFrom = true
       continue
     }
-    if (char === " " || char === "\t" || char === "\r") {
+    if (char === " " || char === "\t") {
       endWord()
       continue
     }
@@ -143,7 +249,7 @@ export function parseShellLine(line: string): Parsed {
     hasWord = true
   }
   endCommand()
-  return { ok: true, commands }
+  return { ok: true, commands, unknowns }
 }
 
 /** A short option given alone or bundled with others: `-o`, `-no`. Not `--output`. */
@@ -151,8 +257,18 @@ function hasShortFlag(args: string[], letter: string) {
   return args.some((arg) => /^-[A-Za-z]+/.test(arg) && !arg.startsWith("--") && arg.slice(1).includes(letter))
 }
 
+/**
+ * A long option, as GNU tools and git read them: spelled out, or any
+ * beginning of it (`--out` is `--output`), with or without `=value`. A
+ * beginning that two options share is refused by the tool itself, so taking
+ * it for the one that writes costs nothing.
+ */
 function hasLongFlag(args: string[], ...names: string[]) {
-  return args.some((arg) => names.some((name) => arg === name || arg.startsWith(`${name}=`)))
+  return args.some((arg) => {
+    if (!arg.startsWith("--") || arg.length < 3) return false
+    const given = arg.split("=", 1)[0]!
+    return names.some((name) => name.startsWith(given))
+  })
 }
 
 const anyArguments = (): Verdict => null
@@ -176,7 +292,9 @@ function listingOnly(args: string[], changingShortFlags: string, what: string): 
     return `git ${what} with a name creates or changes one`
   }
   if ([...changingShortFlags].some((letter) => hasShortFlag(args, letter))
-    || args.some((arg) => /^--(delete|move|copy|force|set-upstream-to|set-upstream|unset-upstream|edit-description|annotate|sign|local-user|message|file|edit|track|no-track|create-reflog|cleanup)(=|$)/.test(arg))) {
+    || hasLongFlag(args, "--delete", "--move", "--copy", "--force", "--set-upstream-to", "--set-upstream", "--unset-upstream",
+      "--edit-description", "--annotate", "--sign", "--local-user", "--message", "--file", "--edit", "--track", "--no-track",
+      "--create-reflog", "--cleanup")) {
     return `that git ${what} command changes a ${what}`
   }
   return null
@@ -201,7 +319,7 @@ function checkGit(args: string[]): Verdict {
   const subcommand = args[index]
   const rest = args.slice(index + 1)
   if (!subcommand) return null
-  if (rest.some((arg) => arg.startsWith("--output") || arg === "--ext-diff" || arg.startsWith("--open-files-in-pager") || /^-O/.test(arg))) {
+  if (hasLongFlag(rest, "--output", "--ext-diff", "--open-files-in-pager") || rest.some((arg) => arg.startsWith("--output") || /^-O/.test(arg))) {
     return "that git option writes a file or runs another program"
   }
   if (GIT_READ_SUBCOMMANDS.has(subcommand)) return null
@@ -290,12 +408,24 @@ const READ_COMMANDS: Record<string, (args: string[]) => Verdict> = {
 export function shellLineWrites(line: string): Verdict {
   const parsed = parseShellLine(line)
   if (!parsed.ok) return parsed.reason
-  for (const words of parsed.commands) {
+  for (const [index, words] of parsed.commands.entries()) {
     const [name, ...args] = words
+    const [nameUnknown, ...argUnknowns] = parsed.unknowns[index]!
     if (!name) continue
+    if (nameUnknown) return "the command's own name is a variable or a wildcard"
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(name)) return "it sets a variable for a command"
     const check = Object.hasOwn(READ_COMMANDS, name) ? READ_COMMANDS[name]! : null
     if (!check) return `\`${name.slice(0, 40)}\` is not on the list of commands that only read`
+    // The check reads the arguments as written. Where it is the arguments
+    // that decide, each has to be what the shell will pass.
+    if (check !== anyArguments) {
+      if (argUnknowns.includes("variable")) return `it gives \`${name}\` a variable ($...), whose value could be an option that writes`
+      if (argUnknowns.includes("wildcard-option")) {
+        return `it gives \`${name}\` a wildcard that a file's name could turn into an option; start it with ./ (as in ./*.ts)`
+      }
+      // `uniq a b` writes to b, and one wildcard can be both.
+      if (name === "uniq" && argUnknowns.includes("wildcard")) return "uniq with a wildcard may be given a second file name, which it writes to"
+    }
     const verdict = check(args)
     if (verdict) return verdict
   }
